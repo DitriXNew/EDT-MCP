@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <!-- Страница настроек плагина -->
+   <extension point="org.eclipse.ui.preferencePages">
+      <page
+            id="com.ditrix.edt.mcp.server.preferences"
+            name="MCP Server"
+            class="com.ditrix.edt.mcp.server.preferences.McpServerPreferencePage">
+      </page>
+   </extension>
+   
+   <!-- Инициализатор настроек по умолчанию -->
+   <extension point="org.eclipse.core.runtime.preferences">
+      <initializer class="com.ditrix.edt.mcp.server.preferences.PreferenceInitializer"/>
+   </extension>
+   
+   <!-- Startup для автозапуска сервера если включено -->
+   <extension point="org.eclipse.ui.startup">
+      <startup class="com.ditrix.edt.mcp.server.McpServerStartup"/>
+   </extension>
+   
+   <!-- Status bar indicator for MCP server in the trim area -->
+   <extension point="org.eclipse.ui.menus">
+      <menuContribution
+            locationURI="toolbar:org.eclipse.ui.trim.status">
+         <toolbar
+               id="com.ditrix.edt.mcp.server.statusBar">
+            <control
+                  class="com.ditrix.edt.mcp.server.ui.McpStatusContribution"
+                  id="com.ditrix.edt.mcp.server.status">
+            </control>
+         </toolbar>
+      </menuContribution>
+   </extension>
+</plugin>

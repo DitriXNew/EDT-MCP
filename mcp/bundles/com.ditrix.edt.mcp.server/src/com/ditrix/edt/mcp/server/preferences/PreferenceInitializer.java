@@ -1,0 +1,24 @@
+/**
+ * Copyright (c) 2025 DitriX
+ */
+package com.ditrix.edt.mcp.server.preferences;
+
+import org.eclipse.core.runtime.preferences.AbstractPreferenceInitializer;
+import org.eclipse.jface.preference.IPreferenceStore;
+
+import com.ditrix.edt.mcp.server.Activator;
+
+/**
+ * Default preference initializer.
+ */
+public class PreferenceInitializer extends AbstractPreferenceInitializer
+{
+    @Override
+    public void initializeDefaultPreferences()
+    {
+        IPreferenceStore store = Activator.getDefault().getPreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_PORT, PreferenceConstants.DEFAULT_PORT);
+        store.setDefault(PreferenceConstants.PREF_AUTO_START, PreferenceConstants.DEFAULT_AUTO_START);
+        store.setDefault(PreferenceConstants.PREF_CHECKS_FOLDER, PreferenceConstants.DEFAULT_CHECKS_FOLDER);
+    }
+}

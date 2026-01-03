@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+   Copyright (c) 2020,2021 1C-Soft LLC.
+   This program and the accompanying materials are made available under
+   the terms of the Eclipse Public License 2.0 which is available at
+   https://www.eclipse.org/legal/epl-2.0/
+   SPDX-License-Identifier: EPL-2.0
+   Contributors:
+       1C-Soft LLC - initial API and implementation
+-->
+<?pde version="3.8"?><target name="1C:EDT Ruby Platform" sequenceNumber="1">
+<locations>
+
+<!-- EDT Platform Support -->
+<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
+<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2025.2/"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.8.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.9.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.10.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.11.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.12.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.13.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.14.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.15.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.16.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.17.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.18.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.19.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.20.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.21.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.22.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.23.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.24.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.25.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.26.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.3.27.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.platform.support_v8.5.1.feature.feature.group" version="0.0.0"/>
+</location>
+
+<!-- EDT -->
+<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
+<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2025.2/"/>
+<unit id="com._1c.g5.v8.dt.rcp" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.feature.feature.group" version="0.0.0"/>
+<unit id="com._1c.g5.v8.dt.thirdparty.feature.group" version="0.0.0"/>
+</location>
+
+<!-- LIBS -->
+<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
+<unit id="org.mockito" version="0.0.0"/>
+<unit id="org.objenesis" version="0.0.0"/>
+<unit id="net.bytebuddy.byte-buddy" version="0.0.0"/>
+<unit id="net.bytebuddy.byte-buddy-agent" version="0.0.0"/>
+<unit id="org.apache.commons.codec" version="1.6.0.v201305230611"/>
+<repository location="https://download.eclipse.org/tools/orbit/downloads/drops/R20211213173813/repository/"/>
+</location>
+
+<!-- SVG -->
+<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
+<unit id="org.eclipse.orbit.maven.org.apache.batik.feature.group" version="4.37.0"/>
+<repository location="https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.37.0/"/>
+</location>
+
+<!-- Eclipse -->
+<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
+<unit id="org.eclipse.sdk.feature.group" version="0.0.0"/>
+<unit id="org.eclipse.platform.feature.group" version="0.0.0"/>
+<unit id="org.eclipse.pde.feature.group" version="0.0.0"/>
+<unit id="org.eclipse.orbit.xml-apis-ext" version="0.0.0"/>
+<unit id="org.eclipse.ecf.filetransfer.httpclientjava.feature.feature.group" version="0.0.0"/>
+<repository id="eclipse_repository" location="https://download.eclipse.org/releases/2023-12/"/>
+</location>
+
+<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
+<unit id="org.eclipse.license.feature.group" version="0.0.0"/>
+<repository location="http://download.eclipse.org/cbi/updates/license/2.0.2.v20181016-2210"/>
+</location>
+
+</locations>
+</target>
