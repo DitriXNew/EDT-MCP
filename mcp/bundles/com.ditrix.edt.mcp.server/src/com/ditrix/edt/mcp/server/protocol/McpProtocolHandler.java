@@ -142,8 +142,8 @@ public class McpProtocolHandler
             case JSON:
                 return buildToolCallJsonResponse(result, requestId);
             case MARKDOWN:
-                String fileName = tool.getResultFileName(params);
-                return buildToolCallResourceResponse(result, "text/markdown", fileName, requestId); //$NON-NLS-1$
+                // Return Markdown as simple TextContent for compatibility
+                return buildToolCallTextResponse(result, requestId);
             case TEXT:
             default:
                 return buildToolCallTextResponse(result, requestId);
