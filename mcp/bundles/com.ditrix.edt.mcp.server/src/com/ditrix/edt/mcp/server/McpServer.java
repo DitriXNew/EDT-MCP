@@ -17,6 +17,7 @@ import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.tools.impl.GetBookmarksTool;
+import com.ditrix.edt.mcp.server.tools.impl.FindReferencesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetCheckDescriptionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetConfigurationPropertiesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
@@ -108,6 +109,7 @@ public class McpServer
         registry.register(new GetPlatformDocumentationTool());
         registry.register(new GetMetadataObjectsTool());
         registry.register(new GetMetadataDetailsTool());
+        registry.register(new FindReferencesTool());
         
         Activator.logInfo("Registered " + registry.getToolCount() + " MCP tools"); //$NON-NLS-1$ //$NON-NLS-2$
     }

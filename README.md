@@ -92,6 +92,7 @@ Add to `claude_desktop_config.json`:
 | `get_platform_documentation` | Get platform type documentation (methods, properties, constructors) |
 | `get_metadata_objects` | Get list of metadata objects from 1C configuration |
 | `get_metadata_details` | Get detailed properties of metadata objects (attributes, tabular sections, etc.) |
+| `find_references` | Find all references to a metadata object (in metadata, BSL code, forms, roles, etc.) |
 
 ### Content Assist Tool
 
@@ -279,6 +280,52 @@ Returns markdown table with columns: Name, Synonym, Comment, Type, ObjectModule,
 
 Returns markdown with detailed object properties, attributes, tabular sections, forms, commands.
 
+### Find References Tool
+
+**`find_references`** - Find all references to a metadata object. Returns all places where the object is used: in other metadata objects, forms, roles, subsystems, etc.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `objectFqn` | Yes | Fully qualified name (e.g. `Catalog.Products`, `Document.SalesOrder`, `CommonModule.Common`) |
+| `limit` | No | Maximum results per category (default: 100, max: 500) |
+
+**Example:**
+```json
+{
+  "projectName": "MyProject",
+  "objectFqn": "Catalog.Products"
+}
+```
+
+**Returns markdown with references grouped by category:**
+- **Subsystems** - Subsystems where object is included
+- **Roles** - Roles with permissions for the object
+- **Common attributes** - Common attributes using the object type
+- **Event subscriptions** - Event subscriptions for the object
+- **Scheduled jobs** - Scheduled jobs referencing the object
+- **Forms** - Forms using the object
+- **Type descriptions** - Type definitions using the object
+- **And more...** - Documents, catalogs, registers, etc.
+
+**Output format:**
+```markdown
+# References to Catalog.Products
+
+**Total references found:** 42
+
+## Subsystems (3)
+- Configuration.Subsystems.Sales
+- Configuration.Subsystems.Purchases
+- Configuration.Subsystems.Warehouse
+
+## Roles (5)
+- Role.Administrator → Read
+- Role.Manager → FullAccess
+...
+```
+
 ### Output Formats
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description` - return Markdown as EmbeddedResource with `mimeType: text/markdown`
@@ -308,6 +355,11 @@ Click the status indicator in EDT status bar:
 ## Version History
 
 ### 1.16.0
+- **New**: `find_references` tool - Find all references to a metadata object
+  - Returns all places where the object is used: roles, subsystems, forms, type descriptions, etc.
+  - Results grouped by category (Subsystems, Roles, Forms, Type descriptions, etc.)
+  - Searches through produced types, predefined items, fields
+  - Note: BSL code references will be added in future version
 - **New**: "Plain text mode (Cursor compatibility)" preference setting
   - When enabled, returns Markdown results as plain text instead of embedded resources
   - Solves compatibility issues with AI clients that don't support MCP embedded resources (e.g., Cursor)
