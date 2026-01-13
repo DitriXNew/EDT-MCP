@@ -81,7 +81,7 @@ Add to `claude_desktop_config.json`:
 | `get_edt_version` | Returns current EDT version |
 | `list_projects` | Lists workspace projects with properties |
 | `get_configuration_properties` | Gets 1C configuration properties |
-| `get_project_errors` | Returns EDT problems with severity/checkId filters |
+| `get_project_errors` | Returns EDT problems with severity/checkId/objects filters |
 | `get_problem_summary` | Problem counts grouped by project and severity |
 | `clean_project` | Cleans project markers and triggers full revalidation |
 | `revalidate_objects` | Revalidates specific objects by FQN (e.g. "Document.MyDoc") |
@@ -155,6 +155,46 @@ Returns only methods containing "Insert" or "Add" with full documentation:
 - **`revalidate_objects`**: Revalidates specific metadata objects by their FQN:
   - `Document.MyDocument`, `Catalog.MyCatalog`, `CommonModule.MyModule`
   - `Document.MyDoc.Form.MyForm` for nested objects
+
+### Project Errors Tool
+
+**`get_project_errors`** - Get detailed configuration problems from EDT with multiple filter options.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | No | Filter by project name |
+| `severity` | No | Filter by severity: `ERRORS`, `BLOCKER`, `CRITICAL`, `MAJOR`, `MINOR`, `TRIVIAL` |
+| `checkId` | No | Filter by check ID substring (e.g. `ql-temp-table-index`) |
+| `objects` | No | Filter by object FQNs (array). Returns errors only from specified objects |
+| `limit` | No | Maximum results (default: 100, max: 1000) |
+
+**Objects filter format:**
+- Array of FQN strings: `["Document.SalesOrder", "Catalog.Products"]`
+- Case-insensitive partial matching
+- Matches against error location (objectPresentation)
+- FQN examples:
+  - `Document.SalesOrder` - all errors in document
+  - `Catalog.Products` - all errors in catalog
+  - `CommonModule.MyModule` - all errors in common module
+  - `Document.SalesOrder.Form.ItemForm` - errors in specific form
+
+**Example - Get errors for specific objects:**
+```json
+{
+  "projectName": "MyProject",
+  "objects": ["Document.SalesOrder", "Catalog.Products"],
+  "severity": "BLOCKER"
+}
+```
+
+**Example - Get all errors with check ID filter:**
+```json
+{
+  "projectName": "MyProject",
+  "checkId": "ql-temp-table"
+}
+```
 
 ### Platform Documentation Tool
 
@@ -255,11 +295,15 @@ Click the status indicator in EDT status bar:
 
 ## Version History
 
-### 1.15.0
+### 1.16.0
 - **New**: "Plain text mode (Cursor compatibility)" preference setting
   - When enabled, returns Markdown results as plain text instead of embedded resources
   - Solves compatibility issues with AI clients that don't support MCP embedded resources (e.g., Cursor)
   - Located in: **Window → Preferences → MCP Server**
+- **New**: `objects` filter parameter for `get_project_errors` tool
+  - Filter errors by specific object FQNs (e.g. `["Document.SalesOrder", "Catalog.Products"]`)
+  - Returns only errors from the specified objects
+  - FQN matching is case-insensitive and supports partial matches
 
 ### 1.9.0
 - **Improved**: Enhanced EObject formatting in metadata tools using new `EObjectInspector` utility
@@ -382,4 +426,4 @@ Click the status indicator in EDT status bar:
 Copyright (c) 2025 DitriX. All rights reserved.
 
 ---
-*EDT MCP Server v1.15.0*
+*EDT MCP Server v1.16.0*
