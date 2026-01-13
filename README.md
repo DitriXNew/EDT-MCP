@@ -198,19 +198,20 @@ Returns only methods containing "Insert" or "Add" with full documentation:
 
 ### Platform Documentation Tool
 
-**`get_platform_documentation`** - Get documentation for platform types (ValueTable, Array, Structure, Query, etc.)
+**`get_platform_documentation`** - Get documentation for platform types (ValueTable, Array, Structure, Query, etc.) and built-in functions (FindFiles, Message, Format, etc.)
 
 **Parameters:**
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `typeName` | Yes | Platform type name (e.g. `ValueTable`, `Array`, `Structure`) |
+| `typeName` | Yes | Type or function name (e.g. `ValueTable`, `Array`, `FindFiles`, `Message`) |
+| `category` | No | Category: `type` (platform types), `builtin` (built-in functions). Default: `type` |
 | `projectName` | No | EDT project name (uses first available project if not specified) |
-| `memberName` | No | Filter by member name (partial match) |
-| `memberType` | No | Filter: `method`, `property`, `constructor`, `event`, `all` (default: `all`) |
+| `memberName` | No | Filter by member name (partial match) - only for `type` category |
+| `memberType` | No | Filter: `method`, `property`, `constructor`, `event`, `all` (default: `all`) - only for `type` category |
 | `language` | No | Output language: `en` or `ru` (default: `en`) |
-| `limit` | No | Maximum results (default: 50) |
+| `limit` | No | Maximum results (default: 50) - only for `type` category |
 
-**Example:**
+**Example - Platform type documentation:**
 ```json
 {
   "typeName": "ValueTable",
@@ -219,6 +220,17 @@ Returns only methods containing "Insert" or "Add" with full documentation:
   "language": "ru"
 }
 ```
+
+**Example - Built-in function documentation:**
+```json
+{
+  "typeName": "FindFiles",
+  "category": "builtin",
+  "language": "en"
+}
+```
+
+Returns function signature with parameters, types, and return value.
 
 ### Metadata Objects Tool
 
@@ -304,6 +316,10 @@ Click the status indicator in EDT status bar:
   - Filter errors by specific object FQNs (e.g. `["Document.SalesOrder", "Catalog.Products"]`)
   - Returns only errors from the specified objects
   - FQN matching is case-insensitive and supports partial matches
+- **New**: Built-in function documentation in `get_platform_documentation` tool
+  - Use `category: "builtin"` to get documentation for global functions (FindFiles, Message, Format, etc.)
+  - Returns function signature with parameters, types, optional flags, and return type
+  - Supports both English and Russian function names
 
 ### 1.9.0
 - **Improved**: Enhanced EObject formatting in metadata tools using new `EObjectInspector` utility

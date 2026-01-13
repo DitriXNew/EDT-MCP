@@ -9,6 +9,7 @@ import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.osgi.framework.BundleContext;
 import org.osgi.util.tracker.ServiceTracker;
 
+import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
@@ -42,6 +43,7 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<IBmModelManager, IBmModelManager> bmModelManagerTracker;
     private ServiceTracker<IDerivedDataManagerProvider, IDerivedDataManagerProvider> derivedDataManagerProviderTracker;
     private ServiceTracker<IServicesOrchestrator, IServicesOrchestrator> servicesOrchestratorTracker;
+    private ServiceTracker<BmAwareResourceSetProvider, BmAwareResourceSetProvider> resourceSetProviderTracker;
 
     @Override
     public void start(BundleContext context) throws Exception
@@ -74,6 +76,9 @@ public class Activator extends AbstractUIPlugin
         
         servicesOrchestratorTracker = new ServiceTracker<>(context, IServicesOrchestrator.class, null);
         servicesOrchestratorTracker.open();
+        
+        resourceSetProviderTracker = new ServiceTracker<>(context, BmAwareResourceSetProvider.class, null);
+        resourceSetProviderTracker.open();
         
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
@@ -126,6 +131,11 @@ public class Activator extends AbstractUIPlugin
         {
             servicesOrchestratorTracker.close();
             servicesOrchestratorTracker = null;
+        }
+        if (resourceSetProviderTracker != null)
+        {
+            resourceSetProviderTracker.close();
+            resourceSetProviderTracker = null;
         }
         
         logInfo("EDT MCP Server plugin stopped"); //$NON-NLS-1$
@@ -265,6 +275,21 @@ public class Activator extends AbstractUIPlugin
             return null;
         }
         return servicesOrchestratorTracker.getService();
+    }
+    
+    /**
+     * Returns the BmAwareResourceSetProvider service for resolving EMF proxies.
+     * Used for resolving platform type proxies in content assist.
+     * 
+     * @return resource set provider or null if not available
+     */
+    public BmAwareResourceSetProvider getResourceSetProvider()
+    {
+        if (resourceSetProviderTracker == null)
+        {
+            return null;
+        }
+        return resourceSetProviderTracker.getService();
     }
 
     /**

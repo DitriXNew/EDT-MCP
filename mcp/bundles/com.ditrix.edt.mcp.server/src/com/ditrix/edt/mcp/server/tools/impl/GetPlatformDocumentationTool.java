@@ -21,6 +21,7 @@ import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
 import com._1c.g5.v8.dt.mcore.ContextDef;
 import com._1c.g5.v8.dt.mcore.Ctor;
 import com._1c.g5.v8.dt.mcore.Event;
@@ -34,6 +35,8 @@ import com._1c.g5.v8.dt.mcore.TypeContainer;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
+
+import org.eclipse.emf.ecore.resource.ResourceSet;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -764,17 +767,209 @@ public class GetPlatformDocumentationTool implements IMcpTool
     }
     
     /**
-     * Gets documentation for built-in functions (Message, Format, etc.).
+     * Gets documentation for built-in functions (Message, Format, FindFiles, etc.).
+     * Uses McorePackage.Literals.METHOD provider to get global context methods.
      */
     private String getBuiltinFunctionDocumentation(String functionName, boolean useRussian)
     {
-        // For now, provide a placeholder - full implementation would require
-        // accessing BuiltinFunction from BSL model
+        AtomicReference<String> resultRef = new AtomicReference<>();
+        
+        Display display = PlatformUI.getWorkbench().getDisplay();
+        display.syncExec(() -> {
+            try
+            {
+                String result = getBuiltinFunctionDocumentationInternal(functionName, useRussian);
+                resultRef.set(result);
+            }
+            catch (Exception e)
+            {
+                Activator.logError("Error getting builtin function documentation", e); //$NON-NLS-1$
+                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+            }
+        });
+        
+        return resultRef.get();
+    }
+    
+    /**
+     * Internal implementation that runs on UI thread.
+     */
+    private String getBuiltinFunctionDocumentationInternal(String functionName, boolean useRussian)
+    {
+        Version version = getProjectVersion(null);
+        if (version == null)
+        {
+            version = Version.LATEST;
+        }
+        
+        // Get METHOD provider - this gives us global context methods (built-in functions)
+        IEObjectProvider.Registry registry = IEObjectProvider.Registry.INSTANCE;
+        IEObjectProvider methodProvider = registry.get(McorePackage.Literals.METHOD, version);
+        
+        if (methodProvider == null)
+        {
+            return "Error: Could not get method provider. Make sure EDT workspace is open."; //$NON-NLS-1$
+        }
+        
+        // Get ResourceSet for resolving proxies
+        ResourceSet resourceSet = null;
+        BmAwareResourceSetProvider resourceSetProvider = Activator.getDefault().getResourceSetProvider();
+        IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
+        if (v8pm != null && resourceSetProvider != null)
+        {
+            for (IV8Project project : v8pm.getProjects())
+            {
+                resourceSet = resourceSetProvider.get(project.getProject());
+                if (resourceSet != null)
+                {
+                    break;
+                }
+            }
+        }
+        
+        // Search for the function
+        Method foundMethod = null;
+        List<String> availableMethods = new ArrayList<>();
+        
+        Iterable<IEObjectDescription> descriptions = methodProvider.getEObjectDescriptions(null);
+        if (descriptions != null)
+        {
+            for (IEObjectDescription desc : descriptions)
+            {
+                String methodName = desc.getName().getLastSegment();
+                if (methodName == null)
+                {
+                    methodName = desc.getName().toString();
+                }
+                
+                // Collect some methods for suggestions
+                if (availableMethods.size() < 30)
+                {
+                    availableMethods.add(methodName);
+                }
+                
+                // Check if this is the function we're looking for (case-insensitive)
+                if (methodName.equalsIgnoreCase(functionName))
+                {
+                    EObject resolved = desc.getEObjectOrProxy();
+                    if (resolved != null)
+                    {
+                        // Try to resolve proxy
+                        if (resolved.eIsProxy() && resourceSet != null)
+                        {
+                            resolved = EcoreUtil.resolve(resolved, resourceSet);
+                        }
+                        else if (resolved.eIsProxy())
+                        {
+                            // Try with temp resource set
+                            org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet = 
+                                new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
+                            resolved = EcoreUtil.resolve(resolved, tempResourceSet);
+                        }
+                        
+                        if (resolved instanceof Method && !resolved.eIsProxy())
+                        {
+                            foundMethod = (Method) resolved;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If not found, show available methods
+        if (foundMethod == null)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Error: Built-in function not found: ").append(functionName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append("Available global methods (first ").append(availableMethods.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            for (String availMethod : availableMethods)
+            {
+                sb.append("- ").append(availMethod).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (availableMethods.isEmpty())
+            {
+                sb.append("(no methods found - provider may be empty)\n"); //$NON-NLS-1$
+            }
+            else if (availableMethods.size() >= 30)
+            {
+                sb.append("... (more available)\n"); //$NON-NLS-1$
+            }
+            return sb.toString();
+        }
+        
+        // Build documentation for the found method
+        return buildBuiltinMethodDocumentation(foundMethod, useRussian);
+    }
+    
+    /**
+     * Builds markdown documentation for a built-in method.
+     */
+    private String buildBuiltinMethodDocumentation(Method method, boolean useRussian)
+    {
         StringBuilder sb = new StringBuilder();
-        sb.append("# Built-in Function: ").append(functionName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("*Built-in function documentation is not yet fully implemented.*\n\n"); //$NON-NLS-1$
-        sb.append("To get information about built-in functions, use the `get_content_assist` tool "); //$NON-NLS-1$
-        sb.append("at a position where you're calling the function.\n"); //$NON-NLS-1$
+        
+        // Method header
+        String displayName = useRussian ? method.getNameRu() : method.getName();
+        String altName = useRussian ? method.getName() : method.getNameRu();
+        
+        sb.append("# ").append(displayName != null ? displayName : "Unknown"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (altName != null && !altName.equals(displayName))
+        {
+            sb.append(" / ").append(altName); //$NON-NLS-1$
+        }
+        sb.append("\n\n"); //$NON-NLS-1$
+        
+        sb.append("**Category:** Built-in function (global method)\n\n"); //$NON-NLS-1$
+        
+        // Method flags
+        if (method.isRetVal())
+        {
+            sb.append("*Returns a value*\n\n"); //$NON-NLS-1$
+        }
+        else
+        {
+            sb.append("*Procedure (no return value)*\n\n"); //$NON-NLS-1$
+        }
+        
+        // Parameter sets (overloads)
+        EList<ParamSet> paramSets = method.getParamSet();
+        if (paramSets != null && !paramSets.isEmpty())
+        {
+            sb.append("## Parameters\n\n"); //$NON-NLS-1$
+            for (int i = 0; i < paramSets.size(); i++)
+            {
+                ParamSet ps = paramSets.get(i);
+                if (paramSets.size() > 1)
+                {
+                    sb.append("### Overload ").append(i + 1).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                appendParamSetDocumentation(sb, ps, useRussian);
+                sb.append("\n"); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            sb.append("## Parameters\n\n*No parameters*\n\n"); //$NON-NLS-1$
+        }
+        
+        // Return type
+        EList<TypeItem> retValTypes = method.getRetValType();
+        if (retValTypes != null && !retValTypes.isEmpty())
+        {
+            sb.append("## Return Type\n\n"); //$NON-NLS-1$
+            List<String> typeNames = new ArrayList<>();
+            for (TypeItem typeItem : retValTypes)
+            {
+                String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
+                if (typeName != null)
+                {
+                    typeNames.add(typeName);
+                }
+            }
+            sb.append("**Returns:** ").append(String.join(" | ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        
         return sb.toString();
     }
 }
