@@ -3,8 +3,10 @@
  */
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,9 +32,11 @@ import com._1c.g5.v8.bm.core.IBmEngine;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.common.Functions;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.mcore.FieldSource;
+import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.md.PredefinedItemUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -371,7 +375,7 @@ public class FindReferencesTool implements IMcpTool
     }
     
     /**
-     * Formats output as markdown.
+     * Formats output as markdown - sorted list similar to EDT.
      */
     private String formatOutput(String objectFqn, ReferenceCollector collector)
     {
@@ -388,48 +392,88 @@ public class FindReferencesTool implements IMcpTool
             return sb.toString();
         }
         
-        // Group by category and output
-        Map<String, List<ReferenceInfo>> grouped = collector.getGroupedReferences();
+        // Get all references and merge BSL by module
+        List<ReferenceInfo> allRefs = collector.getAllReferences();
         
-        for (Map.Entry<String, List<ReferenceInfo>> entry : grouped.entrySet())
+        // Separate BSL and metadata references
+        Map<String, List<Integer>> bslModuleLines = new java.util.TreeMap<>();
+        List<ReferenceInfo> metadataRefs = new ArrayList<>();
+        
+        for (ReferenceInfo ref : allRefs)
         {
-            String category = entry.getKey();
-            List<ReferenceInfo> refs = entry.getValue();
-            
-            sb.append("## ").append(category).append(" (").append(refs.size()).append(")\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            
-            for (ReferenceInfo ref : refs)
+            if (ref.isBslReference)
             {
-                sb.append("- "); //$NON-NLS-1$
+                // Group BSL by module path
+                String modulePath = ref.sourcePath;
+                bslModuleLines.computeIfAbsent(modulePath, k -> new ArrayList<>()).add(ref.line);
+            }
+            else
+            {
+                metadataRefs.add(ref);
+            }
+        }
+        
+        // Sort metadata references by sourcePath
+        metadataRefs.sort((a, b) -> {
+            String pathA = a.sourcePath != null ? a.sourcePath : ""; //$NON-NLS-1$
+            String pathB = b.sourcePath != null ? b.sourcePath : ""; //$NON-NLS-1$
+            return pathA.compareToIgnoreCase(pathB);
+        });
+        
+        // Output metadata references
+        for (ReferenceInfo ref : metadataRefs)
+        {
+            String displayPath = ref.sourcePath;
+            if (displayPath != null && displayPath.startsWith("/")) //$NON-NLS-1$
+            {
+                displayPath = displayPath.substring(1);
+            }
+            
+            sb.append("- ").append(displayPath); //$NON-NLS-1$
+            if (ref.feature != null && !ref.feature.isEmpty())
+            {
+                sb.append(" - ").append(ref.feature); //$NON-NLS-1$
+            }
+            sb.append("\n"); //$NON-NLS-1$
+        }
+        
+        // Output BSL references grouped by module
+        if (!bslModuleLines.isEmpty())
+        {
+            sb.append("\n### BSL Modules\n\n"); //$NON-NLS-1$
+            
+            for (Map.Entry<String, List<Integer>> entry : bslModuleLines.entrySet())
+            {
+                String modulePath = entry.getKey();
+                List<Integer> lines = entry.getValue();
                 
-                // Remove leading slash for cleaner output
-                String displayPath = ref.sourcePath;
-                if (displayPath != null && displayPath.startsWith("/")) //$NON-NLS-1$
+                // Sort lines
+                lines.sort(Integer::compareTo);
+                
+                // Remove leading slash if present
+                if (modulePath != null && modulePath.startsWith("/")) //$NON-NLS-1$
                 {
-                    displayPath = displayPath.substring(1);
+                    modulePath = modulePath.substring(1);
                 }
                 
-                if (ref.isBslReference)
+                sb.append("- ").append(modulePath); //$NON-NLS-1$
+                
+                // Format lines as [Line X; Line Y; ...]
+                if (!lines.isEmpty())
                 {
-                    // BSL code reference with module and line
-                    sb.append("**").append(displayPath).append("**"); //$NON-NLS-1$ //$NON-NLS-2$
-                    if (ref.line > 0)
+                    sb.append(" ["); //$NON-NLS-1$
+                    for (int i = 0; i < lines.size(); i++)
                     {
-                        sb.append(" (line ").append(ref.line).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
+                        if (i > 0)
+                        {
+                            sb.append("; "); //$NON-NLS-1$
+                        }
+                        sb.append("Line ").append(lines.get(i)); //$NON-NLS-1$
                     }
-                }
-                else
-                {
-                    // Metadata reference
-                    sb.append(displayPath);
-                    if (ref.feature != null && !ref.feature.isEmpty())
-                    {
-                        sb.append(" → ").append(ref.feature); //$NON-NLS-1$
-                    }
+                    sb.append("]"); //$NON-NLS-1$
                 }
                 sb.append("\n"); //$NON-NLS-1$
             }
-            sb.append("\n"); //$NON-NLS-1$
         }
         
         return sb.toString();
@@ -476,8 +520,6 @@ public class FindReferencesTool implements IMcpTool
         private final List<ReferenceInfo> references = new ArrayList<>();
         /** Set to track unique references (category:path:feature) to avoid duplicates */
         private final java.util.Set<String> seenReferences = new java.util.HashSet<>();
-        /** Target object FQN for filtering self-references */
-        private String targetFqn;
         
         ReferenceCollector(IBmModel bmModel, MdObject targetObject, int limit)
         {
@@ -493,9 +535,6 @@ public class FindReferencesTool implements IMcpTool
         {
             IBmEngine engine = bmModel.getEngine();
             IBmObject targetBmObject = (IBmObject) targetObject;
-            
-            // Get target FQN for filtering self-references
-            targetFqn = targetBmObject.bmIsTop() ? targetBmObject.bmGetFqn().toString() : null;
             
             // 1. Collect direct back references
             collectBackReferences(engine, targetBmObject);
@@ -516,8 +555,8 @@ public class FindReferencesTool implements IMcpTool
         }
         
         /**
-         * Adds reference if not duplicate and not self-reference.
-         * @return true if added, false if duplicate or self-reference
+         * Adds reference if not duplicate.
+         * @return true if added, false if duplicate or internal path
          */
         private boolean addReference(ReferenceInfo ref)
         {
@@ -531,16 +570,13 @@ public class FindReferencesTool implements IMcpTool
                 return false;
             }
             
-            // Skip true self-references only (path starts with targetFqn)
-            // Don't filter Catalog.ItemKeys.Attribute.Item when searching for Catalog.Items
-            if (targetFqn != null && ref.sourcePath != null)
+            // Note: EDT shows self-references (references within the same object)
+            // so we don't filter them
+            
+            // Skip technical/internal objects
+            if (ref.sourcePath != null && isInternalPath(ref.sourcePath))
             {
-                // Normalize path - remove leading slash for comparison
-                String normalizedPath = ref.sourcePath.startsWith("/") ? ref.sourcePath.substring(1) : ref.sourcePath; //$NON-NLS-1$
-                if (normalizedPath.equals(targetFqn) || normalizedPath.startsWith(targetFqn + ".")) //$NON-NLS-1$
-                {
-                    return false;
-                }
+                return false;
             }
             
             seenReferences.add(key);
@@ -572,7 +608,13 @@ public class FindReferencesTool implements IMcpTool
                 }
                 
                 String category = getCategoryFromObject(sourceObject);
-                String sourcePath = getObjectPath(sourceObject);
+                // Build full path including the feature path inside the object
+                String sourcePath = getFullReferencePath(sourceObject, ref);
+                // Skip if path is internal (returns null)
+                if (sourcePath == null)
+                {
+                    continue;
+                }
                 String feature = ref.getFeature() != null ? ref.getFeature().getName() : null;
                 
                 addReference(new ReferenceInfo(category, sourcePath, feature));
@@ -607,7 +649,11 @@ public class FindReferencesTool implements IMcpTool
                         }
                         
                         String category = getCategoryFromObject(sourceObject);
-                        String sourcePath = getObjectPath(sourceObject);
+                        String sourcePath = getFullReferencePath(sourceObject, ref);
+                        if (sourcePath == null)
+                        {
+                            continue;
+                        }
                         String feature = "Type: " + (ref.getFeature() != null ? ref.getFeature().getName() : ""); //$NON-NLS-1$ //$NON-NLS-2$
                         
                         addReference(new ReferenceInfo(category, sourcePath, feature));
@@ -648,7 +694,11 @@ public class FindReferencesTool implements IMcpTool
                     }
                     
                     String category = "Predefined items"; //$NON-NLS-1$
-                    String sourcePath = getObjectPath(sourceObject);
+                    String sourcePath = getFullReferencePath(sourceObject, ref);
+                    if (sourcePath == null)
+                    {
+                        continue;
+                    }
                     String feature = item.getName();
                     
                     addReference(new ReferenceInfo(category, sourcePath, feature));
@@ -692,7 +742,11 @@ public class FindReferencesTool implements IMcpTool
                     }
                     
                     String category = "Field references"; //$NON-NLS-1$
-                    String sourcePath = getObjectPath(sourceObject);
+                    String sourcePath = getFullReferencePath(sourceObject, ref);
+                    if (sourcePath == null)
+                    {
+                        continue;
+                    }
                     String feature = field.getName();
                     
                     addReference(new ReferenceInfo(category, sourcePath, feature));
@@ -911,16 +965,28 @@ public class FindReferencesTool implements IMcpTool
                 return true;
             }
             
-            // Skip transient and internal references
+            // Skip transient references
             EStructuralFeature feature = ref.getFeature();
             if (feature != null && feature.isTransient())
             {
                 return true;
             }
             
-            // Skip obvious parent-child relationships
+            // Check package URI - following EDT's isInternal logic
             String packageUri = object.eClass().getEPackage().getNsURI();
-            if (packageUri != null && packageUri.contains("dbview")) //$NON-NLS-1$
+            if (packageUri == null)
+            {
+                return true;
+            }
+            
+            // Skip dbview package references (EDT's DB_VIEW_PACKAGE_URI)
+            if (packageUri.contains("dbview")) //$NON-NLS-1$
+            {
+                return true;
+            }
+            
+            // Skip derived command interface (cmi/deriveddata package)
+            if (packageUri.contains("cmi") && packageUri.contains("deriveddata")) //$NON-NLS-1$ //$NON-NLS-2$
             {
                 return true;
             }
@@ -963,6 +1029,252 @@ public class FindReferencesTool implements IMcpTool
             }
             
             return className;
+        }
+        
+        /**
+         * Gets full reference path including the path inside the object to the referring feature.
+         * Format: TopObject - FeatureLabel.ObjectName.FeatureLabel...
+         * Example: Catalog.Items.Form.ItemForm.Form - Items.List.Items.Owner.Data path
+         * 
+         * Follows EDT's TableItemsFactory algorithm:
+         * - Build path from sourceObject up to topObject using eContainer()
+         * - For each level: FeatureLabel (localized) + ObjectName (if available)
+         */
+        private String getFullReferencePath(IBmObject sourceObject, IBmCrossReference ref)
+        {
+            // Get the top-level container (form, catalog, etc.)
+            IBmObject topObject = findTopContainer(sourceObject);
+            if (topObject == null)
+            {
+                return getObjectPath(sourceObject);
+            }
+            
+            String topPath = topObject.bmGetFqn();
+            if (topPath == null || topPath.isEmpty())
+            {
+                return getObjectPath(sourceObject);
+            }
+            
+            // Build the inner path EDT-style: FeatureLabel.ObjectName.FeatureLabel...
+            String innerPath = buildInnerPathEdtStyle(sourceObject, topObject, ref.getFeature());
+            
+            // Filter out internal/technical paths that EDT doesn't show
+            if (innerPath != null && isInternalPath(innerPath))
+            {
+                return null; // Signal to skip this reference
+            }
+            
+            StringBuilder result = new StringBuilder(topPath);
+            if (innerPath != null && !innerPath.isEmpty())
+            {
+                result.append(" - ").append(innerPath); //$NON-NLS-1$
+            }
+            
+            return result.toString();
+        }
+        
+        /**
+         * Checks if path is internal/technical and should be filtered out.
+         * EDT doesn't show references from Value types, Form context, Db view defs, etc.
+         */
+        private boolean isInternalPath(String path)
+        {
+            if (path == null || path.isEmpty())
+            {
+                return false;
+            }
+            
+            // Skip paths starting with technical features
+            if (path.startsWith("Value types") || path.startsWith("Form context") //$NON-NLS-1$ //$NON-NLS-2$
+                || path.startsWith("Db view defs") || path.startsWith("Standard commands")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                return true;
+            }
+            
+            return false;
+        }
+        
+        /**
+         * Finds the top-level container of an object.
+         */
+        private IBmObject findTopContainer(IBmObject object)
+        {
+            if (object == null)
+            {
+                return null;
+            }
+            
+            if (object.bmIsTop())
+            {
+                return object;
+            }
+            
+            EObject current = (EObject) object;
+            while (current != null)
+            {
+                if (current instanceof IBmObject && ((IBmObject) current).bmIsTop())
+                {
+                    return (IBmObject) current;
+                }
+                current = current.eContainer();
+            }
+            
+            return null;
+        }
+        
+        /**
+         * Builds the inner path EDT-style: FeatureLabel.ObjectName.FeatureLabel.ObjectName...
+         * Following EDT's TableItemsFactory algorithm.
+         * 
+         * @param sourceObject the source object where reference is located
+         * @param topObject the top-level container
+         * @param referenceFeature the feature that contains the reference
+         * @return path string like "Items.List.Items.Owner.Data path"
+         */
+        private String buildInnerPathEdtStyle(IBmObject sourceObject, IBmObject topObject, EStructuralFeature referenceFeature)
+        {
+            // Build path exactly like EDT's TableItemsFactory.getTopObjectPathToReference
+            // Path is built from source up to topObject: Deque<Pair<EObject, EStructuralFeature>>
+            Deque<PathSegment> path = new ArrayDeque<>();
+            
+            IBmObject parent = sourceObject;
+            EStructuralFeature ref = referenceFeature;
+            
+            do
+            {
+                path.addFirst(new PathSegment((EObject) parent, ref));
+                if (parent.bmIsTop())
+                {
+                    break;
+                }
+                ref = ((EObject) parent).eContainingFeature();
+                EObject container = ((EObject) parent).eContainer();
+                parent = container instanceof IBmObject ? (IBmObject) container : null;
+            }
+            while (parent != null);
+            
+            if (path.isEmpty())
+            {
+                return referenceFeature != null ? getFeatureLabel(referenceFeature) : null;
+            }
+            
+            // Build path string exactly like EDT:
+            // referenceName = featureLabel(topObjectPair.second)
+            // for each segment: referenceName + "." + objectName + "." + featureLabel
+            PathSegment topObjectPair = path.pollFirst();
+            
+            // Start with feature label of the first segment
+            StringBuilder referenceName = new StringBuilder();
+            if (topObjectPair.feature != null)
+            {
+                String label = getFeatureLabel(topObjectPair.feature);
+                if (label != null)
+                {
+                    referenceName.append(label);
+                }
+            }
+            
+            // For remaining segments, add objectName.featureLabel
+            // Optimization: skip redundant "Items" in path (e.g., Items.X.Items.Y -> Items.X.Y)
+            String prevFeatureLabel = referenceName.length() > 0 ? referenceName.toString() : null;
+            for (PathSegment segment : path)
+            {
+                String nextSegmentName = getSegmentObjectName(segment.object);
+                // EDT skips segments where getSegmentName returns null!
+                if (nextSegmentName == null)
+                {
+                    continue;
+                }
+                
+                String currentFeatureLabel = getFeatureLabel(segment.feature);
+                
+                if (referenceName.length() > 0)
+                {
+                    referenceName.append("."); //$NON-NLS-1$
+                }
+                referenceName.append(nextSegmentName);
+                
+                // Skip adding featureLabel if it's "Items" and the previous featureLabel was also "Items"
+                // This removes redundant ".Items" in paths like "Items.X.Items.Y" -> "Items.X.Y"
+                boolean isItemsFeature = "Items".equals(currentFeatureLabel); //$NON-NLS-1$
+                boolean prevWasItems = "Items".equals(prevFeatureLabel); //$NON-NLS-1$
+                
+                if (!isItemsFeature || !prevWasItems)
+                {
+                    referenceName.append("."); //$NON-NLS-1$
+                    referenceName.append(currentFeatureLabel);
+                }
+                
+                prevFeatureLabel = currentFeatureLabel;
+            }
+            
+            return referenceName.length() > 0 ? referenceName.toString() : null;
+        }
+        
+        /**
+         * Gets the localized label for a feature, following EDT's Functions.featureToLabel() pattern.
+         */
+        private String getFeatureLabel(EStructuralFeature feature)
+        {
+            if (feature == null)
+            {
+                return null;
+            }
+            try
+            {
+                // Try to use EDT's localization
+                String label = Functions.featureToLabel().apply(feature);
+                if (label != null)
+                {
+                    return label;
+                }
+            }
+            catch (Exception e)
+            {
+                // Ignore and fall back
+            }
+            // Fallback: capitalize feature name
+            return capitalizeFirst(feature.getName());
+        }
+        
+        /**
+         * Gets the name of an object for path segment (following EDT's getSegmentName pattern).
+         */
+        private String getSegmentObjectName(EObject object)
+        {
+            // NamedElement has getName() - covers form items, commands, etc.
+            if (object instanceof NamedElement)
+            {
+                return ((NamedElement) object).getName();
+            }
+            // MdObject also has getName()
+            if (object instanceof MdObject)
+            {
+                return ((MdObject) object).getName();
+            }
+            // For ExtInfo (form extension info), return EClass name
+            // Check by class name to avoid dependency on form bundle
+            String className = object.eClass().getName();
+            if (className.endsWith("ExtInfo")) //$NON-NLS-1$
+            {
+                return className;
+            }
+            return null;
+        }
+        
+        /**
+         * Helper class to hold path segment information (like EDT's Pair<EObject, EStructuralFeature>).
+         */
+        private static class PathSegment
+        {
+            final EObject object;
+            final EStructuralFeature feature;
+            
+            PathSegment(EObject object, EStructuralFeature feature)
+            {
+                this.object = object;
+                this.feature = feature;
+            }
         }
         
         private String getObjectPath(IBmObject object)
@@ -1194,6 +1506,11 @@ public class FindReferencesTool implements IMcpTool
         public int getTotalCount()
         {
             return references.size();
+        }
+        
+        public List<ReferenceInfo> getAllReferences()
+        {
+            return new ArrayList<>(references);
         }
         
         public Map<String, List<ReferenceInfo>> getGroupedReferences()
