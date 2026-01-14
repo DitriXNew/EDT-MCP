@@ -282,7 +282,7 @@ Returns markdown with detailed object properties, attributes, tabular sections, 
 
 ### Find References Tool
 
-**`find_references`** - Find all references to a metadata object. Returns all places where the object is used: in other metadata objects, forms, roles, subsystems, etc.
+**`find_references`** - Find all references to a metadata object. Returns all places where the object is used: in other metadata objects, BSL code, forms, roles, subsystems, etc. Matches EDT's built-in "Find References" functionality.
 
 **Parameters:**
 | Parameter | Required | Description |
@@ -299,32 +299,38 @@ Returns markdown with detailed object properties, attributes, tabular sections, 
 }
 ```
 
-**Returns markdown with references grouped by category:**
-- **Subsystems** - Subsystems where object is included
-- **Roles** - Roles with permissions for the object
-- **Common attributes** - Common attributes using the object type
-- **Event subscriptions** - Event subscriptions for the object
-- **Scheduled jobs** - Scheduled jobs referencing the object
-- **Forms** - Forms using the object
-- **Type descriptions** - Type definitions using the object
-- **And more...** - Documents, catalogs, registers, etc.
+**Returns markdown with references in EDT-compatible format:**
 
-**Output format:**
 ```markdown
-# References to Catalog.Products
+# References to Catalog.Items
 
-**Total references found:** 42
+**Total references found:** 122
 
-## Subsystems (3)
-- Configuration.Subsystems.Sales
-- Configuration.Subsystems.Purchases
-- Configuration.Subsystems.Warehouse
+- Catalog.ItemKeys - Attributes.Item.Type - Type: types
+- Catalog.ItemKeys.Form.ChoiceForm.Form - Items.List.Item.Data path - Type: types
+- Catalog.Items - Attributes.PackageUnit.Choice parameter links - Ref
+- Catalog.Items.Form.ItemForm.Form - Items.GroupTop.GroupMainAttributes.Code.Data path - Type: types
+- CommonAttribute.Author - Content - metadata
+- Configuration - Catalogs - catalogs
+- DefinedType.typeItem - Type - Type: types
+- EventSubscription.BeforeWrite_CatalogsLockDataModification - Source - Type: types
+- Role.FullAccess.Rights - Role rights - object
+- Subsystem.Settings.Subsystem.Items - Content - content
 
-## Roles (5)
-- Role.Administrator → Read
-- Role.Manager → FullAccess
-...
+### BSL Modules
+
+- CommonModules/GetItemInfo/Module.bsl [Line 199; Line 369; Line 520]
+- Catalogs/Items/Forms/ListForm/Module.bsl [Line 18; Line 19]
 ```
+
+**Reference types included:**
+- **Metadata references** - Attributes, form items, command parameters, type descriptions
+- **Type usages** - DefinedTypes, ChartOfCharacteristicTypes, type compositions
+- **Common attributes** - Objects included in common attribute content
+- **Event subscriptions** - Source objects for subscriptions
+- **Roles** - Objects with role permissions
+- **Subsystems** - Subsystem content
+- **BSL code** - References in BSL modules with line numbers
 
 ### Output Formats
 
@@ -354,12 +360,13 @@ Click the status indicator in EDT status bar:
 
 ## Version History
 
-### 1.16.0
+### 1.17.0
 - **New**: `find_references` tool - Find all references to a metadata object
   - Returns all places where the object is used: roles, subsystems, forms, type descriptions, etc.
   - Results grouped by category (Subsystems, Roles, Forms, Type descriptions, etc.)
   - Searches through produced types, predefined items, fields
   - Note: BSL code references will be added in future version
+### 1.16.0  
 - **New**: "Plain text mode (Cursor compatibility)" preference setting
   - When enabled, returns Markdown results as plain text instead of embedded resources
   - Solves compatibility issues with AI clients that don't support MCP embedded resources (e.g., Cursor)
