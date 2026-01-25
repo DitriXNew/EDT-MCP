@@ -205,20 +205,27 @@ public class McpProtocolHandler
     }
     
     /**
-     * Adds user signal to a JSON result string.
+     * Adds user signal to a JSON result string using Gson for proper JSON handling.
      */
     private String addUserSignalToJson(String jsonResult, UserSignal signal)
     {
         try
         {
-            // Simple approach: insert before last }
-            String signalJson = ", \"userSignal\": {\"type\": \"" + signal.getType().name() + 
-                "\", \"message\": \"" + escapeJsonString(signal.getMessage()) + "\"}";
-            
-            int lastBrace = jsonResult.lastIndexOf('}');
-            if (lastBrace > 0)
+            // Parse the original JSON
+            JsonElement element = JsonParser.parseString(jsonResult);
+            if (element.isJsonObject())
             {
-                return jsonResult.substring(0, lastBrace) + signalJson + "}";
+                com.google.gson.JsonObject jsonObject = element.getAsJsonObject();
+                
+                // Create userSignal object
+                com.google.gson.JsonObject signalObject = new com.google.gson.JsonObject();
+                signalObject.addProperty("type", signal.getType().name());
+                signalObject.addProperty("message", signal.getMessage());
+                
+                // Add to result
+                jsonObject.add("userSignal", signalObject);
+                
+                return new com.google.gson.Gson().toJson(jsonObject);
             }
         }
         catch (Exception e)
@@ -226,22 +233,6 @@ public class McpProtocolHandler
             Activator.logError("Failed to add user signal to JSON", e);
         }
         return jsonResult;
-    }
-    
-    /**
-     * Escapes a string for JSON.
-     */
-    private String escapeJsonString(String text)
-    {
-        if (text == null)
-        {
-            return "";
-        }
-        return text.replace("\\", "\\\\")
-                   .replace("\"", "\\\"")
-                   .replace("\n", "\\n")
-                   .replace("\r", "\\r")
-                   .replace("\t", "\\t");
     }
     
     /**

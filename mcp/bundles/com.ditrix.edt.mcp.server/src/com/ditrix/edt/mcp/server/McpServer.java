@@ -327,11 +327,12 @@ public class McpServer
     /**
      * Interrupts the current tool call with a user signal.
      * Sends the signal response immediately and returns control to the agent.
+     * This method is thread-safe.
      * 
      * @param signal the user signal
      * @return true if the call was interrupted successfully
      */
-    public boolean interruptToolCall(UserSignal signal)
+    public synchronized boolean interruptToolCall(UserSignal signal)
     {
         ActiveToolCall call = this.activeToolCall;
         if (call != null && !call.hasResponded())
@@ -339,9 +340,10 @@ public class McpServer
             boolean sent = call.sendSignalResponse(signal);
             if (sent)
             {
-                // Clear tool execution state
-                setCurrentToolName(null);
-                clearActiveToolCall();
+                // Clear tool execution state atomically
+                this.currentToolName = null;
+                this.toolExecutionStartTime = 0;
+                this.activeToolCall = null;
             }
             return sent;
         }
@@ -367,7 +369,8 @@ public class McpServer
             if (origin != null && !isValidOrigin(origin))
             {
                 Activator.logInfo("Invalid Origin header rejected: " + origin); //$NON-NLS-1$
-                sendResponse(exchange, 403, "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32600, \"message\": \"Invalid Origin\"}}"); //$NON-NLS-1$
+                sendResponse(exchange, 403, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildJsonRpcError(
+                    McpConstants.ERROR_INVALID_REQUEST, "Invalid Origin", null)); //$NON-NLS-1$
                 return;
             }
             
@@ -402,7 +405,7 @@ public class McpServer
             }
             else
             {
-                sendResponse(exchange, 405, "{\"error\": \"Method not allowed\"}"); //$NON-NLS-1$
+                sendResponse(exchange, 405, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildSimpleError("Method not allowed")); //$NON-NLS-1$
             }
         }
         
@@ -478,8 +481,8 @@ public class McpServer
             catch (Exception e)
             {
                 Activator.logError("MCP request processing error", e); //$NON-NLS-1$
-                response = "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32603, \"message\": \"" //$NON-NLS-1$
-                    + escapeJsonForError(e.getMessage()) + "\"}, \"id\": null}"; //$NON-NLS-1$
+                response = com.ditrix.edt.mcp.server.protocol.JsonUtils.buildJsonRpcError(
+                    McpConstants.ERROR_INTERNAL, e.getMessage(), null);
             }
 
             // Check if client accepts SSE
@@ -593,47 +596,29 @@ public class McpServer
         }
         
         /**
-         * Extracts request ID from JSON-RPC request.
+         * Extracts request ID from JSON-RPC request using Gson.
          */
         private Object extractRequestId(String requestBody)
         {
             try
             {
-                int idIndex = requestBody.indexOf("\"id\""); //$NON-NLS-1$
-                if (idIndex >= 0)
+                com.google.gson.JsonElement element = com.google.gson.JsonParser.parseString(requestBody);
+                if (element.isJsonObject())
                 {
-                    int colonIndex = requestBody.indexOf(':', idIndex);
-                    if (colonIndex >= 0)
+                    com.google.gson.JsonObject jsonObject = element.getAsJsonObject();
+                    if (jsonObject.has("id")) //$NON-NLS-1$
                     {
-                        int start = colonIndex + 1;
-                        // Skip whitespace
-                        while (start < requestBody.length() && Character.isWhitespace(requestBody.charAt(start)))
+                        com.google.gson.JsonElement idElement = jsonObject.get("id"); //$NON-NLS-1$
+                        if (idElement.isJsonPrimitive())
                         {
-                            start++;
-                        }
-                        
-                        if (start < requestBody.length())
-                        {
-                            char c = requestBody.charAt(start);
-                            if (c == '"')
+                            com.google.gson.JsonPrimitive primitive = idElement.getAsJsonPrimitive();
+                            if (primitive.isString())
                             {
-                                // String ID
-                                int end = requestBody.indexOf('"', start + 1);
-                                if (end > start)
-                                {
-                                    return requestBody.substring(start + 1, end);
-                                }
+                                return primitive.getAsString();
                             }
-                            else if (Character.isDigit(c) || c == '-')
+                            else if (primitive.isNumber())
                             {
-                                // Numeric ID
-                                int end = start + 1;
-                                while (end < requestBody.length() && 
-                                       (Character.isDigit(requestBody.charAt(end)) || requestBody.charAt(end) == '-'))
-                                {
-                                    end++;
-                                }
-                                return Long.parseLong(requestBody.substring(start, end));
+                                return primitive.getAsLong();
                             }
                         }
                     }
@@ -647,26 +632,22 @@ public class McpServer
         }
         
         /**
-         * Extracts tool name from tools/call request.
+         * Extracts tool name from tools/call request using Gson.
          */
         private String extractToolName(String requestBody)
         {
             try
             {
-                int nameIndex = requestBody.indexOf("\"name\""); //$NON-NLS-1$
-                if (nameIndex >= 0)
+                com.google.gson.JsonElement element = com.google.gson.JsonParser.parseString(requestBody);
+                if (element.isJsonObject())
                 {
-                    int colonIndex = requestBody.indexOf(':', nameIndex);
-                    if (colonIndex >= 0)
+                    com.google.gson.JsonObject jsonObject = element.getAsJsonObject();
+                    if (jsonObject.has("params")) //$NON-NLS-1$
                     {
-                        int start = requestBody.indexOf('"', colonIndex + 1);
-                        if (start >= 0)
+                        com.google.gson.JsonObject params = jsonObject.getAsJsonObject("params"); //$NON-NLS-1$
+                        if (params.has("name")) //$NON-NLS-1$
                         {
-                            int end = requestBody.indexOf('"', start + 1);
-                            if (end > start)
-                            {
-                                return requestBody.substring(start + 1, end);
-                            }
+                            return params.get("name").getAsString(); //$NON-NLS-1$
                         }
                     }
                 }
@@ -676,21 +657,6 @@ public class McpServer
                 Activator.logError("Failed to extract tool name", e); //$NON-NLS-1$
             }
             return "unknown"; //$NON-NLS-1$
-        }
-        
-        /**
-         * Escapes a string for JSON error messages.
-         */
-        private String escapeJsonForError(String text)
-        {
-            if (text == null)
-            {
-                return "Unknown error";
-            }
-            return text.replace("\\", "\\\\")
-                       .replace("\"", "\\\"")
-                       .replace("\n", "\\n")
-                       .replace("\r", "\\r");
         }
         
         /**
@@ -746,13 +712,12 @@ public class McpServer
                 // Client wants SSE stream - we could support server-initiated messages here
                 // For now, return 405 as we don't use server-initiated notifications
                 Activator.logInfo("SSE GET request received - returning 405 (not supported)"); //$NON-NLS-1$
-                sendResponse(exchange, 405, "{\"error\": \"Server-initiated SSE not supported\"}"); //$NON-NLS-1$
+                sendResponse(exchange, 405, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildSimpleError("Server-initiated SSE not supported")); //$NON-NLS-1$
             }
             else
             {
                 // Return server info for plain GET requests
-                String response = String.format(
-                    "{\"name\": \"%s\", \"version\": \"%s\", \"edt_version\": \"%s\", \"protocol_version\": \"%s\", \"status\": \"running\"}", //$NON-NLS-1$
+                String response = com.ditrix.edt.mcp.server.protocol.JsonUtils.buildServerInfo(
                     McpConstants.SERVER_NAME,
                     McpConstants.PLUGIN_VERSION,
                     GetEdtVersionTool.getEdtVersion(),
@@ -787,7 +752,7 @@ public class McpServer
                 return;
             }
             
-            String response = "{\"status\": \"ok\", \"edt_version\": \"" + GetEdtVersionTool.getEdtVersion() + "\"}"; //$NON-NLS-1$ //$NON-NLS-2$
+            String response = com.ditrix.edt.mcp.server.protocol.JsonUtils.buildHealthResponse(GetEdtVersionTool.getEdtVersion());
             exchange.getResponseHeaders().add("Content-Type", "application/json"); //$NON-NLS-1$ //$NON-NLS-2$
             sendResponse(exchange, 200, response);
         }

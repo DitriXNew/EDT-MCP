@@ -7,15 +7,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
- * JSON utility methods.
+ * JSON utility methods for parameter extraction and JSON building.
  */
 public final class JsonUtils
 {
+    private static final Gson GSON = new Gson();
+    
     private JsonUtils()
     {
         // Utility class
@@ -24,7 +28,7 @@ public final class JsonUtils
     /**
      * Escapes special characters for JSON string.
      * Note: Prefer using Gson for JSON serialization.
-     * This method is kept for legacy compatibility.
+     * This method is kept for cases where direct escaping is needed.
      * 
      * @param s input string
      * @return escaped string
@@ -40,6 +44,87 @@ public final class JsonUtils
                 .replace("\n", "\\n") //$NON-NLS-1$ //$NON-NLS-2$
                 .replace("\r", "\\r") //$NON-NLS-1$ //$NON-NLS-2$
                 .replace("\t", "\\t"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+    
+    /**
+     * Builds a JSON-RPC 2.0 error response.
+     * 
+     * @param code the error code
+     * @param message the error message
+     * @param requestId the request ID (can be null)
+     * @return JSON-RPC error response string
+     */
+    public static String buildJsonRpcError(int code, String message, Object requestId)
+    {
+        JsonObject response = new JsonObject();
+        response.addProperty("jsonrpc", "2.0"); //$NON-NLS-1$ //$NON-NLS-2$
+        
+        JsonObject error = new JsonObject();
+        error.addProperty("code", code); //$NON-NLS-1$
+        error.addProperty("message", message != null ? message : "Unknown error"); //$NON-NLS-1$ //$NON-NLS-2$
+        response.add("error", error); //$NON-NLS-1$
+        
+        if (requestId == null)
+        {
+            response.add("id", null); //$NON-NLS-1$
+        }
+        else if (requestId instanceof String)
+        {
+            response.addProperty("id", (String) requestId); //$NON-NLS-1$
+        }
+        else if (requestId instanceof Number)
+        {
+            response.addProperty("id", (Number) requestId); //$NON-NLS-1$
+        }
+        
+        return GSON.toJson(response);
+    }
+    
+    /**
+     * Builds a simple JSON error response (non-JSON-RPC).
+     * 
+     * @param message the error message
+     * @return JSON error response string
+     */
+    public static String buildSimpleError(String message)
+    {
+        JsonObject response = new JsonObject();
+        response.addProperty("error", message != null ? message : "Unknown error"); //$NON-NLS-1$ //$NON-NLS-2$
+        return GSON.toJson(response);
+    }
+    
+    /**
+     * Builds a server info JSON response.
+     * 
+     * @param name server name
+     * @param version plugin version
+     * @param edtVersion EDT version
+     * @param protocolVersion MCP protocol version
+     * @return JSON response string
+     */
+    public static String buildServerInfo(String name, String version, String edtVersion, String protocolVersion)
+    {
+        JsonObject response = new JsonObject();
+        response.addProperty("name", name); //$NON-NLS-1$
+        response.addProperty("version", version); //$NON-NLS-1$
+        response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
+        response.addProperty("protocol_version", protocolVersion); //$NON-NLS-1$
+        response.addProperty("status", "running"); //$NON-NLS-1$ //$NON-NLS-2$
+        return GSON.toJson(response);
+    }
+    
+    /**
+     * Builds a health check JSON response.
+     * 
+     * @param edtVersion EDT version
+     * @return JSON response string
+     */
+    public static String buildHealthResponse(String edtVersion)
+    {
+        JsonObject response = new JsonObject();
+        response.addProperty("status", "ok"); //$NON-NLS-1$ //$NON-NLS-2$
+        response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
+        return GSON.toJson(response);
     }
     
     /**

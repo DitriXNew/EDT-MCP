@@ -105,7 +105,6 @@ public class ActiveToolCall
             {
                 os.write(responseBytes);
             }
-            exchange.close();
             
             Activator.logInfo("User signal response sent for tool: " + toolName); //$NON-NLS-1$
             return true;
@@ -114,6 +113,11 @@ public class ActiveToolCall
         {
             Activator.logError("Failed to send signal response", e); //$NON-NLS-1$
             return false;
+        }
+        finally
+        {
+            // Always close exchange to prevent resource leak
+            exchange.close();
         }
     }
     
@@ -141,7 +145,6 @@ public class ActiveToolCall
             {
                 os.write(responseBytes);
             }
-            exchange.close();
             return true;
         }
         catch (IOException e)
@@ -149,43 +152,47 @@ public class ActiveToolCall
             Activator.logError("Failed to send normal response", e); //$NON-NLS-1$
             return false;
         }
+        finally
+        {
+            // Always close exchange to prevent resource leak
+            exchange.close();
+        }
     }
     
     private String buildSignalResponse(UserSignal signal)
     {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"jsonrpc\": \"2.0\", \"result\": {\"content\": [{\"type\": \"text\", \"text\": \"");
-        sb.append("USER SIGNAL: ").append(escapeJson(signal.getMessage()));
-        sb.append("\\n\\nSignal Type: ").append(signal.getType().name());
-        sb.append("\\nTool: ").append(toolName);
-        sb.append("\\nElapsed: ").append(getElapsedSeconds()).append("s");
-        sb.append("\\n\\nNote: The EDT operation may still be running in background.");
-        sb.append("\"}]}, \"id\": ");
+        com.google.gson.JsonObject response = new com.google.gson.JsonObject();
+        response.addProperty("jsonrpc", "2.0"); //$NON-NLS-1$ //$NON-NLS-2$
+        
+        // Build result object
+        com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+        com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+        com.google.gson.JsonObject textContent = new com.google.gson.JsonObject();
+        textContent.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
+        
+        // Build message text
+        String messageText = String.format(
+            "USER SIGNAL: %s%n%nSignal Type: %s%nTool: %s%nElapsed: %ds%n%nNote: The EDT operation may still be running in background.", //$NON-NLS-1$
+            signal.getMessage(),
+            signal.getType().name(),
+            toolName,
+            getElapsedSeconds()
+        );
+        textContent.addProperty("text", messageText); //$NON-NLS-1$
+        content.add(textContent);
+        result.add("content", content); //$NON-NLS-1$
+        response.add("result", result); //$NON-NLS-1$
         
         // Handle request ID (can be string or number)
         if (requestId instanceof String)
         {
-            sb.append("\"").append(requestId).append("\"");
+            response.addProperty("id", (String) requestId); //$NON-NLS-1$
         }
-        else
+        else if (requestId instanceof Number)
         {
-            sb.append(requestId);
+            response.addProperty("id", (Number) requestId); //$NON-NLS-1$
         }
-        sb.append("}");
         
-        return sb.toString();
-    }
-    
-    private String escapeJson(String text)
-    {
-        if (text == null)
-        {
-            return "";
-        }
-        return text.replace("\\", "\\\\")
-                   .replace("\"", "\\\"")
-                   .replace("\n", "\\n")
-                   .replace("\r", "\\r")
-                   .replace("\t", "\\t");
+        return new com.google.gson.Gson().toJson(response);
     }
 }

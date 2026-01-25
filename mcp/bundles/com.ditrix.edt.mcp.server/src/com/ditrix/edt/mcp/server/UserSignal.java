@@ -78,26 +78,11 @@ public class UserSignal
      */
     public String toJson()
     {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"userSignal\": true, ");
-        json.append("\"signalType\": \"").append(type.name()).append("\", ");
-        json.append("\"message\": \"").append(escapeJson(message)).append("\"");
-        json.append("}");
-        return json.toString();
-    }
-    
-    private String escapeJson(String text)
-    {
-        if (text == null)
-        {
-            return "";
-        }
-        return text.replace("\\", "\\\\")
-                   .replace("\"", "\\\"")
-                   .replace("\n", "\\n")
-                   .replace("\r", "\\r")
-                   .replace("\t", "\\t");
+        com.google.gson.JsonObject json = new com.google.gson.JsonObject();
+        json.addProperty("userSignal", true); //$NON-NLS-1$
+        json.addProperty("signalType", type.name()); //$NON-NLS-1$
+        json.addProperty("message", message); //$NON-NLS-1$
+        return new com.google.gson.Gson().toJson(json);
     }
     
     /**

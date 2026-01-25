@@ -37,6 +37,21 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
  */
 public class McpStatusContribution extends WorkbenchWindowControlContribution
 {
+    /** Width hint for the status label to accommodate full tool names */
+    private static final int STATUS_LABEL_WIDTH_HINT = 200;
+    
+    /** Maximum length for tool name display before truncation */
+    private static final int TOOL_NAME_MAX_LENGTH = 25;
+    
+    /** Size hint for the circle indicator image */
+    private static final int CIRCLE_SIZE_HINT = 14;
+    
+    /** Update interval in milliseconds for status refresh and blinking effect */
+    private static final int STATUS_UPDATE_INTERVAL_MS = 500;
+    
+    /** Font size scaling factor for status bar text */
+    private static final double FONT_SIZE_SCALE = 0.9;
+    
     private Composite container;
     private Label circleLabel;
     private Label statusLabel;
@@ -70,8 +85,8 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         circleLabel = new Label(container, SWT.NONE);
         circleLabel.setImage(greyImage);
         GridData circleGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        circleGd.widthHint = 14;
-        circleGd.heightHint = 14;
+        circleGd.widthHint = CIRCLE_SIZE_HINT;
+        circleGd.heightHint = CIRCLE_SIZE_HINT;
         circleLabel.setLayoutData(circleGd);
         
         // Create popup menu on circle click
@@ -96,12 +111,12 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         // Make font smaller
         Font originalFont = statusLabel.getFont();
         FontData fontData = originalFont.getFontData()[0];
-        fontData.setHeight((int)(fontData.getHeight() * 0.9));
+        fontData.setHeight((int)(fontData.getHeight() * FONT_SIZE_SCALE));
         font = new Font(originalFont.getDevice(), fontData);
         statusLabel.setFont(font);
         
         GridData statusGd = new GridData(SWT.CENTER, SWT.CENTER, true, true);
-        statusGd.widthHint = 200; // Wide enough for full tool names
+        statusGd.widthHint = STATUS_LABEL_WIDTH_HINT;
         statusLabel.setLayoutData(statusGd);
         
         // Create counter label [N]
@@ -425,7 +440,7 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             {
                 try
                 {
-                    Thread.sleep(500); // Update every 500ms for blinking effect
+                    Thread.sleep(STATUS_UPDATE_INTERVAL_MS);
                     Display display = Display.getDefault();
                     if (display != null && !display.isDisposed())
                     {
@@ -483,8 +498,8 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             if (isExecuting)
             {
                 // Add MCP: prefix and truncate tool name if too long
-                String displayName = currentTool.length() > 25 
-                    ? "MCP: " + currentTool.substring(0, 22) + "..." //$NON-NLS-1$ //$NON-NLS-2$
+                String displayName = currentTool.length() > TOOL_NAME_MAX_LENGTH 
+                    ? "MCP: " + currentTool.substring(0, TOOL_NAME_MAX_LENGTH - 3) + "..." //$NON-NLS-1$ //$NON-NLS-2$
                     : "MCP: " + currentTool; //$NON-NLS-1$
                 statusLabel.setText(displayName);
             }
