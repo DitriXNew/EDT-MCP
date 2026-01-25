@@ -14,13 +14,13 @@
   <parent>
     <groupId>com.ditrix.edt.mcp</groupId>
     <artifactId>bom</artifactId>
-    <version>1.17.0-SNAPSHOT</version>
+    <version>1.18.0-SNAPSHOT</version>
     <relativePath>./bom/pom.xml</relativePath>
   </parent>
 
   <groupId>com.ditrix.edt.mcp</groupId>
   <artifactId>parent</artifactId>
-  <version>1.17.0-SNAPSHOT</version>
+  <version>1.18.0-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>EDT MCP Server Plugin</name>

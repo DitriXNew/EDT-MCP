@@ -97,6 +97,9 @@ Add to `claude_desktop_config.json`:
 | `get_metadata_objects` | Get list of metadata objects from 1C configuration |
 | `get_metadata_details` | Get detailed properties of metadata objects (attributes, tabular sections, etc.) |
 | `find_references` | Find all references to a metadata object (in metadata, BSL code, forms, roles, etc.) |
+| `get_applications` | Get list of applications (infobases) for a project with update state |
+| `update_database` | Update database (infobase) with full or incremental update mode |
+| `debug_launch` | Launch application in debug mode (auto-updates database before launch) |
 
 ### Content Assist Tool
 
@@ -124,35 +127,6 @@ Add to `claude_desktop_config.json`:
    - Methods after dot (e.g. `Structure.Insert`, `Array.Add`)
    - Object properties and fields
    - Configuration objects and modules
-
-**Example - Get methods for Structure with filter:**
-```json
-{
-  "projectName": "MyProject",
-  "filePath": "CommonModules/MyCommonModule/Module.bsl",
-  "line": 15,
-  "column": 12,
-  "contains": "Insert,Add",
-  "extendedDocumentation": true
-}
-```
-
-Returns only methods containing "Insert" or "Add" with full documentation:
-```json
-{
-  "success": true,
-  "totalProposals": 8,
-  "filteredOut": 6,
-  "skipped": 0,
-  "returnedProposals": 2,
-  "proposals": [
-    {
-      "displayString": "Insert(Key) ~ Structure",
-      "documentation": "Procedure Structure.Insert(Key, [Value])..."
-    }
-  ]
-}
-```
 
 ### Validation Tools
 
@@ -184,23 +158,6 @@ Returns only methods containing "Insert" or "Add" with full documentation:
   - `CommonModule.MyModule` - all errors in common module
   - `Document.SalesOrder.Form.ItemForm` - errors in specific form
 
-**Example - Get errors for specific objects:**
-```json
-{
-  "projectName": "MyProject",
-  "objects": ["Document.SalesOrder", "Catalog.Products"],
-  "severity": "BLOCKER"
-}
-```
-
-**Example - Get all errors with check ID filter:**
-```json
-{
-  "projectName": "MyProject",
-  "checkId": "ql-temp-table"
-}
-```
-
 ### Platform Documentation Tool
 
 **`get_platform_documentation`** - Get documentation for platform types (ValueTable, Array, Structure, Query, etc.) and built-in functions (FindFiles, Message, Format, etc.)
@@ -216,27 +173,6 @@ Returns only methods containing "Insert" or "Add" with full documentation:
 | `language` | No | Output language: `en` or `ru` (default: `en`) |
 | `limit` | No | Maximum results (default: 50) - only for `type` category |
 
-**Example - Platform type documentation:**
-```json
-{
-  "typeName": "ValueTable",
-  "memberType": "method",
-  "memberName": "Add",
-  "language": "ru"
-}
-```
-
-**Example - Built-in function documentation:**
-```json
-{
-  "typeName": "FindFiles",
-  "category": "builtin",
-  "language": "en"
-}
-```
-
-Returns function signature with parameters, types, and return value.
-
 ### Metadata Objects Tool
 
 **`get_metadata_objects`** - Get list of metadata objects from 1C configuration.
@@ -250,17 +186,6 @@ Returns function signature with parameters, types, and return value.
 | `limit` | No | Maximum results (default: 100) |
 | `language` | No | Language code for synonyms (e.g. `en`, `ru`). Uses configuration default if not specified |
 
-**Example:**
-```json
-{
-  "projectName": "MyProject",
-  "metadataType": "documents",
-  "nameFilter": "Sales"
-}
-```
-
-Returns markdown table with columns: Name, Synonym, Comment, Type, ObjectModule, ManagerModule.
-
 ### Metadata Details Tool
 
 **`get_metadata_details`** - Get detailed properties of metadata objects.
@@ -273,17 +198,6 @@ Returns markdown table with columns: Name, Synonym, Comment, Type, ObjectModule,
 | `full` | No | Return all properties (`true`) or only key info (`false`). Default: `false` |
 | `language` | No | Language code for synonyms. Uses configuration default if not specified |
 
-**Example:**
-```json
-{
-  "projectName": "MyProject",
-  "objectFqns": ["Document.SalesOrder", "Catalog.Products"],
-  "full": true
-}
-```
-
-Returns markdown with detailed object properties, attributes, tabular sections, forms, commands.
-
 ### Find References Tool
 
 **`find_references`** - Find all references to a metadata object. Returns all places where the object is used: in other metadata objects, BSL code, forms, roles, subsystems, etc. Matches EDT's built-in "Find References" functionality.
@@ -294,14 +208,6 @@ Returns markdown with detailed object properties, attributes, tabular sections, 
 | `projectName` | Yes | EDT project name |
 | `objectFqn` | Yes | Fully qualified name (e.g. `Catalog.Products`, `Document.SalesOrder`, `CommonModule.Common`) |
 | `limit` | No | Maximum results per category (default: 100, max: 500) |
-
-**Example:**
-```json
-{
-  "projectName": "MyProject",
-  "objectFqn": "Catalog.Products"
-}
-```
 
 **Returns markdown with references in EDT-compatible format:**
 
@@ -336,6 +242,45 @@ Returns markdown with detailed object properties, attributes, tabular sections, 
 - **Subsystems** - Subsystem content
 - **BSL code** - References in BSL modules with line numbers
 
+### Application Management Tools
+
+#### Get Applications Tool
+
+**`get_applications`** - Get list of applications (infobases) for a project. Returns application ID, name, type, and current update state. Use this to get application IDs for `update_database` and `debug_launch` tools.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+
+#### Update Database Tool
+
+**`update_database`** - Update database (infobase) configuration. Supports full and incremental update modes.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `applicationId` | Yes | Application ID from `get_applications` |
+| `fullUpdate` | No | If true - full reload, if false - incremental update (default: false) |
+| `autoRestructure` | No | Automatically apply restructurization if needed (default: true) |
+
+#### Debug Launch Tool
+
+**`debug_launch`** - Launch application in debug mode. Automatically updates database before launching and finds existing launch configuration.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `applicationId` | Yes | Application ID from `get_applications` |
+| `updateBeforeLaunch` | No | If true - update database before launching (default: true) |
+
+**Notes:**
+- Requires a launch configuration to be created in EDT first (Run → Run Configurations...)
+- If no configuration exists, returns list of available configurations
+- `updateBeforeLaunch=true` skips update if database is already up to date
+
 ### Output Formats
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description` - return Markdown as EmbeddedResource with `mimeType: text/markdown`
@@ -363,6 +308,19 @@ Click the status indicator in EDT status bar:
 - Java 17+
 
 ## Version History
+
+### 1.18.0
+- **New**: `get_applications` tool - Get list of applications (infobases) for a project
+  - Returns application ID, name, type, and current update state
+  - Use this to get application IDs for `update_database` and `debug_launch` tools
+- **New**: `update_database` tool - Update database (infobase) configuration
+  - Supports full update (complete reload) and incremental update (changes only)
+  - Auto-applies restructurization when needed
+  - Returns detailed status before and after update
+- **New**: `debug_launch` tool - Launch application in debug mode
+  - Automatically updates database before launching (configurable via `updateBeforeLaunch` parameter)
+  - Finds existing launch configuration for project/application
+  - Starts debug session directly from AI assistant
 
 ### 1.17.0
 - **New**: `find_references` tool - Find all references to a metadata object

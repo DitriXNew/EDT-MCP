@@ -2,11 +2,14 @@
 
 **Before making any significant changes, ALWAYS use expert consultation tools:**
 
-- `ask-me-copilot-tool_askExpert` - Ask questions about architecture, business logic, unclear requirements
-- `ask-me-copilot-tool_confirmAction` - Confirm destructive or critical actions before executing
-- `ask-me-copilot-tool_reviewCode` - Request code review for complex or security-sensitive code
-- `ask-me-copilot-tool_selectFromList` - Get expert decision when choosing between multiple approaches
-- `ask-me-copilot-tool_checkTaskStatus` - Always check task status. As often as you can!
+Tool	When Copilot Uses It
+🧠 Ask Expert	- Clarifications, stuck after 2 attempts, architectural decisions
+🎯 Select Options	- Present 2-5 choices for decisions
+📝 Review Code	- Security-sensitive or complex implementations
+⚠️ Confirm Action	- Before deletions, schema changes, breaking changes
+🖼️ Read Image	- Analyze mockups, diagrams, icons in your project
+📊 Check Task Status	- Get messages from expert, respect pause, check if consultation needed
+📋 Questionnaire	- Multi-field forms for structured data collection
 
 **When to consult:**
 - Uncertain about BSL typing or 1C platform specifics
@@ -15,10 +18,11 @@
 - Before any database schema changes
 - When implementing new tools or integrations
 
-В папке examples есть примеры создани плагина.
-Инструкция доступна тут: https://edt.1c.ru/dev/ru/docs/plugins/project/
-Мы разарбатываем плагин для EDT, это MCP сервер.
-Документация тут: https://edt.1c.ru/dev/edt/2025.2/apidocs/
+In the examples folder, there are examples of creating a plugin.
+Instructions are available here: https://edt.1c.ru/dev/ru/docs/plugins/project/
+We are developing a plugin for EDT, this is the MCP server.
+Documentation is here: https://edt.1c.ru/dev/edt/2025.2/apidocs/
 
-САМ СБОРКУ НЕ ДЕЛАЙ, ПРОСИ ЭКСПЕРТА!
+DO NOT BUILD YOURSELF, ASK THE EXPERT!
+
 ALL CODE AND INTERFACE MUST BE IN ENGLISH.

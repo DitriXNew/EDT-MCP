@@ -17,6 +17,7 @@ import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
+import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 
 /**
@@ -44,6 +45,7 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<IDerivedDataManagerProvider, IDerivedDataManagerProvider> derivedDataManagerProviderTracker;
     private ServiceTracker<IServicesOrchestrator, IServicesOrchestrator> servicesOrchestratorTracker;
     private ServiceTracker<BmAwareResourceSetProvider, BmAwareResourceSetProvider> resourceSetProviderTracker;
+    private ServiceTracker<IApplicationManager, IApplicationManager> applicationManagerTracker;
 
     @Override
     public void start(BundleContext context) throws Exception
@@ -79,6 +81,9 @@ public class Activator extends AbstractUIPlugin
         
         resourceSetProviderTracker = new ServiceTracker<>(context, BmAwareResourceSetProvider.class, null);
         resourceSetProviderTracker.open();
+        
+        applicationManagerTracker = new ServiceTracker<>(context, IApplicationManager.class, null);
+        applicationManagerTracker.open();
         
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
@@ -136,6 +141,11 @@ public class Activator extends AbstractUIPlugin
         {
             resourceSetProviderTracker.close();
             resourceSetProviderTracker = null;
+        }
+        if (applicationManagerTracker != null)
+        {
+            applicationManagerTracker.close();
+            applicationManagerTracker = null;
         }
         
         logInfo("EDT MCP Server plugin stopped"); //$NON-NLS-1$
@@ -290,6 +300,21 @@ public class Activator extends AbstractUIPlugin
             return null;
         }
         return resourceSetProviderTracker.getService();
+    }
+    
+    /**
+     * Returns the IApplicationManager service for managing applications.
+     * Used for application lifecycle operations (update, start, etc.).
+     * 
+     * @return application manager or null if not available
+     */
+    public IApplicationManager getApplicationManager()
+    {
+        if (applicationManagerTracker == null)
+        {
+            return null;
+        }
+        return applicationManagerTracker.getService();
     }
 
     /**

@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: %pluginName
 Bundle-Vendor: %providerName
-Bundle-Version: 1.17.0.qualifier
+Bundle-Version: 1.18.0.qualifier
 Bundle-SymbolicName: com.ditrix.edt.mcp.server;singleton:=true
 Bundle-Activator: com.ditrix.edt.mcp.server.Activator
 Bundle-ActivationPolicy: lazy
@@ -40,9 +40,12 @@ Import-Package: com._1c.g5.v8.bm.core,
  com._1c.g5.v8.dt.platform.version,
  com._1c.g5.v8.dt.rights.model,
  com._1c.g5.v8.dt.validation.marker,
+ com.e1c.g5.dt.applications,
  com.e1c.g5.v8.dt.check,
  com.google.common.base;version="[32.1.0,33.0.0)",
  com.google.gson,
+ org.eclipse.debug.core,
+ org.eclipse.debug.ui,
  org.eclipse.emf.common.util,
  org.eclipse.emf.ecore,
  org.eclipse.emf.ecore.resource,

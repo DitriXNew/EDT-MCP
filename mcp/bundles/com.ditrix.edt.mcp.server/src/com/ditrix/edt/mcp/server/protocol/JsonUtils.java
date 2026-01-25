@@ -120,4 +120,69 @@ public final class JsonUtils
         
         return result.isEmpty() ? null : result;
     }
+    
+    /**
+     * Extracts a boolean argument from params map.
+     * 
+     * @param params the params map
+     * @param argumentName the argument name to extract
+     * @param defaultValue the default value if not found or invalid
+     * @return boolean value or default
+     */
+    public static boolean extractBooleanArgument(Map<String, String> params, String argumentName, boolean defaultValue)
+    {
+        if (params == null || argumentName == null)
+        {
+            return defaultValue;
+        }
+        
+        String value = params.get(argumentName);
+        if (value == null || value.isEmpty())
+        {
+            return defaultValue;
+        }
+        
+        value = value.trim().toLowerCase();
+        if ("true".equals(value) || "1".equals(value) || "yes".equals(value)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            return true;
+        }
+        else if ("false".equals(value) || "0".equals(value) || "no".equals(value)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            return false;
+        }
+        
+        return defaultValue;
+    }
+    
+    /**
+     * Extracts an integer argument from params map.
+     * 
+     * @param params the params map
+     * @param argumentName the argument name to extract
+     * @param defaultValue the default value if not found or invalid
+     * @return integer value or default
+     */
+    public static int extractIntArgument(Map<String, String> params, String argumentName, int defaultValue)
+    {
+        if (params == null || argumentName == null)
+        {
+            return defaultValue;
+        }
+        
+        String value = params.get(argumentName);
+        if (value == null || value.isEmpty())
+        {
+            return defaultValue;
+        }
+        
+        try
+        {
+            return Integer.parseInt(value.trim());
+        }
+        catch (NumberFormatException e)
+        {
+            return defaultValue;
+        }
+    }
 }

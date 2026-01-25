@@ -17,7 +17,9 @@ import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.tools.impl.GetBookmarksTool;
+import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.FindReferencesTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetCheckDescriptionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetConfigurationPropertiesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
@@ -31,6 +33,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetTasksTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
+import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -110,6 +113,11 @@ public class McpServer
         registry.register(new GetMetadataObjectsTool());
         registry.register(new GetMetadataDetailsTool());
         registry.register(new FindReferencesTool());
+        
+        // Application tools
+        registry.register(new GetApplicationsTool());
+        registry.register(new UpdateDatabaseTool());
+        registry.register(new DebugLaunchTool());
         
         Activator.logInfo("Registered " + registry.getToolCount() + " MCP tools"); //$NON-NLS-1$ //$NON-NLS-2$
     }
