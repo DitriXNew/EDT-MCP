@@ -51,6 +51,18 @@ public class McpServer
     /** Request counter - use AtomicLong for thread safety */
     private final AtomicLong requestCount = new AtomicLong(0);
     
+    /** Current executing tool name */
+    private volatile String currentToolName = null;
+    
+    /** Timestamp when current tool execution started (milliseconds) */
+    private volatile long toolExecutionStartTime = 0;
+    
+    /** User signal for current operation (cancel, retry, background, expert) */
+    private volatile UserSignal userSignal = null;
+    
+    /** Currently active tool call that can be interrupted */
+    private volatile ActiveToolCall activeToolCall = null;
+    
     /** Protocol handler */
     private McpProtocolHandler protocolHandler;
 
@@ -205,6 +217,138 @@ public class McpServer
     }
 
     /**
+     * Returns the currently executing tool name.
+     * 
+     * @return tool name or null if no tool is executing
+     */
+    public String getCurrentToolName()
+    {
+        return currentToolName;
+    }
+
+    /**
+     * Sets the currently executing tool name.
+     * Also records the start time when a tool begins execution.
+     * 
+     * @param toolName the tool name or null when execution completes
+     */
+    public void setCurrentToolName(String toolName)
+    {
+        this.currentToolName = toolName;
+        this.toolExecutionStartTime = toolName != null ? System.currentTimeMillis() : 0;
+    }
+
+    /**
+     * Checks if a tool is currently executing.
+     * 
+     * @return true if a tool is executing
+     */
+    public boolean isToolExecuting()
+    {
+        return currentToolName != null;
+    }
+
+    /**
+     * Returns the elapsed time in seconds since tool execution started.
+     * 
+     * @return elapsed seconds or 0 if no tool is executing
+     */
+    public long getToolExecutionSeconds()
+    {
+        if (toolExecutionStartTime == 0)
+        {
+            return 0;
+        }
+        return (System.currentTimeMillis() - toolExecutionStartTime) / 1000;
+    }
+
+    /**
+     * Sets a user signal for the current operation.
+     * This signal will be included in the tool response.
+     * 
+     * @param signal the user signal
+     */
+    public void setUserSignal(UserSignal signal)
+    {
+        this.userSignal = signal;
+    }
+
+    /**
+     * Gets and clears the current user signal.
+     * Returns null if no signal is pending.
+     * 
+     * @return the user signal or null
+     */
+    public UserSignal consumeUserSignal()
+    {
+        UserSignal signal = this.userSignal;
+        this.userSignal = null;
+        return signal;
+    }
+
+    /**
+     * Checks if a user signal is pending.
+     * 
+     * @return true if a signal is pending
+     */
+    public boolean hasUserSignal()
+    {
+        return userSignal != null;
+    }
+
+    /**
+     * Sets the active tool call.
+     * 
+     * @param toolCall the active tool call
+     */
+    public void setActiveToolCall(ActiveToolCall toolCall)
+    {
+        this.activeToolCall = toolCall;
+    }
+
+    /**
+     * Gets the active tool call.
+     * 
+     * @return the active tool call or null
+     */
+    public ActiveToolCall getActiveToolCall()
+    {
+        return activeToolCall;
+    }
+
+    /**
+     * Clears the active tool call.
+     */
+    public void clearActiveToolCall()
+    {
+        this.activeToolCall = null;
+    }
+
+    /**
+     * Interrupts the current tool call with a user signal.
+     * Sends the signal response immediately and returns control to the agent.
+     * 
+     * @param signal the user signal
+     * @return true if the call was interrupted successfully
+     */
+    public boolean interruptToolCall(UserSignal signal)
+    {
+        ActiveToolCall call = this.activeToolCall;
+        if (call != null && !call.hasResponded())
+        {
+            boolean sent = call.sendSignalResponse(signal);
+            if (sent)
+            {
+                // Clear tool execution state
+                setCurrentToolName(null);
+                clearActiveToolCall();
+            }
+            return sent;
+        }
+        return false;
+    }
+
+    /**
      * MCP request handler.
      * Implements Streamable HTTP transport as per MCP 2025-11-25 specification.
      */
@@ -301,10 +445,24 @@ public class McpServer
             
             String response;
             boolean isInitialize = requestBody.contains("\"" + McpConstants.METHOD_INITIALIZE + "\""); //$NON-NLS-1$ //$NON-NLS-2$
+            boolean isToolCall = requestBody.contains("\"" + McpConstants.METHOD_TOOLS_CALL + "\""); //$NON-NLS-1$ //$NON-NLS-2$
 
             try
             {
-                response = protocolHandler.processRequest(requestBody);
+                if (isToolCall)
+                {
+                    // Handle tool calls with interruptible execution
+                    response = handleInterruptibleToolCall(exchange, requestBody);
+                    if (response == null)
+                    {
+                        // Response was already sent (user interrupted)
+                        return;
+                    }
+                }
+                else
+                {
+                    response = protocolHandler.processRequest(requestBody);
+                }
                 
                 // null response means notification (no response needed)
                 if (response == null)
@@ -321,7 +479,7 @@ public class McpServer
             {
                 Activator.logError("MCP request processing error", e); //$NON-NLS-1$
                 response = "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32603, \"message\": \"" //$NON-NLS-1$
-                    + e.getMessage() + "\"}, \"id\": null}"; //$NON-NLS-1$
+                    + escapeJsonForError(e.getMessage()) + "\"}, \"id\": null}"; //$NON-NLS-1$
             }
 
             // Check if client accepts SSE
@@ -343,6 +501,196 @@ public class McpServer
                 exchange.getResponseHeaders().add("Content-Type", "application/json"); //$NON-NLS-1$ //$NON-NLS-2$
                 sendResponse(exchange, 200, response);
             }
+        }
+        
+        /**
+         * Handles tool call with support for user interruption.
+         * Runs tool execution in a separate thread and monitors for user signals.
+         * 
+         * @param exchange the HTTP exchange
+         * @param requestBody the request body
+         * @return the response, or null if response was already sent (interrupted)
+         */
+        private String handleInterruptibleToolCall(HttpExchange exchange, String requestBody) throws Exception
+        {
+            // Extract request ID and tool name for ActiveToolCall
+            Object requestId = extractRequestId(requestBody);
+            String toolName = extractToolName(requestBody);
+            
+            // Create and register active tool call
+            ActiveToolCall activeCall = new ActiveToolCall(exchange, toolName, requestId);
+            setActiveToolCall(activeCall);
+            
+            // Use a container to hold the result from the background thread
+            final String[] resultContainer = new String[1];
+            final Exception[] errorContainer = new Exception[1];
+            final boolean[] completedFlag = new boolean[1];
+            
+            // Run tool execution in background thread
+            Thread executionThread = new Thread(() -> {
+                try
+                {
+                    resultContainer[0] = protocolHandler.processRequest(requestBody);
+                }
+                catch (Exception e)
+                {
+                    errorContainer[0] = e;
+                }
+                finally
+                {
+                    synchronized (completedFlag)
+                    {
+                        completedFlag[0] = true;
+                        completedFlag.notifyAll();
+                    }
+                }
+            }, "MCP-Tool-Executor"); //$NON-NLS-1$
+            
+            executionThread.start();
+            
+            // Wait for completion or user signal
+            synchronized (completedFlag)
+            {
+                while (!completedFlag[0])
+                {
+                    try
+                    {
+                        // Check every 100ms for signals
+                        completedFlag.wait(100);
+                        
+                        // Check if user sent an interrupt signal
+                        if (activeCall.hasResponded())
+                        {
+                            // User already sent a response, don't send another
+                            clearActiveToolCall();
+                            return null;
+                        }
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+            
+            // Clear active tool call
+            clearActiveToolCall();
+            
+            // Check if response was already sent while we were waiting
+            if (activeCall.hasResponded())
+            {
+                return null;
+            }
+            
+            // Return result or throw error
+            if (errorContainer[0] != null)
+            {
+                throw errorContainer[0];
+            }
+            
+            return resultContainer[0];
+        }
+        
+        /**
+         * Extracts request ID from JSON-RPC request.
+         */
+        private Object extractRequestId(String requestBody)
+        {
+            try
+            {
+                int idIndex = requestBody.indexOf("\"id\""); //$NON-NLS-1$
+                if (idIndex >= 0)
+                {
+                    int colonIndex = requestBody.indexOf(':', idIndex);
+                    if (colonIndex >= 0)
+                    {
+                        int start = colonIndex + 1;
+                        // Skip whitespace
+                        while (start < requestBody.length() && Character.isWhitespace(requestBody.charAt(start)))
+                        {
+                            start++;
+                        }
+                        
+                        if (start < requestBody.length())
+                        {
+                            char c = requestBody.charAt(start);
+                            if (c == '"')
+                            {
+                                // String ID
+                                int end = requestBody.indexOf('"', start + 1);
+                                if (end > start)
+                                {
+                                    return requestBody.substring(start + 1, end);
+                                }
+                            }
+                            else if (Character.isDigit(c) || c == '-')
+                            {
+                                // Numeric ID
+                                int end = start + 1;
+                                while (end < requestBody.length() && 
+                                       (Character.isDigit(requestBody.charAt(end)) || requestBody.charAt(end) == '-'))
+                                {
+                                    end++;
+                                }
+                                return Long.parseLong(requestBody.substring(start, end));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Activator.logError("Failed to extract request ID", e); //$NON-NLS-1$
+            }
+            return null;
+        }
+        
+        /**
+         * Extracts tool name from tools/call request.
+         */
+        private String extractToolName(String requestBody)
+        {
+            try
+            {
+                int nameIndex = requestBody.indexOf("\"name\""); //$NON-NLS-1$
+                if (nameIndex >= 0)
+                {
+                    int colonIndex = requestBody.indexOf(':', nameIndex);
+                    if (colonIndex >= 0)
+                    {
+                        int start = requestBody.indexOf('"', colonIndex + 1);
+                        if (start >= 0)
+                        {
+                            int end = requestBody.indexOf('"', start + 1);
+                            if (end > start)
+                            {
+                                return requestBody.substring(start + 1, end);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Activator.logError("Failed to extract tool name", e); //$NON-NLS-1$
+            }
+            return "unknown"; //$NON-NLS-1$
+        }
+        
+        /**
+         * Escapes a string for JSON error messages.
+         */
+        private String escapeJsonForError(String text)
+        {
+            if (text == null)
+            {
+                return "Unknown error";
+            }
+            return text.replace("\\", "\\\\")
+                       .replace("\"", "\\\"")
+                       .replace("\n", "\\n")
+                       .replace("\r", "\\r");
         }
         
         /**
