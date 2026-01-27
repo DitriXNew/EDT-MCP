@@ -119,6 +119,20 @@ Create `.cursor/mcp.json`:
 }
 ```
 
+### Claude Code
+
+> **Note:** By editing the file `.claude.json` can be added to the MCP either to a specific project or to any project (at the root). If there is no mcpServers section, add it.
+
+Add to `.claude.json` (in Windows `%USERPROFILE%\.claude.json`):
+```json
+"mcpServers": {
+  "EDT MCP Server": {
+    "type": "http",
+    "url": "http://localhost:8765/mcp"
+  }
+}
+```
+
 ### Claude Desktop
 
 Add to `claude_desktop_config.json`:
