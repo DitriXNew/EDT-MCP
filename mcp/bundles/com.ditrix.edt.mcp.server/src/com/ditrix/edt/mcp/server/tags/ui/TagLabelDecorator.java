@@ -102,11 +102,25 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
     
     private IProject extractProject(EObject eobj) {
         if (eobj.eResource() != null && eobj.eResource().getURI() != null) {
-            String uriPath = eobj.eResource().getURI().toPlatformString(true);
+            org.eclipse.emf.common.util.URI uri = eobj.eResource().getURI();
+            
+            // Try platform string first
+            String uriPath = uri.toPlatformString(true);
             if (uriPath != null && uriPath.length() > 1) {
                 String projectName = uriPath.split("/")[1];
                 return org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
                     .getRoot().getProject(projectName);
+            }
+            
+            // Try bm:// URI scheme
+            String uriString = uri.toString();
+            if (uriString.startsWith("bm://")) {
+                // Format: bm://projectName/...
+                String[] parts = uriString.substring(5).split("/");
+                if (parts.length > 0) {
+                    return org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+                        .getRoot().getProject(parts[0]);
+                }
             }
         }
         return null;

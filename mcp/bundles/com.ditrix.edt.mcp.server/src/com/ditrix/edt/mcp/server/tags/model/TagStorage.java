@@ -28,11 +28,13 @@ public class TagStorage {
     private List<Tag> tags;
     
     /**
-     * Map from metadata object FQN to set of tag names.
+     * Map from metadata object FQN to list of tag names.
      * Key: FQN (e.g., "Catalog.Products", "Document.SalesOrder")
-     * Value: Set of tag names assigned to this object
+     * Value: List of tag names assigned to this object
+     * 
+     * Using List instead of Set to avoid !!set markers in YAML output.
      */
-    private Map<String, Set<String>> assignments;
+    private Map<String, List<String>> assignments;
     
     /**
      * Default constructor for YAML deserialization.
@@ -50,11 +52,11 @@ public class TagStorage {
         this.tags = tags != null ? tags : new ArrayList<>();
     }
     
-    public Map<String, Set<String>> getAssignments() {
+    public Map<String, List<String>> getAssignments() {
         return assignments;
     }
     
-    public void setAssignments(Map<String, Set<String>> assignments) {
+    public void setAssignments(Map<String, List<String>> assignments) {
         this.assignments = assignments != null ? assignments : new HashMap<>();
     }
     
@@ -98,7 +100,7 @@ public class TagStorage {
         if (tag != null) {
             tags.remove(tag);
             // Remove from all assignments
-            assignments.values().forEach(set -> set.remove(tagName));
+            assignments.values().forEach(list -> list.remove(tagName));
             return true;
         }
         return false;
@@ -109,14 +111,18 @@ public class TagStorage {
      * 
      * @param objectFqn the FQN of the metadata object
      * @param tagName the tag name to assign
-     * @return true if assigned, false if tag doesn't exist
+     * @return true if assigned, false if tag doesn't exist or already assigned
      */
     public boolean assignTag(String objectFqn, String tagName) {
         if (getTagByName(tagName) == null) {
             return false;
         }
-        assignments.computeIfAbsent(objectFqn, k -> new HashSet<>()).add(tagName);
-        return true;
+        List<String> objectTags = assignments.computeIfAbsent(objectFqn, k -> new ArrayList<>());
+        if (!objectTags.contains(tagName)) {
+            objectTags.add(tagName);
+            return true;
+        }
+        return false;
     }
     
     /**
@@ -127,7 +133,7 @@ public class TagStorage {
      * @return true if removed
      */
     public boolean unassignTag(String objectFqn, String tagName) {
-        Set<String> objectTags = assignments.get(objectFqn);
+        List<String> objectTags = assignments.get(objectFqn);
         if (objectTags != null) {
             boolean removed = objectTags.remove(tagName);
             if (objectTags.isEmpty()) {
@@ -145,7 +151,7 @@ public class TagStorage {
      * @return set of assigned tags (never null)
      */
     public Set<Tag> getObjectTags(String objectFqn) {
-        Set<String> tagNames = assignments.get(objectFqn);
+        List<String> tagNames = assignments.get(objectFqn);
         if (tagNames == null || tagNames.isEmpty()) {
             return Set.of();
         }
@@ -167,7 +173,7 @@ public class TagStorage {
      */
     public Set<String> getObjectsByTag(String tagName) {
         Set<String> result = new HashSet<>();
-        for (Map.Entry<String, Set<String>> entry : assignments.entrySet()) {
+        for (Map.Entry<String, List<String>> entry : assignments.entrySet()) {
             if (entry.getValue().contains(tagName)) {
                 result.add(entry.getKey());
             }

@@ -26,3 +26,5 @@ Documentation is here: https://edt.1c.ru/dev/edt/2025.2/apidocs/
 DO NOT BUILD YOURSELF, ASK THE EXPERT!
 
 ALL CODE AND INTERFACE MUST BE IN ENGLISH.
+
+USE rg TO SEARCH THE CODEBASE.

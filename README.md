@@ -370,12 +370,71 @@ Click the status indicator in EDT status bar:
 - ⚫ Grey - Server stopped
 - **[N]** - Request counter
 
+## Metadata Tags
+
+The plugin provides a metadata tagging feature to organize and filter metadata objects.
+
+### Assigning Tags
+
+1. Right-click on any metadata object in the EDT Navigator
+2. Select **Tags → Manage Tags...**
+3. In the dialog:
+   - Check/uncheck existing tags to assign/unassign them
+   - Create new tags with custom name and color
+   - Edit or delete existing tags
+
+Tags are stored in `.settings/metadata-tags.yaml` file in each project (can be committed to VCS).
+
+### Tag Decorator
+
+Tagged objects display their tags as a suffix in the Navigator tree:
+- Example: `CommonModule.MyModule [Test, Demo]`
+
+**To enable/disable:**
+- **Window → Preferences → General → Appearance → Label Decorations**
+- Find "Metadata Tags Decorator" and toggle the checkbox
+
+**Decoration styles** (configurable in MCP Server preferences):
+- Show all tags: `[Tag1, Tag2, Tag3]`
+- Show first tag only: `[Tag1]`
+- Show count: `[3 tags]`
+
+### Tag Filter View
+
+A dedicated view for filtering metadata objects by tags:
+
+1. **Window → Show View → Other → MCP Server → Tag Filter**
+2. Select project from dropdown
+3. Check tags in the left panel
+4. Right panel shows all objects with selected tags
+5. Double-click an object to navigate to it
+
+**Features:**
+- Multi-tag filter (AND/OR logic)
+- Navigate to object on double-click
+- Real-time refresh when tags change
+
 ## Requirements
 
 - 1C:EDT 2025.2 (Ruby) or later
 - Java 17+
 
 ## Version History
+
+### 1.19.0
+- **New**: Metadata Tags feature
+  - Assign custom tags to any metadata object for organization
+  - Context menu: right-click → Tags → Manage Tags...
+  - Create tags with custom names and colors
+  - Tags stored in `.settings/metadata-tags.yaml` (VCS friendly)
+- **New**: Tag Decorator in Navigator
+  - Shows assigned tags as suffix: `CommonModule.MyModule [Test, Demo]`
+  - Enable/disable: Window → Preferences → General → Appearance → Label Decorations
+  - Multiple display styles: all tags, first tag, or count only
+- **New**: Tag Filter View
+  - Window → Show View → Other → MCP Server → Tag Filter
+  - Filter metadata objects by tags across the project
+  - Double-click to navigate to object
 
 ### 1.18.0
 - **New**: `get_applications` tool - Get list of applications (infobases) for a project

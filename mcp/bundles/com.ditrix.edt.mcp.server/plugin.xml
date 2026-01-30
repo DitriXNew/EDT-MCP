@@ -98,7 +98,7 @@
             state="true">
          <description>Shows tags assigned to metadata objects</description>
          <enablement>
-            <objectClass name="com._1c.g5.v8.dt.metadata.mdclass.MdObject"/>
+            <objectClass name="org.eclipse.emf.ecore.EObject"/>
          </enablement>
       </decorator>
    </extension>

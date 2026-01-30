@@ -56,10 +56,12 @@ public abstract class AbstractTagHandler extends AbstractHandler {
     }
     
     /**
-     * Extracts the FQN from a metadata object.
+     * Extracts the full FQN from a metadata object, including parent hierarchy.
+     * For nested objects like attributes, returns full path like
+     * "Document.SalesOrder.TabularSection.Products.Attribute.Quantity"
      * 
      * @param mdObject the metadata object
-     * @return the FQN string (e.g., "Catalog.Products")
+     * @return the full FQN string
      */
     protected String extractFqn(EObject mdObject) {
         if (mdObject == null) {
@@ -67,33 +69,59 @@ public abstract class AbstractTagHandler extends AbstractHandler {
         }
         
         try {
-            // Try to get the name using reflection (MdObject interface)
-            Class<?> mdObjectClass = mdObject.getClass();
+            // Build full path by traversing the containment hierarchy
+            StringBuilder fqnBuilder = new StringBuilder();
+            EObject current = mdObject;
             
-            // Get eClass name
-            String typeName = mdObject.eClass().getName();
-            
-            // Get name property
-            java.lang.reflect.Method getNameMethod = null;
-            for (java.lang.reflect.Method m : mdObjectClass.getMethods()) {
-                if ("getName".equals(m.getName()) && m.getParameterCount() == 0) {
-                    getNameMethod = m;
+            while (current != null) {
+                // Get eClass name (type like Document, Catalog, Attribute, etc.)
+                String typeName = current.eClass().getName();
+                
+                // Skip Configuration root and internal types
+                if ("Configuration".equals(typeName) || typeName.startsWith("Md")) {
                     break;
                 }
-            }
-            
-            if (getNameMethod != null) {
-                Object name = getNameMethod.invoke(mdObject);
-                if (name != null) {
-                    return typeName + "." + name.toString();
+                
+                // Try to get name property
+                String name = getObjectName(current);
+                
+                if (name != null && !name.isEmpty()) {
+                    String part = typeName + "." + name;
+                    if (fqnBuilder.length() > 0) {
+                        fqnBuilder.insert(0, ".");
+                    }
+                    fqnBuilder.insert(0, part);
                 }
+                
+                // Move to parent
+                current = current.eContainer();
             }
             
-            return typeName;
+            return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
         } catch (Exception e) {
             Activator.logError("Failed to extract FQN from " + mdObject, e);
             return null;
         }
+    }
+    
+    /**
+     * Gets the name of a metadata object using reflection.
+     * 
+     * @param eObject the object
+     * @return the name or null
+     */
+    private String getObjectName(EObject eObject) {
+        try {
+            for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
+                if ("getName".equals(m.getName()) && m.getParameterCount() == 0) {
+                    Object name = m.invoke(eObject);
+                    return name != null ? name.toString() : null;
+                }
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
+        return null;
     }
     
     /**
@@ -142,10 +170,8 @@ public abstract class AbstractTagHandler extends AbstractHandler {
             // First try resource URI
             if (eobj.eResource() != null && eobj.eResource().getURI() != null) {
                 org.eclipse.emf.common.util.URI uri = eobj.eResource().getURI();
-                Activator.logInfo("EObject URI: " + uri);
                 
                 String uriPath = uri.toPlatformString(true);
-                Activator.logInfo("Platform string: " + uriPath);
                 
                 if (uriPath != null && uriPath.length() > 1) {
                     String projectName = uriPath.split("/")[1];

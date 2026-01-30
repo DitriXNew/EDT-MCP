@@ -344,6 +344,9 @@ public class TagService implements IResourceChangeListener {
             
             Representer representer = new Representer(options);
             representer.getPropertyUtils().setSkipMissingProperties(true);
+            // Don't output class tags like !!com.ditrix... or !!set
+            representer.addClassTag(TagStorage.class, org.yaml.snakeyaml.nodes.Tag.MAP);
+            representer.addClassTag(Tag.class, org.yaml.snakeyaml.nodes.Tag.MAP);
             
             Yaml yaml = new Yaml(representer, options);
             StringWriter writer = new StringWriter();
