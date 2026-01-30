@@ -133,4 +133,25 @@
          <viewShortcut id="com.ditrix.edt.mcp.server.tags.filterView"/>
       </perspectiveExtension>
    </extension>
+   
+   <!-- Tag Search Filter for EDT Navigator -->
+   <extension point="org.eclipse.ui.navigator.navigatorContent">
+      <commonFilter
+            id="com.ditrix.edt.mcp.server.tags.TagSearchFilter"
+            name="Tag Search Filter"
+            description="Filters metadata objects by tag when search starts with #"
+            activeByDefault="false"
+            visibleInUI="false"
+            class="com.ditrix.edt.mcp.server.tags.ui.TagSearchFilter">
+      </commonFilter>
+   </extension>
+   
+   <!-- Bind Tag Search Filter to EDT Navigator -->
+   <extension point="org.eclipse.ui.navigator.viewer">
+      <viewerContentBinding viewerId="com._1c.g5.v8.dt.ui2.navigator">
+         <includes>
+            <contentExtension pattern="com.ditrix.edt.mcp.server.tags.TagSearchFilter"/>
+         </includes>
+      </viewerContentBinding>
+   </extension>
 </plugin>

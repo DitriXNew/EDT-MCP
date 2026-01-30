@@ -6,6 +6,7 @@ package com.ditrix.edt.mcp.server;
 import org.eclipse.ui.IStartup;
 
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
+import com.ditrix.edt.mcp.server.tags.ui.TagSearchManager;
 
 /**
  * Startup class for auto-starting MCP server on EDT startup.
@@ -15,6 +16,9 @@ public class McpServerStartup implements IStartup
     @Override
     public void earlyStartup()
     {
+        // Start tag search manager for # search in navigator
+        TagSearchManager.getInstance().start();
+        
         // Check auto-start preference
         boolean autoStart = Activator.getDefault().getPreferenceStore()
             .getBoolean(PreferenceConstants.PREF_AUTO_START);
