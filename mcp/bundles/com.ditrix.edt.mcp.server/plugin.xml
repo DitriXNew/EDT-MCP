@@ -70,7 +70,14 @@
          <separator name="com.ditrix.edt.mcp.server.tags.separator" visible="true"/>
          <menu
                id="com.ditrix.edt.mcp.server.tags.menu"
+               icon="icons/tag.png"
                label="Tags">
+            <!-- Dynamic tags list -->
+            <dynamic
+                  class="com.ditrix.edt.mcp.server.tags.ui.TagsMenuContribution"
+                  id="com.ditrix.edt.mcp.server.tags.dynamicTags">
+            </dynamic>
+            <!-- Manage Tags command at the bottom -->
             <command
                   commandId="com.ditrix.edt.mcp.server.tags.manageTags"
                   label="Manage Tags..."
