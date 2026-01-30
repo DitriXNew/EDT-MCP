@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?eclipse version="3.4"?>
 <plugin>
-   <!-- Страница настроек плагина -->
+   <!-- Preferences page -->
    <extension point="org.eclipse.ui.preferencePages">
       <page
             id="com.ditrix.edt.mcp.server.preferences"
@@ -10,18 +10,48 @@
       </page>
    </extension>
    
-   <!-- Инициализатор настроек по умолчанию -->
+   <!-- Default preferences initializer -->
    <extension point="org.eclipse.core.runtime.preferences">
       <initializer class="com.ditrix.edt.mcp.server.preferences.PreferenceInitializer"/>
    </extension>
    
-   <!-- Startup для автозапуска сервера если включено -->
+   <!-- Startup for auto-starting server if enabled -->
    <extension point="org.eclipse.ui.startup">
       <startup class="com.ditrix.edt.mcp.server.McpServerStartup"/>
    </extension>
    
-   <!-- Status bar indicator for MCP server in the trim area -->
+   <!-- Commands for tag management -->
+   <extension point="org.eclipse.ui.commands">
+      <category
+            id="com.ditrix.edt.mcp.server.tags.category"
+            name="Metadata Tags">
+      </category>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.tags.manageTags"
+            name="Manage Tags...">
+      </command>
+   </extension>
+   
+   <!-- Handlers for tag commands -->
+   <extension point="org.eclipse.ui.handlers">
+      <handler
+            class="com.ditrix.edt.mcp.server.tags.handlers.ManageTagsHandler"
+            commandId="com.ditrix.edt.mcp.server.tags.manageTags">
+         <enabledWhen>
+            <with variable="selection">
+               <count value="1"/>
+               <iterate operator="and">
+                  <instanceof value="org.eclipse.emf.ecore.EObject"/>
+               </iterate>
+            </with>
+         </enabledWhen>
+      </handler>
+   </extension>
+   
+   <!-- Context menu contributions -->
    <extension point="org.eclipse.ui.menus">
+      <!-- Status bar indicator for MCP server in the trim area -->
       <menuContribution
             locationURI="toolbar:org.eclipse.ui.trim.status">
          <toolbar
@@ -32,5 +62,68 @@
             </control>
          </toolbar>
       </menuContribution>
+      
+      <!-- Tag management in EDT navigator context menu -->
+      <menuContribution
+            allPopups="false"
+            locationURI="popup:com._1c.g5.v8.dt.navigator.ui.navigator.popup?after=group.edit">
+         <separator name="com.ditrix.edt.mcp.server.tags.separator" visible="true"/>
+         <menu
+               id="com.ditrix.edt.mcp.server.tags.menu"
+               label="Tags">
+            <command
+                  commandId="com.ditrix.edt.mcp.server.tags.manageTags"
+                  label="Manage Tags..."
+                  style="push">
+               <visibleWhen checkEnabled="false">
+                  <with variable="selection">
+                     <count value="1"/>
+                     <iterate operator="and">
+                        <instanceof value="org.eclipse.emf.ecore.EObject"/>
+                     </iterate>
+                  </with>
+               </visibleWhen>
+            </command>
+         </menu>
+      </menuContribution>
+   </extension>
+   
+   <!-- Label decorator for showing tags on metadata objects -->
+   <extension point="org.eclipse.ui.decorators">
+      <decorator
+            class="com.ditrix.edt.mcp.server.tags.ui.TagLabelDecorator"
+            id="com.ditrix.edt.mcp.server.tags.decorator"
+            label="Metadata Tags Decorator"
+            lightweight="true"
+            state="true">
+         <description>Shows tags assigned to metadata objects</description>
+         <enablement>
+            <objectClass name="com._1c.g5.v8.dt.metadata.mdclass.MdObject"/>
+         </enablement>
+      </decorator>
+   </extension>
+   
+   <!-- Tag Filter View -->
+   <extension point="org.eclipse.ui.views">
+      <category
+            id="com.ditrix.edt.mcp.server.tags.viewCategory"
+            name="MCP Server">
+      </category>
+      <view
+            id="com.ditrix.edt.mcp.server.tags.filterView"
+            name="Tag Filter"
+            category="com.ditrix.edt.mcp.server.tags.viewCategory"
+            class="com.ditrix.edt.mcp.server.tags.ui.TagFilterView"
+            allowMultiple="false"
+            restorable="true">
+         <description>Filter metadata objects by tags</description>
+      </view>
+   </extension>
+   
+   <!-- Add Tag Filter View to Window > Show View menu -->
+   <extension point="org.eclipse.ui.perspectiveExtensions">
+      <perspectiveExtension targetID="*">
+         <viewShortcut id="com.ditrix.edt.mcp.server.tags.filterView"/>
+      </perspectiveExtension>
    </extension>
 </plugin>

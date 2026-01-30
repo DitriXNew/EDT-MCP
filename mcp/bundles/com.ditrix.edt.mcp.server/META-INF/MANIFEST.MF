@@ -2,14 +2,15 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: %pluginName
 Bundle-Vendor: %providerName
-Bundle-Version: 1.18.0.qualifier
+Bundle-Version: 1.19.0.qualifier
 Bundle-SymbolicName: com.ditrix.edt.mcp.server;singleton:=true
 Bundle-Activator: com.ditrix.edt.mcp.server.Activator
 Bundle-ActivationPolicy: lazy
 Bundle-Localization: plugin
 Bundle-ClassPath: .,
  lib/copy-down-1.1.jar,
- lib/jsoup-1.17.2.jar
+ lib/jsoup-1.17.2.jar,
+ lib/snakeyaml-2.2.jar
 Require-Bundle: org.eclipse.core.runtime;bundle-version="[3.30.0,4.0.0)",
  org.eclipse.core.resources;bundle-version="[3.18.0,4.0.0)",
  org.eclipse.ui;bundle-version="[3.201.0,4.0.0)",

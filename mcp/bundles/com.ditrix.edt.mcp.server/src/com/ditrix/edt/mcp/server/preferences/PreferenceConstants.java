@@ -44,6 +44,29 @@ public final class PreferenceConstants
     /** Default plain text mode (disabled - use embedded resources by default) */
     public static final boolean DEFAULT_PLAIN_TEXT_MODE = false;
     
+    // === Tag decoration preferences ===
+    
+    /** Show tags in navigator tree */
+    public static final String PREF_TAGS_SHOW_IN_NAVIGATOR = "tags.showInNavigator"; //$NON-NLS-1$
+    
+    /** Tag decoration style */
+    public static final String PREF_TAGS_DECORATION_STYLE = "tags.decorationStyle"; //$NON-NLS-1$
+    
+    /** Decoration style: show all tags as suffix */
+    public static final String TAGS_STYLE_SUFFIX = "suffix"; //$NON-NLS-1$
+    
+    /** Decoration style: show only first tag */
+    public static final String TAGS_STYLE_FIRST_TAG = "firstTag"; //$NON-NLS-1$
+    
+    /** Decoration style: show tag count */
+    public static final String TAGS_STYLE_COUNT = "count"; //$NON-NLS-1$
+    
+    /** Default: show tags in navigator */
+    public static final boolean DEFAULT_TAGS_SHOW_IN_NAVIGATOR = true;
+    
+    /** Default decoration style */
+    public static final String DEFAULT_TAGS_DECORATION_STYLE = TAGS_STYLE_SUFFIX;
+    
     private PreferenceConstants()
     {
         // Utility class
