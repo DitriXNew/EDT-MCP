@@ -22,7 +22,6 @@ import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.navigator.CommonNavigator;
 import org.eclipse.ui.navigator.CommonViewer;
 
-import com._1c.g5.v8.dt.navigator.util.NavigatorUtil;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
@@ -38,13 +37,9 @@ public class TagSearchFilter extends ViewerFilter {
     /** Filter ID as registered in plugin.xml */
     public static final String FILTER_ID = "com.ditrix.edt.mcp.server.tags.TagSearchFilter";
     
-    private static final String NAVIGATOR_SEARCH_FILTER_ID = 
-        "com._1c.g5.v8.dt.internal.navigator.ui.filters.NavigatorSearchFilter";
-    
     private Viewer viewer;
     private String lastPattern = "";
     private Set<String> matchingFqns = new HashSet<>();
-    private boolean standardFilterDeactivated = false;
     
     /**
      * Default constructor for extension factory.
@@ -55,22 +50,12 @@ public class TagSearchFilter extends ViewerFilter {
     @Override
     public boolean select(Viewer viewer, Object parentElement, Object element) {
         this.viewer = viewer;
-        
+
         String searchPattern = getActiveSearchPattern();
-        
-        Activator.logInfo("TagSearchFilter.select() called, pattern: '" + searchPattern + "', element: " + element.getClass().getSimpleName());
-        
+
         // Only handle patterns starting with #
         if (searchPattern == null || !searchPattern.startsWith("#")) {
-            // Reset flag when pattern is not a tag search
-            standardFilterDeactivated = false;
             return true; // Let other filters handle
-        }
-        
-        // Ensure standard filter is deactivated when we're in tag search mode
-        // This is done IMMEDIATELY on first call to prevent race conditions
-        if (!standardFilterDeactivated) {
-            ensureStandardFilterDeactivated();
         }
         
         String tagPattern = searchPattern.substring(1).toLowerCase().trim();
@@ -82,45 +67,89 @@ public class TagSearchFilter extends ViewerFilter {
         if (!searchPattern.equals(lastPattern)) {
             lastPattern = searchPattern;
             recalculateMatchingFqns(tagPattern);
-            Activator.logInfo("Recalculated matching FQNs: " + matchingFqns.size() + " objects found");
-            if (matchingFqns.size() <= 15) {
-                Activator.logInfo("Matching FQNs: " + matchingFqns);
-            }
+            Activator.logInfo("Tag search: " + matchingFqns.size() + " objects found for #" + tagPattern);
         }
         
         // Projects always visible if they have matching children
         if (element instanceof IProject project) {
-            boolean result = hasMatchingChildren(project, tagPattern);
-            Activator.logInfo("Project " + project.getName() + " visible: " + result);
-            return result;
+            return hasMatchingChildren(project, tagPattern);
         }
         
         // Check if element matches
         if (element instanceof EObject eObject) {
+            // Special handling for Configuration - always visible if there are matching FQNs
+            String typeName = eObject.eClass().getName();
+            if ("Configuration".equals(typeName)) {
+                return !matchingFqns.isEmpty();
+            }
+            
             String fqn = extractFqn(eObject);
             if (fqn != null) {
                 // Check if this FQN or any parent matches
                 boolean result = matchesFqnOrParent(fqn);
-                // Only log first few
-                if (fqn.split("\\.").length <= 4) {
-                    Activator.logInfo("Element " + fqn + " visible: " + result);
+                
+                // Special handling for Subsystems: parent subsystem should be visible if ANY child matches
+                if (!result && "Subsystem".equals(typeName)) {
+                    result = hasMatchingChildSubsystem(eObject);
                 }
+                
                 return result;
             } else {
-                Activator.logInfo("EObject but extractFqn returned null: " + eObject.eClass().getName());
+                // If we can't extract FQN, assume visible (might be a special element)
+                return true;
             }
         } else {
             // Check if this is a Navigator folder (e.g., DocumentNavigatorAdapter$Folder)
             String className = element.getClass().getName();
             
-            // Handle navigator folder containers
-            if (className.contains("NavigatorAdapter$Folder") || className.contains("NavigatorAdapter") 
-                    && !className.endsWith("CommonNavigatorAdapter")) {
+            // Handle CommonNavigatorAdapter - it's the "Common" folder containing subsystems, common modules, etc.
+            if (className.endsWith("CommonNavigatorAdapter")) {
+                // Check if any of the "common" types have matching FQNs
+                boolean hasCommonMatches = hasMatchingFqnsForType("Subsystem") ||
+                    hasMatchingFqnsForType("CommonModule") ||
+                    hasMatchingFqnsForType("SessionParameter") ||
+                    hasMatchingFqnsForType("Role") ||
+                    hasMatchingFqnsForType("CommonAttribute") ||
+                    hasMatchingFqnsForType("ExchangePlan") ||
+                    hasMatchingFqnsForType("FilterCriterion") ||
+                    hasMatchingFqnsForType("EventSubscription") ||
+                    hasMatchingFqnsForType("ScheduledJob") ||
+                    hasMatchingFqnsForType("Bot") ||
+                    hasMatchingFqnsForType("FunctionalOption") ||
+                    hasMatchingFqnsForType("FunctionalOptionsParameter") ||
+                    hasMatchingFqnsForType("DefinedType") ||
+                    hasMatchingFqnsForType("SettingsStorage") ||
+                    hasMatchingFqnsForType("CommonForm") ||
+                    hasMatchingFqnsForType("CommonCommand") ||
+                    hasMatchingFqnsForType("CommandGroup") ||
+                    hasMatchingFqnsForType("CommonTemplate") ||
+                    hasMatchingFqnsForType("CommonPicture") ||
+                    hasMatchingFqnsForType("XDTOPackage") ||
+                    hasMatchingFqnsForType("WebService") ||
+                    hasMatchingFqnsForType("HTTPService") ||
+                    hasMatchingFqnsForType("WSReference") ||
+                    hasMatchingFqnsForType("WebSocketClient") ||
+                    hasMatchingFqnsForType("IntegrationService") ||
+                    hasMatchingFqnsForType("PaletteColor") ||
+                    hasMatchingFqnsForType("StyleItem");
+                return hasCommonMatches;
+            }
+            
+            // Handle navigator folder containers - fix operator precedence
+            if (className.contains("NavigatorAdapter$Folder") || 
+                    (className.contains("NavigatorAdapter") && !className.endsWith("CommonNavigatorAdapter"))) {
+                
+                // First, try to handle as a nested object folder (Attributes, TabularSections, etc.)
+                // These folders have a parent EObject and a model object name
+                Boolean nestedResult = checkNestedObjectFolder(element);
+                if (nestedResult != null) {
+                    return nestedResult;
+                }
+                
+                // Fall back to type-based check for top-level folders
                 String metadataType = extractMetadataTypeFromFolderClass(className);
                 if (metadataType != null) {
-                    boolean result = hasMatchingFqnsForType(metadataType);
-                    Activator.logInfo("Folder for " + metadataType + " visible: " + result);
-                    return result;
+                    return hasMatchingFqnsForType(metadataType);
                 }
             }
             
@@ -129,14 +158,14 @@ public class TagSearchFilter extends ViewerFilter {
             if (unwrapped != null) {
                 String fqn = extractFqn(unwrapped);
                 if (fqn != null) {
-                    boolean result = matchesFqnOrParent(fqn);
-                    Activator.logInfo("Unwrapped to " + fqn + " visible: " + result);
-                    return result;
+                    return matchesFqnOrParent(fqn);
                 }
             }
+            
+            // IMPORTANT: Unknown elements should NOT be visible by default during tag search!
+            // Only show elements we explicitly matched
+            return false;
         }
-        
-        return true;
     }
     
     /**
@@ -181,57 +210,6 @@ public class TagSearchFilter extends ViewerFilter {
         }
         
         return "";
-    }
-    
-    /**
-     * Ensures the standard NavigatorSearchFilter and StateProvider are deactivated.
-     * This is called from within select() to prevent race conditions.
-     */
-    private void ensureStandardFilterDeactivated() {
-        try {
-            Activator.logInfo("ensureStandardFilterDeactivated() called");
-            
-            // First, deactivate the NavigatorContentProviderStateProvider
-            // This is the KEY step - it makes content providers return ALL children
-            var stateProvider = Activator.getDefault().getNavigatorStateProvider();
-            if (stateProvider != null && stateProvider.isActive()) {
-                stateProvider.setActive(false);
-                Activator.logInfo("Deactivated NavigatorContentProviderStateProvider from TagSearchFilter.select()");
-            }
-            
-            CommonNavigator navigator = null;
-            
-            // Try to get navigator from viewer
-            if (viewer instanceof CommonViewer commonViewer) {
-                navigator = commonViewer.getCommonNavigator();
-            }
-            
-            // Fallback to active window
-            if (navigator == null) {
-                IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
-                if (window != null && window.getActivePage() != null) {
-                    var navigatorView = window.getActivePage().findView("com._1c.g5.v8.dt.ui2.navigator");
-                    if (navigatorView instanceof CommonNavigator nav) {
-                        navigator = nav;
-                    }
-                }
-            }
-            
-            if (navigator != null) {
-                var filterService = navigator.getNavigatorContentService().getFilterService();
-                boolean isActive = filterService.isActive(NAVIGATOR_SEARCH_FILTER_ID);
-                
-                if (isActive) {
-                    NavigatorUtil.deactivateFilter(navigator, NAVIGATOR_SEARCH_FILTER_ID);
-                    Activator.logInfo("Deactivated standard search filter from TagSearchFilter.select()");
-                }
-                standardFilterDeactivated = true;
-            } else {
-                Activator.logInfo("Navigator is null, cannot deactivate standard filter");
-            }
-        } catch (Exception e) {
-            Activator.logError("Failed to deactivate filters from select()", e);
-        }
     }
     
     /**
@@ -305,6 +283,40 @@ public class TagSearchFilter extends ViewerFilter {
             }
         }
         
+        return false;
+    }
+    
+    /**
+     * Checks if a subsystem has any child subsystems that match tags.
+     * This handles nested subsystems where the parent FQN is just "Subsystem.ParentName"
+     * but child subsystems have separate FQNs like "Subsystem.ChildName".
+     * 
+     * @param subsystemEObject the parent subsystem EObject
+     * @return true if any child subsystem or descendant matches
+     */
+    private boolean hasMatchingChildSubsystem(EObject subsystemEObject) {
+        try {
+            // Get child subsystems using reflection
+            java.lang.reflect.Method getSubsystems = subsystemEObject.getClass().getMethod("getSubsystems");
+            Object result = getSubsystems.invoke(subsystemEObject);
+            
+            if (result instanceof java.util.Collection<?> children) {
+                for (Object child : children) {
+                    if (child instanceof EObject childEObject) {
+                        String childFqn = extractFqn(childEObject);
+                        if (childFqn != null && matchesFqnOrParent(childFqn)) {
+                            return true;
+                        }
+                        // Recursively check children
+                        if (hasMatchingChildSubsystem(childEObject)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Not a subsystem or no getSubsystems method - ignore
+        }
         return false;
     }
     
@@ -402,6 +414,158 @@ public class TagSearchFilter extends ViewerFilter {
     }
     
     /**
+     * Checks if a nested object folder (Attributes, TabularSections, EnumValues, etc.)
+     * contains any matching child elements.
+     * 
+     * These folders have:
+     * - getModel() or getModel(boolean) -> returns parent EObject (Document, Enum, etc.)
+     * - getModelObjectName() -> returns "Attribute", "EnumValue", "TabularSection", etc.
+     * 
+     * @param element the folder element
+     * @return true if folder should be visible, false if not, null if not a nested folder
+     */
+    private Boolean checkNestedObjectFolder(Object element) {
+        try {
+            // First get the parent EObject
+            EObject parent = null;
+            
+            // Try getModel() or getModel(false)
+            for (String methodName : new String[]{"getModel"}) {
+                try {
+                    // Try getModel(boolean)
+                    var method = element.getClass().getMethod(methodName, boolean.class);
+                    Object result = method.invoke(element, false);
+                    if (result instanceof EObject eObj) {
+                        parent = eObj;
+                        break;
+                    }
+                } catch (NoSuchMethodException e) {
+                    // Try without parameter
+                    try {
+                        var method = element.getClass().getMethod(methodName);
+                        Object result = method.invoke(element);
+                        if (result instanceof EObject eObj) {
+                            parent = eObj;
+                            break;
+                        }
+                    } catch (NoSuchMethodException e2) {
+                        // Ignore
+                    }
+                }
+            }
+            
+            if (parent == null) {
+                return null; // Not a nested folder
+            }
+            
+            // Get the parent's FQN
+            String parentFqn = extractFqn(parent);
+            if (parentFqn == null) {
+                return null;
+            }
+            
+            // Get the model object name (Attribute, EnumValue, TabularSection, etc.)
+            String modelObjectName = null;
+            try {
+                var method = element.getClass().getMethod("getModelObjectName");
+                Object result = method.invoke(element);
+                if (result != null) {
+                    modelObjectName = result.toString();
+                }
+            } catch (NoSuchMethodException e) {
+                // Ignore
+            }
+            
+            if (modelObjectName == null) {
+                return null;
+            }
+            
+            // Map folder model object names to FQN type prefixes
+            // For example, "Attribute" in Document -> "DocumentAttribute"
+            // "EnumValue" in Enum -> "EnumValue"
+            String fqnTypePrefix = mapModelObjectNameToFqnType(parentFqn, modelObjectName);
+            
+            if (fqnTypePrefix == null) {
+                // No mapping, fall back to checking if any matching FQN contains this segment
+                String searchPrefix = parentFqn + "." + modelObjectName + ".";
+                for (String fqn : matchingFqns) {
+                    if (fqn.contains("." + modelObjectName + ".") && fqn.startsWith(parentFqn + ".")) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            
+            // Check if any matching FQN is a child of parent.FqnType.*
+            String searchPrefix = parentFqn + "." + fqnTypePrefix + ".";
+            for (String fqn : matchingFqns) {
+                if (fqn.startsWith(searchPrefix)) {
+                    return true;
+                }
+            }
+            
+            return false;
+            
+        } catch (Exception e) {
+            Activator.logError("Error checking nested folder", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Maps a model object name (from getModelObjectName) to the FQN type prefix.
+     * For example:
+     * - "Attribute" in Document -> "DocumentAttribute"
+     * - "EnumValue" in Enum -> "EnumValue"
+     * - "Dimension" in InformationRegister -> "InformationRegisterDimension"
+     */
+    private String mapModelObjectNameToFqnType(String parentFqn, String modelObjectName) {
+        // Get the parent type (first segment)
+        String[] parts = parentFqn.split("\\.");
+        if (parts.length < 1) {
+            return null;
+        }
+        String parentType = parts[0];
+        
+        // Map common model object names to FQN types
+        // The pattern is usually ParentType + ModelObjectName or just ModelObjectName
+        
+        // Attributes
+        if ("Attribute".equals(modelObjectName)) {
+            // Documents, Catalogs, etc. use Type + Attribute
+            return parentType + "Attribute";
+        }
+        
+        // Enum values
+        if ("EnumValue".equals(modelObjectName)) {
+            return "EnumValue";
+        }
+        
+        // Tabular sections
+        if ("TabularSection".equals(modelObjectName)) {
+            return parentType + "TabularSection";
+        }
+        
+        // Register dimensions
+        if ("Dimension".equals(modelObjectName)) {
+            return parentType + "Dimension";
+        }
+        
+        // Register resources
+        if ("Resource".equals(modelObjectName)) {
+            return parentType + "Resource";
+        }
+        
+        // Forms, Commands, Templates are typically just the name
+        if ("Form".equals(modelObjectName) || "Command".equals(modelObjectName) || "Template".equals(modelObjectName)) {
+            return parentType + modelObjectName;
+        }
+        
+        // Default: try parentType + modelObjectName
+        return parentType + modelObjectName;
+    }
+
+    /**
      * Extracts metadata type from Navigator folder class name.
      * E.g., "DocumentNavigatorAdapter$Folder" -> "Document"
      */
@@ -410,13 +574,8 @@ public class TagSearchFilter extends ViewerFilter {
         // or com._1c.g5.v8.dt.md.ui.navigator.adapters.XXXNavigatorAdapter
         
         // Map of class name patterns to FQN prefixes
-        java.util.Map<String, String> typeMap = new java.util.HashMap<>();
-        typeMap.put("Document", "Document");
-        typeMap.put("Catalog", "Catalog");
-        typeMap.put("Enum", "Enum");
-        typeMap.put("Report", "Report");
-        typeMap.put("DataProcessor", "DataProcessor");
-        typeMap.put("Constant", "Constant");
+        java.util.Map<String, String> typeMap = new java.util.LinkedHashMap<>();
+        // Most specific first
         typeMap.put("InformationRegister", "InformationRegister");
         typeMap.put("AccumulationRegister", "AccumulationRegister");
         typeMap.put("AccountingRegister", "AccountingRegister");
@@ -424,14 +583,50 @@ public class TagSearchFilter extends ViewerFilter {
         typeMap.put("ChartOfCharacteristicTypes", "ChartOfCharacteristicTypes");
         typeMap.put("ChartOfAccounts", "ChartOfAccounts");
         typeMap.put("ChartOfCalculationTypes", "ChartOfCalculationTypes");
+        typeMap.put("ExternalDataSource", "ExternalDataSource");
+        typeMap.put("ExternalDataProcessor", "ExternalDataProcessor");
+        typeMap.put("ExternalReport", "ExternalReport");
+        typeMap.put("DocumentJournal", "DocumentJournal");
+        typeMap.put("DocumentNumerator", "DocumentNumerator");
+        typeMap.put("Document", "Document");
+        typeMap.put("Catalog", "Catalog");
+        typeMap.put("Enum", "Enum");
+        typeMap.put("Report", "Report");
+        typeMap.put("DataProcessor", "DataProcessor");
+        typeMap.put("Constant", "Constant");
         typeMap.put("BusinessProcess", "BusinessProcess");
         typeMap.put("Task", "Task");
-        typeMap.put("ExternalDataSource", "ExternalDataSource");
-        typeMap.put("DocumentJournal", "DocumentJournal");
         typeMap.put("Subsystem", "Subsystem");
         typeMap.put("CommonModule", "CommonModule");
         typeMap.put("CommonForm", "CommonForm");
+        typeMap.put("CommonCommand", "CommonCommand");
+        typeMap.put("CommonTemplate", "CommonTemplate");
+        typeMap.put("CommonPicture", "CommonPicture");
+        typeMap.put("CommonAttribute", "CommonAttribute");
+        typeMap.put("CommandGroup", "CommandGroup");
         typeMap.put("StyleItem", "StyleItem");
+        typeMap.put("Style", "Style");
+        typeMap.put("PaletteColor", "PaletteColor");
+        typeMap.put("SessionParameter", "SessionParameter");
+        typeMap.put("Role", "Role");
+        typeMap.put("ExchangePlan", "ExchangePlan");
+        typeMap.put("FilterCriterion", "FilterCriterion");
+        typeMap.put("EventSubscription", "EventSubscription");
+        typeMap.put("ScheduledJob", "ScheduledJob");
+        typeMap.put("Bot", "Bot");
+        typeMap.put("FunctionalOptionsParameter", "FunctionalOptionsParameter");
+        typeMap.put("FunctionalOption", "FunctionalOption");
+        typeMap.put("DefinedType", "DefinedType");
+        typeMap.put("SettingsStorage", "SettingsStorage");
+        typeMap.put("XDTOPackage", "XDTOPackage");
+        typeMap.put("WebService", "WebService");
+        typeMap.put("HTTPService", "HTTPService");
+        typeMap.put("WSReference", "WSReference");
+        typeMap.put("WebSocketClient", "WebSocketClient");
+        typeMap.put("IntegrationService", "IntegrationService");
+        typeMap.put("Sequence", "Sequence");
+        typeMap.put("Recalculation", "Recalculation");
+        typeMap.put("Language", "Language");
         
         for (java.util.Map.Entry<String, String> entry : typeMap.entrySet()) {
             if (className.contains(entry.getKey() + "NavigatorAdapter")) {

@@ -9,14 +9,21 @@
  ******************************************************************************/
 package com.ditrix.edt.mcp.server.tags.ui;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Stream;
+
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.IPreferenceChangeListener;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.PreferenceChangeEvent;
+import org.eclipse.jface.viewers.AbstractTreeViewer;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.TreeItem;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.navigator.CommonNavigator;
+import org.eclipse.ui.navigator.CommonViewer;
 
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.navigator.util.NavigatorUtil;
@@ -43,6 +50,9 @@ public class TagSearchManager implements IPreferenceChangeListener {
     private IEclipsePreferences searchHistoryNode;
     private boolean standardFilterWasActive = false;
     private boolean wasStateProviderActive = false;
+    private volatile boolean isInTagSearchMode = false;
+    private java.util.Timer stateProviderMonitor;
+    private volatile String activeSetupPattern = null;  // Tracks which pattern setup is running for
     
     private TagSearchManager() {
     }
@@ -77,6 +87,7 @@ public class TagSearchManager implements IPreferenceChangeListener {
      * Stops listening and cleans up.
      */
     public void stop() {
+        stopStateProviderMonitoring();
         if (searchHistoryNode != null) {
             searchHistoryNode.removePreferenceChangeListener(this);
             searchHistoryNode = null;
@@ -92,8 +103,6 @@ public class TagSearchManager implements IPreferenceChangeListener {
         
         String newPattern = event.getNewValue() != null ? event.getNewValue().toString() : "";
         
-        Activator.logInfo("Search pattern changed: " + newPattern);
-        
         // Run on UI thread SYNCHRONOUSLY to ensure filter is deactivated before tree refresh
         Display display = Display.getDefault();
         if (display.getThread() == Thread.currentThread()) {
@@ -107,6 +116,15 @@ public class TagSearchManager implements IPreferenceChangeListener {
     
     /**
      * Handles pattern change - enables/disables filters as needed.
+     * 
+     * NEW SIMPLER APPROACH:
+     * 1. Wait for the Navigator's searchPerformer to finish (it runs in background)
+     * 2. Then deactivate StateProvider so content providers return ALL children
+     * 3. Deactivate standard NavigatorSearchFilter so it doesn't filter anything
+     * 4. Activate our TagSearchFilter to filter by tag
+     * 
+     * Key insight: When isActive()==false, content providers ignore Trie and return all children.
+     * Our TagSearchFilter then filters those children by tag.
      */
     private void handlePatternChange(String pattern) {
         try {
@@ -114,14 +132,34 @@ public class TagSearchManager implements IPreferenceChangeListener {
             if (navigator == null) {
                 return;
             }
-            
+
             if (pattern.startsWith("#")) {
-                // Tag search mode - deactivate standard filter and state provider, activate our filter
-                deactivateStandardFilter(navigator);
-                deactivateNavigatorStateProvider();
-                activateTagFilter(navigator);
+                // Tag search mode
+                isInTagSearchMode = true;
+                String tagPattern = pattern.substring(1).trim();
+                
+                if (tagPattern.isEmpty()) {
+                    return;
+                }
+                
+                // Pre-calculate matching FQNs for the filter to use
+                // This is done synchronously so the filter has data when it runs
+                TagTrieStateProvider tagTrieProvider = TagTrieStateProvider.getInstance();
+                tagTrieProvider.buildAndActivate(tagPattern);
+                
+                // Schedule the filter setup to run AFTER the Navigator's searchPerformer
+                // The searchPerformer runs in a background job, so we use a delayed execution
+                scheduleTagSearchSetup(navigator, pattern);
+                
             } else {
                 // Normal mode - restore standard filter if we deactivated it
+                isInTagSearchMode = false;
+                activeSetupPattern = null;
+                stopStateProviderMonitoring();
+                
+                // Deactivate our tag search
+                TagTrieStateProvider.getInstance().deactivate();
+                
                 if (standardFilterWasActive || wasStateProviderActive) {
                     // The searchPerformer will handle activating standard filter
                     // We just need to deactivate our filter
@@ -133,6 +171,129 @@ public class TagSearchManager implements IPreferenceChangeListener {
             }
         } catch (Exception e) {
             Activator.logError("Error handling pattern change", e);
+        }
+    }
+    
+    /**
+     * Schedules tag search setup to run after the Navigator's searchPerformer finishes.
+     * This ensures our setup doesn't get overwritten.
+     */
+    private void scheduleTagSearchSetup(CommonNavigator navigator, String pattern) {
+        stopStateProviderMonitoring(); // Cancel any previous setup
+        
+        // Track which pattern this setup is for
+        activeSetupPattern = pattern;
+        
+        // Use a timer to wait for searchPerformer to complete
+        // The searchPerformer job takes ~200-500ms typically
+        stateProviderMonitor = new java.util.Timer("TagSearchSetup", true);
+        
+        final String setupPattern = pattern; // Capture for lambda
+        
+        java.util.TimerTask setupTask = new java.util.TimerTask() {
+            private int attemptCount = 0;
+            
+            @Override
+            public void run() {
+                // Check if pattern changed or not in tag search mode
+                if (!isInTagSearchMode || !setupPattern.equals(activeSetupPattern)) {
+                    cancel();
+                    return;
+                }
+                
+                attemptCount++;
+                
+                Display.getDefault().asyncExec(() -> {
+                    try {
+                        // Double-check pattern is still current (another setup might have started)
+                        if (!setupPattern.equals(activeSetupPattern) || !isInTagSearchMode) {
+                            Activator.logInfo("Setup skipped - pattern changed: " + setupPattern + " vs " + activeSetupPattern);
+                            return;
+                        }
+                        
+                        INavigatorContentProviderStateProvider stateProvider =
+                            Activator.getDefault().getNavigatorStateProvider();
+                        
+                        if (stateProvider == null) {
+                            Activator.logInfo("Setup skipped - no stateProvider");
+                            return;
+                        }
+                        
+                        // Check if searchPerformer has finished (it deactivates the stateProvider at the end)
+                        // OR if this is attempt #3+ (force setup even if still running)
+                        boolean forceSetup = attemptCount >= 3;
+                        boolean searchFinished = !stateProvider.isActive();
+                        
+                        if (searchFinished || forceSetup) {
+                            Activator.logInfo("Setup running for: " + setupPattern + " (attempt " + attemptCount + ")");
+                            
+                            // CRITICAL: Ensure StateProvider is INACTIVE
+                            // When inactive, content providers return ALL children (no Trie filtering)
+                            if (stateProvider.isActive()) {
+                                stateProvider.setActive(false);
+                            }
+                            
+                            // Deactivate standard filter
+                            deactivateStandardFilter(navigator);
+                            
+                            // Activate our tag filter
+                            activateTagFilter(navigator);
+                            
+                            // Dynamic tree expansion like EDT does in UISearchHelper
+                            // First expand to level 2, then fully expand each visible branch
+                            expandTreeDynamically(navigator.getCommonViewer());
+                            
+                            // Cancel timer - setup complete
+                            cancel();
+                            stopStateProviderMonitoring();
+                        }
+                    } catch (Exception e) {
+                        Activator.logError("Error in tag search setup", e);
+                    }
+                });
+            }
+        };
+        
+        // Start checking after 200ms, then every 100ms
+        stateProviderMonitor.schedule(setupTask, 200, 100);
+    }
+    
+    /**
+     * Expands the tree dynamically similar to EDT's UISearchHelper.expandTreeViewerStepByStep().
+     * First expands to level 2, then collects level 2 items and fully expands each.
+     * 
+     * This ensures all nested matching objects are visible regardless of depth.
+     */
+    private void expandTreeDynamically(CommonViewer viewer) {
+        try {
+            // Collapse all first to ensure fresh state
+            viewer.collapseAll();
+            
+            // Refresh tree to apply filter changes
+            viewer.refresh();
+            
+            // Process pending UI events to ensure refresh is complete
+            Display.getCurrent().update();
+            
+            // First expand to level 2 to show basic structure
+            viewer.expandToLevel(2, true);
+            
+            // Collect all items at level 2 (children of root items)
+            List<TreeItem> level2Items = new ArrayList<>();
+            TreeItem[] rootItems = viewer.getTree().getItems();
+            Stream.of(rootItems).forEach(rootItem -> 
+                Stream.of(rootItem.getItems()).forEach(level2Items::add)
+            );
+            
+            // Fully expand each level 2 item (ALL_LEVELS = -1)
+            for (TreeItem item : level2Items) {
+                Object data = item.getData();
+                if (data != null) {
+                    viewer.expandToLevel(data, AbstractTreeViewer.ALL_LEVELS, true);
+                }
+            }
+        } catch (Exception e) {
+            Activator.logError("Error in dynamic tree expansion", e);
         }
     }
     
@@ -164,37 +325,9 @@ public class TagSearchManager implements IPreferenceChangeListener {
             if (filterService.isActive(NAVIGATOR_SEARCH_FILTER_ID)) {
                 standardFilterWasActive = true;
                 NavigatorUtil.deactivateFilter(navigator, NAVIGATOR_SEARCH_FILTER_ID);
-                Activator.logInfo("Deactivated standard search filter");
             }
         } catch (Exception e) {
             Activator.logError("Failed to deactivate standard filter", e);
-        }
-    }
-    
-    /**
-     * Deactivates the NavigatorContentProviderStateProvider.
-     * This is critical - it controls what children content providers return.
-     * When active, content providers use the trie to filter children.
-     * When inactive, content providers return all children (which we then filter).
-     */
-    private void deactivateNavigatorStateProvider() {
-        try {
-            INavigatorContentProviderStateProvider stateProvider = 
-                Activator.getDefault().getNavigatorStateProvider();
-            
-            if (stateProvider != null) {
-                if (stateProvider.isActive()) {
-                    wasStateProviderActive = true;
-                    stateProvider.setActive(false);
-                    Activator.logInfo("Deactivated NavigatorContentProviderStateProvider");
-                } else {
-                    Activator.logInfo("NavigatorContentProviderStateProvider was already inactive");
-                }
-            } else {
-                Activator.logInfo("NavigatorContentProviderStateProvider service not available");
-            }
-        } catch (Exception e) {
-            Activator.logError("Failed to deactivate navigator state provider", e);
         }
     }
     
@@ -204,14 +337,10 @@ public class TagSearchManager implements IPreferenceChangeListener {
     private void activateTagFilter(CommonNavigator navigator) {
         try {
             var filterService = navigator.getNavigatorContentService().getFilterService();
-            
-            Activator.logInfo("Attempting to activate tag filter, current active: " + filterService.isActive(TAG_SEARCH_FILTER_ID));
-            
+
             if (!filterService.isActive(TAG_SEARCH_FILTER_ID)) {
                 NavigatorUtil.activateOrRefreshFilter(navigator, TAG_SEARCH_FILTER_ID);
-                Activator.logInfo("Activated tag search filter");
             } else {
-                Activator.logInfo("Tag filter already active, refreshing");
                 navigator.getCommonViewer().refresh();
             }
         } catch (Exception e) {
@@ -225,13 +354,22 @@ public class TagSearchManager implements IPreferenceChangeListener {
     private void deactivateTagFilter(CommonNavigator navigator) {
         try {
             var filterService = navigator.getNavigatorContentService().getFilterService();
-            
+
             if (filterService.isActive(TAG_SEARCH_FILTER_ID)) {
                 NavigatorUtil.deactivateFilter(navigator, TAG_SEARCH_FILTER_ID);
-                Activator.logInfo("Deactivated tag search filter");
             }
         } catch (Exception e) {
             Activator.logError("Failed to deactivate tag filter", e);
+        }
+    }
+
+    /**
+     * Stops the tag search setup timer.
+     */
+    private void stopStateProviderMonitoring() {
+        if (stateProviderMonitor != null) {
+            stateProviderMonitor.cancel();
+            stateProviderMonitor = null;
         }
     }
 }

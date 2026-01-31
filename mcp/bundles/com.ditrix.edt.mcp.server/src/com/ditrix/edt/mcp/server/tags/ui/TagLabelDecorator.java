@@ -126,33 +126,62 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
         return null;
     }
     
+    /**
+     * Extracts the fully qualified name (FQN) by traversing the parent hierarchy.
+     * For nested objects like Document.SalesOrder.DocumentAttribute.CustomerName,
+     * this builds the complete FQN path.
+     */
     private String extractFqn(EObject mdObject) {
         if (mdObject == null) {
             return null;
         }
         
         try {
-            String typeName = mdObject.eClass().getName();
+            StringBuilder fqnBuilder = new StringBuilder();
+            EObject current = mdObject;
             
-            java.lang.reflect.Method getNameMethod = null;
-            for (java.lang.reflect.Method m : mdObject.getClass().getMethods()) {
-                if ("getName".equals(m.getName()) && m.getParameterCount() == 0) {
-                    getNameMethod = m;
+            while (current != null) {
+                String typeName = current.eClass().getName();
+                
+                // Stop at Configuration or internal model objects
+                if ("Configuration".equals(typeName) || typeName.startsWith("Md")) {
                     break;
                 }
-            }
-            
-            if (getNameMethod != null) {
-                Object name = getNameMethod.invoke(mdObject);
-                if (name != null) {
-                    return typeName + "." + name.toString();
+                
+                String name = getObjectName(current);
+                
+                if (name != null && !name.isEmpty()) {
+                    String part = typeName + "." + name;
+                    if (fqnBuilder.length() > 0) {
+                        fqnBuilder.insert(0, ".");
+                    }
+                    fqnBuilder.insert(0, part);
                 }
+                
+                current = current.eContainer();
             }
             
-            return typeName;
+            return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
         } catch (Exception e) {
             return null;
         }
+    }
+    
+    /**
+     * Gets object name using reflection.
+     */
+    private String getObjectName(EObject eObject) {
+        try {
+            for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
+                if ("getName".equals(m.getName()) && m.getParameterCount() == 0) {
+                    Object name = m.invoke(eObject);
+                    return name != null ? name.toString() : null;
+                }
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
+        return null;
     }
     
     @Override
