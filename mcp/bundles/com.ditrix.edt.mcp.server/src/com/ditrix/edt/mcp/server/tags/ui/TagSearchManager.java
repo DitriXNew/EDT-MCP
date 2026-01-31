@@ -262,18 +262,27 @@ public class TagSearchManager implements IPreferenceChangeListener {
             // Process pending UI events to ensure refresh is complete
             Display.getCurrent().update();
             
-            // First expand to level 2 to show basic structure
-            viewer.expandToLevel(2, true);
+            // Expand to a deeper level to get past Project and Configuration levels
+            // Level structure: 0=root, 1=Project, 2=Configuration, 3=Folders, 4+=Objects
+            viewer.expandToLevel(4, true);
             
-            // Collect all items at level 2 (children of root items)
-            List<TreeItem> level2Items = new ArrayList<>();
+            // Debug: log root items count
             TreeItem[] rootItems = viewer.getTree().getItems();
-            Stream.of(rootItems).forEach(rootItem -> 
-                Stream.of(rootItem.getItems()).forEach(level2Items::add)
-            );
+            Activator.logInfo("Tree expansion: " + rootItems.length + " root items");
             
-            // Fully expand each level 2 item (ALL_LEVELS = -1)
-            for (TreeItem item : level2Items) {
+            // Collect items at level 3 (folder level - Common, Documents, etc.)
+            List<TreeItem> level3Items = new ArrayList<>();
+            Stream.of(rootItems).forEach(rootItem -> {
+                Activator.logInfo("  Root: " + rootItem.getText() + " has " + rootItem.getItemCount() + " children");
+                // Level 2 - Configuration
+                Stream.of(rootItem.getItems()).forEach(configItem ->
+                    // Level 3 - Folders
+                    Stream.of(configItem.getItems()).forEach(level3Items::add)
+                );
+            });
+            
+            // Fully expand each level 3 folder item (ALL_LEVELS = -1)
+            for (TreeItem item : level3Items) {
                 Object data = item.getData();
                 if (data != null) {
                     viewer.expandToLevel(data, AbstractTreeViewer.ALL_LEVELS, true);

@@ -194,7 +194,15 @@ public class TagsMenuContribution extends CompoundContributionItem {
             MenuItem item = new MenuItem(menu, SWT.CHECK, index);
             item.setText(tag.getName());
             item.setSelection(isChecked);
-            item.setImage(createColorIcon(tag.getColor(), isChecked));
+            Image image = createColorIcon(tag.getColor(), isChecked);
+            item.setImage(image);
+            
+            // Dispose image when menu item is disposed
+            item.addDisposeListener(e -> {
+                if (image != null && !image.isDisposed()) {
+                    image.dispose();
+                }
+            });
             
             item.addSelectionListener(new SelectionAdapter() {
                 @Override

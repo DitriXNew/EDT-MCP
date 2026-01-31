@@ -9,7 +9,9 @@
  ******************************************************************************/
 package com.ditrix.edt.mcp.server.tags.ui;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
@@ -39,7 +41,15 @@ public class TagSearchFilter extends ViewerFilter {
     
     private Viewer viewer;
     private String lastPattern = "";
+    
+    /** Matching FQNs per project - each project has its own set of matching FQNs */
+    private Map<IProject, Set<String>> matchingFqnsByProject = new HashMap<>();
+    
+    /** Combined set for quick lookup (backwards compatibility) */
     private Set<String> matchingFqns = new HashSet<>();
+    
+    /** Current project context for filtering - set at the start of select() */
+    private IProject currentFilterProject;
     
     /**
      * Default constructor for extension factory.
@@ -55,11 +65,13 @@ public class TagSearchFilter extends ViewerFilter {
 
         // Only handle patterns starting with #
         if (searchPattern == null || !searchPattern.startsWith("#")) {
+            currentFilterProject = null;
             return true; // Let other filters handle
         }
         
         String tagPattern = searchPattern.substring(1).toLowerCase().trim();
         if (tagPattern.isEmpty()) {
+            currentFilterProject = null;
             return true;
         }
         
@@ -70,6 +82,12 @@ public class TagSearchFilter extends ViewerFilter {
             Activator.logInfo("Tag search: " + matchingFqns.size() + " objects found for #" + tagPattern);
         }
         
+        // Try to determine current project context from element or parent
+        currentFilterProject = extractProjectFromElement(element);
+        if (currentFilterProject == null) {
+            currentFilterProject = extractProjectFromElement(parentElement);
+        }
+        
         // Projects always visible if they have matching children
         if (element instanceof IProject project) {
             return hasMatchingChildren(project, tagPattern);
@@ -77,20 +95,35 @@ public class TagSearchFilter extends ViewerFilter {
         
         // Check if element matches
         if (element instanceof EObject eObject) {
-            // Special handling for Configuration - always visible if there are matching FQNs
+            // Get the project this EObject belongs to for project-specific matching
+            IProject project = extractProjectFromEObject(eObject);
+            if (project != null) {
+                currentFilterProject = project;
+            }
+            
+            // Special handling for Configuration - always visible if there are matching FQNs for this project
             String typeName = eObject.eClass().getName();
             if ("Configuration".equals(typeName)) {
-                return !matchingFqns.isEmpty();
+                Set<String> projectFqns = getMatchingFqnsForProject(currentFilterProject);
+                return !projectFqns.isEmpty();
             }
             
             String fqn = extractFqn(eObject);
+            
+            // Debug: log what we're checking
+            if (fqn != null && fqn.contains("AddDataProc")) {
+                Activator.logInfo("DEBUG: Checking " + fqn + " in project " + 
+                    (currentFilterProject != null ? currentFilterProject.getName() : "null") +
+                    ", projectFqns size: " + getMatchingFqnsForProject(currentFilterProject).size());
+            }
+            
             if (fqn != null) {
-                // Check if this FQN or any parent matches
-                boolean result = matchesFqnOrParent(fqn);
+                // Check if this FQN or any parent matches IN THIS PROJECT
+                boolean result = matchesFqnOrParentInProject(fqn, currentFilterProject);
                 
                 // Special handling for Subsystems: parent subsystem should be visible if ANY child matches
                 if (!result && "Subsystem".equals(typeName)) {
-                    result = hasMatchingChildSubsystem(eObject);
+                    result = hasMatchingChildSubsystemInProject(eObject, currentFilterProject);
                 }
                 
                 return result;
@@ -214,9 +247,11 @@ public class TagSearchFilter extends ViewerFilter {
     
     /**
      * Recalculates matching FQNs across all projects for the given tag pattern.
+     * Stores FQNs per project to avoid cross-project matching issues.
      */
     private void recalculateMatchingFqns(String tagPattern) {
         matchingFqns.clear();
+        matchingFqnsByProject.clear();
         
         TagService tagService = TagService.getInstance();
         
@@ -226,14 +261,21 @@ public class TagSearchFilter extends ViewerFilter {
                 continue;
             }
             
+            Set<String> projectFqns = new HashSet<>();
             TagStorage storage = tagService.getTagStorage(project);
             
             // Find all tags matching the pattern
             for (Tag tag : storage.getTags()) {
                 if (tag.getName().toLowerCase().contains(tagPattern)) {
                     // Add all objects with this tag
-                    matchingFqns.addAll(storage.getObjectsByTag(tag.getName()));
+                    Set<String> objectFqns = storage.getObjectsByTag(tag.getName());
+                    projectFqns.addAll(objectFqns);
+                    matchingFqns.addAll(objectFqns);
                 }
+            }
+            
+            if (!projectFqns.isEmpty()) {
+                matchingFqnsByProject.put(project, projectFqns);
             }
         }
     }
@@ -259,16 +301,19 @@ public class TagSearchFilter extends ViewerFilter {
     
     /**
      * Checks if FQN matches directly or is a parent of a matching FQN.
+     * Uses currentFilterProject context.
      */
     private boolean matchesFqnOrParent(String fqn) {
+        Set<String> projectFqns = getCurrentMatchingFqns();
+        
         // Direct match
-        if (matchingFqns.contains(fqn)) {
+        if (projectFqns.contains(fqn)) {
             return true;
         }
         
         // Check if this is a parent of any matching FQN
         String prefix = fqn + ".";
-        for (String matchingFqn : matchingFqns) {
+        for (String matchingFqn : projectFqns) {
             if (matchingFqn.startsWith(prefix)) {
                 return true;
             }
@@ -276,7 +321,7 @@ public class TagSearchFilter extends ViewerFilter {
         
         // Check if this FQN is part of a matching FQN path
         // (to show intermediate nodes in the tree)
-        for (String matchingFqn : matchingFqns) {
+        for (String matchingFqn : projectFqns) {
             if (matchingFqn.startsWith(fqn)) {
                 // This element is on the path to a matching element
                 return true;
@@ -295,6 +340,17 @@ public class TagSearchFilter extends ViewerFilter {
      * @return true if any child subsystem or descendant matches
      */
     private boolean hasMatchingChildSubsystem(EObject subsystemEObject) {
+        return hasMatchingChildSubsystemInProject(subsystemEObject, null);
+    }
+    
+    /**
+     * Checks if a subsystem has any child subsystems that match tags within a specific project.
+     * 
+     * @param subsystemEObject the parent subsystem EObject
+     * @param project the project (can be null for global check)
+     * @return true if any child subsystem or descendant matches
+     */
+    private boolean hasMatchingChildSubsystemInProject(EObject subsystemEObject, IProject project) {
         try {
             // Get child subsystems using reflection
             java.lang.reflect.Method getSubsystems = subsystemEObject.getClass().getMethod("getSubsystems");
@@ -304,11 +360,11 @@ public class TagSearchFilter extends ViewerFilter {
                 for (Object child : children) {
                     if (child instanceof EObject childEObject) {
                         String childFqn = extractFqn(childEObject);
-                        if (childFqn != null && matchesFqnOrParent(childFqn)) {
+                        if (childFqn != null && matchesFqnOrParentInProject(childFqn, project)) {
                             return true;
                         }
                         // Recursively check children
-                        if (hasMatchingChildSubsystem(childEObject)) {
+                        if (hasMatchingChildSubsystemInProject(childEObject, project)) {
                             return true;
                         }
                     }
@@ -480,6 +536,8 @@ public class TagSearchFilter extends ViewerFilter {
                 return null;
             }
             
+            Set<String> projectFqns = getCurrentMatchingFqns();
+            
             // Map folder model object names to FQN type prefixes
             // For example, "Attribute" in Document -> "DocumentAttribute"
             // "EnumValue" in Enum -> "EnumValue"
@@ -488,7 +546,7 @@ public class TagSearchFilter extends ViewerFilter {
             if (fqnTypePrefix == null) {
                 // No mapping, fall back to checking if any matching FQN contains this segment
                 String searchPrefix = parentFqn + "." + modelObjectName + ".";
-                for (String fqn : matchingFqns) {
+                for (String fqn : projectFqns) {
                     if (fqn.contains("." + modelObjectName + ".") && fqn.startsWith(parentFqn + ".")) {
                         return true;
                     }
@@ -498,7 +556,7 @@ public class TagSearchFilter extends ViewerFilter {
             
             // Check if any matching FQN is a child of parent.FqnType.*
             String searchPrefix = parentFqn + "." + fqnTypePrefix + ".";
-            for (String fqn : matchingFqns) {
+            for (String fqn : projectFqns) {
                 if (fqn.startsWith(searchPrefix)) {
                     return true;
                 }
@@ -639,14 +697,219 @@ public class TagSearchFilter extends ViewerFilter {
     
     /**
      * Checks if any matching FQN starts with the given metadata type.
+     * Uses currentFilterProject context.
      */
     private boolean hasMatchingFqnsForType(String metadataType) {
+        Set<String> projectFqns = getCurrentMatchingFqns();
         String prefix = metadataType + ".";
-        for (String fqn : matchingFqns) {
+        for (String fqn : projectFqns) {
             if (fqn.startsWith(prefix)) {
                 return true;
             }
         }
+        return false;
+    }
+    
+    /**
+     * Extracts the project from any element type (IProject, EObject, or wrapper).
+     * 
+     * @param element the element
+     * @return the project or null if not found
+     */
+    private IProject extractProjectFromElement(Object element) {
+        if (element == null) {
+            return null;
+        }
+        
+        // If it's a project directly
+        if (element instanceof IProject project) {
+            return project;
+        }
+        
+        // If it's an EObject
+        if (element instanceof EObject eObject) {
+            return extractProjectFromEObject(eObject);
+        }
+        
+        // Try to unwrap to EObject and get project
+        EObject unwrapped = unwrapToEObject(element);
+        if (unwrapped != null) {
+            return extractProjectFromEObject(unwrapped);
+        }
+        
+        // Try getProject() method via reflection
+        try {
+            java.lang.reflect.Method getProject = element.getClass().getMethod("getProject");
+            Object result = getProject.invoke(element);
+            if (result instanceof IProject project) {
+                return project;
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
+        
+        // Try getModel() method and extract from that
+        try {
+            java.lang.reflect.Method getModel = element.getClass().getMethod("getModel");
+            Object model = getModel.invoke(element);
+            if (model instanceof EObject eObject) {
+                return extractProjectFromEObject(eObject);
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Extracts the project from an EObject using multiple strategies.
+     * 
+     * @param eObject the EObject
+     * @return the project or null if not found
+     */
+    private IProject extractProjectFromEObject(EObject eObject) {
+        if (eObject == null) {
+            return null;
+        }
+        
+        try {
+            // Try 1: Get project from resource URI (platform resource)
+            if (eObject.eResource() != null && eObject.eResource().getURI() != null) {
+                org.eclipse.emf.common.util.URI uri = eObject.eResource().getURI();
+                String uriPath = uri.toPlatformString(true);
+                
+                if (uriPath != null && uriPath.length() > 1) {
+                    String projectName = uriPath.split("/")[1];
+                    IProject project = ResourcesPlugin.getWorkspace()
+                        .getRoot().getProject(projectName);
+                    if (project != null && project.exists()) {
+                        return project;
+                    }
+                }
+                
+                // Try 2: Extract from bm: URI scheme
+                String uriString = uri.toString();
+                if (uriString.startsWith("bm://")) {
+                    // Format: bm://projectName/...
+                    String[] parts = uriString.substring(5).split("/");
+                    if (parts.length > 0) {
+                        IProject project = ResourcesPlugin.getWorkspace()
+                            .getRoot().getProject(parts[0]);
+                        if (project != null && project.exists()) {
+                            return project;
+                        }
+                    }
+                }
+            }
+            
+            // Try 3: Use V8ProjectManager
+            try {
+                com._1c.g5.v8.dt.core.platform.IV8ProjectManager v8ProjectManager = 
+                    Activator.getDefault().getV8ProjectManager();
+                if (v8ProjectManager != null) {
+                    com._1c.g5.v8.dt.core.platform.IV8Project v8Project = 
+                        v8ProjectManager.getProject(eObject);
+                    if (v8Project != null) {
+                        return v8Project.getProject();
+                    }
+                }
+            } catch (Exception e) {
+                // Ignore
+            }
+            
+            // Try 4: Traverse up to find Configuration and get project from there
+            EObject current = eObject;
+            while (current != null) {
+                String typeName = current.eClass().getName();
+                if ("Configuration".equals(typeName)) {
+                    // Found Configuration - try to get project from its resource
+                    if (current.eResource() != null && current.eResource().getURI() != null) {
+                        org.eclipse.emf.common.util.URI uri = current.eResource().getURI();
+                        
+                        // Try platform string
+                        String uriPath = uri.toPlatformString(true);
+                        if (uriPath != null && uriPath.length() > 1) {
+                            String projectName = uriPath.split("/")[1];
+                            IProject project = ResourcesPlugin.getWorkspace()
+                                .getRoot().getProject(projectName);
+                            if (project != null && project.exists()) {
+                                return project;
+                            }
+                        }
+                        
+                        // Try bm: scheme
+                        String uriString = uri.toString();
+                        if (uriString.startsWith("bm://")) {
+                            String[] parts = uriString.substring(5).split("/");
+                            if (parts.length > 0) {
+                                IProject project = ResourcesPlugin.getWorkspace()
+                                    .getRoot().getProject(parts[0]);
+                                if (project != null && project.exists()) {
+                                    return project;
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+                current = current.eContainer();
+            }
+        } catch (Exception e) {
+            // Ignore - return null
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Gets matching FQNs for a specific project.
+     * 
+     * @param project the project (can be null)
+     * @return the set of matching FQNs for this project, or empty set if none
+     */
+    private Set<String> getMatchingFqnsForProject(IProject project) {
+        IProject effectiveProject = project != null ? project : currentFilterProject;
+        if (effectiveProject == null) {
+            // If no project specified and no current filter project, return combined set
+            return matchingFqns;
+        }
+        return matchingFqnsByProject.getOrDefault(effectiveProject, java.util.Collections.emptySet());
+    }
+    
+    /**
+     * Gets matching FQNs for the current filter project context.
+     * Uses currentFilterProject if set, otherwise returns combined set.
+     * 
+     * @return the set of matching FQNs for current context
+     */
+    private Set<String> getCurrentMatchingFqns() {
+        return getMatchingFqnsForProject(currentFilterProject);
+    }
+    
+    /**
+     * Checks if FQN matches (exact or as parent) within a specific project.
+     * 
+     * @param fqn the FQN to check
+     * @param project the project (can be null for global check)
+     * @return true if matches
+     */
+    private boolean matchesFqnOrParentInProject(String fqn, IProject project) {
+        Set<String> projectFqns = getMatchingFqnsForProject(project);
+        
+        // Exact match
+        if (projectFqns.contains(fqn)) {
+            return true;
+        }
+        
+        // Check if this FQN is a parent of a matching FQN
+        String prefix = fqn + ".";
+        for (String matchingFqn : projectFqns) {
+            if (matchingFqn.startsWith(prefix)) {
+                return true;
+            }
+        }
+        
         return false;
     }
 }
