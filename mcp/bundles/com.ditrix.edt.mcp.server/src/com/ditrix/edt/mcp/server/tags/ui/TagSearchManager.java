@@ -184,30 +184,25 @@ public class TagSearchManager implements IPreferenceChangeListener {
         // Track which pattern this setup is for
         activeSetupPattern = pattern;
         
-        // Use a timer to wait for searchPerformer to complete
-        // The searchPerformer job takes ~200-500ms typically
-        stateProviderMonitor = new java.util.Timer("TagSearchSetup", true);
-        
         final String setupPattern = pattern; // Capture for lambda
         
+        // Use a timer to wait for searchPerformer to complete
+        stateProviderMonitor = new java.util.Timer("TagSearchSetup", true);
+        
         java.util.TimerTask setupTask = new java.util.TimerTask() {
-            private int attemptCount = 0;
-            
             @Override
             public void run() {
-                // Check if pattern changed or not in tag search mode
+                // Check if pattern changed or not in tag search mode BEFORE doing anything
                 if (!isInTagSearchMode || !setupPattern.equals(activeSetupPattern)) {
-                    cancel();
+                    stopStateProviderMonitoring();
                     return;
                 }
                 
-                attemptCount++;
-                
-                Display.getDefault().asyncExec(() -> {
+                // Use syncExec to ensure we complete before timer fires again
+                Display.getDefault().syncExec(() -> {
                     try {
-                        // Double-check pattern is still current (another setup might have started)
+                        // Double-check pattern is still current
                         if (!setupPattern.equals(activeSetupPattern) || !isInTagSearchMode) {
-                            Activator.logInfo("Setup skipped - pattern changed: " + setupPattern + " vs " + activeSetupPattern);
                             return;
                         }
                         
@@ -215,47 +210,39 @@ public class TagSearchManager implements IPreferenceChangeListener {
                             Activator.getDefault().getNavigatorStateProvider();
                         
                         if (stateProvider == null) {
-                            Activator.logInfo("Setup skipped - no stateProvider");
                             return;
                         }
                         
-                        // Check if searchPerformer has finished (it deactivates the stateProvider at the end)
-                        // OR if this is attempt #3+ (force setup even if still running)
-                        boolean forceSetup = attemptCount >= 3;
-                        boolean searchFinished = !stateProvider.isActive();
+                        Activator.logInfo("Setup running for: " + setupPattern);
                         
-                        if (searchFinished || forceSetup) {
-                            Activator.logInfo("Setup running for: " + setupPattern + " (attempt " + attemptCount + ")");
-                            
-                            // CRITICAL: Ensure StateProvider is INACTIVE
-                            // When inactive, content providers return ALL children (no Trie filtering)
-                            if (stateProvider.isActive()) {
-                                stateProvider.setActive(false);
-                            }
-                            
-                            // Deactivate standard filter
-                            deactivateStandardFilter(navigator);
-                            
-                            // Activate our tag filter
-                            activateTagFilter(navigator);
-                            
-                            // Dynamic tree expansion like EDT does in UISearchHelper
-                            // First expand to level 2, then fully expand each visible branch
-                            expandTreeDynamically(navigator.getCommonViewer());
-                            
-                            // Cancel timer - setup complete
-                            cancel();
-                            stopStateProviderMonitoring();
+                        // CRITICAL: Ensure StateProvider is INACTIVE
+                        // When inactive, content providers return ALL children (no Trie filtering)
+                        if (stateProvider.isActive()) {
+                            stateProvider.setActive(false);
                         }
+                        
+                        // Deactivate standard filter
+                        deactivateStandardFilter(navigator);
+                        
+                        // Activate our tag filter
+                        activateTagFilter(navigator);
+                        
+                        // Dynamic tree expansion like EDT does in UISearchHelper
+                        expandTreeDynamically(navigator.getCommonViewer());
+                        
                     } catch (Exception e) {
                         Activator.logError("Error in tag search setup", e);
                     }
                 });
+                
+                // Always stop after first execution - no retry needed
+                stopStateProviderMonitoring();
             }
         };
         
-        // Start checking after 200ms, then every 100ms
-        stateProviderMonitor.schedule(setupTask, 200, 100);
+        // Single delayed execution - wait for searchPerformer to finish
+        // searchPerformer typically takes 200-500ms
+        stateProviderMonitor.schedule(setupTask, 400);
     }
     
     /**
@@ -333,10 +320,24 @@ public class TagSearchManager implements IPreferenceChangeListener {
     
     /**
      * Activates the tag search filter.
+     * First "warms up" the filter by calling select() directly, then activates it.
      */
     private void activateTagFilter(CommonNavigator navigator) {
         try {
             var filterService = navigator.getNavigatorContentService().getFilterService();
+            
+            // "Warm up" the filter by calling select() directly - this pre-calculates matchingFqns
+            var descriptors = filterService.getVisibleFilterDescriptors();
+            for (var desc : descriptors) {
+                if (TAG_SEARCH_FILTER_ID.equals(desc.getId())) {
+                    var filter = filterService.getViewerFilter(desc);
+                    if (filter != null) {
+                        // Pre-calculate by calling select with dummy element
+                        filter.select(navigator.getCommonViewer(), null, new Object());
+                    }
+                    break;
+                }
+            }
 
             if (!filterService.isActive(TAG_SEARCH_FILTER_ID)) {
                 NavigatorUtil.activateOrRefreshFilter(navigator, TAG_SEARCH_FILTER_ID);
