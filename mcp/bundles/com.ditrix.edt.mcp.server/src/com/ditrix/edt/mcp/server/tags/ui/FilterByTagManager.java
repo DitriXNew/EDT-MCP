@@ -1,0 +1,262 @@
+/*******************************************************************************
+ * Copyright (c) 2025 DITRIX
+ * 
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * http://www.eclipse.org/legal/epl-2.0.
+ * 
+ * SPDX-License-Identifier: EPL-2.0
+ ******************************************************************************/
+package com.ditrix.edt.mcp.server.tags.ui;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import org.eclipse.core.resources.IProject;
+import org.eclipse.jface.viewers.ViewerFilter;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Shell;
+import org.eclipse.ui.IWorkbenchWindow;
+import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.navigator.CommonNavigator;
+import org.eclipse.ui.navigator.CommonViewer;
+
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.tags.model.Tag;
+import com.google.inject.Inject;
+
+/**
+ * Manager for filter by tag functionality.
+ * Handles activating/deactivating the tag filter on the navigator
+ * and stores the selected tags.
+ */
+public class FilterByTagManager {
+    
+    private static FilterByTagManager instance;
+    
+    @Inject
+    private IV8ProjectManager v8ProjectManager;
+    
+    /** Currently selected tags per project */
+    private Map<IProject, Set<Tag>> selectedTags = new HashMap<>();
+    
+    /** Whether filter is currently active */
+    private boolean isFilterActive = false;
+    
+    /** The filter instance */
+    private TagSearchFilter tagFilter;
+    
+    private FilterByTagManager() {
+        // Singleton
+    }
+    
+    /**
+     * Gets the singleton instance.
+     */
+    public static synchronized FilterByTagManager getInstance() {
+        if (instance == null) {
+            instance = new FilterByTagManager();
+        }
+        return instance;
+    }
+    
+    /**
+     * Opens the filter by tag dialog.
+     */
+    public void openFilterDialog() {
+        Display.getDefault().asyncExec(() -> {
+            try {
+                Shell shell = getActiveShell();
+                if (shell == null) {
+                    return;
+                }
+                
+                IV8ProjectManager projectManager = getV8ProjectManager();
+                if (projectManager == null) {
+                    Activator.logError("V8ProjectManager not available", null);
+                    return;
+                }
+                
+                FilterByTagDialog dialog = new FilterByTagDialog(shell, projectManager);
+                dialog.setInitialSelection(selectedTags);
+                dialog.open();
+                
+                if (dialog.isTurnedOn()) {
+                    // Apply new filter
+                    selectedTags = dialog.getSelectedTags();
+                    if (!selectedTags.isEmpty()) {
+                        activateFilter();
+                    } else {
+                        deactivateFilter();
+                    }
+                } else if (dialog.isTurnedOff()) {
+                    // Turn off filter
+                    selectedTags.clear();
+                    deactivateFilter();
+                }
+                // else: Cancel - do nothing
+                
+            } catch (Exception e) {
+                Activator.logError("Error opening filter by tag dialog", e);
+            }
+        });
+    }
+    
+    /**
+     * Returns whether filter is currently active.
+     */
+    public boolean isFilterActive() {
+        return isFilterActive;
+    }
+    
+    /**
+     * Gets the currently selected tags.
+     */
+    public Map<IProject, Set<Tag>> getSelectedTags() {
+        return new HashMap<>(selectedTags);
+    }
+    
+    /**
+     * Gets selected tag names for a specific project.
+     */
+    public Set<String> getSelectedTagNames(IProject project) {
+        Set<Tag> tags = selectedTags.get(project);
+        if (tags == null || tags.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> names = new HashSet<>();
+        for (Tag tag : tags) {
+            names.add(tag.getName());
+        }
+        return names;
+    }
+    
+    /**
+     * Checks if a tag is selected for a project.
+     */
+    public boolean isTagSelected(IProject project, String tagName) {
+        Set<Tag> tags = selectedTags.get(project);
+        if (tags == null) {
+            return false;
+        }
+        for (Tag tag : tags) {
+            if (tag.getName().equals(tagName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Activates the tag filter on the navigator.
+     */
+    private void activateFilter() {
+        CommonNavigator navigator = getNavigator();
+        if (navigator == null) {
+            return;
+        }
+        
+        CommonViewer viewer = navigator.getCommonViewer();
+        if (viewer == null) {
+            return;
+        }
+        
+        // Calculate matching FQNs based on selected tags
+        if (tagFilter == null) {
+            tagFilter = new TagSearchFilter();
+        }
+        tagFilter.setSelectedTagsMode(selectedTags);
+        
+        // Add filter to viewer if not already added
+        ViewerFilter[] filters = viewer.getFilters();
+        boolean hasFilter = false;
+        for (ViewerFilter f : filters) {
+            if (f == tagFilter) {
+                hasFilter = true;
+                break;
+            }
+        }
+        
+        if (!hasFilter) {
+            viewer.addFilter(tagFilter);
+        }
+        
+        isFilterActive = true;
+        
+        // Refresh the tree
+        viewer.refresh();
+        
+        Activator.logInfo("Tag filter activated with " + countSelectedTags() + " tags selected");
+    }
+    
+    /**
+     * Deactivates the tag filter from the navigator.
+     */
+    private void deactivateFilter() {
+        CommonNavigator navigator = getNavigator();
+        if (navigator == null) {
+            return;
+        }
+        
+        CommonViewer viewer = navigator.getCommonViewer();
+        if (viewer == null) {
+            return;
+        }
+        
+        if (tagFilter != null) {
+            tagFilter.clearSelectedTagsMode();
+            viewer.removeFilter(tagFilter);
+        }
+        
+        isFilterActive = false;
+        
+        // Refresh the tree
+        viewer.refresh();
+        
+        Activator.logInfo("Tag filter deactivated");
+    }
+    
+    private int countSelectedTags() {
+        int count = 0;
+        for (Set<Tag> tags : selectedTags.values()) {
+            count += tags.size();
+        }
+        return count;
+    }
+    
+    private CommonNavigator getNavigator() {
+        try {
+            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+            if (window != null) {
+                return (CommonNavigator) window.getActivePage().findView("com._1c.g5.v8.dt.ui2.navigator");
+            }
+        } catch (Exception e) {
+            Activator.logError("Failed to get navigator", e);
+        }
+        return null;
+    }
+    
+    private Shell getActiveShell() {
+        IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+        if (window != null) {
+            return window.getShell();
+        }
+        return Display.getDefault().getActiveShell();
+    }
+    
+    private IV8ProjectManager getV8ProjectManager() {
+        if (v8ProjectManager != null) {
+            return v8ProjectManager;
+        }
+        // Try to get from Activator's service tracker
+        try {
+            return Activator.getDefault().getV8ProjectManager();
+        } catch (Exception e) {
+            Activator.logError("Failed to get V8ProjectManager", e);
+            return null;
+        }
+    }
+}

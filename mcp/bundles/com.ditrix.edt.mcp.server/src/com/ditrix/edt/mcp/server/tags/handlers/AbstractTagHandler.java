@@ -93,8 +93,9 @@ public abstract class AbstractTagHandler extends AbstractHandler {
                     fqnBuilder.insert(0, part);
                 }
                 
-                // Move to parent
-                current = current.eContainer();
+                // Move to parent - special handling for Subsystem to get parent subsystem
+                EObject parent = getParentForFqn(current);
+                current = parent;
             }
             
             return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
@@ -102,6 +103,41 @@ public abstract class AbstractTagHandler extends AbstractHandler {
             Activator.logError("Failed to extract FQN from " + mdObject, e);
             return null;
         }
+    }
+    
+    /**
+     * Gets the parent object for FQN building.
+     * Special handling for Subsystem to use getParentSubsystem() for nested subsystems.
+     * 
+     * @param eObject the current object
+     * @return the parent object to use for FQN building
+     */
+    private EObject getParentForFqn(EObject eObject) {
+        if (eObject == null) {
+            return null;
+        }
+        
+        // Special handling for Subsystem - use getParentSubsystem() for nested subsystems
+        String typeName = eObject.eClass().getName();
+        if ("Subsystem".equals(typeName)) {
+            try {
+                for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
+                    if ("getParentSubsystem".equals(m.getName()) && m.getParameterCount() == 0) {
+                        Object parent = m.invoke(eObject);
+                        if (parent instanceof EObject parentEObj) {
+                            return parentEObj;
+                        }
+                        // If no parent subsystem, try eContainer (for top-level subsystems)
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                // Fallback to eContainer
+            }
+        }
+        
+        // Default: use eContainer for other types
+        return eObject.eContainer();
     }
     
     /**

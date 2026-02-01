@@ -31,6 +31,12 @@
             id="com.ditrix.edt.mcp.server.tags.manageTags"
             name="Manage Tags...">
       </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.tags.filterByTag"
+            name="Filter by Tag..."
+            description="Filter navigator by tags">
+      </command>
    </extension>
    
    <!-- Handlers for tag commands -->
@@ -47,6 +53,10 @@
             </with>
          </enabledWhen>
       </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.tags.handlers.FilterByTagHandler"
+            commandId="com.ditrix.edt.mcp.server.tags.filterByTag">
+      </handler>
    </extension>
    
    <!-- Context menu contributions -->
@@ -61,6 +71,31 @@
                   id="com.ditrix.edt.mcp.server.status">
             </control>
          </toolbar>
+      </menuContribution>
+      
+      <!-- Filter by Tag button in EDT Navigator toolbar -->
+      <menuContribution
+            allPopups="false"
+            locationURI="toolbar:com._1c.g5.v8.dt.ui2.navigator">
+         <command
+               commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
+               icon="icons/tag.png"
+               label="Filter by Tag"
+               tooltip="Filter navigator by tags"
+               style="push">
+         </command>
+      </menuContribution>
+      
+      <!-- Filter by Tag in EDT Navigator view menu -->
+      <menuContribution
+            allPopups="false"
+            locationURI="menu:com._1c.g5.v8.dt.ui2.navigator?after=additions">
+         <command
+               commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
+               icon="icons/tag.png"
+               label="Filter by Tag..."
+               style="push">
+         </command>
       </menuContribution>
       
       <!-- Tag management in EDT navigator context menu -->
@@ -153,5 +188,15 @@
             <contentExtension pattern="com.ditrix.edt.mcp.server.tags.TagSearchFilter"/>
          </includes>
       </viewerContentBinding>
+   </extension>
+   
+   <!-- Refactoring contributors for tag sync on rename/delete -->
+   <extension point="com._1c.g5.v8.dt.refactoring.core.refactoringContributors">
+      <contributor
+            class="com.ditrix.edt.mcp.server.tags.refactoring.TagRenameRefactoringContributor">
+      </contributor>
+      <contributor
+            class="com.ditrix.edt.mcp.server.tags.refactoring.TagDeleteRefactoringContributor">
+      </contributor>
    </extension>
 </plugin>

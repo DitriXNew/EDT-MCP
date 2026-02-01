@@ -130,6 +130,7 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
      * Extracts the fully qualified name (FQN) by traversing the parent hierarchy.
      * For nested objects like Document.SalesOrder.DocumentAttribute.CustomerName,
      * this builds the complete FQN path.
+     * Special handling for nested Subsystems to use getParentSubsystem().
      */
     private String extractFqn(EObject mdObject) {
         if (mdObject == null) {
@@ -158,13 +159,45 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
                     fqnBuilder.insert(0, part);
                 }
                 
-                current = current.eContainer();
+                current = getParentForFqn(current);
             }
             
             return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
         } catch (Exception e) {
             return null;
         }
+    }
+    
+    /**
+     * Gets the parent object for FQN building.
+     * Special handling for Subsystem to use getParentSubsystem() for nested subsystems.
+     */
+    private EObject getParentForFqn(EObject eObject) {
+        if (eObject == null) {
+            return null;
+        }
+        
+        // Special handling for Subsystem - use getParentSubsystem() for nested subsystems
+        String typeName = eObject.eClass().getName();
+        if ("Subsystem".equals(typeName)) {
+            try {
+                for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
+                    if ("getParentSubsystem".equals(m.getName()) && m.getParameterCount() == 0) {
+                        Object parent = m.invoke(eObject);
+                        if (parent instanceof EObject parentEObj) {
+                            return parentEObj;
+                        }
+                        // If no parent subsystem, try eContainer (for top-level subsystems)
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                // Fallback to eContainer
+            }
+        }
+        
+        // Default: use eContainer for other types
+        return eObject.eContainer();
     }
     
     /**

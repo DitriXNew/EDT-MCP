@@ -166,6 +166,47 @@ public class TagStorage {
     }
     
     /**
+     * Gets the names of all tags assigned to a metadata object.
+     * 
+     * @param objectFqn the FQN of the metadata object
+     * @return set of tag names (never null)
+     */
+    public Set<String> getTagNames(String objectFqn) {
+        List<String> tagNames = assignments.get(objectFqn);
+        if (tagNames == null || tagNames.isEmpty()) {
+            return Set.of();
+        }
+        return new HashSet<>(tagNames);
+    }
+    
+    /**
+     * Renames an object in the assignments (updates FQN key).
+     * 
+     * @param oldFqn the old FQN
+     * @param newFqn the new FQN
+     * @return true if renamed, false if old FQN not found
+     */
+    public boolean renameObject(String oldFqn, String newFqn) {
+        List<String> tagNames = assignments.remove(oldFqn);
+        if (tagNames != null && !tagNames.isEmpty()) {
+            assignments.put(newFqn, tagNames);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Removes an object from all tag assignments.
+     * 
+     * @param objectFqn the FQN of the object to remove
+     * @return true if removed, false if not found
+     */
+    public boolean removeObject(String objectFqn) {
+        List<String> removed = assignments.remove(objectFqn);
+        return removed != null && !removed.isEmpty();
+    }
+    
+    /**
      * Gets all metadata objects that have a specific tag.
      * 
      * @param tagName the tag name

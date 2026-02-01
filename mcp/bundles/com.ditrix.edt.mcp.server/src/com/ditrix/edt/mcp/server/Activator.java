@@ -101,9 +101,6 @@ public class Activator extends AbstractUIPlugin
             mcpServer.stop();
         }
         
-        // Stop tag search manager
-        com.ditrix.edt.mcp.server.tags.ui.TagSearchManager.getInstance().stop();
-        
         // Close service trackers
         if (v8ProjectManagerTracker != null)
         {

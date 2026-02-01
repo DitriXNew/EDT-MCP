@@ -304,6 +304,43 @@ public class TagService implements IResourceChangeListener {
         fireTagsChanged(project);
     }
     
+    /**
+     * Renames an object in tag assignments (updates FQN).
+     * Called when a metadata object is renamed via refactoring.
+     * 
+     * @param project the project
+     * @param oldFqn the old FQN of the object
+     * @param newFqn the new FQN of the object
+     * @return true if renamed successfully
+     */
+    public boolean renameObject(IProject project, String oldFqn, String newFqn) {
+        TagStorage storage = getTagStorage(project);
+        if (storage.renameObject(oldFqn, newFqn)) {
+            saveTagStorage(project, storage);
+            fireAssignmentsChanged(project, newFqn);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Removes an object from all tag assignments.
+     * Called when a metadata object is deleted via refactoring.
+     * 
+     * @param project the project
+     * @param objectFqn the FQN of the deleted object
+     * @return true if removed successfully
+     */
+    public boolean removeObject(IProject project, String objectFqn) {
+        TagStorage storage = getTagStorage(project);
+        if (storage.removeObject(objectFqn)) {
+            saveTagStorage(project, storage);
+            fireAssignmentsChanged(project, objectFqn);
+            return true;
+        }
+        return false;
+    }
+    
     // === Private methods ===
     
     private TagStorage loadTagStorage(IProject project) {

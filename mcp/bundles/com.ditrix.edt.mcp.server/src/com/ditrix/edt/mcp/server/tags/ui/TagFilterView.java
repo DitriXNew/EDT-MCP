@@ -10,6 +10,7 @@
 package com.ditrix.edt.mcp.server.tags.ui;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -26,12 +27,14 @@ import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.MenuManager;
 import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.CheckStateChangedEvent;
-import org.eclipse.jface.viewers.CheckboxTableViewer;
+import org.eclipse.jface.viewers.CheckboxTreeViewer;
 import org.eclipse.jface.viewers.ColumnLabelProvider;
 import org.eclipse.jface.viewers.ICheckStateListener;
 import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.jface.viewers.ITreeContentProvider;
 import org.eclipse.jface.viewers.TableViewer;
 import org.eclipse.jface.viewers.TableViewerColumn;
+import org.eclipse.jface.viewers.TreeViewerColumn;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.graphics.Color;
@@ -48,12 +51,17 @@ import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.Text;
+import org.eclipse.swt.widgets.Tree;
+import org.eclipse.ui.ISharedImages;
+import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.part.ViewPart;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.TagService.ITagChangeListener;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.ui.shared.MdUiSharedImages;
 
 /**
@@ -68,13 +76,17 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     private static final int COLOR_ICON_SIZE = 16;
     
     private TagService tagService;
-    private IProject selectedProject;
+    private IV8ProjectManager v8ProjectManager;
     
-    private CheckboxTableViewer tagsViewer;
+    // Tree viewer with projects and tags
+    private CheckboxTreeViewer tagsTreeViewer;
     private TableViewer resultsViewer;
     
-    private Set<String> selectedTags = new HashSet<>();
-    private List<String> filteredObjects = new ArrayList<>();
+    // Selected tags per project (for filtering)
+    private Map<IProject, Set<String>> selectedTagsByProject = new HashMap<>();
+    
+    // Filtered results with project info
+    private List<ObjectEntry> filteredObjects = new ArrayList<>();
     
     /** Search filter text */
     private Text searchText;
@@ -85,16 +97,25 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     /** Search all tags checkbox */
     private Button searchAllTagsCheckbox;
     
+    // Color icons cache
+    private List<Image> colorIcons = new ArrayList<>();
+    
+    /**
+     * Wrapper for result objects with project info.
+     */
+    private record ObjectEntry(IProject project, String fqn, Set<Tag> tags) {}
+    
     @Override
     public void createPartControl(Composite parent) {
         tagService = TagService.getInstance();
         tagService.addTagChangeListener(this);
+        v8ProjectManager = Activator.getDefault().getV8ProjectManager();
         
         parent.setLayout(new FillLayout());
         
         SashForm sashForm = new SashForm(parent, SWT.HORIZONTAL);
         
-        // Left panel - Tags
+        // Left panel - Tags tree
         createTagsPanel(sashForm);
         
         // Right panel - Filtered results
@@ -103,13 +124,13 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         sashForm.setWeights(30, 70);
         
         // Initial data load
-        refreshProjects();
+        refreshTagsTree();
     }
     
     private void createTagsPanel(Composite parent) {
         Group group = new Group(parent, SWT.NONE);
         group.setText("Filter by Tags");
-        GridLayout layout = new GridLayout(4, false);
+        GridLayout layout = new GridLayout(3, false);
         layout.marginWidth = 5;
         layout.marginHeight = 5;
         group.setLayout(layout);
@@ -120,7 +141,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         refreshBtn.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
             @Override
             public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
-                refreshProjects();
+                refreshTagsTree();
             }
         });
         
@@ -129,14 +150,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         selectAllBtn.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
             @Override
             public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
-                tagsViewer.setAllChecked(true);
-                selectedTags.clear();
-                for (Object element : (java.util.List<?>) tagsViewer.getInput()) {
-                    if (element instanceof Tag tag) {
-                        selectedTags.add(tag.getName());
-                    }
-                }
-                updateFilteredResults();
+                selectAllTags(true);
             }
         });
         
@@ -145,74 +159,55 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         deselectAllBtn.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
             @Override
             public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
-                tagsViewer.setAllChecked(false);
-                selectedTags.clear();
-                updateFilteredResults();
+                selectAllTags(false);
             }
         });
         
-        // Open YAML button
-        Button openYamlBtn = new Button(group, SWT.PUSH);
-        openYamlBtn.setText("Open YAML");
-        openYamlBtn.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
-            @Override
-            public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
-                openTagsYamlFile();
-            }
-        });
+        // Tree with checkboxes
+        Tree tree = new Tree(group, SWT.CHECK | SWT.BORDER | SWT.V_SCROLL | SWT.FULL_SELECTION);
+        tree.setHeaderVisible(true);
+        GridData treeData = new GridData(SWT.FILL, SWT.FILL, true, true, 3, 1);
+        tree.setLayoutData(treeData);
         
-        // Table
-        Table table = new Table(group, SWT.CHECK | SWT.BORDER | SWT.V_SCROLL | SWT.FULL_SELECTION);
-        table.setHeaderVisible(true);
-        GridData tableData = new GridData(SWT.FILL, SWT.FILL, true, true, 4, 1);
-        table.setLayoutData(tableData);
+        tagsTreeViewer = new CheckboxTreeViewer(tree);
+        tagsTreeViewer.setContentProvider(new TagTreeContentProvider());
         
-        tagsViewer = new CheckboxTableViewer(table);
-        tagsViewer.setContentProvider(ArrayContentProvider.getInstance());
-        
-        // Color column
-        TableViewerColumn colorColumn = new TableViewerColumn(tagsViewer, SWT.NONE);
-        colorColumn.getColumn().setText("");
-        colorColumn.getColumn().setWidth(30);
-        colorColumn.setLabelProvider(new ColumnLabelProvider() {
-            @Override
-            public Image getImage(Object element) {
-                if (element instanceof Tag tag) {
-                    return createColorIcon(tag.getColor());
-                }
-                return null;
-            }
-            
-            @Override
-            public String getText(Object element) {
-                return "";
-            }
-        });
-        
-        // Name column - wider
-        TableViewerColumn nameColumn = new TableViewerColumn(tagsViewer, SWT.NONE);
-        nameColumn.getColumn().setText("Tag");
-        nameColumn.getColumn().setWidth(150);
+        // Name column with project/tag icons
+        TreeViewerColumn nameColumn = new TreeViewerColumn(tagsTreeViewer, SWT.NONE);
+        nameColumn.getColumn().setText("Project / Tag");
+        nameColumn.getColumn().setWidth(200);
         nameColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
             public String getText(Object element) {
-                if (element instanceof Tag tag) {
-                    return tag.getName();
+                if (element instanceof IProject project) {
+                    return project.getName();
+                } else if (element instanceof TagEntry entry) {
+                    return entry.tag().getName();
                 }
                 return "";
             }
+            
+            @Override
+            public Image getImage(Object element) {
+                if (element instanceof IProject) {
+                    return PlatformUI.getWorkbench().getSharedImages()
+                        .getImage(ISharedImages.IMG_OBJ_PROJECT);
+                } else if (element instanceof TagEntry entry) {
+                    return createColorIcon(entry.tag().getColor());
+                }
+                return null;
+            }
         });
         
-        // Count column - shows filtered count when searching
-        TableViewerColumn countColumn = new TableViewerColumn(tagsViewer, SWT.NONE);
+        // Count column
+        TreeViewerColumn countColumn = new TreeViewerColumn(tagsTreeViewer, SWT.NONE);
         countColumn.getColumn().setText("Count");
-        countColumn.getColumn().setWidth(60);
+        countColumn.getColumn().setWidth(80);
         countColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
             public String getText(Object element) {
-                if (element instanceof Tag tag && selectedProject != null) {
-                    Set<String> objects = tagService.findObjectsByTag(selectedProject, tag.getName());
-                    // If searching, show filtered count
+                if (element instanceof TagEntry entry) {
+                    Set<String> objects = tagService.findObjectsByTag(entry.project(), entry.tag().getName());
                     if (searchPattern != null) {
                         int filteredCount = 0;
                         int totalCount = objects.size();
@@ -224,25 +219,217 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
                         return filteredCount + "/" + totalCount;
                     }
                     return String.valueOf(objects.size());
+                } else if (element instanceof IProject project) {
+                    // Show total tags count for project
+                    List<Tag> tags = tagService.getTags(project);
+                    return "(" + tags.size() + " tags)";
                 }
-                return "0";
+                return "";
             }
         });
         
+        // Context menu for projects (Open YAML)
+        createTreeContextMenu(tree);
+        
         // Handle checkbox changes
-        tagsViewer.addCheckStateListener(new ICheckStateListener() {
+        tagsTreeViewer.addCheckStateListener(new ICheckStateListener() {
             @Override
             public void checkStateChanged(CheckStateChangedEvent event) {
-                if (event.getElement() instanceof Tag tag) {
-                    if (event.getChecked()) {
-                        selectedTags.add(tag.getName());
+                Object element = event.getElement();
+                boolean checked = event.getChecked();
+                
+                if (element instanceof IProject project) {
+                    // Check/uncheck all tags in this project
+                    List<Tag> tags = tagService.getTags(project);
+                    Set<String> projectTags = selectedTagsByProject.computeIfAbsent(project, p -> new HashSet<>());
+                    
+                    if (checked) {
+                        for (Tag tag : tags) {
+                            projectTags.add(tag.getName());
+                            tagsTreeViewer.setChecked(new TagEntry(project, tag), true);
+                        }
                     } else {
-                        selectedTags.remove(tag.getName());
+                        projectTags.clear();
+                        for (Tag tag : tags) {
+                            tagsTreeViewer.setChecked(new TagEntry(project, tag), false);
+                        }
                     }
-                    updateFilteredResults();
+                    
+                } else if (element instanceof TagEntry entry) {
+                    Set<String> projectTags = selectedTagsByProject.computeIfAbsent(entry.project(), p -> new HashSet<>());
+                    if (checked) {
+                        projectTags.add(entry.tag().getName());
+                    } else {
+                        projectTags.remove(entry.tag().getName());
+                    }
+                    // Update parent project checkbox state
+                    updateProjectCheckState(entry.project());
+                }
+                
+                updateFilteredResults();
+            }
+        });
+        
+        // Set input
+        tagsTreeViewer.setInput(ResourcesPlugin.getWorkspace().getRoot());
+        tagsTreeViewer.expandAll();
+    }
+    
+    /**
+     * Create context menu for the tags tree.
+     */
+    private void createTreeContextMenu(Tree tree) {
+        MenuManager menuMgr = new MenuManager("#PopupMenu");
+        menuMgr.setRemoveAllWhenShown(true);
+        menuMgr.addMenuListener(new IMenuListener() {
+            @Override
+            public void menuAboutToShow(IMenuManager manager) {
+                IStructuredSelection selection = tagsTreeViewer.getStructuredSelection();
+                if (!selection.isEmpty() && selection.getFirstElement() instanceof IProject project) {
+                    manager.add(new Action("Open YAML File") {
+                        @Override
+                        public void run() {
+                            openTagsYamlFile(project);
+                        }
+                    });
                 }
             }
         });
+        
+        Menu menu = menuMgr.createContextMenu(tree);
+        tree.setMenu(menu);
+    }
+    
+    /**
+     * Update project checkbox to grayed or checked based on children state.
+     */
+    private void updateProjectCheckState(IProject project) {
+        List<Tag> tags = tagService.getTags(project);
+        Set<String> selectedTags = selectedTagsByProject.getOrDefault(project, new HashSet<>());
+        
+        int checkedCount = 0;
+        for (Tag tag : tags) {
+            if (selectedTags.contains(tag.getName())) {
+                checkedCount++;
+            }
+        }
+        
+        if (checkedCount == 0) {
+            tagsTreeViewer.setChecked(project, false);;
+            tagsTreeViewer.setGrayed(project, false);
+        } else if (checkedCount == tags.size()) {
+            tagsTreeViewer.setChecked(project, true);
+            tagsTreeViewer.setGrayed(project, false);
+        } else {
+            tagsTreeViewer.setChecked(project, true);
+            tagsTreeViewer.setGrayed(project, true);
+        }
+    }
+    
+    /**
+     * Select or deselect all tags.
+     */
+    private void selectAllTags(boolean select) {
+        IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
+        for (IProject project : root.getProjects()) {
+            if (!project.isOpen()) continue;
+            if (v8ProjectManager != null) {
+                IV8Project v8Project = v8ProjectManager.getProject(project);
+                if (v8Project == null) continue;
+            }
+            
+            List<Tag> tags = tagService.getTags(project);
+            Set<String> projectTags = selectedTagsByProject.computeIfAbsent(project, p -> new HashSet<>());
+            
+            if (select) {
+                for (Tag tag : tags) {
+                    projectTags.add(tag.getName());
+                    tagsTreeViewer.setChecked(new TagEntry(project, tag), true);
+                }
+                tagsTreeViewer.setChecked(project, true);
+                tagsTreeViewer.setGrayed(project, false);
+            } else {
+                projectTags.clear();
+                for (Tag tag : tags) {
+                    tagsTreeViewer.setChecked(new TagEntry(project, tag), false);
+                }
+                tagsTreeViewer.setChecked(project, false);
+                tagsTreeViewer.setGrayed(project, false);
+            }
+        }
+        updateFilteredResults();
+    }
+    
+    /**
+     * Wrapper class for tag entries in the tree.
+     */
+    private record TagEntry(IProject project, Tag tag) {
+        @Override
+        public boolean equals(Object obj) {
+            if (obj instanceof TagEntry other) {
+                return project.equals(other.project) && tag.getName().equals(other.tag.getName());
+            }
+            return false;
+        }
+        
+        @Override
+        public int hashCode() {
+            return project.hashCode() * 31 + tag.getName().hashCode();
+        }
+    }
+    
+    /**
+     * Content provider for the tags tree.
+     */
+    private class TagTreeContentProvider implements ITreeContentProvider {
+        @Override
+        public Object[] getElements(Object inputElement) {
+            if (inputElement instanceof IWorkspaceRoot root) {
+                List<IProject> result = new ArrayList<>();
+                for (IProject project : root.getProjects()) {
+                    if (project.isOpen()) {
+                        // Check if it's an EDT project
+                        if (v8ProjectManager != null) {
+                            IV8Project v8Project = v8ProjectManager.getProject(project);
+                            if (v8Project != null) {
+                                result.add(project);
+                            }
+                        } else {
+                            result.add(project);
+                        }
+                    }
+                }
+                return result.toArray();
+            }
+            return new Object[0];
+        }
+        
+        @Override
+        public Object[] getChildren(Object parentElement) {
+            if (parentElement instanceof IProject project) {
+                List<Tag> tags = tagService.getTags(project);
+                return tags.stream()
+                    .map(tag -> new TagEntry(project, tag))
+                    .toArray();
+            }
+            return new Object[0];
+        }
+        
+        @Override
+        public Object getParent(Object element) {
+            if (element instanceof TagEntry entry) {
+                return entry.project();
+            }
+            return null;
+        }
+        
+        @Override
+        public boolean hasChildren(Object element) {
+            if (element instanceof IProject project) {
+                return !tagService.getTags(project).isEmpty();
+            }
+            return false;
+        }
     }
     
     private void createResultsPanel(Composite parent) {
@@ -270,7 +457,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         searchAllTagsCheckbox.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
             @Override
             public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
-                refreshTags();
+                refreshTagsTree();
             }
         });
         
@@ -284,23 +471,46 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         resultsViewer = new TableViewer(table);
         resultsViewer.setContentProvider(ArrayContentProvider.getInstance());
         
+        // Project column
+        TableViewerColumn projectColumn = new TableViewerColumn(resultsViewer, SWT.NONE);
+        projectColumn.getColumn().setText("Project");
+        projectColumn.getColumn().setWidth(100);
+        projectColumn.setLabelProvider(new ColumnLabelProvider() {
+            @Override
+            public String getText(Object element) {
+                if (element instanceof ObjectEntry entry) {
+                    return entry.project().getName();
+                }
+                return "";
+            }
+            
+            @Override
+            public Image getImage(Object element) {
+                if (element instanceof ObjectEntry) {
+                    return PlatformUI.getWorkbench().getSharedImages()
+                        .getImage(ISharedImages.IMG_OBJ_PROJECT);
+                }
+                return null;
+            }
+        });
+        
         // FQN column - wider to show full paths, with icon
         TableViewerColumn fqnColumn = new TableViewerColumn(resultsViewer, SWT.NONE);
         fqnColumn.getColumn().setText("Object");
-        fqnColumn.getColumn().setWidth(450);
+        fqnColumn.getColumn().setWidth(350);
         fqnColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
             public String getText(Object element) {
-                if (element instanceof String fqn) {
-                    return simplifyFqn(fqn);
+                if (element instanceof ObjectEntry entry) {
+                    return simplifyFqn(entry.fqn());
                 }
                 return element.toString();
             }
             
             @Override
             public Image getImage(Object element) {
-                if (element instanceof String fqn) {
-                    return getObjectIcon(fqn);
+                if (element instanceof ObjectEntry entry) {
+                    return getObjectIcon(entry.fqn());
                 }
                 return null;
             }
@@ -309,13 +519,12 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         // Tags column
         TableViewerColumn tagsColumn = new TableViewerColumn(resultsViewer, SWT.NONE);
         tagsColumn.getColumn().setText("Tags");
-        tagsColumn.getColumn().setWidth(200);
+        tagsColumn.getColumn().setWidth(150);
         tagsColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
             public String getText(Object element) {
-                if (element instanceof String fqn && selectedProject != null) {
-                    Set<Tag> tags = tagService.getObjectTags(selectedProject, fqn);
-                    return tags.stream()
+                if (element instanceof ObjectEntry entry) {
+                    return entry.tags().stream()
                         .map(Tag::getName)
                         .reduce((a, b) -> a + ", " + b)
                         .orElse("");
@@ -327,22 +536,22 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         // Double-click to navigate to object
         resultsViewer.addDoubleClickListener(event -> {
             IStructuredSelection selection = resultsViewer.getStructuredSelection();
-            if (!selection.isEmpty() && selection.getFirstElement() instanceof String fqn) {
-                navigateToObject(fqn);
+            if (!selection.isEmpty() && selection.getFirstElement() instanceof ObjectEntry entry) {
+                navigateToObject(entry.project(), entry.fqn());
             }
         });
         
         // Context menu
-        createContextMenu();
+        createResultsContextMenu();
     }
     
-    private void createContextMenu() {
+    private void createResultsContextMenu() {
         MenuManager menuMgr = new MenuManager("#PopupMenu");
         menuMgr.setRemoveAllWhenShown(true);
         menuMgr.addMenuListener(new IMenuListener() {
             @Override
             public void menuAboutToShow(IMenuManager manager) {
-                fillContextMenu(manager);
+                fillResultsContextMenu(manager);
             }
         });
         
@@ -350,7 +559,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         resultsViewer.getControl().setMenu(menu);
     }
     
-    private void fillContextMenu(IMenuManager manager) {
+    private void fillResultsContextMenu(IMenuManager manager) {
         IStructuredSelection selection = resultsViewer.getStructuredSelection();
         
         // Copy selected FQNs (works with multiple selection)
@@ -364,8 +573,8 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
                             sb.append("\n");
                         }
                         // Copy simplified FQN as displayed
-                        if (obj instanceof String fqn) {
-                            sb.append(simplifyFqn(fqn));
+                        if (obj instanceof ObjectEntry entry) {
+                            sb.append(simplifyFqn(entry.fqn()));
                         } else {
                             sb.append(String.valueOf(obj));
                         }
@@ -381,11 +590,11 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
                 @Override
                 public void run() {
                     StringBuilder sb = new StringBuilder();
-                    for (String fqn : filteredObjects) {
+                    for (ObjectEntry entry : filteredObjects) {
                         if (sb.length() > 0) {
                             sb.append("\n");
                         }
-                        sb.append(simplifyFqn(fqn));
+                        sb.append(simplifyFqn(entry.fqn()));
                     }
                     copyToClipboard(sb.toString());
                 }
@@ -407,53 +616,45 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         clipboard.dispose();
     }
     
-    private void refreshProjects() {
-        // Get first EDT project
-        IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
-        for (IProject project : root.getProjects()) {
-            if (project.isOpen()) {
-                selectedProject = project;
-                break;
-            }
-        }
-        
-        if (selectedProject != null) {
-            refreshTags();
-        }
-    }
-    
-    private void refreshTags() {
-        if (selectedProject == null) {
-            tagsViewer.setInput(new ArrayList<>());
+    /**
+     * Refresh the tags tree.
+     */
+    private void refreshTagsTree() {
+        if (tagsTreeViewer == null || tagsTreeViewer.getControl().isDisposed()) {
             return;
         }
         
-        List<Tag> tags = tagService.getTags(selectedProject);
-        
-        // If "Filter tags" checkbox is checked, only show tags with matching objects
-        if (searchAllTagsCheckbox != null && searchAllTagsCheckbox.getSelection() && searchPattern != null) {
-            List<Tag> filteredTags = new ArrayList<>();
-            for (Tag tag : tags) {
-                // Check if this tag has any objects matching the search pattern
-                Set<String> objects = tagService.findObjectsByTag(selectedProject, tag.getName());
-                for (String fqn : objects) {
-                    if (matchesSearch(fqn)) {
-                        filteredTags.add(tag);
-                        break;
-                    }
-                }
-            }
-            tags = filteredTags;
-        }
-        
-        tagsViewer.setInput(tags);
+        tagsTreeViewer.setInput(ResourcesPlugin.getWorkspace().getRoot());
+        tagsTreeViewer.expandAll();
         
         // Restore checked state
-        for (Tag tag : tags) {
-            tagsViewer.setChecked(tag, selectedTags.contains(tag.getName()));
-        }
+        restoreCheckedState();
         
         updateFilteredResults();
+    }
+    
+    /**
+     * Restore checked state from selectedTagsByProject map.
+     */
+    private void restoreCheckedState() {
+        IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
+        for (IProject project : root.getProjects()) {
+            if (!project.isOpen()) continue;
+            if (v8ProjectManager != null) {
+                IV8Project v8Project = v8ProjectManager.getProject(project);
+                if (v8Project == null) continue;
+            }
+            
+            Set<String> selectedTags = selectedTagsByProject.getOrDefault(project, new HashSet<>());
+            List<Tag> tags = tagService.getTags(project);
+            
+            for (Tag tag : tags) {
+                TagEntry entry = new TagEntry(project, tag);
+                tagsTreeViewer.setChecked(entry, selectedTags.contains(tag.getName()));
+            }
+            
+            updateProjectCheckState(project);
+        }
     }
     
     /**
@@ -477,11 +678,11 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         // Refresh tags to update filtered counts
         if (searchAllTagsCheckbox != null && searchAllTagsCheckbox.getSelection()) {
             // Full refresh if filtering is enabled (will call updateFilteredResults)
-            refreshTags();
+            refreshTagsTree();
         } else {
-            // Just refresh the tags table to update the count column
-            if (tagsViewer != null && !tagsViewer.getControl().isDisposed()) {
-                tagsViewer.refresh();
+            // Just refresh the tags tree to update the count column
+            if (tagsTreeViewer != null && !tagsTreeViewer.getControl().isDisposed()) {
+                tagsTreeViewer.refresh();
             }
         }
     }
@@ -499,23 +700,45 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     private void updateFilteredResults() {
         filteredObjects.clear();
         
-        if (selectedProject == null || selectedTags.isEmpty()) {
+        // Check if any tags are selected across all projects
+        boolean hasSelection = selectedTagsByProject.values().stream()
+            .anyMatch(tags -> !tags.isEmpty());
+        
+        if (!hasSelection) {
             resultsViewer.setInput(filteredObjects);
             updateResultsCount();
             return;
         }
         
-        // Find objects that have ANY of the selected tags
-        Map<String, Set<Tag>> matches = tagService.findObjectsByTags(selectedProject, selectedTags);
-        
-        // Apply search filter
-        for (String fqn : matches.keySet()) {
-            if (matchesSearch(fqn)) {
-                filteredObjects.add(fqn);
+        // Iterate over all projects with selected tags (OR logic)
+        for (Map.Entry<IProject, Set<String>> entry : selectedTagsByProject.entrySet()) {
+            IProject project = entry.getKey();
+            Set<String> selectedTags = entry.getValue();
+            
+            if (selectedTags.isEmpty()) {
+                continue;
+            }
+            
+            // Find objects that have ANY of the selected tags for this project
+            Map<String, Set<Tag>> matches = tagService.findObjectsByTags(project, selectedTags);
+            
+            // Apply search filter and add to results
+            for (Map.Entry<String, Set<Tag>> match : matches.entrySet()) {
+                String fqn = match.getKey();
+                if (matchesSearch(fqn)) {
+                    filteredObjects.add(new ObjectEntry(project, fqn, match.getValue()));
+                }
             }
         }
         
-        filteredObjects.sort(String::compareTo);
+        // Sort by project name, then by FQN
+        filteredObjects.sort((a, b) -> {
+            int projectCompare = a.project().getName().compareTo(b.project().getName());
+            if (projectCompare != 0) {
+                return projectCompare;
+            }
+            return a.fqn().compareTo(b.fqn());
+        });
         
         resultsViewer.setInput(filteredObjects);
         updateResultsCount();
@@ -540,15 +763,21 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         gc.dispose();
         color.dispose();
         
+        // Cache for disposal later
+        colorIcons.add(image);
+        
         return image;
     }
     
     /**
      * Navigate to a metadata object in EDT navigator.
      * Uses EDT's IResourceLookup to find and open the object.
+     * 
+     * @param project the project containing the object
+     * @param fqn the fully qualified name of the object
      */
-    private void navigateToObject(String fqn) {
-        if (selectedProject == null || fqn == null) {
+    private void navigateToObject(IProject project, String fqn) {
+        if (project == null || fqn == null) {
             return;
         }
         
@@ -562,7 +791,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             }
             
             com._1c.g5.v8.dt.metadata.mdclass.Configuration configuration = 
-                configProvider.getConfiguration(selectedProject);
+                configProvider.getConfiguration(project);
             if (configuration == null) {
                 return;
             }
@@ -795,14 +1024,16 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     /**
      * Open the tags YAML file in an editor.
+     * 
+     * @param project the project to open YAML file for
      */
-    private void openTagsYamlFile() {
-        if (selectedProject == null) {
+    private void openTagsYamlFile(IProject project) {
+        if (project == null) {
             return;
         }
         
         try {
-            org.eclipse.core.resources.IFile yamlFile = selectedProject.getFile(
+            org.eclipse.core.resources.IFile yamlFile = project.getFile(
                 new org.eclipse.core.runtime.Path(".settings/metadata-tags.yaml"));
             
             if (yamlFile.exists()) {
@@ -837,28 +1068,36 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     @Override
     public void setFocus() {
-        tagsViewer.getControl().setFocus();
+        if (tagsTreeViewer != null && !tagsTreeViewer.getControl().isDisposed()) {
+            tagsTreeViewer.getControl().setFocus();
+        }
     }
     
     @Override
     public void dispose() {
         tagService.removeTagChangeListener(this);
+        // Dispose color icons
+        for (Image img : colorIcons) {
+            if (img != null && !img.isDisposed()) {
+                img.dispose();
+            }
+        }
+        colorIcons.clear();
         super.dispose();
     }
     
     @Override
     public void onTagsChanged(IProject project) {
         Display.getDefault().asyncExec(() -> {
-            if (project.equals(selectedProject)) {
-                refreshTags();
-            }
+            refreshTagsTree();
         });
     }
     
     @Override
     public void onAssignmentsChanged(IProject project, String objectFqn) {
         Display.getDefault().asyncExec(() -> {
-            if (project.equals(selectedProject)) {
+            // Refresh if any project with selected tags changed
+            if (selectedTagsByProject.containsKey(project)) {
                 updateFilteredResults();
             }
         });

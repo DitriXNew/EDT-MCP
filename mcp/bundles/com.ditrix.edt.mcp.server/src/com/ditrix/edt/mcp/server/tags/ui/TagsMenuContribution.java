@@ -150,13 +150,43 @@ public class TagsMenuContribution extends CompoundContributionItem {
                     fqnBuilder.insert(0, part);
                 }
                 
-                current = current.eContainer();
+                current = getParentForFqn(current);
             }
             
             return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
         } catch (Exception e) {
             return null;
         }
+    }
+    
+    /**
+     * Gets the parent object for FQN building.
+     * Special handling for Subsystem to use getParentSubsystem() for nested subsystems.
+     */
+    private EObject getParentForFqn(EObject eObject) {
+        if (eObject == null) {
+            return null;
+        }
+        
+        // Special handling for Subsystem - use getParentSubsystem() for nested subsystems
+        String typeName = eObject.eClass().getName();
+        if ("Subsystem".equals(typeName)) {
+            try {
+                for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
+                    if ("getParentSubsystem".equals(m.getName()) && m.getParameterCount() == 0) {
+                        Object parent = m.invoke(eObject);
+                        if (parent instanceof EObject parentEObj) {
+                            return parentEObj;
+                        }
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                // Fallback to eContainer
+            }
+        }
+        
+        return eObject.eContainer();
     }
     
     private String getObjectName(EObject eObject) {

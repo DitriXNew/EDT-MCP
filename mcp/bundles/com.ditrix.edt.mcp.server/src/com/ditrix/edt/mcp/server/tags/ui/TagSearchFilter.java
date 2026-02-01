@@ -19,10 +19,6 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.jface.viewers.ViewerFilter;
-import org.eclipse.ui.IWorkbenchWindow;
-import org.eclipse.ui.PlatformUI;
-import org.eclipse.ui.navigator.CommonNavigator;
-import org.eclipse.ui.navigator.CommonViewer;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
@@ -31,25 +27,27 @@ import com.ditrix.edt.mcp.server.tags.model.TagStorage;
 
 /**
  * ViewerFilter that filters navigator elements by tag.
- * When search pattern starts with #, this filter searches by tag name
- * instead of object name.
+ * Supports dialog mode: When selected tags are set from FilterByTagDialog
  */
 public class TagSearchFilter extends ViewerFilter {
     
     /** Filter ID as registered in plugin.xml */
     public static final String FILTER_ID = "com.ditrix.edt.mcp.server.tags.TagSearchFilter";
     
-    private Viewer viewer;
-    private String lastPattern = "";
-    
     /** Matching FQNs per project - each project has its own set of matching FQNs */
     private Map<IProject, Set<String>> matchingFqnsByProject = new HashMap<>();
     
-    /** Combined set for quick lookup (backwards compatibility) */
+    /** Combined set for quick lookup */
     private Set<String> matchingFqns = new HashSet<>();
     
     /** Current project context for filtering - set at the start of select() */
     private IProject currentFilterProject;
+    
+    /** Whether we are in dialog-selected tags mode */
+    private boolean dialogMode = false;
+    
+    /** Selected tags from dialog per project */
+    private Map<IProject, Set<Tag>> selectedTagsByProject = new HashMap<>();
     
     /**
      * Default constructor for extension factory.
@@ -57,29 +55,81 @@ public class TagSearchFilter extends ViewerFilter {
     public TagSearchFilter() {
     }
     
+    /**
+     * Sets the filter to dialog mode with the specified selected tags.
+     * This mode is activated when user selects tags from FilterByTagDialog.
+     * 
+     * @param selectedTags map of project to set of selected tags
+     */
+    public void setSelectedTagsMode(Map<IProject, Set<Tag>> selectedTags) {
+        this.dialogMode = true;
+        this.selectedTagsByProject = new HashMap<>(selectedTags);
+        
+        // Recalculate matching FQNs based on selected tags
+        recalculateMatchingFqnsFromSelectedTags();
+        
+        Activator.logInfo("TagSearchFilter: dialog mode enabled with " + 
+            matchingFqns.size() + " matching objects");
+    }
+    
+    /**
+     * Clears dialog mode.
+     */
+    public void clearSelectedTagsMode() {
+        this.dialogMode = false;
+        this.selectedTagsByProject.clear();
+        this.matchingFqns.clear();
+        this.matchingFqnsByProject.clear();
+        
+        Activator.logInfo("TagSearchFilter: dialog mode disabled");
+    }
+    
+    /**
+     * Recalculates matching FQNs based on selected tags from dialog.
+     */
+    private void recalculateMatchingFqnsFromSelectedTags() {
+        matchingFqns.clear();
+        matchingFqnsByProject.clear();
+        
+        TagService tagService = TagService.getInstance();
+        
+        for (Map.Entry<IProject, Set<Tag>> entry : selectedTagsByProject.entrySet()) {
+            IProject project = entry.getKey();
+            Set<Tag> tags = entry.getValue();
+            
+            Set<String> projectFqns = new HashSet<>();
+            TagStorage storage = tagService.getTagStorage(project);
+            
+            for (Tag tag : tags) {
+                Set<String> objectFqns = storage.getObjectsByTag(tag.getName());
+                projectFqns.addAll(objectFqns);
+                matchingFqns.addAll(objectFqns);
+            }
+            
+            if (!projectFqns.isEmpty()) {
+                matchingFqnsByProject.put(project, projectFqns);
+            }
+        }
+    }
+    
     @Override
     public boolean select(Viewer viewer, Object parentElement, Object element) {
-        this.viewer = viewer;
-
-        String searchPattern = getActiveSearchPattern();
-
-        // Only handle patterns starting with #
-        if (searchPattern == null || !searchPattern.startsWith("#")) {
-            currentFilterProject = null;
-            return true; // Let other filters handle
+        // Only filter in dialog mode (tags selected from dialog)
+        if (!dialogMode) {
+            return true; // Not in filter mode, show everything
         }
         
-        String tagPattern = searchPattern.substring(1).toLowerCase().trim();
-        if (tagPattern.isEmpty()) {
-            currentFilterProject = null;
+        // Use the shared filtering logic
+        return selectByMatchingFqns(viewer, parentElement, element);
+    }
+    
+    /**
+     * Shared filtering logic - checks if element matches the current matching FQNs.
+     */
+    private boolean selectByMatchingFqns(Viewer viewer, Object parentElement, Object element) {
+        // If no matching FQNs, show everything
+        if (matchingFqns.isEmpty() && matchingFqnsByProject.isEmpty()) {
             return true;
-        }
-        
-        // Recalculate matching FQNs if pattern changed
-        if (!searchPattern.equals(lastPattern)) {
-            lastPattern = searchPattern;
-            recalculateMatchingFqns(tagPattern);
-            Activator.logInfo("Tag search: " + matchingFqns.size() + " objects found for #" + tagPattern);
         }
         
         // Try to determine current project context from element or parent
@@ -90,7 +140,7 @@ public class TagSearchFilter extends ViewerFilter {
         
         // Projects always visible if they have matching children
         if (element instanceof IProject project) {
-            return hasMatchingChildren(project, tagPattern);
+            return hasMatchingChildrenInProject(project);
         }
         
         // Check if element matches
@@ -202,101 +252,11 @@ public class TagSearchFilter extends ViewerFilter {
     }
     
     /**
-     * Gets the current search pattern from navigator.
+     * Checks if project has any matching FQNs (used in dialog mode).
      */
-    private String getActiveSearchPattern() {
-        try {
-            if (viewer instanceof CommonViewer commonViewer) {
-                CommonNavigator navigator = commonViewer.getCommonNavigator();
-                // Try to get pattern through reflection since Navigator is internal
-                if (navigator != null) {
-                    var method = navigator.getClass().getMethod("getSearchFilterState");
-                    var state = method.invoke(navigator);
-                    if (state != null) {
-                        var getPattern = state.getClass().getMethod("getActivePattern");
-                        Object pattern = getPattern.invoke(state);
-                        return pattern != null ? pattern.toString() : "";
-                    }
-                }
-            }
-        } catch (Exception e) {
-            // Fallback - try to get from workbench
-        }
-        
-        // Fallback: try to get navigator from active window
-        try {
-            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
-            if (window != null && window.getActivePage() != null) {
-                var navigatorView = window.getActivePage().findView("com._1c.g5.v8.dt.ui2.navigator");
-                if (navigatorView instanceof CommonNavigator navigator) {
-                    var method = navigator.getClass().getMethod("getSearchFilterState");
-                    var state = method.invoke(navigator);
-                    if (state != null) {
-                        var getPattern = state.getClass().getMethod("getActivePattern");
-                        Object pattern = getPattern.invoke(state);
-                        return pattern != null ? pattern.toString() : "";
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Activator.logError("Failed to get search pattern", e);
-        }
-        
-        return "";
-    }
-    
-    /**
-     * Recalculates matching FQNs across all projects for the given tag pattern.
-     * Stores FQNs per project to avoid cross-project matching issues.
-     */
-    private void recalculateMatchingFqns(String tagPattern) {
-        matchingFqns.clear();
-        matchingFqnsByProject.clear();
-        
-        TagService tagService = TagService.getInstance();
-        
-        // Search in all open projects
-        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
-            if (!project.isOpen()) {
-                continue;
-            }
-            
-            Set<String> projectFqns = new HashSet<>();
-            TagStorage storage = tagService.getTagStorage(project);
-            
-            // Find all tags matching the pattern
-            for (Tag tag : storage.getTags()) {
-                if (tag.getName().toLowerCase().contains(tagPattern)) {
-                    // Add all objects with this tag
-                    Set<String> objectFqns = storage.getObjectsByTag(tag.getName());
-                    projectFqns.addAll(objectFqns);
-                    matchingFqns.addAll(objectFqns);
-                }
-            }
-            
-            if (!projectFqns.isEmpty()) {
-                matchingFqnsByProject.put(project, projectFqns);
-            }
-        }
-    }
-    
-    /**
-     * Checks if project has any children matching the tag pattern.
-     */
-    private boolean hasMatchingChildren(IProject project, String tagPattern) {
-        TagService tagService = TagService.getInstance();
-        TagStorage storage = tagService.getTagStorage(project);
-        
-        // Check if any tag matches
-        for (Tag tag : storage.getTags()) {
-            if (tag.getName().toLowerCase().contains(tagPattern)) {
-                Set<String> objects = storage.getObjectsByTag(tag.getName());
-                if (!objects.isEmpty()) {
-                    return true;
-                }
-            }
-        }
-        return false;
+    private boolean hasMatchingChildrenInProject(IProject project) {
+        Set<String> projectFqns = matchingFqnsByProject.get(project);
+        return projectFqns != null && !projectFqns.isEmpty();
     }
     
     /**
@@ -329,18 +289,6 @@ public class TagSearchFilter extends ViewerFilter {
         }
         
         return false;
-    }
-    
-    /**
-     * Checks if a subsystem has any child subsystems that match tags.
-     * This handles nested subsystems where the parent FQN is just "Subsystem.ParentName"
-     * but child subsystems have separate FQNs like "Subsystem.ChildName".
-     * 
-     * @param subsystemEObject the parent subsystem EObject
-     * @return true if any child subsystem or descendant matches
-     */
-    private boolean hasMatchingChildSubsystem(EObject subsystemEObject) {
-        return hasMatchingChildSubsystemInProject(subsystemEObject, null);
     }
     
     /**
@@ -378,6 +326,7 @@ public class TagSearchFilter extends ViewerFilter {
     
     /**
      * Extracts FQN from an EObject using reflection.
+     * Special handling for nested Subsystems.
      */
     private String extractFqn(EObject mdObject) {
         if (mdObject == null) {
@@ -405,13 +354,43 @@ public class TagSearchFilter extends ViewerFilter {
                     fqnBuilder.insert(0, part);
                 }
                 
-                current = current.eContainer();
+                current = getParentForFqn(current);
             }
             
             return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
         } catch (Exception e) {
             return null;
         }
+    }
+    
+    /**
+     * Gets the parent object for FQN building.
+     * Special handling for Subsystem to use getParentSubsystem() for nested subsystems.
+     */
+    private EObject getParentForFqn(EObject eObject) {
+        if (eObject == null) {
+            return null;
+        }
+        
+        // Special handling for Subsystem - use getParentSubsystem() for nested subsystems
+        String typeName = eObject.eClass().getName();
+        if ("Subsystem".equals(typeName)) {
+            try {
+                for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
+                    if ("getParentSubsystem".equals(m.getName()) && m.getParameterCount() == 0) {
+                        Object parent = m.invoke(eObject);
+                        if (parent instanceof EObject parentEObj) {
+                            return parentEObj;
+                        }
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                // Fallback to eContainer
+            }
+        }
+        
+        return eObject.eContainer();
     }
     
     /**
@@ -545,7 +524,6 @@ public class TagSearchFilter extends ViewerFilter {
             
             if (fqnTypePrefix == null) {
                 // No mapping, fall back to checking if any matching FQN contains this segment
-                String searchPrefix = parentFqn + "." + modelObjectName + ".";
                 for (String fqn : projectFqns) {
                     if (fqn.contains("." + modelObjectName + ".") && fqn.startsWith(parentFqn + ".")) {
                         return true;
