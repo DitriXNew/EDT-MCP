@@ -174,6 +174,8 @@ Add to `claude_desktop_config.json`:
 | `get_metadata_objects` | Get list of metadata objects from 1C configuration |
 | `get_metadata_details` | Get detailed properties of metadata objects (attributes, tabular sections, etc.) |
 | `find_references` | Find all references to a metadata object (in metadata, BSL code, forms, roles, etc.) |
+| `get_tags` | Get list of all tags defined in the project with descriptions and object counts |
+| `get_objects_by_tags` | Get metadata objects filtered by tags with tag descriptions and object FQNs |
 | `get_applications` | Get list of applications (infobases) for a project with update state |
 | `update_database` | Update database (infobase) with full or incremental update mode |
 | `debug_launch` | Launch application in debug mode (auto-updates database before launch) |
@@ -321,6 +323,35 @@ Add to `claude_desktop_config.json`:
 - **Roles** - Objects with role permissions
 - **Subsystems** - Subsystem content
 - **BSL code** - References in BSL modules with line numbers
+
+### Tag Management Tools
+
+#### Get Tags Tool
+
+**`get_tags`** - Get list of all tags defined in the project. Tags are user-defined labels for organizing metadata objects.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+
+**Returns:** Markdown table with tag name, color, description, and number of assigned objects.
+
+#### Get Objects By Tags Tool
+
+**`get_objects_by_tags`** - Get metadata objects filtered by tags. Returns objects that have any of the specified tags.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `tags` | Yes | Array of tag names to filter by (e.g. `["Important", "NeedsReview"]`) |
+| `limit` | No | Maximum objects per tag (default: 100) |
+
+**Returns:** Markdown with sections for each tag including:
+- Tag color and description
+- Table of object FQNs assigned to the tag
+- Summary with total objects found
 
 ### Application Management Tools
 

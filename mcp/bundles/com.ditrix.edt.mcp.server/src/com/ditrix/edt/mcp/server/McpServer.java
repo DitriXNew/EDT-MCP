@@ -29,6 +29,8 @@ import com.ditrix.edt.mcp.server.tools.impl.GetMetadataObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetPlatformDocumentationTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProblemSummaryTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetTagsTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetObjectsByTagsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTasksTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
@@ -125,6 +127,10 @@ public class McpServer
         registry.register(new GetMetadataObjectsTool());
         registry.register(new GetMetadataDetailsTool());
         registry.register(new FindReferencesTool());
+        
+        // Tag tools
+        registry.register(new GetTagsTool());
+        registry.register(new GetObjectsByTagsTool());
         
         // Application tools
         registry.register(new GetApplicationsTool());
