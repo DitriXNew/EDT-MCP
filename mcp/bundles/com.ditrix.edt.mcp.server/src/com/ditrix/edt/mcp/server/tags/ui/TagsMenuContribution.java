@@ -134,8 +134,10 @@ public class TagsMenuContribution extends CompoundContributionItem {
             item.addSelectionListener(new SelectionAdapter() {
                 @Override
                 public void widgetSelected(SelectionEvent e) {
+                    // Capture selection value before asyncExec since menu item may be disposed
+                    boolean selected = item.getSelection();
                     Display.getCurrent().asyncExec(() -> {
-                        if (item.getSelection()) {
+                        if (selected) {
                             tagService.assignTag(project, fqn, tag.getName());
                         } else {
                             tagService.unassignTag(project, fqn, tag.getName());

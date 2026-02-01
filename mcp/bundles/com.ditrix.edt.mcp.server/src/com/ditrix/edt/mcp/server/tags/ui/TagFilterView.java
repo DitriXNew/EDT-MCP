@@ -280,6 +280,8 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
                             tagsTreeViewer.setChecked(new TagEntry(project, tag), false);
                         }
                     }
+                    // Reset grayed state when explicitly checking/unchecking project
+                    tagsTreeViewer.setGrayed(project, false);
                     
                 } else if (element instanceof TagEntry entry) {
                     Set<String> projectTags = selectedTagsByProject.computeIfAbsent(entry.project(), p -> new HashSet<>());

@@ -21,7 +21,7 @@ import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
-import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.wiring.ServiceAccess;
 
@@ -151,25 +151,13 @@ public final class TagUtils {
             return null;
         }
         
-        String typeName = eObject.eClass().getName();
-        
         // Special handling for Subsystem - use getParentSubsystem() for nested subsystems
-        if (TagConstants.TYPE_SUBSYSTEM.equals(typeName)) {
-            try {
-                for (Method m : eObject.getClass().getMethods()) {
-                    if (TagConstants.METHOD_GET_PARENT_SUBSYSTEM.equals(m.getName()) 
-                            && m.getParameterCount() == 0) {
-                        Object parent = m.invoke(eObject);
-                        if (parent instanceof EObject parentEObj) {
-                            return parentEObj;
-                        }
-                        // If no parent subsystem, fall through to eContainer
-                        break;
-                    }
-                }
-            } catch (Exception e) {
-                Activator.logDebug("Failed to get parent subsystem, using eContainer");
+        if (eObject instanceof Subsystem subsystem) {
+            Subsystem parentSubsystem = subsystem.getParentSubsystem();
+            if (parentSubsystem != null) {
+                return parentSubsystem;
             }
+            // If no parent subsystem, fall through to eContainer
         }
         
         // Default: use eContainer for other types
@@ -177,9 +165,10 @@ public final class TagUtils {
     }
     
     /**
-     * Gets the name of a metadata object using reflection.
+     * Gets the name of a metadata object.
      * 
-     * <p>Calls the getName() method if present on the object.</p>
+     * <p>For MdObject instances, uses the getName() method directly.
+     * Falls back to reflection for other types.</p>
      * 
      * @param eObject the object
      * @return the name string or null if not found
@@ -189,9 +178,15 @@ public final class TagUtils {
             return null;
         }
         
+        // Use MdObject interface directly if available
+        if (eObject instanceof MdObject mdObject) {
+            return mdObject.getName();
+        }
+        
+        // Fallback to reflection for other types
         try {
             for (Method m : eObject.getClass().getMethods()) {
-                if (TagConstants.METHOD_GET_NAME.equals(m.getName()) 
+                if ("getName".equals(m.getName()) 
                         && m.getParameterCount() == 0) {
                     Object name = m.invoke(eObject);
                     return name != null ? name.toString() : null;
