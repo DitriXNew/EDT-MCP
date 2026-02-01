@@ -14,9 +14,9 @@ package com.ditrix.edt.mcp.server.tags;
  * Centralizes magic strings and configuration values.
  * 
  * <p>Note: Metadata type constants are intentionally NOT defined here.
- * Use EDT's MdClassPackage.Literals for type checking, and eClass().getName()
- * for dynamic type name retrieval. This approach supports new metadata types
- * that may be added in future platform versions.</p>
+ * Use MdClassPackage.eINSTANCE.getEClassifiers() for reflection-based access
+ * to all EClass types, and eClass().getName() for dynamic type name retrieval.
+ * This approach supports new metadata types that may be added in future platform versions.</p>
  */
 public final class TagConstants {
     

@@ -37,6 +37,101 @@
             name="Filter by Tag..."
             description="Filter navigator by tags">
       </command>
+      <!-- Toggle tag commands (Ctrl+Alt+1 through Ctrl+Alt+0) -->
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.tags.toggleTag"
+            name="Toggle Tag by Index"
+            description="Toggle tag assignment by position (1-10)">
+         <commandParameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               name="Tag Index"
+               optional="false"/>
+      </command>
+   </extension>
+   
+   <!-- Key bindings for toggle tag commands -->
+   <extension point="org.eclipse.ui.bindings">
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+1">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="1"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+2">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="2"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+3">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="3"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+4">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="4"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+5">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="5"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+6">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="6"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+7">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="7"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+8">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="8"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+9">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="9"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+0">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="0"/>
+      </key>
    </extension>
    
    <!-- Handlers for tag commands -->
@@ -56,6 +151,18 @@
       <handler
             class="com.ditrix.edt.mcp.server.tags.handlers.FilterByTagHandler"
             commandId="com.ditrix.edt.mcp.server.tags.filterByTag">
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.tags.handlers.ToggleTagByIndexHandler"
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag">
+         <enabledWhen>
+            <with variable="selection">
+               <count value="+"/>
+               <iterate operator="or">
+                  <instanceof value="org.eclipse.emf.ecore.EObject"/>
+               </iterate>
+            </with>
+         </enabledWhen>
       </handler>
    </extension>
    

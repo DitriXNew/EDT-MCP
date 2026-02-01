@@ -17,14 +17,12 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmCrossReference;
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.refactoring.core.IDeleteRefactoringContributor;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringOperation;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringPostProcessor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringOperationDescriptor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
-import com._1c.g5.wiring.ServiceAccess;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
@@ -41,19 +39,17 @@ public class TagDeleteRefactoringContributor implements IDeleteRefactoringContri
     public RefactoringOperationDescriptor createParticipatingOperation(EObject object, 
             RefactoringSettings settings, RefactoringStatus status) {
         
-        if (object == null || !(object instanceof IBmObject)) {
+        if (object == null || !(object instanceof IBmObject bmObject)) {
             return null;
         }
         
-        IBmObject bmObject = (IBmObject) object;
-        String fqn = extractFqn(bmObject);
-        
+        String fqn = TagUtils.extractFqn(bmObject);
         if (fqn == null || fqn.isEmpty()) {
             return null;
         }
         
         // Get the project for this object
-        IProject project = getProject(object);
+        IProject project = TagUtils.extractProject(object);
         if (project == null) {
             return null;
         }
@@ -84,53 +80,6 @@ public class TagDeleteRefactoringContributor implements IDeleteRefactoringContri
     @Override
     public boolean allowProhibitedReferenceEditing(IBmCrossReference reference) {
         return false;
-    }
-    
-    /**
-     * Extracts the FQN from a BM object.
-     */
-    private String extractFqn(IBmObject bmObject) {
-        // First try the BM API
-        String fqn = TagUtils.extractFqn(bmObject);
-        if (fqn != null && !fqn.isEmpty()) {
-            return fqn;
-        }
-        // Fallback to EObject-based extraction (IBmObject extends EObject)
-        return TagUtils.extractFqn((EObject) bmObject);
-    }
-    
-    /**
-     * Gets the project for an EObject.
-     */
-    private IProject getProject(EObject object) {
-        try {
-            // Use IResourceLookup service - the proper EDT way
-            IResourceLookup resourceLookup = ServiceAccess.get(IResourceLookup.class);
-            if (resourceLookup != null) {
-                IProject project = resourceLookup.getProject(object);
-                if (project != null) {
-                    return project;
-                }
-            }
-            
-            // Fallback: try eResource
-            org.eclipse.emf.ecore.resource.Resource resource = object.eResource();
-            if (resource != null && resource.getURI() != null) {
-                String path = resource.getURI().toPlatformString(true);
-                if (path != null && path.startsWith("/")) {
-                    String projectName = path.substring(1);
-                    int slashIndex = projectName.indexOf('/');
-                    if (slashIndex > 0) {
-                        projectName = projectName.substring(0, slashIndex);
-                    }
-                    return org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-                            .getRoot().getProject(projectName);
-                }
-            }
-        } catch (Exception e) {
-            Activator.logError("Failed to get project for object", e);
-        }
-        return null;
     }
     
     /**

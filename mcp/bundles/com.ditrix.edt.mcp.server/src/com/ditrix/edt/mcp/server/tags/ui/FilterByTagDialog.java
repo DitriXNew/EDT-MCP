@@ -79,6 +79,7 @@ public class FilterByTagDialog extends SelectionDialog {
     // Result flags
     private boolean isFilterEnabled = false;
     private boolean isTurnedOff = false;
+    private boolean showUntaggedOnly = false;
     
     // ResourceManager for image lifecycle
     private ResourceManager resourceManager;
@@ -124,12 +125,26 @@ public class FilterByTagDialog extends SelectionDialog {
     }
     
     /**
+     * Returns whether "show untagged objects only" is selected.
+     */
+    public boolean isShowUntaggedOnly() {
+        return showUntaggedOnly;
+    }
+    
+    /**
      * Sets the initial selection (currently selected tags).
      */
     public void setInitialSelection(Map<IProject, Set<Tag>> initialSelection) {
         if (initialSelection != null) {
             this.selectedTags = new HashMap<>(initialSelection);
         }
+    }
+    
+    /**
+     * Sets the initial state for "show untagged only" option.
+     */
+    public void setInitialShowUntaggedOnly(boolean showUntaggedOnly) {
+        this.showUntaggedOnly = showUntaggedOnly;
     }
     
     @Override
@@ -211,6 +226,21 @@ public class FilterByTagDialog extends SelectionDialog {
             treeViewer.refresh();
             if (!searchPattern.isEmpty()) {
                 treeViewer.expandAll();
+            }
+        });
+        
+        // Show untagged objects only checkbox
+        Button showUntaggedCheckbox = new Button(container, SWT.CHECK);
+        showUntaggedCheckbox.setText(Messages.FilterByTagDialog_ShowUntaggedOnly);
+        showUntaggedCheckbox.setToolTipText(Messages.FilterByTagDialog_ShowUntaggedOnlyTooltip);
+        showUntaggedCheckbox.setSelection(showUntaggedOnly);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(showUntaggedCheckbox);
+        showUntaggedCheckbox.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                showUntaggedOnly = showUntaggedCheckbox.getSelection();
+                // Disable tag tree when showing untagged only
+                treeViewer.getTree().setEnabled(!showUntaggedOnly);
             }
         });
         
@@ -437,27 +467,11 @@ public class FilterByTagDialog extends SelectionDialog {
     
     /**
      * Wrapper class for tag entries in the tree.
+     * 
+     * <p>Uses record auto-generated equals/hashCode since Tag class
+     * already implements proper equality based on tag name.</p>
      */
-    private static class TagEntry {
-        final IProject project;
-        final Tag tag;
-        
-        TagEntry(IProject project, Tag tag) {
-            this.project = project;
-            this.tag = tag;
-        }
-        
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj) return true;
-            if (!(obj instanceof TagEntry other)) return false;
-            return project.equals(other.project) && tag.getName().equals(other.tag.getName());
-        }
-        
-        @Override
-        public int hashCode() {
-            return project.hashCode() * 31 + tag.getName().hashCode();
-        }
+    private record TagEntry(IProject project, Tag tag) {
     }
     
     /**

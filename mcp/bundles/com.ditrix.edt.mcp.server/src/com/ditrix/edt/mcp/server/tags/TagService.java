@@ -399,6 +399,60 @@ public class TagService implements IResourceChangeListener {
         return false;
     }
     
+    /**
+     * Moves a tag up in the list (decreases its index).
+     * This affects the order for keyboard shortcuts Ctrl+Alt+1-0.
+     * 
+     * @param project the project
+     * @param tagName the tag name to move
+     * @return true if moved, false if already at top or not found
+     */
+    public boolean moveTagUp(IProject project, String tagName) {
+        TagStorage storage = getTagStorage(project);
+        if (storage.moveTagUp(tagName)) {
+            saveTagStorage(project, storage);
+            fireTagsChanged(project);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Moves a tag down in the list (increases its index).
+     * This affects the order for keyboard shortcuts Ctrl+Alt+1-0.
+     * 
+     * @param project the project
+     * @param tagName the tag name to move
+     * @return true if moved, false if already at bottom or not found
+     */
+    public boolean moveTagDown(IProject project, String tagName) {
+        TagStorage storage = getTagStorage(project);
+        if (storage.moveTagDown(tagName)) {
+            saveTagStorage(project, storage);
+            fireTagsChanged(project);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Gets the index of a tag (1-based, for display).
+     * This corresponds to keyboard shortcuts Ctrl+Alt+1-0.
+     * 
+     * @param project the project
+     * @param tagName the tag name
+     * @return the index (1-based), or 0 if not found or beyond position 10
+     */
+    public int getTagHotkeyIndex(IProject project, String tagName) {
+        TagStorage storage = getTagStorage(project);
+        int index = storage.getTagIndex(tagName);
+        if (index >= 0 && index < 10) {
+            // Convert 0-based to 1-based, but index 9 becomes 0 (for Ctrl+Alt+0)
+            return index == 9 ? 0 : index + 1;
+        }
+        return -1; // No hotkey for this tag
+    }
+    
     // === Private methods ===
     
     private TagStorage loadTagStorage(IProject project) {

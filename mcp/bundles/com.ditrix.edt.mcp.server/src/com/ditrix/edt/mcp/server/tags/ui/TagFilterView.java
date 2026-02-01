@@ -390,20 +390,11 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     /**
      * Wrapper class for tag entries in the tree.
+     * 
+     * <p>Uses record auto-generated equals/hashCode since Tag class
+     * already implements proper equality based on tag name.</p>
      */
     private record TagEntry(IProject project, Tag tag) {
-        @Override
-        public boolean equals(Object obj) {
-            if (obj instanceof TagEntry other) {
-                return project.equals(other.project) && tag.getName().equals(other.tag.getName());
-            }
-            return false;
-        }
-        
-        @Override
-        public int hashCode() {
-            return project.hashCode() * 31 + tag.getName().hashCode();
-        }
     }
     
     /**
@@ -812,7 +803,8 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     /**
      * Navigate to a metadata object in EDT navigator.
-     * Uses EDT's IResourceLookup to find and open the object.
+     * Uses EDT's BM model to find and open the object by FQN dynamically.
+     * This approach works for all metadata types without hardcoding.
      * 
      * @param project the project containing the object
      * @param fqn the fully qualified name of the object
@@ -823,37 +815,37 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         }
         
         try {
-            // Get configuration provider
-            com._1c.g5.v8.dt.core.platform.IConfigurationProvider configProvider = 
-                Activator.getDefault().getConfigurationProvider();
+            // Use BmModelManager to get object by FQN dynamically
+            com._1c.g5.v8.dt.core.platform.IBmModelManager bmModelManager = 
+                Activator.getDefault().getBmModelManager();
             
-            if (configProvider == null) {
+            if (bmModelManager == null) {
+                Activator.logError("BmModelManager not available", null);
                 return;
             }
             
-            com._1c.g5.v8.dt.metadata.mdclass.Configuration configuration = 
-                configProvider.getConfiguration(project);
-            if (configuration == null) {
+            com._1c.g5.v8.bm.integration.IBmModel bmModel = bmModelManager.getModel(project);
+            if (bmModel == null) {
+                Activator.logError("BM model not found for project: " + project.getName(), null);
                 return;
             }
             
-            // Find the object by FQN - split into type and name
-            String[] parts = fqn.split("\\.", 2);
-            if (parts.length != 2) {
-                return;
-            }
-            
-            String typeName = parts[0];
-            String objectName = parts[1];
-            
-            // Try to find the object in configuration
-            org.eclipse.emf.ecore.EObject targetObject = findMdObject(configuration, typeName, objectName);
+            // Execute readonly task to get object by FQN
+            final String targetFqn = fqn;
+            org.eclipse.emf.ecore.EObject targetObject = (org.eclipse.emf.ecore.EObject) bmModel.executeReadonlyTask(
+                new com._1c.g5.v8.bm.integration.AbstractBmTask<com._1c.g5.v8.bm.core.IBmObject>("Get object by FQN") {
+                    @Override
+                    public com._1c.g5.v8.bm.core.IBmObject execute(
+                            com._1c.g5.v8.bm.core.IBmTransaction transaction, 
+                            org.eclipse.core.runtime.IProgressMonitor progressMonitor) {
+                        return transaction.getTopObjectByFqn(targetFqn);
+                    }
+                });
             
             if (targetObject != null) {
                 // Open in editor using EDT's OpenHelper
                 Display.getDefault().asyncExec(() -> {
                     try {
-                        // Use OpenHelper to open the object
                         com._1c.g5.v8.dt.ui.util.OpenHelper openHelper = 
                             new com._1c.g5.v8.dt.ui.util.OpenHelper();
                         openHelper.openEditor(targetObject);
@@ -861,141 +853,12 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
                         Activator.logError("Failed to open object: " + fqn, e);
                     }
                 });
+            } else {
+                Activator.logInfo("Object not found by FQN: " + fqn);
             }
         } catch (Exception e) {
             Activator.logError("Failed to navigate to object: " + fqn, e);
         }
-    }
-    
-    /**
-     * Find metadata object by type and name.
-     */
-    private org.eclipse.emf.ecore.EObject findMdObject(
-            com._1c.g5.v8.dt.metadata.mdclass.Configuration configuration, 
-            String typeName, String objectName) {
-        
-        // Map type name to configuration feature
-        org.eclipse.emf.common.util.EList<?> objects = null;
-        
-        switch (typeName) {
-            case "CommonModule":
-                objects = configuration.getCommonModules();
-                break;
-            case "Catalog":
-                objects = configuration.getCatalogs();
-                break;
-            case "Document":
-                objects = configuration.getDocuments();
-                break;
-            case "InformationRegister":
-                objects = configuration.getInformationRegisters();
-                break;
-            case "AccumulationRegister":
-                objects = configuration.getAccumulationRegisters();
-                break;
-            case "Enum":
-                objects = configuration.getEnums();
-                break;
-            case "Report":
-                objects = configuration.getReports();
-                break;
-            case "DataProcessor":
-                objects = configuration.getDataProcessors();
-                break;
-            case "Constant":
-                objects = configuration.getConstants();
-                break;
-            case "CommonPicture":
-                objects = configuration.getCommonPictures();
-                break;
-            case "CommonTemplate":
-                objects = configuration.getCommonTemplates();
-                break;
-            case "ExchangePlan":
-                objects = configuration.getExchangePlans();
-                break;
-            case "WebService":
-                objects = configuration.getWebServices();
-                break;
-            case "HTTPService":
-                objects = configuration.getHttpServices();
-                break;
-            case "Role":
-                objects = configuration.getRoles();
-                break;
-            case "Subsystem":
-                objects = configuration.getSubsystems();
-                break;
-            case "Style":
-                objects = configuration.getStyles();
-                break;
-            case "StyleItem":
-                objects = configuration.getStyleItems();
-                break;
-            case "CommonForm":
-                objects = configuration.getCommonForms();
-                break;
-            case "CommonCommand":
-                objects = configuration.getCommonCommands();
-                break;
-            case "CommonAttribute":
-                objects = configuration.getCommonAttributes();
-                break;
-            case "SessionParameter":
-                objects = configuration.getSessionParameters();
-                break;
-            case "ScheduledJob":
-                objects = configuration.getScheduledJobs();
-                break;
-            case "FunctionalOption":
-                objects = configuration.getFunctionalOptions();
-                break;
-            case "FunctionalOptionsParameter":
-                objects = configuration.getFunctionalOptionsParameters();
-                break;
-            case "DefinedType":
-                objects = configuration.getDefinedTypes();
-                break;
-            case "EventSubscription":
-                objects = configuration.getEventSubscriptions();
-                break;
-            case "BusinessProcess":
-                objects = configuration.getBusinessProcesses();
-                break;
-            case "Task":
-                objects = configuration.getTasks();
-                break;
-            case "ChartsOfAccounts":
-            case "ChartOfAccounts":
-                objects = configuration.getChartsOfAccounts();
-                break;
-            case "ChartsOfCalculationTypes":
-            case "ChartOfCalculationTypes":
-                objects = configuration.getChartsOfCalculationTypes();
-                break;
-            case "ChartsOfCharacteristicTypes":
-            case "ChartOfCharacteristicTypes":
-                objects = configuration.getChartsOfCharacteristicTypes();
-                break;
-            case "TabularSectionAttribute":
-            case "Attribute":
-                // These are nested - skip for now
-                return null;
-            default:
-                return null;
-        }
-        
-        if (objects != null) {
-            for (Object obj : objects) {
-                if (obj instanceof com._1c.g5.v8.dt.metadata.mdclass.MdObject mdObj) {
-                    if (objectName.equals(mdObj.getName())) {
-                        return mdObj;
-                    }
-                }
-            }
-        }
-        
-        return null;
     }
     
     /**

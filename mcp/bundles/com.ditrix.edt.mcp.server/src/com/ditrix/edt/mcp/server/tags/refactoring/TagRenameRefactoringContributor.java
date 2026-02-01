@@ -18,12 +18,10 @@ import org.eclipse.ltk.core.refactoring.Change;
 
 import com._1c.g5.v8.bm.core.IBmCrossReference;
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.refactoring.core.IRenameRefactoringContributor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringOperationDescriptor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
-import com._1c.g5.wiring.ServiceAccess;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
@@ -60,19 +58,17 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
     public Collection<Change> createNativePostChanges(EObject object, String newName, 
             RefactoringSettings settings, RefactoringStatus status) {
         // Check if this object has any tags assigned
-        if (object == null || !(object instanceof IBmObject)) {
+        if (object == null || !(object instanceof IBmObject bmObject)) {
             return null;
         }
         
-        IBmObject bmObject = (IBmObject) object;
-        String oldFqn = extractFqn(bmObject);
-        
+        String oldFqn = TagUtils.extractFqn(bmObject);
         if (oldFqn == null || oldFqn.isEmpty()) {
             return null;
         }
         
         // Get the project for this object
-        IProject project = getProject(object);
+        IProject project = TagUtils.extractProject(object);
         if (project == null) {
             return null;
         }
@@ -88,7 +84,7 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
         }
         
         // Build the new FQN based on the new name
-        String newFqn = buildNewFqn(oldFqn, newName);
+        String newFqn = TagUtils.buildNewFqn(oldFqn, newName);
         
         if (newFqn == null || newFqn.equals(oldFqn)) {
             return null;
@@ -102,60 +98,6 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
     @Override
     public boolean allowProhibitedReferenceEditing(IBmCrossReference reference) {
         return false;
-    }
-    
-    /**
-     * Extracts the FQN from a BM object.
-     */
-    private String extractFqn(IBmObject bmObject) {
-        // First try the BM API
-        String fqn = TagUtils.extractFqn(bmObject);
-        if (fqn != null && !fqn.isEmpty()) {
-            return fqn;
-        }
-        // Fallback to EObject-based extraction (IBmObject extends EObject)
-        return TagUtils.extractFqn((EObject) bmObject);
-    }
-    
-    /**
-     * Builds a new FQN by replacing the last name component with the new name.
-     */
-    private String buildNewFqn(String oldFqn, String newName) {
-        return TagUtils.buildNewFqn(oldFqn, newName);
-    }
-    
-    /**
-     * Gets the project for an EObject.
-     */
-    private IProject getProject(EObject object) {
-        try {
-            // Use IResourceLookup service - the proper EDT way
-            IResourceLookup resourceLookup = ServiceAccess.get(IResourceLookup.class);
-            if (resourceLookup != null) {
-                IProject project = resourceLookup.getProject(object);
-                if (project != null) {
-                    return project;
-                }
-            }
-            
-            // Fallback: Try to get the project from eResource
-            org.eclipse.emf.ecore.resource.Resource resource = object.eResource();
-            if (resource != null && resource.getURI() != null) {
-                String path = resource.getURI().toPlatformString(true);
-                if (path != null && path.startsWith("/")) {
-                    String projectName = path.substring(1);
-                    int slashIndex = projectName.indexOf('/');
-                    if (slashIndex > 0) {
-                        projectName = projectName.substring(0, slashIndex);
-                    }
-                    return org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-                            .getRoot().getProject(projectName);
-                }
-            }
-        } catch (Exception e) {
-            Activator.logError("Failed to get project for object", e);
-        }
-        return null;
     }
     
     /**

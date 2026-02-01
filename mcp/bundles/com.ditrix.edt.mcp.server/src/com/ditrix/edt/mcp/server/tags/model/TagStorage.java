@@ -221,4 +221,53 @@ public class TagStorage {
         }
         return result;
     }
+    
+    /**
+     * Moves a tag up in the list (decreases its index).
+     * This affects the order for keyboard shortcuts Ctrl+Alt+1-0.
+     * 
+     * @param tagName the tag name to move
+     * @return true if moved, false if already at top or not found
+     */
+    public boolean moveTagUp(String tagName) {
+        int index = getTagIndex(tagName);
+        if (index > 0) {
+            Tag tag = tags.remove(index);
+            tags.add(index - 1, tag);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Moves a tag down in the list (increases its index).
+     * This affects the order for keyboard shortcuts Ctrl+Alt+1-0.
+     * 
+     * @param tagName the tag name to move
+     * @return true if moved, false if already at bottom or not found
+     */
+    public boolean moveTagDown(String tagName) {
+        int index = getTagIndex(tagName);
+        if (index >= 0 && index < tags.size() - 1) {
+            Tag tag = tags.remove(index);
+            tags.add(index + 1, tag);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Gets the index of a tag in the list.
+     * 
+     * @param tagName the tag name
+     * @return the index (0-based), or -1 if not found
+     */
+    public int getTagIndex(String tagName) {
+        for (int i = 0; i < tags.size(); i++) {
+            if (tags.get(i).getName().equals(tagName)) {
+                return i;
+            }
+        }
+        return -1;
+    }
 }

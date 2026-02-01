@@ -10,6 +10,7 @@
 package com.ditrix.edt.mcp.server.tags.ui;
 
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EObject;
@@ -30,10 +31,22 @@ import com.ditrix.edt.mcp.server.tags.model.Tag;
  * Tags are displayed as badges/suffixes next to the object name.
  * 
  * <p>Uses {@link TagUtils} for FQN and project extraction to avoid code duplication.</p>
+ * 
+ * <p>Implements debouncing for refresh requests to avoid excessive updates
+ * when multiple tag changes occur in quick succession.</p>
  */
 public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChangeListener {
     
+    /** Debounce delay in milliseconds */
+    private static final long REFRESH_DEBOUNCE_MS = 100;
+    
     private final TagService tagService;
+    
+    /** Timestamp of last scheduled refresh */
+    private final AtomicLong lastRefreshRequest = new AtomicLong(0);
+    
+    /** Flag to track if a refresh is pending */
+    private volatile boolean refreshPending = false;
     
     /**
      * Creates a new decorator.
@@ -105,16 +118,46 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
     
     @Override
     public void onTagsChanged(IProject project) {
-        refreshDecorations();
+        scheduleRefresh();
     }
     
     @Override
     public void onAssignmentsChanged(IProject project, String objectFqn) {
-        refreshDecorations();
+        scheduleRefresh();
     }
     
-    private void refreshDecorations() {
-        org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
+    /**
+     * Schedules a debounced decoration refresh.
+     * Multiple calls within REFRESH_DEBOUNCE_MS will be coalesced into a single refresh.
+     */
+    private void scheduleRefresh() {
+        long now = System.currentTimeMillis();
+        lastRefreshRequest.set(now);
+        
+        if (!refreshPending) {
+            refreshPending = true;
+            org.eclipse.swt.widgets.Display.getDefault().timerExec((int) REFRESH_DEBOUNCE_MS, () -> {
+                executeRefresh();
+            });
+        }
+    }
+    
+    /**
+     * Executes the actual decoration refresh.
+     * Checks if more refresh requests came in during the debounce period.
+     */
+    private void executeRefresh() {
+        long lastRequest = lastRefreshRequest.get();
+        long elapsed = System.currentTimeMillis() - lastRequest;
+        
+        if (elapsed < REFRESH_DEBOUNCE_MS) {
+            // More requests came in, reschedule
+            org.eclipse.swt.widgets.Display.getDefault().timerExec((int) (REFRESH_DEBOUNCE_MS - elapsed), () -> {
+                executeRefresh();
+            });
+        } else {
+            // Debounce period passed, execute refresh
+            refreshPending = false;
             try {
                 org.eclipse.ui.PlatformUI.getWorkbench()
                     .getDecoratorManager()
@@ -122,7 +165,7 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
             } catch (Exception e) {
                 Activator.logDebug("Failed to refresh decorations: " + e.getMessage());
             }
-        });
+        }
     }
     
     @Override

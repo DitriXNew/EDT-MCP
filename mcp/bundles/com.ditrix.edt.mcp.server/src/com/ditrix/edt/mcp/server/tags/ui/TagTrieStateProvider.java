@@ -180,6 +180,7 @@ public class TagTrieStateProvider implements INavigatorContentProviderStateProvi
                             
                             // Special handling for Subsystems - they are not top-level BM objects
                             // They are contained in Configuration.getSubsystems()
+                            // Using hardcoded "Subsystem" as the EClass name
                             if ("Subsystem".equals(parts[0])) {
                                 topObject = resolveSubsystem(project, parts[1]);
                                 if (topObject != null) {

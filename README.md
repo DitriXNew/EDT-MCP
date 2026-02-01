@@ -16,7 +16,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🚀 **Application Management** - Get applications, update database, launch in debug mode
 - 🎯 **Status Bar** - Real-time server status with tool name, execution time, and interactive controls
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
-- 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, and find objects by tags
+- 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
 
 ## Installation
 
@@ -435,6 +435,49 @@ The Navigator will show only:
 
 **To clear the filter:** Click **Turn Off** in the dialog or use the toolbar button again.
 
+### Keyboard Shortcuts for Tags
+
+Quickly toggle tags on selected objects using keyboard shortcuts:
+
+| Shortcut | Action |
+|----------|--------|
+| **Ctrl+Alt+1** | Toggle 1st tag |
+| **Ctrl+Alt+2** | Toggle 2nd tag |
+| **...** | ... |
+| **Ctrl+Alt+9** | Toggle 9th tag |
+| **Ctrl+Alt+0** | Toggle 10th tag |
+
+**Features:**
+- Works with multiple selected objects
+- Supports cross-project selection (each object uses tags from its own project)
+- Pressing the same shortcut again removes the tag (toggle behavior)
+- Tag order is configurable in the Manage Tags dialog (Move Up/Move Down buttons)
+
+**To customize shortcuts:** Window → Preferences → General → Keys → search for "Toggle Tag"
+
+### Filtering Untagged Objects
+
+Find metadata objects that haven't been tagged yet:
+
+1. Open Filter by Tag dialog (toolbar button or Tags → Filter by Tag...)
+2. Check the **"Show untagged objects only"** checkbox
+3. Click **Set**
+
+The Navigator will show only objects that have no tags assigned, making it easy to identify objects that need categorization.
+
+### Multi-Select Tag Assignment
+
+Assign or remove tags from multiple objects at once:
+
+1. Select multiple objects in the Navigator (Ctrl+Click or Shift+Click)
+2. Right-click → **Tags**
+3. Select a tag to toggle it on/off for ALL selected objects
+
+**Behavior:**
+- ✓ Checked = all selected objects have this tag
+- ☐ Unchecked = none of the selected objects have this tag
+- When objects are from different projects, only objects from projects that have the tag will be affected
+
 ### Tag Filter View
 
 For advanced filtering across multiple projects, use the Tag Filter View:
@@ -477,6 +520,30 @@ assignments:
 - Java 17+
 
 ## Version History
+
+<details>
+<summary><strong>1.20.0</strong> - Tag Enhancements: keyboard shortcuts, untagged filter, multiselect</summary>
+
+- **New**: Keyboard shortcuts for tags (Ctrl+Alt+1-0)
+  - Toggle first 10 tags with Ctrl+Alt+1 through Ctrl+Alt+0
+  - Works with multiple selected objects
+  - Supports cross-project selection
+  - Customizable via Window → Preferences → General → Keys
+- **New**: Move tags up/down in Manage Tags dialog
+  - Reorder tags to assign frequently used tags to lower numbers
+  - Tag order persists and affects hotkey assignments
+- **New**: "Show untagged objects only" filter
+  - Checkbox in Filter by Tag dialog
+  - Find objects that haven't been tagged yet
+- **New**: Multi-select tag assignment
+  - Select multiple objects and assign/remove tags from context menu
+  - Shows aggregated state across all selected objects
+  - Handles objects from different projects correctly
+- **Improved**: Performance optimizations
+  - Debouncing for decorator refresh
+  - Removed hardcoded type references in favor of dynamic MdClassPackage.Literals
+
+</details>
 
 <details>
 <summary><strong>1.19.0</strong> - Metadata Tags: organize objects with custom tags, filter Navigator, find by tags</summary>

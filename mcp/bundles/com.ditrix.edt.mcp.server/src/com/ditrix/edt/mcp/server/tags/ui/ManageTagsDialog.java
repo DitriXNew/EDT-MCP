@@ -143,10 +143,28 @@ public class ManageTagsDialog extends Dialog {
             }
         });
         
+        // Hotkey column (shows Ctrl+Alt+N for first 10 tags)
+        TableViewerColumn hotkeyColumn = new TableViewerColumn(tagsViewer, SWT.CENTER);
+        hotkeyColumn.getColumn().setText("#");
+        hotkeyColumn.getColumn().setWidth(30);
+        hotkeyColumn.getColumn().setToolTipText("Hotkey index (Ctrl+Alt+N)");
+        hotkeyColumn.setLabelProvider(new ColumnLabelProvider() {
+            @Override
+            public String getText(Object element) {
+                if (element instanceof Tag tag) {
+                    int index = tagService.getTagHotkeyIndex(project, tag.getName());
+                    if (index >= 0) {
+                        return String.valueOf(index);
+                    }
+                }
+                return "";
+            }
+        });
+        
         // Name column (wider)
         TableViewerColumn nameColumn = new TableViewerColumn(tagsViewer, SWT.NONE);
         nameColumn.getColumn().setText("Tag");
-        nameColumn.getColumn().setWidth(200);
+        nameColumn.getColumn().setWidth(170);
         nameColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
             public String getText(Object element) {
@@ -175,6 +193,32 @@ public class ManageTagsDialog extends Dialog {
         Composite buttonsComposite = new Composite(group, SWT.NONE);
         GridDataFactory.fillDefaults().align(SWT.FILL, SWT.TOP).applyTo(buttonsComposite);
         GridLayoutFactory.fillDefaults().applyTo(buttonsComposite);
+        
+        Button moveUpButton = new Button(buttonsComposite, SWT.PUSH);
+        moveUpButton.setText("Move Up");
+        moveUpButton.setToolTipText("Move tag up (affects Ctrl+Alt+1-0 hotkeys)");
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(moveUpButton);
+        moveUpButton.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                moveSelectedTagUp();
+            }
+        });
+        
+        Button moveDownButton = new Button(buttonsComposite, SWT.PUSH);
+        moveDownButton.setText("Move Down");
+        moveDownButton.setToolTipText("Move tag down (affects Ctrl+Alt+1-0 hotkeys)");
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(moveDownButton);
+        moveDownButton.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                moveSelectedTagDown();
+            }
+        });
+        
+        // Separator
+        Label separator = new Label(buttonsComposite, SWT.SEPARATOR | SWT.HORIZONTAL);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(separator);
         
         Button editButton = new Button(buttonsComposite, SWT.PUSH);
         editButton.setText("Edit...");
@@ -269,6 +313,28 @@ public class ManageTagsDialog extends Dialog {
         if (selection instanceof Tag tag) {
             tagService.deleteTag(project, tag.getName());
             refreshTags();
+        }
+    }
+    
+    private void moveSelectedTagUp() {
+        Object selection = tagsViewer.getStructuredSelection().getFirstElement();
+        if (selection instanceof Tag tag) {
+            if (tagService.moveTagUp(project, tag.getName())) {
+                refreshTags();
+                // Re-select the moved tag
+                tagsViewer.setSelection(new org.eclipse.jface.viewers.StructuredSelection(tag));
+            }
+        }
+    }
+    
+    private void moveSelectedTagDown() {
+        Object selection = tagsViewer.getStructuredSelection().getFirstElement();
+        if (selection instanceof Tag tag) {
+            if (tagService.moveTagDown(project, tag.getName())) {
+                refreshTags();
+                // Re-select the moved tag
+                tagsViewer.setSelection(new org.eclipse.jface.viewers.StructuredSelection(tag));
+            }
         }
     }
     

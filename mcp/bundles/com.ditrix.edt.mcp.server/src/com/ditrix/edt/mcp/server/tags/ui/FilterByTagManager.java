@@ -43,6 +43,9 @@ public class FilterByTagManager {
     /** Whether filter is currently active */
     private boolean isFilterActive = false;
     
+    /** Whether to show only untagged objects */
+    private boolean showUntaggedOnly = false;
+    
     /** The filter instance */
     private TagSearchFilter tagFilter;
     
@@ -79,12 +82,14 @@ public class FilterByTagManager {
                 
                 FilterByTagDialog dialog = new FilterByTagDialog(shell, projectManager);
                 dialog.setInitialSelection(selectedTags);
+                dialog.setInitialShowUntaggedOnly(showUntaggedOnly);
                 dialog.open();
                 
                 if (dialog.isFilterEnabled()) {
                     // Apply new filter
                     selectedTags = dialog.getSelectedTags();
-                    if (!selectedTags.isEmpty()) {
+                    showUntaggedOnly = dialog.isShowUntaggedOnly();
+                    if (!selectedTags.isEmpty() || showUntaggedOnly) {
                         activateFilter();
                     } else {
                         deactivateFilter();
@@ -92,6 +97,7 @@ public class FilterByTagManager {
                 } else if (dialog.isTurnedOff()) {
                     // Turn off filter
                     selectedTags.clear();
+                    showUntaggedOnly = false;
                     deactivateFilter();
                 }
                 // else: Cancel - do nothing
@@ -165,7 +171,12 @@ public class FilterByTagManager {
         if (tagFilter == null) {
             tagFilter = new TagSearchFilter();
         }
-        tagFilter.setSelectedTagsMode(selectedTags);
+        
+        if (showUntaggedOnly) {
+            tagFilter.setShowUntaggedOnly(true);
+        } else {
+            tagFilter.setSelectedTagsMode(selectedTags);
+        }
         
         // Add filter to viewer if not already added
         ViewerFilter[] filters = viewer.getFilters();

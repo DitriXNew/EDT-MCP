@@ -27,6 +27,8 @@ public class Messages extends NLS {
     public static String FilterByTagDialog_DeselectAll;
     public static String FilterByTagDialog_SearchPlaceholder;
     public static String FilterByTagDialog_EditTag;
+    public static String FilterByTagDialog_ShowUntaggedOnly;
+    public static String FilterByTagDialog_ShowUntaggedOnlyTooltip;
     
     // FilterByTagManager
     public static String FilterByTagManager_FilterName;

@@ -46,8 +46,57 @@ public class TagSearchFilter extends ViewerFilter {
     /** Whether we are in dialog-selected tags mode */
     private boolean dialogMode = false;
     
+    /** Whether to show only untagged objects */
+    private boolean showUntaggedOnly = false;
+    
     /** Selected tags from dialog per project */
     private Map<IProject, Set<Tag>> selectedTagsByProject = new HashMap<>();
+    
+    /**
+     * Set of metadata types that appear under "Common" folder in the navigator.
+     * Derived dynamically from MdClassPackage using reflection.
+     */
+    private static final Set<String> COMMON_METADATA_TYPES = initCommonMetadataTypes();
+    
+    /**
+     * Common metadata type names that appear in the "Common" folder.
+     * These are the types that don't have their own top-level folder in navigator.
+     */
+    private static final Set<String> COMMON_TYPE_NAMES = Set.of(
+        "Subsystem", "CommonModule", "SessionParameter", "Role", "CommonAttribute",
+        "ExchangePlan", "FilterCriterion", "EventSubscription", "ScheduledJob", "Bot",
+        "FunctionalOption", "FunctionalOptionsParameter", "DefinedType", "SettingsStorage",
+        "CommonForm", "CommonCommand", "CommandGroup", "CommonTemplate", "CommonPicture",
+        "XDTOPackage", "WebService", "HTTPService", "WSReference", "WebSocketClient",
+        "IntegrationService", "Style", "StyleItem", "Language"
+    );
+    
+    /**
+     * Initializes the set of common metadata types from MdClassPackage.
+     * Uses reflection to get all EClass types and filters by known common type names.
+     * This ensures we use the actual EMF type names.
+     */
+    private static Set<String> initCommonMetadataTypes() {
+        Set<String> result = new java.util.HashSet<>();
+        org.eclipse.emf.ecore.EPackage pkg = 
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.eINSTANCE;
+        
+        for (org.eclipse.emf.ecore.EClassifier classifier : pkg.getEClassifiers()) {
+            if (classifier instanceof org.eclipse.emf.ecore.EClass eClass) {
+                String name = eClass.getName();
+                if (COMMON_TYPE_NAMES.contains(name)) {
+                    result.add(name);
+                }
+            }
+        }
+        
+        // Fallback to hardcoded names if reflection failed
+        if (result.isEmpty()) {
+            return COMMON_TYPE_NAMES;
+        }
+        
+        return result;
+    }
     
     /**
      * Default constructor for extension factory.
@@ -73,10 +122,60 @@ public class TagSearchFilter extends ViewerFilter {
     }
     
     /**
+     * Sets the filter to show only untagged objects.
+     * 
+     * @param showUntaggedOnly true to show only untagged objects
+     */
+    public void setShowUntaggedOnly(boolean showUntaggedOnly) {
+        this.showUntaggedOnly = showUntaggedOnly;
+        if (showUntaggedOnly) {
+            this.dialogMode = true; // Enable dialog mode
+            // Clear tag selection since we're showing untagged only
+            recalculateUntaggedFqns();
+            Activator.logInfo("TagSearchFilter: untagged-only mode enabled with " + 
+                matchingFqns.size() + " untagged objects");
+        }
+    }
+    
+    /**
+     * Recalculates matching FQNs to show only untagged objects.
+     */
+    private void recalculateUntaggedFqns() {
+        matchingFqns.clear();
+        matchingFqnsByProject.clear();
+        
+        TagService tagService = TagService.getInstance();
+        
+        // Get all projects
+        for (IProject project : org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+                .getRoot().getProjects()) {
+            if (!project.isOpen()) {
+                continue;
+            }
+            
+            TagStorage storage = tagService.getTagStorage(project);
+            
+            // Get all assigned FQNs
+            Set<String> assignedFqns = new HashSet<>();
+            for (Tag tag : storage.getTags()) {
+                assignedFqns.addAll(storage.getObjectsByTag(tag.getName()));
+            }
+            
+            // Store as "untagged FQNs" - we need to invert the logic in select()
+            // For untagged mode, we'll mark which FQNs ARE tagged, and reject them
+            if (!assignedFqns.isEmpty()) {
+                matchingFqnsByProject.put(project, assignedFqns);
+                matchingFqns.addAll(assignedFqns);
+            }
+        }
+    }
+    
+    /**
      * Clears dialog mode.
      */
     public void clearSelectedTagsMode() {
         this.dialogMode = false;
+        this.showUntaggedOnly = false;
         this.selectedTagsByProject.clear();
         this.matchingFqns.clear();
         this.matchingFqnsByProject.clear();
@@ -172,6 +271,7 @@ public class TagSearchFilter extends ViewerFilter {
                 boolean result = matchesFqnOrParentInProject(fqn, currentFilterProject);
                 
                 // Special handling for Subsystems: parent subsystem should be visible if ANY child matches
+                // Using hardcoded "Subsystem" as the EClass name
                 if (!result && "Subsystem".equals(typeName)) {
                     result = hasMatchingChildSubsystemInProject(eObject, currentFilterProject);
                 }
@@ -187,35 +287,8 @@ public class TagSearchFilter extends ViewerFilter {
             
             // Handle CommonNavigatorAdapter - it's the "Common" folder containing subsystems, common modules, etc.
             if (className.endsWith("CommonNavigatorAdapter")) {
-                // Check if any of the "common" types have matching FQNs
-                boolean hasCommonMatches = hasMatchingFqnsForType("Subsystem") ||
-                    hasMatchingFqnsForType("CommonModule") ||
-                    hasMatchingFqnsForType("SessionParameter") ||
-                    hasMatchingFqnsForType("Role") ||
-                    hasMatchingFqnsForType("CommonAttribute") ||
-                    hasMatchingFqnsForType("ExchangePlan") ||
-                    hasMatchingFqnsForType("FilterCriterion") ||
-                    hasMatchingFqnsForType("EventSubscription") ||
-                    hasMatchingFqnsForType("ScheduledJob") ||
-                    hasMatchingFqnsForType("Bot") ||
-                    hasMatchingFqnsForType("FunctionalOption") ||
-                    hasMatchingFqnsForType("FunctionalOptionsParameter") ||
-                    hasMatchingFqnsForType("DefinedType") ||
-                    hasMatchingFqnsForType("SettingsStorage") ||
-                    hasMatchingFqnsForType("CommonForm") ||
-                    hasMatchingFqnsForType("CommonCommand") ||
-                    hasMatchingFqnsForType("CommandGroup") ||
-                    hasMatchingFqnsForType("CommonTemplate") ||
-                    hasMatchingFqnsForType("CommonPicture") ||
-                    hasMatchingFqnsForType("XDTOPackage") ||
-                    hasMatchingFqnsForType("WebService") ||
-                    hasMatchingFqnsForType("HTTPService") ||
-                    hasMatchingFqnsForType("WSReference") ||
-                    hasMatchingFqnsForType("WebSocketClient") ||
-                    hasMatchingFqnsForType("IntegrationService") ||
-                    hasMatchingFqnsForType("PaletteColor") ||
-                    hasMatchingFqnsForType("StyleItem");
-                return hasCommonMatches;
+                // Check if any matching FQN belongs to a "common" metadata type
+                return hasMatchingFqnsForAnyType(COMMON_METADATA_TYPES);
             }
             
             // Handle navigator folder containers - fix operator precedence
@@ -480,73 +553,48 @@ public class TagSearchFilter extends ViewerFilter {
     /**
      * Extracts metadata type from Navigator folder class name.
      * E.g., "DocumentNavigatorAdapter$Folder" -> "Document"
+     * Uses ALL_METADATA_TYPES list built dynamically from MdClassPackage.
      */
     private String extractMetadataTypeFromFolderClass(String className) {
         // Format: com._1c.g5.v8.dt.md.ui.navigator.adapters.XXXNavigatorAdapter$Folder
         // or com._1c.g5.v8.dt.md.ui.navigator.adapters.XXXNavigatorAdapter
         
-        // Map of class name patterns to FQN prefixes
-        java.util.Map<String, String> typeMap = new java.util.LinkedHashMap<>();
-        // Most specific first
-        typeMap.put("InformationRegister", "InformationRegister");
-        typeMap.put("AccumulationRegister", "AccumulationRegister");
-        typeMap.put("AccountingRegister", "AccountingRegister");
-        typeMap.put("CalculationRegister", "CalculationRegister");
-        typeMap.put("ChartOfCharacteristicTypes", "ChartOfCharacteristicTypes");
-        typeMap.put("ChartOfAccounts", "ChartOfAccounts");
-        typeMap.put("ChartOfCalculationTypes", "ChartOfCalculationTypes");
-        typeMap.put("ExternalDataSource", "ExternalDataSource");
-        typeMap.put("ExternalDataProcessor", "ExternalDataProcessor");
-        typeMap.put("ExternalReport", "ExternalReport");
-        typeMap.put("DocumentJournal", "DocumentJournal");
-        typeMap.put("DocumentNumerator", "DocumentNumerator");
-        typeMap.put("Document", "Document");
-        typeMap.put("Catalog", "Catalog");
-        typeMap.put("Enum", "Enum");
-        typeMap.put("Report", "Report");
-        typeMap.put("DataProcessor", "DataProcessor");
-        typeMap.put("Constant", "Constant");
-        typeMap.put("BusinessProcess", "BusinessProcess");
-        typeMap.put("Task", "Task");
-        typeMap.put("Subsystem", "Subsystem");
-        typeMap.put("CommonModule", "CommonModule");
-        typeMap.put("CommonForm", "CommonForm");
-        typeMap.put("CommonCommand", "CommonCommand");
-        typeMap.put("CommonTemplate", "CommonTemplate");
-        typeMap.put("CommonPicture", "CommonPicture");
-        typeMap.put("CommonAttribute", "CommonAttribute");
-        typeMap.put("CommandGroup", "CommandGroup");
-        typeMap.put("StyleItem", "StyleItem");
-        typeMap.put("Style", "Style");
-        typeMap.put("PaletteColor", "PaletteColor");
-        typeMap.put("SessionParameter", "SessionParameter");
-        typeMap.put("Role", "Role");
-        typeMap.put("ExchangePlan", "ExchangePlan");
-        typeMap.put("FilterCriterion", "FilterCriterion");
-        typeMap.put("EventSubscription", "EventSubscription");
-        typeMap.put("ScheduledJob", "ScheduledJob");
-        typeMap.put("Bot", "Bot");
-        typeMap.put("FunctionalOptionsParameter", "FunctionalOptionsParameter");
-        typeMap.put("FunctionalOption", "FunctionalOption");
-        typeMap.put("DefinedType", "DefinedType");
-        typeMap.put("SettingsStorage", "SettingsStorage");
-        typeMap.put("XDTOPackage", "XDTOPackage");
-        typeMap.put("WebService", "WebService");
-        typeMap.put("HTTPService", "HTTPService");
-        typeMap.put("WSReference", "WSReference");
-        typeMap.put("WebSocketClient", "WebSocketClient");
-        typeMap.put("IntegrationService", "IntegrationService");
-        typeMap.put("Sequence", "Sequence");
-        typeMap.put("Recalculation", "Recalculation");
-        typeMap.put("Language", "Language");
+        // Get all metadata type names from MdClassPackage via reflection
+        // Check in order from longest to shortest to handle cases like
+        // "InformationRegisterNavigatorAdapter" vs "RegisterNavigatorAdapter"
+        return ALL_METADATA_TYPES.stream()
+            .filter(typeName -> className.contains(typeName + "NavigatorAdapter"))
+            .findFirst()
+            .orElse(null);
+    }
+    
+    /**
+     * All metadata types from MdClassPackage.
+     * Sorted by length descending to match longer names first.
+     */
+    private static final java.util.List<String> ALL_METADATA_TYPES = initAllMetadataTypes();
+    
+    /**
+     * Initializes list of all metadata types from MdClassPackage using reflection.
+     * Gets all EClass types from the package and sorts by length descending.
+     */
+    private static java.util.List<String> initAllMetadataTypes() {
+        java.util.List<String> types = new java.util.ArrayList<>();
+        org.eclipse.emf.ecore.EPackage pkg = 
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.eINSTANCE;
         
-        for (java.util.Map.Entry<String, String> entry : typeMap.entrySet()) {
-            if (className.contains(entry.getKey() + "NavigatorAdapter")) {
-                return entry.getValue();
+        for (org.eclipse.emf.ecore.EClassifier classifier : pkg.getEClassifiers()) {
+            if (classifier instanceof org.eclipse.emf.ecore.EClass eClass) {
+                // Only include concrete metadata types (not abstract)
+                if (!eClass.isAbstract() && !eClass.isInterface()) {
+                    types.add(eClass.getName());
+                }
             }
         }
         
-        return null;
+        // Sort by length descending so longer names match first
+        types.sort((a, b) -> b.length() - a.length());
+        return types;
     }
     
     /**
@@ -559,6 +607,27 @@ public class TagSearchFilter extends ViewerFilter {
         for (String fqn : projectFqns) {
             if (fqn.startsWith(prefix)) {
                 return true;
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Checks if any matching FQN starts with any of the given metadata types.
+     * Uses currentFilterProject context.
+     * 
+     * @param metadataTypes set of metadata type names to check
+     * @return true if any matching FQN belongs to one of the specified types
+     */
+    private boolean hasMatchingFqnsForAnyType(Set<String> metadataTypes) {
+        Set<String> projectFqns = getCurrentMatchingFqns();
+        for (String fqn : projectFqns) {
+            int dotIndex = fqn.indexOf('.');
+            if (dotIndex > 0) {
+                String type = fqn.substring(0, dotIndex);
+                if (metadataTypes.contains(type)) {
+                    return true;
+                }
             }
         }
         return false;
@@ -591,6 +660,8 @@ public class TagSearchFilter extends ViewerFilter {
     
     /**
      * Checks if FQN matches (exact or as parent) within a specific project.
+     * In untagged-only mode, the logic is inverted: matchingFqns contains TAGGED objects,
+     * so we return true only if the FQN is NOT in the set.
      * 
      * @param fqn the FQN to check
      * @param project the project (can be null for global check)
@@ -599,6 +670,27 @@ public class TagSearchFilter extends ViewerFilter {
     private boolean matchesFqnOrParentInProject(String fqn, IProject project) {
         Set<String> projectFqns = getMatchingFqnsForProject(project);
         
+        if (showUntaggedOnly) {
+            // In untagged-only mode, matchingFqns contains TAGGED objects
+            // We want to show objects that are NOT tagged
+            // Exact match means this object IS tagged - reject it
+            if (projectFqns.contains(fqn)) {
+                return false;
+            }
+            // Check if this FQN is a parent of a tagged object - show it (as folder)
+            String prefix = fqn + ".";
+            for (String taggedFqn : projectFqns) {
+                if (taggedFqn.startsWith(prefix)) {
+                    // This is a parent of a tagged object, we need to check children
+                    // Return true to show the folder (will be filtered by children)
+                    return true;
+                }
+            }
+            // Not tagged and not a parent of tagged - this is an untagged object!
+            return true;
+        }
+        
+        // Normal mode: matchingFqns contains objects that match selected tags
         // Exact match
         if (projectFqns.contains(fqn)) {
             return true;
