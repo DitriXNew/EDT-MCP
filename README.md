@@ -16,6 +16,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🚀 **Application Management** - Get applications, update database, launch in debug mode
 - 🎯 **Status Bar** - Real-time server status with tool name, execution time, and interactive controls
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
+- 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, and find objects by tags
 
 ## Installation
 
@@ -47,14 +48,15 @@ The MCP server status bar shows real-time execution status with interactive cont
 - 🟡 **Yellow blinking** - Tool is executing
 - ⚪ **Grey** - Server stopped
 
+![Status Bar Menu](img/StatusButtons.png)
+
+<details>
+<summary><strong>User Signal Controls</strong> - Send signals to AI agent during tool execution</summary>
+
 **During Tool Execution:**
 - Shows tool name (e.g., `MCP: update_database`)
 - Shows elapsed time in MM:SS format
 - Click to access control menu
-
-![Status Bar Menu](img/StatusButtons.png)
-
-### User Signal Controls
 
 When a tool is executing, you can send signals to the AI agent to interrupt the MCP call:
 
@@ -88,6 +90,8 @@ Note: The EDT operation may still be running in background.
 - EDT showed an error dialog and you want agent to retry
 - Want to switch agent's focus to a different task
 
+</details>
+
 ## Connecting AI Assistants
 
 ### VS Code / GitHub Copilot
@@ -103,6 +107,9 @@ Create `.vscode/mcp.json`:
   }
 }
 ```
+
+<details>
+<summary><strong>Other AI Assistants</strong> - Cursor, Claude Code, Claude Desktop</summary>
 
 ### Cursor IDE
 
@@ -146,6 +153,8 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+</details>
+
 ## Available Tools
 
 | Tool | Description |
@@ -168,6 +177,9 @@ Add to `claude_desktop_config.json`:
 | `get_applications` | Get list of applications (infobases) for a project with update state |
 | `update_database` | Update database (infobase) with full or incremental update mode |
 | `debug_launch` | Launch application in debug mode (auto-updates database before launch) |
+
+<details>
+<summary><strong>Tool Details</strong> - Parameters and usage examples for each tool</summary>
 
 ### Content Assist Tool
 
@@ -355,6 +367,8 @@ Add to `claude_desktop_config.json`:
 - **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects` - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
 
+</details>
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
@@ -363,56 +377,99 @@ Add to `claude_desktop_config.json`:
 | `/mcp` | GET | Server info |
 | `/health` | GET | Health check |
 
-## Status Bar
-
-Click the status indicator in EDT status bar:
-- 🟢 Green - Server running
-- ⚫ Grey - Server stopped
-- **[N]** - Request counter
-
 ## Metadata Tags
 
-The plugin provides a metadata tagging feature to organize and filter metadata objects.
+Organize your metadata objects with custom tags for easier navigation and filtering.
 
-### Assigning Tags
+### Why Use Tags?
 
-1. Right-click on any metadata object in the EDT Navigator
-2. Select **Tags → Manage Tags...**
-3. In the dialog:
-   - Check/uncheck existing tags to assign/unassign them
-   - Create new tags with custom name and color
-   - Edit or delete existing tags
+Tags help you:
+- Group related objects across different metadata types (e.g., all objects for a specific feature)
+- Quickly find objects in large configurations
+- Filter the Navigator to focus on specific areas of the project
+- Share object organization with your team via version control
 
-Tags are stored in `.settings/metadata-tags.yaml` file in each project (can be committed to VCS).
+### Getting Started
 
-### Tag Decorator
+**Assigning Tags to Objects:**
 
-Tagged objects display their tags as a suffix in the Navigator tree:
-- Example: `CommonModule.MyModule [Test, Demo]`
+1. Right-click on any metadata object in the Navigator
+2. Select **Tags** from the context menu
+3. Check the tags you want to assign, or select **Manage Tags...** to create new ones
 
-**To enable/disable:**
+![Tags Context Menu](img/tags-context-menu.png)
+
+**Managing Tags:**
+
+In the Manage Tags dialog you can:
+- Create new tags with custom names, colors, and descriptions
+- Edit existing tags (name, color, description)
+- Delete tags
+- See all available tags for the project
+
+![Manage Tags Dialog](img/tags-manage-dialog.png)
+
+### Viewing Tags in Navigator
+
+Tagged objects show their tags as a suffix in the Navigator tree:
+
+![Navigator with Tags](img/tags-navigator.png)
+
+**To enable/disable tag display:**
 - **Window → Preferences → General → Appearance → Label Decorations**
-- Find "Metadata Tags Decorator" and toggle the checkbox
+- Toggle "Metadata Tags Decorator"
 
-**Decoration styles** (configurable in MCP Server preferences):
-- Show all tags: `[Tag1, Tag2, Tag3]`
-- Show first tag only: `[Tag1]`
-- Show count: `[3 tags]`
+### Filtering Navigator by Tags
+
+Filter the entire Navigator to show only objects with specific tags:
+
+1. Click the tag filter button in the Navigator toolbar (or right-click → **Tags → Filter by Tag...**)
+2. Select one or more tags
+3. Click **Set** to apply the filter
+
+![Filter by Tag Dialog](img/tags-filter-dialog.png)
+
+The Navigator will show only:
+- Objects that have ANY of the selected tags
+- Parent folders containing matching objects
+
+**To clear the filter:** Click **Turn Off** in the dialog or use the toolbar button again.
 
 ### Tag Filter View
 
-A dedicated view for filtering metadata objects by tags:
+For advanced filtering across multiple projects, use the Tag Filter View:
 
-1. **Window → Show View → Other → MCP Server → Tag Filter**
-2. Select project from dropdown
-3. Check tags in the left panel
-4. Right panel shows all objects with selected tags
-5. Double-click an object to navigate to it
+**Window → Show View → Other → MCP Server → Tag Filter**
 
-**Features:**
-- Multi-tag filter (AND/OR logic)
-- Navigate to object on double-click
-- Real-time refresh when tags change
+This view provides:
+- **Left panel**: Select tags from all projects in your workspace
+- **Right panel**: See all matching objects with search and navigation
+- **Search**: Filter results by object name using regex
+- **Double-click**: Navigate directly to the object
+
+### Where Tags Are Stored
+
+Tags are stored in `.settings/metadata-tags.yaml` file in each project. This file:
+- Can be committed to version control (VCS friendly)
+- Is automatically updated when you rename or delete objects
+- Uses YAML format for easy readability
+
+**Example:**
+```yaml
+tags:
+  - name: "Important"
+    color: "#FF0000"
+    description: "Critical business logic"
+  - name: "Utils"
+    color: "#00FF00"
+
+assignments:
+  CommonModule.Utils:
+    - "Utils"
+  Document.SalesOrder:
+    - "Important"
+    - "Sales"
+```
 
 ## Requirements
 
@@ -421,22 +478,34 @@ A dedicated view for filtering metadata objects by tags:
 
 ## Version History
 
-### 1.19.0
+<details>
+<summary><strong>1.19.0</strong> - Metadata Tags: organize objects with custom tags, filter Navigator, find by tags</summary>
+
 - **New**: Metadata Tags feature
   - Assign custom tags to any metadata object for organization
-  - Context menu: right-click → Tags → Manage Tags...
-  - Create tags with custom names and colors
+  - Context menu: right-click → Tags for quick access
+  - Manage Tags dialog: create, edit, delete tags with colors and descriptions
   - Tags stored in `.settings/metadata-tags.yaml` (VCS friendly)
 - **New**: Tag Decorator in Navigator
   - Shows assigned tags as suffix: `CommonModule.MyModule [Test, Demo]`
   - Enable/disable: Window → Preferences → General → Appearance → Label Decorations
-  - Multiple display styles: all tags, first tag, or count only
+- **New**: Navigator Filter by Tags
+  - Filter entire Navigator tree to show only objects with selected tags
+  - OR logic: shows objects with ANY of the selected tags
+  - Toolbar button and context menu access
 - **New**: Tag Filter View
-  - Window → Show View → Other → MCP Server → Tag Filter
-  - Filter metadata objects by tags across the project
-  - Double-click to navigate to object
+  - Advanced filtering across all projects in workspace
+  - Search by FQN with regex support
+  - Multi-project support
+- **New**: Automatic YAML synchronization
+  - Rename/delete operations automatically update tag assignments
+  - Works with EDT Undo/Redo
 
-### 1.18.0
+</details>
+
+<details>
+<summary><strong>1.18.0</strong> - Application management: get infobases, update database, debug launch</summary>
+
 - **New**: `get_applications` tool - Get list of applications (infobases) for a project
   - Returns application ID, name, type, and current update state
   - Use this to get application IDs for `update_database` and `debug_launch` tools
@@ -459,13 +528,22 @@ A dedicated view for filtering metadata objects by tags:
   - Dialog preview shows exactly what will be sent to agent
   - EDT operation continues in background while agent receives immediate response
 
-### 1.17.0
+</details>
+
+<details>
+<summary><strong>1.17.0</strong> - Find references: search where metadata objects are used</summary>
+
 - **New**: `find_references` tool - Find all references to a metadata object
   - Returns all places where the object is used: roles, subsystems, forms, type descriptions, etc.
   - Results grouped by category (Subsystems, Roles, Forms, Type descriptions, etc.)
   - Searches through produced types, predefined items, fields
   - Note: BSL code references will be added in future version
-### 1.16.0  
+
+</details>
+
+<details>
+<summary><strong>1.16.0</strong> - Plain text mode for Cursor, object filters, built-in function docs</summary>
+
 - **New**: "Plain text mode (Cursor compatibility)" preference setting
   - When enabled, returns Markdown results as plain text instead of embedded resources
   - Solves compatibility issues with AI clients that don't support MCP embedded resources (e.g., Cursor)
@@ -479,20 +557,24 @@ A dedicated view for filtering metadata objects by tags:
   - Returns function signature with parameters, types, optional flags, and return type
   - Supports both English and Russian function names
 
-### 1.9.0
+</details>
+
+<details>
+<summary><strong>1.9.0</strong> - Enhanced EObject formatting for metadata tools</summary>
+
 - **Improved**: Enhanced EObject formatting in metadata tools using new `EObjectInspector` utility
   - Smart detection of simple value holders (enums, wrappers) vs complex objects needing expansion
   - Automatic extraction of primary values from wrapper classes (e.g., StandardCommandGroup → category enum)
   - EMF-based detection without hardcoded class names using EAttribute/EReference analysis
   - Better formatting for StandardCommandGroup, Color, Picture, and other wrapper types
 - **Internal**: New `EObjectInspector` utility class for EMF EObject type analysis
-  - `getFormatStyle()` - Determines SIMPLE_VALUE, REFERENCE, or EXPAND formatting
-  - `isSimpleValueHolder()` - Checks if EClass/EObject is a simple wrapper
-  - `getPrimaryValue()` - Extracts meaningful value from wrapper objects
-  - `formatReference()` - Smart reference formatting for any EObject type
 - **Refactored**: `AbstractMetadataFormatter` and `UniversalMetadataFormatter` now use EObjectInspector
 
-### 1.8.0
+</details>
+
+<details>
+<summary><strong>1.8.0</strong> - Metadata objects and details tools</summary>
+
 - **New**: `get_metadata_objects` tool - Get list of metadata objects from 1C configuration
   - Returns Name, Synonym, Comment, Type, ObjectModule, ManagerModule for each object
   - Supports filtering by metadata type (documents, catalogs, registers, commonModules, commonAttributes, eventSubscriptions, scheduledJobs, etc.)
@@ -503,7 +585,11 @@ A dedicated view for filtering metadata objects by tags:
   - `full` mode for complete property details
   - Type-specific properties (Document: posting, Catalog: hierarchy, Register: periodicity, etc.)
 
-### 1.7.0
+</details>
+
+<details>
+<summary><strong>1.7.0</strong> - Platform documentation tool</summary>
+
 - **New**: `get_platform_documentation` tool - Get platform type documentation
   - Returns methods, properties, constructors, events with full documentation
   - Supports all platform types: ValueTable, Array, Structure, Query, Map, etc.
@@ -511,93 +597,42 @@ A dedicated view for filtering metadata objects by tags:
   - Bilingual output (English/Russian)
   - Uses EDT's IEObjectProvider with TYPE provider for accurate results
 
-### 1.6.16
-- **New**: `get_content_assist` tool - Get content assist proposals at any code position
-  - Returns type information, methods, properties with full platform documentation
-  - Supports global methods and dot-notation methods
-  - Pagination with `offset` parameter for large result sets
-  - Filtering with `contains` parameter (case-insensitive, comma-separated)
-  - Optional extended documentation (default: disabled for faster responses)
-  - Uses EDT's ICompletionProposalExtension5 for async documentation retrieval
-  - HTML documentation converted to Markdown using CopyDown library
-- **Refactored**: Extracted common `escapeForTable()` to `MarkdownUtils` class
-- **Fixed**: Removed dead code (`tools/BuildUtils.java`)
+</details>
 
-### 1.6.10
+<details>
+<summary><strong>1.6.x</strong> - Content assist, JSON improvements, validation tools</summary>
+
+**1.6.16**
+- **New**: `get_content_assist` tool - Get content assist proposals at any code position
+
+**1.6.10**
 - **Refactored**: All JSON responses now use Gson serialization instead of manual StringBuilder
 - **New**: `ToolResult` class - fluent API for building JSON responses
-- **Improved**: More reliable JSON output (no more missing braces or escaping issues)
-- **Internal**: Uses `JsonParser.parseString()` for input JSON array parsing
 
-### 1.6.9
-- Fixed: `revalidate_objects` JSON response was missing closing brace causing parse error
-
-### 1.6.8
-- Fixed: `revalidate_objects` now uses 4-parameter scheduleValidation (without IBmTransaction) to avoid null transaction error
-
-### 1.6.7
-- Fixed: `revalidate_objects` now uses bmGetId() (Long) instead of URI - fixes NullPointerException in CheckScheduler
-
-### 1.6.6
-- Added: Custom PNG icons for Start (green), Stop (red), Restart (blue) buttons
-- Improved: Additional defensive null filtering in revalidate_objects
-- Added: Debug logging for object lookup in revalidate_objects
-
-### 1.6.5
-- Fixed: Port and checks folder changes now apply immediately when clicking Start/Restart (no need to click Apply first)
-- Fixed: Restart button now has a distinct icon (Redo instead of disabled Synced)
-
-### 1.6.4
-- Fixed: `revalidate_objects` null URI handling (objects with null bmGetUri() are now skipped)
-- Fixed: Full project revalidation when objects array is empty
-- Improved: Service retrieval via Activator (not static fields)
-- Added: JSON field `objectsSkippedNullUri` for objects with null URI
-
-### 1.6.3
-- Fixed: `clean_project` now uses Eclipse CLEAN_BUILD (same as Project → Clean menu)
-
-### 1.6.2
-- Fixed: `revalidate_objects` now passes object URI to scheduleValidation (was ClassCastException)
-
-### 1.6.1
-- Fixed: Array parameters parsing for `revalidate_objects` tool
-- Fixed: Removed JSON duplication in text field (now only in structuredContent)
-- Improved: FQN examples in tool descriptions
-
-### 1.6.0
+**1.6.0**
 - **New**: `clean_project` tool - clears markers and triggers full revalidation via EDT ICheckScheduler
 - **New**: `revalidate_objects` tool - revalidates specific objects by FQN
-- Removed old `revalidate_project` (used Eclipse build, not EDT validation)
-- Added ICheckScheduler and IBmModelManager service integration
 
-### 1.5.1
-- Dynamic file names for EmbeddedResource (e.g., `begin-transaction.md` instead of `tool-result`)
-- Added `getResultFileName()` method to IMcpTool interface
+</details>
 
-### 1.5.0
-- Explicit ResponseType per tool (TEXT, JSON, MARKDOWN)
-- Markdown returned as EmbeddedResource with mimeType
-- JSON returned with structuredContent support
+<details>
+<summary><strong>1.5.x - 1.0.0</strong> - Initial releases and core features</summary>
 
-### 1.4.0
-- Converted list tools to Markdown output
-- Fixed unused code warnings
+**1.5.0** - Explicit ResponseType per tool, Markdown as EmbeddedResource
 
-### 1.3.0
-- MCP Protocol 2025-11-25 with Streamable HTTP
-- SSE transport support
-- Session management with MCP-Session-Id header
+**1.4.0** - Converted list tools to Markdown output
 
-### 1.2.0
-- EDT IMarkerManager integration
-- EDT severity levels (BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL)
+**1.3.0** - MCP Protocol 2025-11-25 with Streamable HTTP, SSE transport support
 
-### 1.0.0
-- Initial release
+**1.2.0** - EDT IMarkerManager integration, EDT severity levels
+
+**1.0.0** - Initial release
+
+</details>
 
 ## License
 
 Copyright (c) 2025 DitriX. All rights reserved.
 
 ---
-*EDT MCP Server v1.16.0*
+*EDT MCP Server v1.19.0*

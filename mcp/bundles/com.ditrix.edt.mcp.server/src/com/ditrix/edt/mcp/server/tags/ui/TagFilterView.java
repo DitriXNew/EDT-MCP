@@ -55,6 +55,8 @@ import org.eclipse.swt.widgets.Tree;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.part.ViewPart;
+import org.eclipse.ui.plugin.AbstractUIPlugin;
+import org.eclipse.jface.resource.ImageDescriptor;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
@@ -135,18 +137,20 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         layout.marginHeight = 5;
         group.setLayout(layout);
         
-        // Buttons row
-        Button refreshBtn = new Button(group, SWT.PUSH);
-        refreshBtn.setText("Refresh");
-        refreshBtn.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
-            @Override
-            public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
-                refreshTagsTree();
-            }
-        });
+        // Load icons
+        ImageDescriptor refreshIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
+            Activator.PLUGIN_ID, "icons/restart.png");
+        ImageDescriptor selectAllIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
+            Activator.PLUGIN_ID, "icons/check_all.png");
+        ImageDescriptor deselectAllIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
+            Activator.PLUGIN_ID, "icons/uncheck_all.png");
         
+        // Buttons row - Select All and Deselect All as icon-only buttons
         Button selectAllBtn = new Button(group, SWT.PUSH);
-        selectAllBtn.setText("Select All");
+        selectAllBtn.setToolTipText("Select all tags");
+        if (selectAllIcon != null) {
+            selectAllBtn.setImage(selectAllIcon.createImage());
+        }
         selectAllBtn.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
             @Override
             public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
@@ -155,11 +159,29 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         });
         
         Button deselectAllBtn = new Button(group, SWT.PUSH);
-        deselectAllBtn.setText("Deselect All");
+        deselectAllBtn.setToolTipText("Deselect all tags");
+        if (deselectAllIcon != null) {
+            deselectAllBtn.setImage(deselectAllIcon.createImage());
+        }
         deselectAllBtn.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
             @Override
             public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
                 selectAllTags(false);
+            }
+        });
+        
+        // Refresh button aligned to the right
+        Button refreshBtn = new Button(group, SWT.PUSH);
+        refreshBtn.setToolTipText("Refresh tags from YAML files");
+        if (refreshIcon != null) {
+            refreshBtn.setImage(refreshIcon.createImage());
+        }
+        GridData refreshData = new GridData(SWT.RIGHT, SWT.CENTER, true, false);
+        refreshBtn.setLayoutData(refreshData);
+        refreshBtn.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
+            @Override
+            public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
+                refreshTagsTree();
             }
         });
         
@@ -408,8 +430,20 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         public Object[] getChildren(Object parentElement) {
             if (parentElement instanceof IProject project) {
                 List<Tag> tags = tagService.getTags(project);
+                
+                // Check if we should hide empty tags
+                boolean hideEmptyTags = searchAllTagsCheckbox != null && searchAllTagsCheckbox.getSelection();
+                
                 return tags.stream()
                     .map(tag -> new TagEntry(project, tag))
+                    .filter(entry -> {
+                        if (!hideEmptyTags) {
+                            return true;
+                        }
+                        // Count matching objects for this tag
+                        int count = countMatchingObjects(entry);
+                        return count > 0;
+                    })
                     .toArray();
             }
             return new Object[0];
@@ -450,10 +484,10 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             updateFilteredResults();
         });
         
-        // Search all tags checkbox
+        // Checkbox to hide tags with no matching objects when search filter is applied
         searchAllTagsCheckbox = new Button(group, SWT.CHECK);
-        searchAllTagsCheckbox.setText("Filter tags");
-        searchAllTagsCheckbox.setToolTipText("When checked, only show tags that have matching objects");
+        searchAllTagsCheckbox.setText("Hide empty tags");
+        searchAllTagsCheckbox.setToolTipText("When checked, tags with no objects matching the search filter will be hidden in the Tags tree");
         searchAllTagsCheckbox.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
             @Override
             public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
@@ -664,13 +698,14 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         String text = searchText.getText().trim();
         if (text.isEmpty()) {
             searchPattern = null;
+            searchText.setToolTipText("Search (regex)...");
         } else {
             try {
                 searchPattern = Pattern.compile(text, Pattern.CASE_INSENSITIVE);
-                searchText.setForeground(null); // Reset to default color
+                searchText.setToolTipText("Search (regex)...");
             } catch (PatternSyntaxException e) {
-                // Invalid regex - show error color
-                searchText.setForeground(Display.getCurrent().getSystemColor(SWT.COLOR_RED));
+                // Invalid regex - show error in tooltip
+                searchText.setToolTipText("Invalid regex: " + e.getDescription());
                 searchPattern = null;
             }
         }
@@ -695,6 +730,23 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             return true;
         }
         return searchPattern.matcher(fqn).find();
+    }
+    
+    /**
+     * Count the number of objects matching the search pattern for a tag.
+     */
+    private int countMatchingObjects(TagEntry entry) {
+        Set<String> objects = tagService.findObjectsByTag(entry.project(), entry.tag().getName());
+        if (searchPattern == null) {
+            return objects.size();
+        }
+        int count = 0;
+        for (String fqn : objects) {
+            if (matchesSearch(fqn)) {
+                count++;
+            }
+        }
+        return count;
     }
     
     private void updateFilteredResults() {

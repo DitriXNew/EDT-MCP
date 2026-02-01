@@ -19,15 +19,22 @@ import java.util.Set;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IWorkspaceRoot;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.MenuManager;
 import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
+import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.jface.viewers.CheckStateChangedEvent;
 import org.eclipse.jface.viewers.CheckboxTreeViewer;
+import org.eclipse.jface.viewers.ColumnLabelProvider;
 import org.eclipse.jface.viewers.ICheckStateListener;
+import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.ITreeContentProvider;
-import org.eclipse.jface.viewers.LabelProvider;
+import org.eclipse.jface.viewers.TreeViewerColumn;
+import org.eclipse.jface.viewers.ViewerFilter;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.events.ModifyListener;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.graphics.Color;
@@ -40,11 +47,18 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.Shell;
+import org.eclipse.swt.widgets.Text;
+import org.eclipse.swt.widgets.Tree;
+import org.eclipse.ui.ISharedImages;
+import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.dialogs.SelectionDialog;
+import org.eclipse.ui.plugin.AbstractUIPlugin;
 
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
 
@@ -71,6 +85,10 @@ public class FilterByTagDialog extends SelectionDialog {
     
     // Color icons cache
     private List<Image> colorIcons = new ArrayList<>();
+    
+    // Search filter
+    private Text searchText;
+    private String searchPattern = "";
     
     /**
      * Creates a new filter dialog.
@@ -145,12 +163,81 @@ public class FilterByTagDialog extends SelectionDialog {
         infoLabel.setText(Messages.FilterByTagDialog_Description);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(infoLabel);
         
-        // Tree viewer with checkboxes
-        treeViewer = new CheckboxTreeViewer(container, SWT.BORDER | SWT.H_SCROLL | SWT.V_SCROLL);
-        GridDataFactory.fillDefaults().grab(true, true).hint(SWT.DEFAULT, 300).applyTo(treeViewer.getTree());
+        // Search bar with icon buttons
+        Composite searchBar = new Composite(container, SWT.NONE);
+        GridLayoutFactory.fillDefaults().numColumns(3).spacing(5, 0).applyTo(searchBar);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(searchBar);
         
+        // Load icons for Select All / Deselect All buttons
+        ImageDescriptor selectAllIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
+            Activator.PLUGIN_ID, "icons/check_all.png");
+        ImageDescriptor deselectAllIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
+            Activator.PLUGIN_ID, "icons/uncheck_all.png");
+        
+        // Select All button (icon only)
+        Button selectAllButton = new Button(searchBar, SWT.PUSH);
+        selectAllButton.setToolTipText(Messages.FilterByTagDialog_SelectAll);
+        if (selectAllIcon != null) {
+            Image img = selectAllIcon.createImage();
+            selectAllButton.setImage(img);
+            colorIcons.add(img); // Dispose later
+        }
+        selectAllButton.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                selectAll(true);
+            }
+        });
+        
+        // Deselect All button (icon only)
+        Button deselectAllButton = new Button(searchBar, SWT.PUSH);
+        deselectAllButton.setToolTipText(Messages.FilterByTagDialog_DeselectAll);
+        if (deselectAllIcon != null) {
+            Image img = deselectAllIcon.createImage();
+            deselectAllButton.setImage(img);
+            colorIcons.add(img); // Dispose later
+        }
+        deselectAllButton.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                selectAll(false);
+            }
+        });
+        
+        // Search filter text field
+        searchText = new Text(searchBar, SWT.BORDER | SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL);
+        searchText.setMessage(Messages.FilterByTagDialog_SearchPlaceholder);
+        GridDataFactory.fillDefaults().grab(true, false).applyTo(searchText);
+        searchText.addModifyListener((ModifyListener) e -> {
+            searchPattern = searchText.getText().toLowerCase().trim();
+            treeViewer.refresh();
+            if (!searchPattern.isEmpty()) {
+                treeViewer.expandAll();
+            }
+        });
+        
+        // Tree viewer with checkboxes and columns
+        Tree tree = new Tree(container, SWT.BORDER | SWT.H_SCROLL | SWT.V_SCROLL | SWT.CHECK | SWT.FULL_SELECTION);
+        tree.setHeaderVisible(true);
+        tree.setLinesVisible(true);
+        GridDataFactory.fillDefaults().grab(true, true).hint(SWT.DEFAULT, 300).applyTo(tree);
+        
+        treeViewer = new CheckboxTreeViewer(tree);
         treeViewer.setContentProvider(new TagTreeContentProvider());
-        treeViewer.setLabelProvider(new TagTreeLabelProvider());
+        
+        // Name column
+        TreeViewerColumn nameColumn = new TreeViewerColumn(treeViewer, SWT.NONE);
+        nameColumn.getColumn().setText("Name");
+        nameColumn.getColumn().setWidth(180);
+        nameColumn.setLabelProvider(new TagNameLabelProvider());
+        
+        // Description column
+        TreeViewerColumn descColumn = new TreeViewerColumn(treeViewer, SWT.NONE);
+        descColumn.getColumn().setText("Description");
+        descColumn.getColumn().setWidth(200);
+        descColumn.setLabelProvider(new TagDescriptionLabelProvider());
+        
+        treeViewer.addFilter(new TagSearchViewerFilter());
         treeViewer.setInput(ResourcesPlugin.getWorkspace().getRoot());
         
         // Set initial checked state
@@ -164,38 +251,61 @@ public class FilterByTagDialog extends SelectionDialog {
             }
         });
         
+        // Context menu for editing tags
+        createContextMenu(tree);
+        
         // Expand all
         treeViewer.expandAll();
-        
-        // Select All / Deselect All buttons
-        Composite buttonBar = new Composite(container, SWT.NONE);
-        GridLayoutFactory.fillDefaults().numColumns(2).applyTo(buttonBar);
-        GridDataFactory.fillDefaults().grab(true, false).applyTo(buttonBar);
-        
-        Button selectAllButton = new Button(buttonBar, SWT.PUSH);
-        selectAllButton.setText(Messages.FilterByTagDialog_SelectAll);
-        selectAllButton.addSelectionListener(new SelectionAdapter() {
-            @Override
-            public void widgetSelected(SelectionEvent e) {
-                selectAll(true);
-            }
-        });
-        
-        Button deselectAllButton = new Button(buttonBar, SWT.PUSH);
-        deselectAllButton.setText(Messages.FilterByTagDialog_DeselectAll);
-        deselectAllButton.addSelectionListener(new SelectionAdapter() {
-            @Override
-            public void widgetSelected(SelectionEvent e) {
-                selectAll(false);
-            }
-        });
         
         return container;
     }
     
+    /**
+     * Creates context menu for the tree.
+     */
+    private void createContextMenu(Tree tree) {
+        MenuManager menuManager = new MenuManager();
+        
+        // Edit Tag action
+        Action editTagAction = new Action(Messages.FilterByTagDialog_EditTag) {
+            @Override
+            public void run() {
+                IStructuredSelection selection = (IStructuredSelection) treeViewer.getSelection();
+                Object firstElement = selection.getFirstElement();
+                if (firstElement instanceof TagEntry tagEntry) {
+                    String oldName = tagEntry.tag.getName();
+                    EditTagDialog dialog = new EditTagDialog(getShell(), tagEntry.tag);
+                    if (dialog.open() == EditTagDialog.OK) {
+                        // Update tag using TagService
+                        tagService.updateTag(
+                            tagEntry.project, 
+                            oldName,
+                            dialog.getTagName(), 
+                            dialog.getTagColor(), 
+                            dialog.getTagDescription()
+                        );
+                        // Refresh tree
+                        treeViewer.refresh();
+                    }
+                }
+            }
+        };
+        menuManager.add(editTagAction);
+        
+        Menu menu = menuManager.createContextMenu(tree);
+        tree.setMenu(menu);
+        
+        // Enable/disable based on selection
+        tree.addMenuDetectListener(e -> {
+            IStructuredSelection selection = (IStructuredSelection) treeViewer.getSelection();
+            Object firstElement = selection.getFirstElement();
+            editTagAction.setEnabled(firstElement instanceof TagEntry);
+        });
+    }
+    
     @Override
     protected Point getInitialSize() {
-        return new Point(400, 500);
+        return new Point(600, 500);
     }
     
     @Override
@@ -435,9 +545,10 @@ public class FilterByTagDialog extends SelectionDialog {
     }
     
     /**
-     * Label provider for the tag tree.
+     * Label provider for Name column.
+     * Shows project icon for projects, color icon for tags.
      */
-    private class TagTreeLabelProvider extends LabelProvider {
+    private class TagNameLabelProvider extends ColumnLabelProvider {
         
         @Override
         public String getText(Object element) {
@@ -447,15 +558,75 @@ public class FilterByTagDialog extends SelectionDialog {
             if (element instanceof TagEntry tagEntry) {
                 return tagEntry.tag.getName();
             }
-            return super.getText(element);
+            return "";
         }
         
         @Override
         public Image getImage(Object element) {
+            if (element instanceof IProject) {
+                return PlatformUI.getWorkbench().getSharedImages()
+                    .getImage(ISharedImages.IMG_OBJ_PROJECT);
+            }
             if (element instanceof TagEntry tagEntry) {
                 return createColorIcon(tagEntry.tag.getColor());
             }
             return null;
+        }
+    }
+    
+    /**
+     * Label provider for Description column.
+     */
+    private class TagDescriptionLabelProvider extends ColumnLabelProvider {
+        
+        @Override
+        public String getText(Object element) {
+            if (element instanceof TagEntry tagEntry) {
+                String description = tagEntry.tag.getDescription();
+                return description != null ? description : "";
+            }
+            return "";
+        }
+    }
+    
+    /**
+     * Filter for searching tags by name or description.
+     */
+    private class TagSearchViewerFilter extends ViewerFilter {
+        
+        @Override
+        public boolean select(org.eclipse.jface.viewers.Viewer viewer, Object parentElement, Object element) {
+            if (searchPattern.isEmpty()) {
+                return true;
+            }
+            
+            if (element instanceof IProject project) {
+                // Show project if any of its tags match
+                List<Tag> tags = tagService.getTags(project);
+                for (Tag tag : tags) {
+                    if (matchesSearch(tag)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            
+            if (element instanceof TagEntry tagEntry) {
+                return matchesSearch(tagEntry.tag);
+            }
+            
+            return true;
+        }
+        
+        private boolean matchesSearch(Tag tag) {
+            if (tag.getName().toLowerCase().contains(searchPattern)) {
+                return true;
+            }
+            String description = tag.getDescription();
+            if (description != null && description.toLowerCase().contains(searchPattern)) {
+                return true;
+            }
+            return false;
         }
     }
 }

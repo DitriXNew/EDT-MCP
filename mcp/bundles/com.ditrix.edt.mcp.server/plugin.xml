@@ -154,6 +154,7 @@
       <view
             id="com.ditrix.edt.mcp.server.tags.filterView"
             name="Tag Filter"
+            icon="icons/tag.png"
             category="com.ditrix.edt.mcp.server.tags.viewCategory"
             class="com.ditrix.edt.mcp.server.tags.ui.TagFilterView"
             allowMultiple="false"
