@@ -309,6 +309,9 @@
       <contributor
             class="com.ditrix.edt.mcp.server.groups.refactoring.GroupRenameRefactoringContributor">
       </contributor>
+      <contributor
+            class="com.ditrix.edt.mcp.server.groups.refactoring.GroupDeleteRefactoringContributor">
+      </contributor>
    </extension>
    
    <!-- ============================================== -->
