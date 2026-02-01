@@ -12,18 +12,19 @@ package com.ditrix.edt.mcp.server.tags.refactoring;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmCrossReference;
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.refactoring.core.IDeleteRefactoringContributor;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringOperation;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringPostProcessor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringOperationDescriptor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
+import com._1c.g5.wiring.ServiceAccess;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
@@ -39,33 +40,45 @@ public class TagDeleteRefactoringContributor implements IDeleteRefactoringContri
     public RefactoringOperationDescriptor createParticipatingOperation(EObject object, 
             RefactoringSettings settings, RefactoringStatus status) {
         
+        Activator.logInfo("[TagDelete] createParticipatingOperation called: " + 
+            (object != null ? object.eClass().getName() : "null"));
+        
         if (object == null || !(object instanceof IBmObject)) {
+            Activator.logInfo("[TagDelete] Object is null or not IBmObject, skipping");
             return null;
         }
         
         IBmObject bmObject = (IBmObject) object;
         String fqn = extractFqn(bmObject);
+        Activator.logInfo("[TagDelete] FQN: " + fqn);
         
         if (fqn == null || fqn.isEmpty()) {
+            Activator.logInfo("[TagDelete] FQN is null or empty, skipping");
             return null;
         }
         
         // Get the project for this object
         IProject project = getProject(object);
         if (project == null) {
+            Activator.logInfo("[TagDelete] Project is null, skipping");
             return null;
         }
+        Activator.logInfo("[TagDelete] Project: " + project.getName());
         
         TagService tagService = TagService.getInstance();
         TagStorage storage = tagService.getTagStorage(project);
         
         // Check if this object has any tags assigned
         Set<String> tags = storage.getTagNames(fqn);
+        Activator.logInfo("[TagDelete] Tags for object: " + tags);
+        
         if (tags == null || tags.isEmpty()) {
+            Activator.logInfo("[TagDelete] No tags for object, skipping");
             return null;
         }
         
         // Create an operation to remove the tag assignments after deletion
+        Activator.logInfo("[TagDelete] Creating TagDeleteOperation for: " + fqn);
         return new RefactoringOperationDescriptor(
             new TagDeleteOperation(project, fqn, tags));
     }
@@ -191,6 +204,17 @@ public class TagDeleteRefactoringContributor implements IDeleteRefactoringContri
      */
     private IProject getProject(EObject object) {
         try {
+            // Use IResourceLookup service - the proper EDT way
+            IResourceLookup resourceLookup = ServiceAccess.get(IResourceLookup.class);
+            if (resourceLookup != null) {
+                IProject project = resourceLookup.getProject(object);
+                if (project != null) {
+                    Activator.logInfo("[TagDelete] Got project via IResourceLookup: " + project.getName());
+                    return project;
+                }
+            }
+            
+            // Fallback: try eResource
             org.eclipse.emf.ecore.resource.Resource resource = object.eResource();
             if (resource != null && resource.getURI() != null) {
                 String path = resource.getURI().toPlatformString(true);
@@ -200,11 +224,12 @@ public class TagDeleteRefactoringContributor implements IDeleteRefactoringContri
                     if (slashIndex > 0) {
                         projectName = projectName.substring(0, slashIndex);
                     }
-                    return ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+                    return org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+                            .getRoot().getProject(projectName);
                 }
             }
         } catch (Exception e) {
-            Activator.logError("Failed to get project for object", e);
+            Activator.logError("[TagDelete] Failed to get project for object", e);
         }
         return null;
     }
