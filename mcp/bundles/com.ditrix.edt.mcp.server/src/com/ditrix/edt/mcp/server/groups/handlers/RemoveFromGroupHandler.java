@@ -16,6 +16,7 @@ import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
@@ -24,18 +25,19 @@ import org.eclipse.ui.handlers.HandlerUtil;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.groups.GroupService;
-import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter.GroupedObjectPlaceholder;
+import com.ditrix.edt.mcp.server.groups.model.Group;
+import com.ditrix.edt.mcp.server.tags.TagUtils;
 
 /**
  * Handler for the "Remove from Group" command.
  * Removes selected objects from their groups, returning them to the original location.
- * Only works on GroupedObjectPlaceholder elements (objects displayed inside a group).
+ * Works on EObjects that are currently in a group.
  */
 public class RemoveFromGroupHandler extends AbstractHandler {
     
     @Override
     public void setEnabled(Object evaluationContext) {
-        // Check if selection contains GroupedObjectPlaceholder elements
+        // Check if selection contains objects that are in groups
         Object selection = HandlerUtil.getVariable(evaluationContext, "selection");
         
         if (!(selection instanceof IStructuredSelection structuredSelection)) {
@@ -43,11 +45,20 @@ public class RemoveFromGroupHandler extends AbstractHandler {
             return;
         }
         
-        // Enable if any selected element is a GroupedObjectPlaceholder
+        GroupService service = GroupService.getInstance();
+        
+        // Enable if any selected element is an EObject in a group
         for (Object element : structuredSelection.toList()) {
-            if (element instanceof GroupedObjectPlaceholder) {
-                setBaseEnabled(true);
-                return;
+            if (element instanceof EObject eObject) {
+                IProject project = TagUtils.extractProject(eObject);
+                String fqn = TagUtils.extractFqn(eObject);
+                if (project != null && fqn != null) {
+                    Group group = service.findGroupForObject(project, fqn);
+                    if (group != null) {
+                        setBaseEnabled(true);
+                        return;
+                    }
+                }
             }
         }
         
@@ -63,47 +74,55 @@ public class RemoveFromGroupHandler extends AbstractHandler {
             return null;
         }
         
-        // Collect selected placeholders
-        List<GroupedObjectPlaceholder> placeholders = new ArrayList<>();
+        GroupService service = GroupService.getInstance();
+        
+        // Collect selected objects that are in groups
+        List<ObjectInGroup> objectsToRemove = new ArrayList<>();
         IProject project = null;
         
         for (Object element : structuredSelection.toList()) {
-            if (element instanceof GroupedObjectPlaceholder placeholder) {
-                placeholders.add(placeholder);
-                if (project == null) {
-                    project = placeholder.getProject();
+            if (element instanceof EObject eObject) {
+                IProject objProject = TagUtils.extractProject(eObject);
+                String fqn = TagUtils.extractFqn(eObject);
+                if (objProject != null && fqn != null) {
+                    Group group = service.findGroupForObject(objProject, fqn);
+                    if (group != null) {
+                        objectsToRemove.add(new ObjectInGroup(objProject, fqn));
+                        if (project == null) {
+                            project = objProject;
+                        }
+                    }
                 }
             }
         }
         
-        if (placeholders.isEmpty() || project == null) {
+        if (objectsToRemove.isEmpty() || project == null) {
             return null;
         }
         
         // Confirm removal
-        String message = placeholders.size() == 1
+        String message = objectsToRemove.size() == 1
             ? "Remove this object from its group?"
-            : "Remove " + placeholders.size() + " objects from their groups?";
+            : "Remove " + objectsToRemove.size() + " objects from their groups?";
         
         if (!MessageDialog.openConfirm(shell, "Remove from Group", message)) {
             return null;
         }
         
         // Remove objects from their groups
-        GroupService service = GroupService.getInstance();
         int successCount = 0;
         int failCount = 0;
         
-        for (GroupedObjectPlaceholder placeholder : placeholders) {
+        for (ObjectInGroup obj : objectsToRemove) {
             try {
-                boolean removed = service.removeObjectFromGroup(project, placeholder.getObjectFqn());
+                boolean removed = service.removeObjectFromGroup(obj.project, obj.fqn);
                 if (removed) {
                     successCount++;
                 } else {
                     failCount++;
                 }
             } catch (Exception e) {
-                Activator.logError("Failed to remove " + placeholder.getObjectFqn() + " from group", e);
+                Activator.logError("Failed to remove " + obj.fqn + " from group", e);
                 failCount++;
             }
         }
@@ -119,4 +138,9 @@ public class RemoveFromGroupHandler extends AbstractHandler {
         
         return null;
     }
+    
+    /**
+     * Helper record to hold project and FQN for removal.
+     */
+    private record ObjectInGroup(IProject project, String fqn) {}
 }

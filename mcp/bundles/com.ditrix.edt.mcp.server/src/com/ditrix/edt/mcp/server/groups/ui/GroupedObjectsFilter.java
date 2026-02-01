@@ -31,35 +31,24 @@ public class GroupedObjectsFilter extends ViewerFilter {
     
     @Override
     public boolean select(Viewer viewer, Object parentElement, Object element) {
-        // Always show GroupedObjectPlaceholder - these are objects displayed inside a group
-        if (element instanceof GroupNavigatorAdapter.GroupedObjectPlaceholder) {
-            return true;
-        }
-        
-        // Only filter EObjects (metadata objects)
-        if (!(element instanceof EObject eObject)) {
-            return true;
-        }
-        
         // Skip filtering inside groups - don't hide objects displayed in GroupNavigatorAdapter
         if (parentElement instanceof GroupNavigatorAdapter) {
             return true;
         }
         
-        // Skip filtering children of GroupedObjectPlaceholder - these are nested children of objects in groups
-        if (parentElement instanceof GroupNavigatorAdapter.GroupedObjectPlaceholder) {
-            return true;
-        }
-        
-        // Handle TreePath - check if any ancestor is GroupNavigatorAdapter or GroupedObjectPlaceholder
+        // Handle TreePath - check if any ancestor is GroupNavigatorAdapter
         if (parentElement instanceof TreePath treePath) {
             for (int i = 0; i < treePath.getSegmentCount(); i++) {
                 Object segment = treePath.getSegment(i);
-                if (segment instanceof GroupNavigatorAdapter 
-                        || segment instanceof GroupNavigatorAdapter.GroupedObjectPlaceholder) {
+                if (segment instanceof GroupNavigatorAdapter) {
                     return true; // Show element - it's inside a group
                 }
             }
+        }
+        
+        // Only filter EObjects (metadata objects)
+        if (!(element instanceof EObject eObject)) {
+            return true;
         }
         
         // Get project from the EObject

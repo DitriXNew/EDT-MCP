@@ -10,23 +10,17 @@
 package com.ditrix.edt.mcp.server.groups.ui;
 
 import java.net.URL;
-import java.util.HashMap;
-import java.util.Map;
 
-import org.eclipse.core.runtime.Platform;
-import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.ui.IMemento;
-import org.eclipse.ui.model.IWorkbenchAdapter;
 import org.eclipse.ui.navigator.ICommonContentExtensionSite;
 import org.eclipse.ui.navigator.ICommonLabelProvider;
 import org.osgi.framework.Bundle;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.groups.model.Group;
-import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter.GroupedObjectPlaceholder;
 
 /**
  * Label provider for virtual group folders in the Navigator.
@@ -34,8 +28,6 @@ import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter.GroupedObjectPl
 public class GroupLabelProvider extends LabelProvider implements ICommonLabelProvider {
     
     private Image folderImage;
-    // Image cache to prevent memory leaks from repeated createImage() calls
-    private final Map<ImageDescriptor, Image> imageCache = new HashMap<>();
     
     @Override
     public void init(ICommonContentExtensionSite aConfig) {
@@ -57,20 +49,7 @@ public class GroupLabelProvider extends LabelProvider implements ICommonLabelPro
         if (element instanceof GroupNavigatorAdapter groupAdapter) {
             return groupAdapter.getGroup().getName();
         }
-        if (element instanceof GroupedObjectPlaceholder placeholder) {
-            // Delegate to resolved object for proper display name
-            EObject resolved = placeholder.getResolvedObject();
-            if (resolved != null) {
-                IWorkbenchAdapter adapter = Platform.getAdapterManager().getAdapter(resolved, IWorkbenchAdapter.class);
-                if (adapter != null) {
-                    return adapter.getLabel(resolved);
-                }
-            }
-            // Fallback to simple name from FQN
-            String fqn = placeholder.getObjectFqn();
-            int lastDot = fqn.lastIndexOf('.');
-            return lastDot >= 0 ? fqn.substring(lastDot + 1) : fqn;
-        }
+        // For real EObjects inside groups, EDT's label provider will handle them
         return null;
     }
     
@@ -79,34 +58,8 @@ public class GroupLabelProvider extends LabelProvider implements ICommonLabelPro
         if (element instanceof GroupNavigatorAdapter) {
             return folderImage;
         }
-        if (element instanceof GroupedObjectPlaceholder placeholder) {
-            // Delegate to resolved object for proper icon
-            EObject resolved = placeholder.getResolvedObject();
-            if (resolved != null) {
-                IWorkbenchAdapter adapter = Platform.getAdapterManager().getAdapter(resolved, IWorkbenchAdapter.class);
-                if (adapter != null) {
-                    ImageDescriptor desc = adapter.getImageDescriptor(resolved);
-                    if (desc != null) {
-                        // Use cache to prevent memory leaks
-                        return getCachedImage(desc);
-                    }
-                }
-            }
-        }
+        // For real EObjects inside groups, EDT's label provider will handle them
         return null;
-    }
-    
-    /**
-     * Gets an image from cache or creates and caches it.
-     */
-    private Image getCachedImage(ImageDescriptor descriptor) {
-        return imageCache.computeIfAbsent(descriptor, desc -> {
-            try {
-                return desc.createImage();
-            } catch (Exception e) {
-                return null;
-            }
-        });
     }
     
     @Override
@@ -138,13 +91,6 @@ public class GroupLabelProvider extends LabelProvider implements ICommonLabelPro
             folderImage.dispose();
             folderImage = null;
         }
-        // Dispose all cached images
-        for (Image image : imageCache.values()) {
-            if (image != null && !image.isDisposed()) {
-                image.dispose();
-            }
-        }
-        imageCache.clear();
         super.dispose();
     }
 }

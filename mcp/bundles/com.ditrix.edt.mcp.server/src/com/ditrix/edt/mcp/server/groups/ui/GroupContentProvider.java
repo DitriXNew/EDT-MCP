@@ -15,7 +15,6 @@ import java.util.List;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IAdaptable;
-import org.eclipse.core.runtime.Platform;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.viewers.StructuredViewer;
 import org.eclipse.jface.viewers.Viewer;
@@ -29,7 +28,6 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.groups.GroupService;
 import com.ditrix.edt.mcp.server.groups.IGroupChangeListener;
 import com.ditrix.edt.mcp.server.groups.model.Group;
-import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter.GroupedObjectPlaceholder;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
 
 /**
@@ -71,18 +69,6 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
         // Handle our group adapters
         if (parentElement instanceof GroupNavigatorAdapter groupAdapter) {
             return groupAdapter.getChildren(parentElement);
-        }
-        
-        // Handle grouped object placeholders - delegate to resolved object
-        if (parentElement instanceof GroupedObjectPlaceholder placeholder) {
-            EObject resolved = placeholder.getResolvedObject();
-            if (resolved != null) {
-                IWorkbenchAdapter adapter = Platform.getAdapterManager().getAdapter(resolved, IWorkbenchAdapter.class);
-                if (adapter != null) {
-                    return adapter.getChildren(resolved);
-                }
-            }
-            return NO_CHILDREN;
         }
         
         return NO_CHILDREN;
@@ -145,9 +131,6 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
         if (element instanceof GroupNavigatorAdapter groupAdapter) {
             return groupAdapter.getParent(element);
         }
-        if (element instanceof GroupedObjectPlaceholder placeholder) {
-            return placeholder.getParentGroup();
-        }
         return null;
     }
     
@@ -163,19 +146,6 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
             boolean hasObjects = !group.getChildren().isEmpty();
             
             return hasNestedGroups || hasObjects;
-        }
-        
-        // Handle grouped object placeholders - delegate to resolved object
-        if (element instanceof GroupedObjectPlaceholder placeholder) {
-            EObject resolved = placeholder.getResolvedObject();
-            if (resolved != null) {
-                IWorkbenchAdapter adapter = Platform.getAdapterManager().getAdapter(resolved, IWorkbenchAdapter.class);
-                if (adapter != null) {
-                    Object[] children = adapter.getChildren(resolved);
-                    return children != null && children.length > 0;
-                }
-            }
-            return false;
         }
         
         if (isCollectionAdapter(element)) {

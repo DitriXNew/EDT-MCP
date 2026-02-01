@@ -109,12 +109,14 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
             children.add(new GroupNavigatorAdapter(nestedGroup, project, this));
         }
         
-        // Add objects in this group - wrap in placeholder to avoid filtering
+        // Add objects in this group - return real EObjects so context menu works properly
+        // The filter will identify grouped objects by checking if parent is GroupNavigatorAdapter
         for (String objectFqn : group.getChildren()) {
             EObject resolvedObject = resolveFqnToEObject(objectFqn);
-            // Always wrap in placeholder so filter can identify grouped objects
-            GroupedObjectPlaceholder placeholder = new GroupedObjectPlaceholder(objectFqn, project, this, resolvedObject);
-            children.add(placeholder);
+            if (resolvedObject != null) {
+                children.add(resolvedObject);
+            }
+            // If resolved object is null, skip this entry (object may have been deleted)
         }
         
         return children.isEmpty() ? NO_CHILDREN : children.toArray();
@@ -279,88 +281,5 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
             return (T) project;
         }
         return Platform.getAdapterManager().getAdapter(this, adapter);
-    }
-    
-    /**
-     * Placeholder for an object inside a group.
-     * Used to identify objects that are displayed inside a group, 
-     * so the filter won't hide them from the group.
-     */
-    public static class GroupedObjectPlaceholder implements IAdaptable {
-        
-        private final String objectFqn;
-        private final IProject project;
-        private final GroupNavigatorAdapter parentGroup;
-        private final EObject resolvedObject;
-        
-        public GroupedObjectPlaceholder(String objectFqn, IProject project, 
-                GroupNavigatorAdapter parentGroup, EObject resolvedObject) {
-            this.objectFqn = objectFqn;
-            this.project = project;
-            this.parentGroup = parentGroup;
-            this.resolvedObject = resolvedObject;
-        }
-        
-        public String getObjectFqn() {
-            return objectFqn;
-        }
-        
-        public IProject getProject() {
-            return project;
-        }
-        
-        public GroupNavigatorAdapter getParentGroup() {
-            return parentGroup;
-        }
-        
-        /**
-         * Gets the resolved EObject for this placeholder.
-         * 
-         * @return the resolved EObject, may be null if resolution failed
-         */
-        public EObject getResolvedObject() {
-            return resolvedObject;
-        }
-        
-        @SuppressWarnings("unchecked")
-        @Override
-        public <T> T getAdapter(Class<T> adapter) {
-            if (adapter == IProject.class) {
-                return (T) project;
-            }
-            // Return resolved object for EObject and IBmObject adapters
-            // This enables double-click to open the object in editor
-            if (resolvedObject != null) {
-                if (adapter == EObject.class) {
-                    return (T) resolvedObject;
-                }
-                if (adapter.getName().equals("com._1c.g5.v8.bm.core.IBmObject") 
-                        && adapter.isInstance(resolvedObject)) {
-                    return (T) resolvedObject;
-                }
-            }
-            // Delegate to resolved object if present
-            if (resolvedObject != null && resolvedObject instanceof IAdaptable adaptable) {
-                T result = adaptable.getAdapter(adapter);
-                if (result != null) {
-                    return result;
-                }
-            }
-            return Platform.getAdapterManager().getAdapter(this, adapter);
-        }
-        
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj) return true;
-            if (obj == null || getClass() != obj.getClass()) return false;
-            GroupedObjectPlaceholder other = (GroupedObjectPlaceholder) obj;
-            return Objects.equals(objectFqn, other.objectFqn)
-                && Objects.equals(project, other.project);
-        }
-        
-        @Override
-        public int hashCode() {
-            return Objects.hash(objectFqn, project);
-        }
     }
 }
