@@ -20,8 +20,11 @@ Require-Bundle: org.eclipse.core.runtime;bundle-version="[3.30.0,4.0.0)",
  org.eclipse.xtext.ui;bundle-version="[2.31.0,3.0.0)"
 Bundle-RequiredExecutionEnvironment: JavaSE-17
 Automatic-Module-Name: com.ditrix.edt.mcp.server
-Import-Package: com._1c.g5.v8.bm.core,
+Import-Package: com._1c.g5.v8.bm.common.collections,
+ com._1c.g5.v8.bm.core,
+ com._1c.g5.v8.bm.core.event,
  com._1c.g5.v8.bm.integration,
+ com._1c.g5.v8.bm.integration.event,
  com._1c.g5.v8.derived,
  com._1c.g5.v8.dt.bm.xtext,
  com._1c.g5.v8.dt.bsl.model,

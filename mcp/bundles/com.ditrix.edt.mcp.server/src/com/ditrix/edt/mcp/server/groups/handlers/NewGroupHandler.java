@@ -30,16 +30,50 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.groups.GroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter;
-import com.ditrix.edt.mcp.server.tags.TagUtils;
 
 /**
  * Handler for the "New Group" command.
  * Creates a new virtual folder group in the Navigator.
+ * Only enabled for top-level collection adapters (Catalogs, CommonModules, etc.).
+ * Nested groups (groups inside groups) are not supported.
  */
 public class NewGroupHandler extends AbstractHandler {
     
     private static final String COLLECTION_ADAPTER_CLASS_NAME = 
         "com._1c.g5.v8.dt.navigator.adapters.CollectionNavigatorAdapterBase";
+    
+    @Override
+    public void setEnabled(Object evaluationContext) {
+        // Check if selection is valid for group creation
+        Object selection = org.eclipse.ui.handlers.HandlerUtil.getVariable(evaluationContext, "selection");
+        
+        if (!(selection instanceof IStructuredSelection structuredSelection)) {
+            setBaseEnabled(false);
+            return;
+        }
+        
+        Object selected = structuredSelection.getFirstElement();
+        if (selected == null) {
+            setBaseEnabled(false);
+            return;
+        }
+        
+        // Nested groups are not supported - disable for GroupNavigatorAdapter
+        if (selected instanceof GroupNavigatorAdapter) {
+            setBaseEnabled(false);
+            return;
+        }
+        
+        // Enable for top-level collection adapters only
+        if (isCollectionAdapter(selected)) {
+            String path = getCollectionPath(selected);
+            // path will be null for nested collections
+            setBaseEnabled(path != null);
+            return;
+        }
+        
+        setBaseEnabled(false);
+    }
     
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException {
@@ -56,14 +90,11 @@ public class NewGroupHandler extends AbstractHandler {
         }
         
         // Determine parent path and project based on selection
+        // Only collection adapters are supported (no nested groups)
         String parentPath = null;
         IProject project = null;
         
-        if (selected instanceof GroupNavigatorAdapter groupAdapter) {
-            // Creating inside another group
-            parentPath = groupAdapter.getGroup().getFullPath();
-            project = groupAdapter.getProject();
-        } else if (isCollectionAdapter(selected)) {
+        if (isCollectionAdapter(selected)) {
             // Creating inside a collection folder (CommonModules, etc.)
             parentPath = getCollectionPath(selected);
             project = getProjectFromAdapter(selected);
@@ -148,8 +179,9 @@ public class NewGroupHandler extends AbstractHandler {
     }
     
     /**
-     * Gets the full collection path for a collection adapter.
-     * For nested collections (like Catalog.Products.Attribute), returns the full path.
+     * Gets the collection path for a collection adapter.
+     * Only returns top-level collection types (CommonModule, Catalog, Document, etc.)
+     * Returns null for nested collections (like Catalog.Products.Attribute).
      */
     private String getCollectionPath(Object adapter) {
         try {
@@ -179,21 +211,21 @@ public class NewGroupHandler extends AbstractHandler {
                 return null;
             }
             
-            // Try to get parent object FQN for nested collections
+            // Check if this is a nested collection (has parent EObject)
+            // We only support top-level collections for groups
             try {
                 Method getParentMethod = adapter.getClass().getMethod("getParent", Object.class);
                 Object parent = getParentMethod.invoke(adapter, adapter);
-                if (parent instanceof EObject parentEObject) {
-                    String parentFqn = TagUtils.extractFqn(parentEObject);
-                    if (parentFqn != null) {
-                        // Return full path: ParentFqn.CollectionType
-                        return parentFqn + "." + modelObjectName;
-                    }
+                if (parent instanceof EObject) {
+                    // This is a nested collection (e.g., Catalog.Products.Attribute)
+                    // We don't support groups for nested collections
+                    return null;
                 }
             } catch (NoSuchMethodException e) {
-                // Method doesn't exist, fall through to simple path
+                // Method doesn't exist - this is fine, proceed with simple path
             }
             
+            // Return simple collection type name (e.g., "CommonModule", "Catalog")
             return modelObjectName;
             
         } catch (Exception e) {

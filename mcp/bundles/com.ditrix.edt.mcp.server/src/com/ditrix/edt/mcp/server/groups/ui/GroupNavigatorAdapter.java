@@ -109,15 +109,12 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
             children.add(new GroupNavigatorAdapter(nestedGroup, project, this));
         }
         
-        // Add objects in this group - resolve FQN to actual EObject
+        // Add objects in this group - wrap in placeholder to avoid filtering
         for (String objectFqn : group.getChildren()) {
             EObject resolvedObject = resolveFqnToEObject(objectFqn);
-            if (resolvedObject != null) {
-                children.add(resolvedObject);
-            } else {
-                // Fallback to placeholder if resolution fails
-                children.add(new GroupedObjectPlaceholder(objectFqn, project, this));
-            }
+            // Always wrap in placeholder so filter can identify grouped objects
+            GroupedObjectPlaceholder placeholder = new GroupedObjectPlaceholder(objectFqn, project, this, resolvedObject);
+            children.add(placeholder);
         }
         
         return children.isEmpty() ? NO_CHILDREN : children.toArray();
@@ -125,6 +122,8 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
     
     /**
      * Resolves an FQN to an EObject using BM.
+     * Supports both top-level objects (e.g., "Catalog.Files") and nested objects
+     * (e.g., "Catalog.Files.CatalogAttribute.Width").
      * 
      * @param fqn the fully qualified name
      * @return the resolved EObject or null
@@ -141,17 +140,114 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
                 return null;
             }
             
-            return (EObject) bmModel.executeReadonlyTask(
-                new AbstractBmTask<IBmObject>("Resolve FQN to EObject") {
+            return bmModel.executeReadonlyTask(
+                new AbstractBmTask<EObject>("Resolve FQN to EObject") {
                     @Override
-                    public IBmObject execute(IBmTransaction transaction, IProgressMonitor progressMonitor) {
-                        return transaction.getTopObjectByFqn(fqn);
+                    public EObject execute(IBmTransaction transaction, IProgressMonitor progressMonitor) {
+                        String[] parts = fqn.split("\\.");
+                        if (parts.length < 2) {
+                            return null;
+                        }
+                        
+                        // Build top-level FQN (first two parts: Type.Name)
+                        String topFqn = parts[0] + "." + parts[1];
+                        IBmObject topObject = transaction.getTopObjectByFqn(topFqn);
+                        
+                        if (topObject == null) {
+                            return null;
+                        }
+                        
+                        // If it's a top-level object, return it
+                        if (parts.length == 2) {
+                            return (EObject) topObject;
+                        }
+                        
+                        // Otherwise resolve nested object
+                        return resolveNestedObject((EObject) topObject, parts, 2);
                     }
                 });
         } catch (Exception e) {
             Activator.logError("Failed to resolve FQN: " + fqn, e);
             return null;
         }
+    }
+    
+    /**
+     * Resolves nested objects from a parent by navigating the FQN parts.
+     * 
+     * @param parent the parent EObject
+     * @param parts the FQN parts
+     * @param startIndex the index to start from (skip top-level type and name)
+     * @return the resolved nested EObject or null
+     */
+    private EObject resolveNestedObject(EObject parent, String[] parts, int startIndex) {
+        EObject current = parent;
+        
+        for (int i = startIndex; i < parts.length; i += 2) { // Skip by 2 (SubTypeName.SubName)
+            if (i + 1 >= parts.length) {
+                break;
+            }
+            
+            String subTypeName = parts[i];
+            String subName = parts[i + 1];
+            
+            // Try to find the child by navigating containment references
+            EObject child = findChildByTypeAndName(current, subTypeName, subName);
+            if (child == null) {
+                return null;
+            }
+            current = child;
+        }
+        
+        return current;
+    }
+    
+    /**
+     * Finds a child EObject by type and name.
+     */
+    private EObject findChildByTypeAndName(EObject parent, String typeName, String name) {
+        // Try to find in all containment references
+        for (org.eclipse.emf.ecore.EReference ref : parent.eClass().getEAllContainments()) {
+            Object value = parent.eGet(ref);
+            if (value instanceof java.util.Collection<?> collection) {
+                for (Object item : collection) {
+                    if (item instanceof EObject child) {
+                        if (matchesTypeAndName(child, typeName, name)) {
+                            return child;
+                        }
+                    }
+                }
+            } else if (value instanceof EObject child) {
+                if (matchesTypeAndName(child, typeName, name)) {
+                    return child;
+                }
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Checks if an EObject matches the given type and name.
+     */
+    private boolean matchesTypeAndName(EObject obj, String typeName, String name) {
+        String objTypeName = obj.eClass().getName();
+        if (!objTypeName.equals(typeName) && !objTypeName.endsWith(typeName)) {
+            return false;
+        }
+        
+        // Try to get name
+        try {
+            for (java.lang.reflect.Method m : obj.getClass().getMethods()) {
+                if ("getName".equals(m.getName()) && m.getParameterCount() == 0) {
+                    Object objName = m.invoke(obj);
+                    return name.equals(objName);
+                }
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
+        
+        return false;
     }
     
     @Override
@@ -187,19 +283,22 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
     
     /**
      * Placeholder for an object inside a group.
-     * Used to identify objects that need to be resolved by the content provider.
+     * Used to identify objects that are displayed inside a group, 
+     * so the filter won't hide them from the group.
      */
     public static class GroupedObjectPlaceholder implements IAdaptable {
         
         private final String objectFqn;
         private final IProject project;
         private final GroupNavigatorAdapter parentGroup;
+        private final EObject resolvedObject;
         
         public GroupedObjectPlaceholder(String objectFqn, IProject project, 
-                GroupNavigatorAdapter parentGroup) {
+                GroupNavigatorAdapter parentGroup, EObject resolvedObject) {
             this.objectFqn = objectFqn;
             this.project = project;
             this.parentGroup = parentGroup;
+            this.resolvedObject = resolvedObject;
         }
         
         public String getObjectFqn() {
@@ -214,11 +313,38 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
             return parentGroup;
         }
         
+        /**
+         * Gets the resolved EObject for this placeholder.
+         * 
+         * @return the resolved EObject, may be null if resolution failed
+         */
+        public EObject getResolvedObject() {
+            return resolvedObject;
+        }
+        
         @SuppressWarnings("unchecked")
         @Override
         public <T> T getAdapter(Class<T> adapter) {
             if (adapter == IProject.class) {
                 return (T) project;
+            }
+            // Return resolved object for EObject and IBmObject adapters
+            // This enables double-click to open the object in editor
+            if (resolvedObject != null) {
+                if (adapter == EObject.class) {
+                    return (T) resolvedObject;
+                }
+                if (adapter.getName().equals("com._1c.g5.v8.bm.core.IBmObject") 
+                        && adapter.isInstance(resolvedObject)) {
+                    return (T) resolvedObject;
+                }
+            }
+            // Delegate to resolved object if present
+            if (resolvedObject != null && resolvedObject instanceof IAdaptable adaptable) {
+                T result = adaptable.getAdapter(adapter);
+                if (result != null) {
+                    return result;
+                }
             }
             return Platform.getAdapterManager().getAdapter(this, adapter);
         }

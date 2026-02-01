@@ -34,8 +34,37 @@ import com.ditrix.edt.mcp.server.tags.TagUtils;
 /**
  * Handler for the "Add to Group..." command.
  * Shows a dialog to select target group and adds selected objects to it.
+ * Only enabled for top-level metadata objects (with FQN like Type.Name).
  */
 public class AddToGroupHandler extends AbstractHandler {
+    
+    @Override
+    public void setEnabled(Object evaluationContext) {
+        // Check if selection contains at least one top-level object
+        Object selection = org.eclipse.ui.handlers.HandlerUtil.getVariable(evaluationContext, "selection");
+        
+        if (!(selection instanceof IStructuredSelection structuredSelection)) {
+            setBaseEnabled(false);
+            return;
+        }
+        
+        // Check if any selected object is a top-level object
+        for (Object element : structuredSelection.toList()) {
+            if (element instanceof EObject eObject) {
+                String fqn = TagUtils.extractFqn(eObject);
+                if (fqn != null) {
+                    String[] parts = fqn.split("\\.");
+                    if (parts.length == 2) {
+                        // Found at least one top-level object
+                        setBaseEnabled(true);
+                        return;
+                    }
+                }
+            }
+        }
+        
+        setBaseEnabled(false);
+    }
     
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException {
@@ -46,48 +75,63 @@ public class AddToGroupHandler extends AbstractHandler {
             return null;
         }
         
-        // Collect selected objects
+        // Collect selected top-level objects and determine their type
         List<EObject> selectedObjects = new ArrayList<>();
         IProject project = null;
+        String objectType = null; // e.g., "Catalog", "CommonModule"
         
         for (Object element : structuredSelection.toList()) {
             if (element instanceof EObject eObject) {
-                selectedObjects.add(eObject);
-                if (project == null) {
-                    project = TagUtils.extractProject(eObject);
+                String fqn = TagUtils.extractFqn(eObject);
+                if (fqn != null) {
+                    String[] parts = fqn.split("\\.");
+                    if (parts.length == 2) {
+                        // Top-level object
+                        selectedObjects.add(eObject);
+                        if (project == null) {
+                            project = TagUtils.extractProject(eObject);
+                        }
+                        if (objectType == null) {
+                            objectType = parts[0]; // e.g., "Catalog"
+                        }
+                    }
                 }
             }
         }
         
-        if (selectedObjects.isEmpty() || project == null) {
+        if (selectedObjects.isEmpty() || project == null || objectType == null) {
             MessageDialog.openWarning(shell, "Add to Group", 
-                "Please select one or more metadata objects to add to a group.");
+                "Please select one or more top-level metadata objects to add to a group.");
             return null;
         }
         
-        // Get all available groups
+        // Get groups filtered by object type
         GroupService service = GroupService.getInstance();
-        List<Group> allGroups = service.getAllGroups(project);
+        final String filterPath = objectType;
+        List<Group> matchingGroups = service.getAllGroups(project).stream()
+            .filter(g -> filterPath.equals(g.getPath()))
+            .toList();
         
-        if (allGroups.isEmpty()) {
+        if (matchingGroups.isEmpty()) {
             MessageDialog.openInformation(shell, "Add to Group", 
-                "No groups exist. Create a group first using 'New Group...' on a collection folder.");
+                "No groups exist for " + objectType + ".\n" +
+                "Create a group first using 'New Group...' on the " + objectType + " folder.");
             return null;
         }
         
-        // Show group selection dialog
+        // Show group selection dialog with group names only
         ElementListSelectionDialog dialog = new ElementListSelectionDialog(shell, new LabelProvider() {
             @Override
             public String getText(Object element) {
                 if (element instanceof Group group) {
-                    return group.getFullPath();
+                    return group.getName();
                 }
                 return super.getText(element);
             }
         });
         dialog.setTitle("Add to Group");
-        dialog.setMessage("Select target group:");
-        dialog.setElements(allGroups.toArray());
+        dialog.setMessage("Select target group for " + objectType + ":");
+        dialog.setElements(matchingGroups.toArray());
         dialog.setMultipleSelection(false);
         
         if (dialog.open() != Window.OK) {

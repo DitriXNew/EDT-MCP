@@ -15,6 +15,7 @@ import java.util.List;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IAdaptable;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.viewers.StructuredViewer;
 import org.eclipse.jface.viewers.Viewer;
@@ -72,8 +73,15 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
             return groupAdapter.getChildren(parentElement);
         }
         
-        // Handle grouped object placeholders - resolve to actual objects
-        if (parentElement instanceof GroupedObjectPlaceholder) {
+        // Handle grouped object placeholders - delegate to resolved object
+        if (parentElement instanceof GroupedObjectPlaceholder placeholder) {
+            EObject resolved = placeholder.getResolvedObject();
+            if (resolved != null) {
+                IWorkbenchAdapter adapter = Platform.getAdapterManager().getAdapter(resolved, IWorkbenchAdapter.class);
+                if (adapter != null) {
+                    return adapter.getChildren(resolved);
+                }
+            }
             return NO_CHILDREN;
         }
         
@@ -157,6 +165,19 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
             return hasNestedGroups || hasObjects;
         }
         
+        // Handle grouped object placeholders - delegate to resolved object
+        if (element instanceof GroupedObjectPlaceholder placeholder) {
+            EObject resolved = placeholder.getResolvedObject();
+            if (resolved != null) {
+                IWorkbenchAdapter adapter = Platform.getAdapterManager().getAdapter(resolved, IWorkbenchAdapter.class);
+                if (adapter != null) {
+                    Object[] children = adapter.getChildren(resolved);
+                    return children != null && children.length > 0;
+                }
+            }
+            return false;
+        }
+        
         if (isCollectionAdapter(element)) {
             // Check if this collection has any groups
             IProject project = getProjectFromAdapter(element);
@@ -176,10 +197,10 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
         if (viewer instanceof StructuredViewer sv) {
             this.viewer = sv;
             // Add our filter directly to the viewer
+            // CommonFilter in plugin.xml may not work reliably, so we add it programmatically
             if (groupedObjectsFilter == null) {
                 groupedObjectsFilter = new GroupedObjectsFilter();
                 sv.addFilter(groupedObjectsFilter);
-                Activator.logInfo("GroupContentProvider: added GroupedObjectsFilter to viewer");
             }
         }
     }

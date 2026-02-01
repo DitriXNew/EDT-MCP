@@ -29,12 +29,13 @@ import com.ditrix.edt.mcp.server.tags.TagUtils;
  */
 public class GroupedObjectsFilter extends ViewerFilter {
     
-    public GroupedObjectsFilter() {
-        com.ditrix.edt.mcp.server.Activator.logInfo("GroupedObjectsFilter: CREATED");
-    }
-    
     @Override
     public boolean select(Viewer viewer, Object parentElement, Object element) {
+        // Always show GroupedObjectPlaceholder - these are objects displayed inside a group
+        if (element instanceof GroupNavigatorAdapter.GroupedObjectPlaceholder) {
+            return true;
+        }
+        
         // Only filter EObjects (metadata objects)
         if (!(element instanceof EObject eObject)) {
             return true;
@@ -45,18 +46,21 @@ public class GroupedObjectsFilter extends ViewerFilter {
             return true;
         }
         
-        // Handle TreePath - check if any ancestor is GroupNavigatorAdapter
+        // Skip filtering children of GroupedObjectPlaceholder - these are nested children of objects in groups
+        if (parentElement instanceof GroupNavigatorAdapter.GroupedObjectPlaceholder) {
+            return true;
+        }
+        
+        // Handle TreePath - check if any ancestor is GroupNavigatorAdapter or GroupedObjectPlaceholder
         if (parentElement instanceof TreePath treePath) {
             for (int i = 0; i < treePath.getSegmentCount(); i++) {
                 Object segment = treePath.getSegment(i);
-                if (segment instanceof GroupNavigatorAdapter) {
+                if (segment instanceof GroupNavigatorAdapter 
+                        || segment instanceof GroupNavigatorAdapter.GroupedObjectPlaceholder) {
                     return true; // Show element - it's inside a group
                 }
             }
         }
-        
-        // Log parent type for debugging
-        String parentType = parentElement == null ? "null" : parentElement.getClass().getSimpleName();
         
         // Get project from the EObject
         IProject project = TagUtils.extractProject(eObject);
@@ -75,15 +79,6 @@ public class GroupedObjectsFilter extends ViewerFilter {
         Group containingGroup = service.findGroupForObject(project, fqn);
         
         // If object is in a group, hide it from the original location
-        // (it will still appear inside the group folder)
-        boolean showObject = containingGroup == null;
-        
-        // Debug
-        if (!showObject) {
-            com.ditrix.edt.mcp.server.Activator.logInfo("GroupedObjectsFilter: hiding " + fqn 
-                + " (in group " + containingGroup.getName() + ") parentType=" + parentType);
-        }
-        
-        return showObject;
+        return containingGroup == null;
     }
 }

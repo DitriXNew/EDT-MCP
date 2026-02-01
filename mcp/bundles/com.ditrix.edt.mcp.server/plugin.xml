@@ -306,6 +306,9 @@
       <contributor
             class="com.ditrix.edt.mcp.server.tags.refactoring.TagDeleteRefactoringContributor">
       </contributor>
+      <contributor
+            class="com.ditrix.edt.mcp.server.groups.refactoring.GroupRenameRefactoringContributor">
+      </contributor>
    </extension>
    
    <!-- ============================================== -->
@@ -391,6 +394,11 @@
             </with>
          </enabledWhen>
       </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.RemoveFromGroupHandler"
+            commandId="com.ditrix.edt.mcp.server.groups.removeFromGroup">
+         <!-- Handler has setEnabled() that checks for GroupedObjectPlaceholder -->
+      </handler>
    </extension>
    
    <!-- Context menu contributions for groups -->
@@ -404,7 +412,7 @@
                icon="icons/group.png"
                label="New Group..."
                style="push">
-            <!-- Always visible in EDT Navigator, handler validates selection -->
+            <visibleWhen checkEnabled="true"/>
          </command>
       </menuContribution>
       
@@ -437,6 +445,12 @@
                style="push">
             <visibleWhen checkEnabled="true"/>
          </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.groups.removeFromGroup"
+               label="Remove from Group"
+               style="push">
+            <visibleWhen checkEnabled="true"/>
+         </command>
       </menuContribution>
    </extension>
    
@@ -448,17 +462,29 @@
             contentProvider="com.ditrix.edt.mcp.server.groups.ui.GroupContentProvider"
             labelProvider="com.ditrix.edt.mcp.server.groups.ui.GroupLabelProvider"
             activeByDefault="true"
-            priority="high">
+            priority="highest">
          <triggerPoints>
-            <!-- Use IWorkbenchAdapter which all EDT navigator elements implement -->
-            <instanceof value="org.eclipse.ui.model.IWorkbenchAdapter"/>
+            <or>
+               <!-- Use IWorkbenchAdapter which all EDT navigator elements implement -->
+               <instanceof value="org.eclipse.ui.model.IWorkbenchAdapter"/>
+               <!-- GroupedObjectPlaceholder used for objects inside groups -->
+               <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter$GroupedObjectPlaceholder"/>
+            </or>
          </triggerPoints>
          <possibleChildren>
             <or>
                <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"/>
+               <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter$GroupedObjectPlaceholder"/>
                <instanceof value="org.eclipse.ui.model.IWorkbenchAdapter"/>
             </or>
          </possibleChildren>
+         <actionProvider
+               class="com.ditrix.edt.mcp.server.groups.ui.GroupActionProvider"
+               id="com.ditrix.edt.mcp.server.groups.actionProvider">
+            <enablement>
+               <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter$GroupedObjectPlaceholder"/>
+            </enablement>
+         </actionProvider>
       </navigatorContent>
       
       <!-- Filter to hide grouped objects from their original location -->
