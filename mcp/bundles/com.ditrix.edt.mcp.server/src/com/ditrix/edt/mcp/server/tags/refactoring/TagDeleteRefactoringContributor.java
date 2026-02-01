@@ -40,45 +40,34 @@ public class TagDeleteRefactoringContributor implements IDeleteRefactoringContri
     public RefactoringOperationDescriptor createParticipatingOperation(EObject object, 
             RefactoringSettings settings, RefactoringStatus status) {
         
-        Activator.logInfo("[TagDelete] createParticipatingOperation called: " + 
-            (object != null ? object.eClass().getName() : "null"));
-        
         if (object == null || !(object instanceof IBmObject)) {
-            Activator.logInfo("[TagDelete] Object is null or not IBmObject, skipping");
             return null;
         }
         
         IBmObject bmObject = (IBmObject) object;
         String fqn = extractFqn(bmObject);
-        Activator.logInfo("[TagDelete] FQN: " + fqn);
         
         if (fqn == null || fqn.isEmpty()) {
-            Activator.logInfo("[TagDelete] FQN is null or empty, skipping");
             return null;
         }
         
         // Get the project for this object
         IProject project = getProject(object);
         if (project == null) {
-            Activator.logInfo("[TagDelete] Project is null, skipping");
             return null;
         }
-        Activator.logInfo("[TagDelete] Project: " + project.getName());
         
         TagService tagService = TagService.getInstance();
         TagStorage storage = tagService.getTagStorage(project);
         
         // Check if this object has any tags assigned
         Set<String> tags = storage.getTagNames(fqn);
-        Activator.logInfo("[TagDelete] Tags for object: " + tags);
         
         if (tags == null || tags.isEmpty()) {
-            Activator.logInfo("[TagDelete] No tags for object, skipping");
             return null;
         }
         
         // Create an operation to remove the tag assignments after deletion
-        Activator.logInfo("[TagDelete] Creating TagDeleteOperation for: " + fqn);
         return new RefactoringOperationDescriptor(
             new TagDeleteOperation(project, fqn, tags));
     }
@@ -209,7 +198,6 @@ public class TagDeleteRefactoringContributor implements IDeleteRefactoringContri
             if (resourceLookup != null) {
                 IProject project = resourceLookup.getProject(object);
                 if (project != null) {
-                    Activator.logInfo("[TagDelete] Got project via IResourceLookup: " + project.getName());
                     return project;
                 }
             }
@@ -229,7 +217,7 @@ public class TagDeleteRefactoringContributor implements IDeleteRefactoringContri
                 }
             }
         } catch (Exception e) {
-            Activator.logError("[TagDelete] Failed to get project for object", e);
+            Activator.logError("Failed to get project for object", e);
         }
         return null;
     }

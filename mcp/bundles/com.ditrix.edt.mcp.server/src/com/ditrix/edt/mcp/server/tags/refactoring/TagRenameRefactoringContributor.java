@@ -38,8 +38,6 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
     @Override
     public RefactoringOperationDescriptor createParticipatingOperation(EObject object, 
             RefactoringSettings settings, RefactoringStatus status) {
-        Activator.logInfo("[TagRename] createParticipatingOperation called for: " + 
-            (object != null ? object.eClass().getName() : "null"));
         // We don't need to participate in the BM transaction itself
         return null;
     }
@@ -47,19 +45,12 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
     @Override
     public RefactoringOperationDescriptor createPreReferenceUpdateParticipatingOperation(
             IBmObject object, RefactoringSettings settings, RefactoringStatus status) {
-        try {
-            Activator.logInfo("[TagRename] createPreReferenceUpdateParticipatingOperation called for: " + 
-                (object != null ? object.bmGetFqn() : "null"));
-        } catch (Exception e) {
-            Activator.logInfo("[TagRename] createPreReferenceUpdateParticipatingOperation called (FQN unavailable)");
-        }
         return null;
     }
     
     @Override
     public Collection<Change> createNativePreChanges(EObject object, String newName, 
             RefactoringSettings settings, RefactoringStatus status) {
-        Activator.logInfo("[TagRename] createNativePreChanges called for newName: " + newName);
         // We don't need pre-changes
         return null;
     }
@@ -67,50 +58,38 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
     @Override
     public Collection<Change> createNativePostChanges(EObject object, String newName, 
             RefactoringSettings settings, RefactoringStatus status) {
-        Activator.logInfo("[TagRename] createNativePostChanges called: object=" + 
-            (object != null ? object.eClass().getName() : "null") + ", newName=" + newName);
-        
         // Check if this object has any tags assigned
         if (object == null || !(object instanceof IBmObject)) {
-            Activator.logInfo("[TagRename] Object is null or not IBmObject, skipping");
             return null;
         }
         
         IBmObject bmObject = (IBmObject) object;
         String oldFqn = extractFqn(bmObject);
-        Activator.logInfo("[TagRename] Old FQN: " + oldFqn);
         
         if (oldFqn == null || oldFqn.isEmpty()) {
-            Activator.logInfo("[TagRename] Old FQN is null or empty, skipping");
             return null;
         }
         
         // Get the project for this object
         IProject project = getProject(object);
         if (project == null) {
-            Activator.logInfo("[TagRename] Project is null, skipping");
             return null;
         }
-        Activator.logInfo("[TagRename] Project: " + project.getName());
         
         TagService tagService = TagService.getInstance();
         TagStorage storage = tagService.getTagStorage(project);
         
         // Check if this object has any tags assigned
         Set<String> tags = storage.getTagNames(oldFqn);
-        Activator.logInfo("[TagRename] Tags for object: " + tags);
         
         if (tags == null || tags.isEmpty()) {
-            Activator.logInfo("[TagRename] No tags for object, skipping");
             return null;
         }
         
         // Build the new FQN based on the new name
         String newFqn = buildNewFqn(oldFqn, newName);
-        Activator.logInfo("[TagRename] New FQN: " + newFqn);
         
         if (newFqn == null || newFqn.equals(oldFqn)) {
-            Activator.logInfo("[TagRename] New FQN is null or same as old, skipping");
             return null;
         }
         
@@ -255,17 +234,13 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
             if (resourceLookup != null) {
                 IProject project = resourceLookup.getProject(object);
                 if (project != null) {
-                    Activator.logInfo("[TagRename] Got project via IResourceLookup: " + project.getName());
                     return project;
                 }
             }
             
             // Fallback: Try to get the project from eResource
             org.eclipse.emf.ecore.resource.Resource resource = object.eResource();
-            Activator.logInfo("[TagRename] eResource: " + resource);
-            
             if (resource != null && resource.getURI() != null) {
-                Activator.logInfo("[TagRename] Resource URI: " + resource.getURI());
                 String path = resource.getURI().toPlatformString(true);
                 if (path != null && path.startsWith("/")) {
                     String projectName = path.substring(1);
@@ -277,37 +252,7 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
                             .getRoot().getProject(projectName);
                 }
             }
-            
-            // Fallback: try to get project from BM object
-            if (object instanceof IBmObject) {
-                IBmObject bmObject = (IBmObject) object;
-                Activator.logInfo("[TagRename] Trying BM fallback for object ID: " + bmObject.bmGetId());
-                
-                // Try to get FQN and find project through it
-                String fqn = null;
-                try {
-                    fqn = bmObject.bmGetFqn();
-                } catch (Exception e) {
-                    // Not a top object, use manual extraction
-                    fqn = extractFqnManually(object);
-                }
-                
-                if (fqn != null) {
-                    // Search all open projects for this object
-                    for (IProject project : org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-                            .getRoot().getProjects()) {
-                        if (project.isOpen() && project.hasNature("com._1c.g5.v8.dt.core.V8ConfigurationNature")) {
-                            // Check if this project has the object
-                            TagService tagService = TagService.getInstance();
-                            // Just return first EDT project for now
-                            Activator.logInfo("[TagRename] Found EDT project: " + project.getName());
-                            return project;
-                        }
-                    }
-                }
-            }
         } catch (Exception e) {
-            Activator.logError("[TagRename] Failed to get project for object", e);
             Activator.logError("Failed to get project for object", e);
         }
         return null;
