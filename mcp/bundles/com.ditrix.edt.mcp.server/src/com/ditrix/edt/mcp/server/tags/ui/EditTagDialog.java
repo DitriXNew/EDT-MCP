@@ -12,18 +12,16 @@ package com.ditrix.edt.mcp.server.tags.ui;
 import org.eclipse.jface.dialogs.Dialog;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
+import org.eclipse.jface.resource.LocalResourceManager;
+import org.eclipse.jface.resource.ResourceManager;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
-import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.GC;
-import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.ColorDialog;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
@@ -35,14 +33,12 @@ import com.ditrix.edt.mcp.server.tags.model.Tag;
  */
 public class EditTagDialog extends Dialog {
     
-    private static final int COLOR_ICON_SIZE = 24;
-    
     private final Tag tag;
     
     private Text nameText;
     private Text descriptionText;
     private Button colorButton;
-    private Image colorButtonImage;
+    private ResourceManager resourceManager;
     
     private String tagName;
     private String tagColor;
@@ -72,6 +68,9 @@ public class EditTagDialog extends Dialog {
     protected Control createDialogArea(Composite parent) {
         Composite container = (Composite) super.createDialogArea(parent);
         GridLayoutFactory.fillDefaults().margins(10, 10).numColumns(3).applyTo(container);
+        
+        // Create resource manager tied to container lifecycle
+        resourceManager = new LocalResourceManager(TagColorIconFactory.getJFaceResources(), container);
         
         // Name
         Label nameLabel = new Label(container, SWT.NONE);
@@ -139,55 +138,21 @@ public class EditTagDialog extends Dialog {
     }
     
     private void updateColorButton() {
-        // Dispose old image first
-        if (colorButtonImage != null && !colorButtonImage.isDisposed()) {
-            colorButtonImage.dispose();
-        }
-        colorButtonImage = createColorIcon(tagColor);
-        colorButton.setImage(colorButtonImage);
+        colorButton.setImage(resourceManager.get(
+            TagColorIconFactory.getColorIcon(tagColor, 24)));
     }
     
     @Override
     public boolean close() {
-        // Dispose the color button image
-        if (colorButtonImage != null && !colorButtonImage.isDisposed()) {
-            colorButtonImage.dispose();
-            colorButtonImage = null;
-        }
+        // ResourceManager is tied to container lifecycle, no explicit disposal needed
         return super.close();
     }
     
-    private Image createColorIcon(String hexColor) {
-        Display display = Display.getCurrent();
-        Image image = new Image(display, COLOR_ICON_SIZE, COLOR_ICON_SIZE);
-        GC gc = new GC(image);
-        
-        RGB rgb = hexToRgb(hexColor);
-        Color color = new Color(display, rgb);
-        gc.setBackground(color);
-        gc.fillRectangle(0, 0, COLOR_ICON_SIZE, COLOR_ICON_SIZE);
-        gc.setForeground(display.getSystemColor(SWT.COLOR_GRAY));
-        gc.drawRectangle(0, 0, COLOR_ICON_SIZE - 1, COLOR_ICON_SIZE - 1);
-        
-        gc.dispose();
-        color.dispose();
-        
-        return image;
-    }
-    
     private RGB hexToRgb(String hex) {
-        hex = hex.replace("#", "");
-        try {
-            int r = Integer.parseInt(hex.substring(0, 2), 16);
-            int g = Integer.parseInt(hex.substring(2, 4), 16);
-            int b = Integer.parseInt(hex.substring(4, 6), 16);
-            return new RGB(r, g, b);
-        } catch (Exception e) {
-            return new RGB(128, 128, 128);
-        }
+        return TagColorIconFactory.hexToRgb(hex);
     }
     
     private String rgbToHex(RGB rgb) {
-        return String.format("#%02X%02X%02X", rgb.red, rgb.green, rgb.blue);
+        return TagColorIconFactory.rgbToHex(rgb);
     }
 }

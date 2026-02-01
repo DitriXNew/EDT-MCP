@@ -15,9 +15,12 @@ import java.io.InputStreamReader;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
@@ -42,24 +45,34 @@ import com.ditrix.edt.mcp.server.tags.model.TagStorage;
  * Service for managing metadata object tags.
  * Provides methods to create, assign, and query tags.
  * Tags are stored in each project's .settings folder.
+ * 
+ * <p>Thread Safety: This class is thread-safe. It uses a ReadWriteLock
+ * to protect the storage cache and CopyOnWriteArrayList for listeners.</p>
  */
 public class TagService implements IResourceChangeListener {
     
-    private static final String SETTINGS_FOLDER = ".settings";
-    private static final String TAGS_FILE = "metadata-tags.yaml";
-    private static final IPath TAGS_PATH = new Path(SETTINGS_FOLDER).append(TAGS_FILE);
+    private static final IPath TAGS_PATH = new Path(TagConstants.SETTINGS_FOLDER)
+        .append(TagConstants.TAGS_FILE);
     
     private static TagService instance;
+    private static final Object INSTANCE_LOCK = new Object();
     
     /**
      * Cache of tag storage per project.
+     * Protected by cacheLock.
      */
-    private final Map<String, TagStorage> projectStorageCache = new ConcurrentHashMap<>();
+    private final Map<String, TagStorage> projectStorageCache = new HashMap<>();
+    
+    /**
+     * Lock for thread-safe cache access.
+     */
+    private final ReadWriteLock cacheLock = new ReentrantReadWriteLock();
     
     /**
      * Listeners for tag changes.
+     * CopyOnWriteArrayList provides thread-safe iteration.
      */
-    private final Map<ITagChangeListener, Boolean> listeners = new ConcurrentHashMap<>();
+    private final List<ITagChangeListener> listeners = new CopyOnWriteArrayList<>();
     
     private TagService() {
         ResourcesPlugin.getWorkspace().addResourceChangeListener(this, 
@@ -71,22 +84,35 @@ public class TagService implements IResourceChangeListener {
      * 
      * @return the tag service instance
      */
-    public static synchronized TagService getInstance() {
-        if (instance == null) {
-            instance = new TagService();
+    public static TagService getInstance() {
+        TagService localInstance = instance;
+        if (localInstance == null) {
+            synchronized (INSTANCE_LOCK) {
+                localInstance = instance;
+                if (localInstance == null) {
+                    instance = localInstance = new TagService();
+                }
+            }
         }
-        return instance;
+        return localInstance;
     }
     
     /**
      * Disposes the service and releases resources.
      */
-    public static synchronized void dispose() {
-        if (instance != null) {
-            ResourcesPlugin.getWorkspace().removeResourceChangeListener(instance);
-            instance.projectStorageCache.clear();
-            instance.listeners.clear();
-            instance = null;
+    public static void dispose() {
+        synchronized (INSTANCE_LOCK) {
+            if (instance != null) {
+                ResourcesPlugin.getWorkspace().removeResourceChangeListener(instance);
+                instance.cacheLock.writeLock().lock();
+                try {
+                    instance.projectStorageCache.clear();
+                } finally {
+                    instance.cacheLock.writeLock().unlock();
+                }
+                instance.listeners.clear();
+                instance = null;
+            }
         }
     }
     
@@ -96,7 +122,9 @@ public class TagService implements IResourceChangeListener {
      * @param listener the listener to add
      */
     public void addTagChangeListener(ITagChangeListener listener) {
-        listeners.put(listener, Boolean.TRUE);
+        if (listener != null && !listeners.contains(listener)) {
+            listeners.add(listener);
+        }
     }
     
     /**
@@ -110,13 +138,38 @@ public class TagService implements IResourceChangeListener {
     
     /**
      * Gets the tag storage for a project.
+     * Thread-safe with proper locking.
      * 
      * @param project the project
      * @return the tag storage, never null
      */
     public TagStorage getTagStorage(IProject project) {
         String projectName = project.getName();
-        return projectStorageCache.computeIfAbsent(projectName, k -> loadTagStorage(project));
+        
+        // Try read lock first (fast path)
+        cacheLock.readLock().lock();
+        try {
+            TagStorage storage = projectStorageCache.get(projectName);
+            if (storage != null) {
+                return storage;
+            }
+        } finally {
+            cacheLock.readLock().unlock();
+        }
+        
+        // Need to load - acquire write lock
+        cacheLock.writeLock().lock();
+        try {
+            // Double-check after acquiring write lock
+            TagStorage storage = projectStorageCache.get(projectName);
+            if (storage == null) {
+                storage = loadTagStorage(project);
+                projectStorageCache.put(projectName, storage);
+            }
+            return storage;
+        } finally {
+            cacheLock.writeLock().unlock();
+        }
     }
     
     /**
@@ -300,7 +353,12 @@ public class TagService implements IResourceChangeListener {
      * @param project the project
      */
     public void refresh(IProject project) {
-        projectStorageCache.remove(project.getName());
+        cacheLock.writeLock().lock();
+        try {
+            projectStorageCache.remove(project.getName());
+        } finally {
+            cacheLock.writeLock().unlock();
+        }
         fireTagsChanged(project);
     }
     
@@ -368,7 +426,7 @@ public class TagService implements IResourceChangeListener {
     private void saveTagStorage(IProject project, TagStorage storage) {
         try {
             // Ensure .settings folder exists
-            IFolder settingsFolder = project.getFolder(SETTINGS_FOLDER);
+            IFolder settingsFolder = project.getFolder(TagConstants.SETTINGS_FOLDER);
             if (!settingsFolder.exists()) {
                 settingsFolder.create(true, true, null);
             }
@@ -408,7 +466,7 @@ public class TagService implements IResourceChangeListener {
     }
     
     private void fireTagsChanged(IProject project) {
-        for (ITagChangeListener listener : listeners.keySet()) {
+        for (ITagChangeListener listener : listeners) {
             try {
                 listener.onTagsChanged(project);
             } catch (Exception e) {
@@ -418,7 +476,7 @@ public class TagService implements IResourceChangeListener {
     }
     
     private void fireAssignmentsChanged(IProject project, String objectFqn) {
-        for (ITagChangeListener listener : listeners.keySet()) {
+        for (ITagChangeListener listener : listeners) {
             try {
                 listener.onAssignmentsChanged(project, objectFqn);
             } catch (Exception e) {
@@ -437,10 +495,16 @@ public class TagService implements IResourceChangeListener {
         try {
             event.getDelta().accept(delta -> {
                 if (delta.getResource() instanceof IFile file) {
-                    if (TAGS_FILE.equals(file.getName()) 
-                            && SETTINGS_FOLDER.equals(file.getParent().getName())) {
+                    if (TagConstants.TAGS_FILE.equals(file.getName()) 
+                            && TagConstants.SETTINGS_FOLDER.equals(file.getParent().getName())) {
                         IProject project = file.getProject();
-                        projectStorageCache.remove(project.getName());
+                        // Invalidate cache with write lock
+                        cacheLock.writeLock().lock();
+                        try {
+                            projectStorageCache.remove(project.getName());
+                        } finally {
+                            cacheLock.writeLock().unlock();
+                        }
                         fireTagsChanged(project);
                     }
                 }

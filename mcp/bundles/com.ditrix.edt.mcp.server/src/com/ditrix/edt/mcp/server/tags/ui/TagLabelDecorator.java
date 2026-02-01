@@ -22,11 +22,14 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.TagService.ITagChangeListener;
+import com.ditrix.edt.mcp.server.tags.TagUtils;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
 
 /**
  * Label decorator that shows tags assigned to metadata objects.
  * Tags are displayed as badges/suffixes next to the object name.
+ * 
+ * <p>Uses {@link TagUtils} for FQN and project extraction to avoid code duplication.</p>
  */
 public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChangeListener {
     
@@ -47,8 +50,8 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
         }
         
         if (element instanceof EObject eobj) {
-            IProject project = extractProject(eobj);
-            String fqn = extractFqn(eobj);
+            IProject project = TagUtils.extractProject(eobj);
+            String fqn = TagUtils.extractFqn(eobj);
             
             if (project != null && fqn != null) {
                 Set<Tag> tags = tagService.getObjectTags(project, fqn);
@@ -100,144 +103,24 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
         return sb.toString();
     }
     
-    private IProject extractProject(EObject eobj) {
-        if (eobj.eResource() != null && eobj.eResource().getURI() != null) {
-            org.eclipse.emf.common.util.URI uri = eobj.eResource().getURI();
-            
-            // Try platform string first
-            String uriPath = uri.toPlatformString(true);
-            if (uriPath != null && uriPath.length() > 1) {
-                String projectName = uriPath.split("/")[1];
-                return org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-                    .getRoot().getProject(projectName);
-            }
-            
-            // Try bm:// URI scheme
-            String uriString = uri.toString();
-            if (uriString.startsWith("bm://")) {
-                // Format: bm://projectName/...
-                String[] parts = uriString.substring(5).split("/");
-                if (parts.length > 0) {
-                    return org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-                        .getRoot().getProject(parts[0]);
-                }
-            }
-        }
-        return null;
-    }
-    
-    /**
-     * Extracts the fully qualified name (FQN) by traversing the parent hierarchy.
-     * For nested objects like Document.SalesOrder.DocumentAttribute.CustomerName,
-     * this builds the complete FQN path.
-     * Special handling for nested Subsystems to use getParentSubsystem().
-     */
-    private String extractFqn(EObject mdObject) {
-        if (mdObject == null) {
-            return null;
-        }
-        
-        try {
-            StringBuilder fqnBuilder = new StringBuilder();
-            EObject current = mdObject;
-            
-            while (current != null) {
-                String typeName = current.eClass().getName();
-                
-                // Stop at Configuration or internal model objects
-                if ("Configuration".equals(typeName) || typeName.startsWith("Md")) {
-                    break;
-                }
-                
-                String name = getObjectName(current);
-                
-                if (name != null && !name.isEmpty()) {
-                    String part = typeName + "." + name;
-                    if (fqnBuilder.length() > 0) {
-                        fqnBuilder.insert(0, ".");
-                    }
-                    fqnBuilder.insert(0, part);
-                }
-                
-                current = getParentForFqn(current);
-            }
-            
-            return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-    
-    /**
-     * Gets the parent object for FQN building.
-     * Special handling for Subsystem to use getParentSubsystem() for nested subsystems.
-     */
-    private EObject getParentForFqn(EObject eObject) {
-        if (eObject == null) {
-            return null;
-        }
-        
-        // Special handling for Subsystem - use getParentSubsystem() for nested subsystems
-        String typeName = eObject.eClass().getName();
-        if ("Subsystem".equals(typeName)) {
-            try {
-                for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
-                    if ("getParentSubsystem".equals(m.getName()) && m.getParameterCount() == 0) {
-                        Object parent = m.invoke(eObject);
-                        if (parent instanceof EObject parentEObj) {
-                            return parentEObj;
-                        }
-                        // If no parent subsystem, try eContainer (for top-level subsystems)
-                        break;
-                    }
-                }
-            } catch (Exception e) {
-                // Fallback to eContainer
-            }
-        }
-        
-        // Default: use eContainer for other types
-        return eObject.eContainer();
-    }
-    
-    /**
-     * Gets object name using reflection.
-     */
-    private String getObjectName(EObject eObject) {
-        try {
-            for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
-                if ("getName".equals(m.getName()) && m.getParameterCount() == 0) {
-                    Object name = m.invoke(eObject);
-                    return name != null ? name.toString() : null;
-                }
-            }
-        } catch (Exception e) {
-            // Ignore
-        }
-        return null;
-    }
-    
     @Override
     public void onTagsChanged(IProject project) {
-        // Refresh all decorations when tags change
         refreshDecorations();
     }
     
     @Override
     public void onAssignmentsChanged(IProject project, String objectFqn) {
-        // Refresh all decorations when assignments change
         refreshDecorations();
     }
     
     private void refreshDecorations() {
-        // Request decorator refresh through the PlatformUI
         org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
             try {
                 org.eclipse.ui.PlatformUI.getWorkbench()
                     .getDecoratorManager()
                     .update("com.ditrix.edt.mcp.server.tags.decorator");
             } catch (Exception e) {
-                // Ignore - workbench may not be running
+                Activator.logDebug("Failed to refresh decorations: " + e.getMessage());
             }
         });
     }

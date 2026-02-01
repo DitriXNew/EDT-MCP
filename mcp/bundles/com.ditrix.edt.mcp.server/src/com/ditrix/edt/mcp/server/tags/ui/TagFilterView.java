@@ -37,10 +37,7 @@ import org.eclipse.jface.viewers.TableViewerColumn;
 import org.eclipse.jface.viewers.TreeViewerColumn;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.SashForm;
-import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -52,11 +49,13 @@ import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.Tree;
-import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.eclipse.jface.resource.ImageDescriptor;
+import org.eclipse.jface.resource.LocalResourceManager;
+import org.eclipse.jface.resource.ResourceManager;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
@@ -99,7 +98,9 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     /** Search all tags checkbox */
     private Button searchAllTagsCheckbox;
     
-    // Color icons cache
+    // ResourceManager for image lifecycle
+    private ResourceManager resourceManager;
+    // Additional images to dispose (not managed by factory)
     private List<Image> colorIcons = new ArrayList<>();
     
     /**
@@ -112,6 +113,9 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         tagService = TagService.getInstance();
         tagService.addTagChangeListener(this);
         v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        
+        // Create resource manager tied to parent lifecycle
+        resourceManager = new LocalResourceManager(TagColorIconFactory.getJFaceResources(), parent);
         
         parent.setLayout(new FillLayout());
         
@@ -213,7 +217,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             public Image getImage(Object element) {
                 if (element instanceof IProject) {
                     return PlatformUI.getWorkbench().getSharedImages()
-                        .getImage(ISharedImages.IMG_OBJ_PROJECT);
+                        .getImage(IDE.SharedImages.IMG_OBJ_PROJECT);
                 } else if (element instanceof TagEntry entry) {
                     return createColorIcon(entry.tag().getColor());
                 }
@@ -522,7 +526,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             public Image getImage(Object element) {
                 if (element instanceof ObjectEntry) {
                     return PlatformUI.getWorkbench().getSharedImages()
-                        .getImage(ISharedImages.IMG_OBJ_PROJECT);
+                        .getImage(IDE.SharedImages.IMG_OBJ_PROJECT);
                 }
                 return null;
             }
@@ -801,24 +805,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     }
     
     private Image createColorIcon(String hexColor) {
-        Display display = Display.getCurrent();
-        Image image = new Image(display, COLOR_ICON_SIZE, COLOR_ICON_SIZE);
-        GC gc = new GC(image);
-        
-        RGB rgb = hexToRgb(hexColor);
-        Color color = new Color(display, rgb);
-        gc.setBackground(color);
-        gc.fillRectangle(0, 0, COLOR_ICON_SIZE, COLOR_ICON_SIZE);
-        gc.setForeground(display.getSystemColor(SWT.COLOR_GRAY));
-        gc.drawRectangle(0, 0, COLOR_ICON_SIZE - 1, COLOR_ICON_SIZE - 1);
-        
-        gc.dispose();
-        color.dispose();
-        
-        // Cache for disposal later
-        colorIcons.add(image);
-        
-        return image;
+        return resourceManager.get(TagColorIconFactory.getColorIcon(hexColor, COLOR_ICON_SIZE));
     }
     
     /**
@@ -1106,18 +1093,6 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         }
     }
 
-    private RGB hexToRgb(String hex) {
-        hex = hex.replace("#", "");
-        try {
-            int r = Integer.parseInt(hex.substring(0, 2), 16);
-            int g = Integer.parseInt(hex.substring(2, 4), 16);
-            int b = Integer.parseInt(hex.substring(4, 6), 16);
-            return new RGB(r, g, b);
-        } catch (Exception e) {
-            return new RGB(128, 128, 128);
-        }
-    }
-    
     @Override
     public void setFocus() {
         if (tagsTreeViewer != null && !tagsTreeViewer.getControl().isDisposed()) {
@@ -1128,13 +1103,14 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     @Override
     public void dispose() {
         tagService.removeTagChangeListener(this);
-        // Dispose color icons
+        // Dispose additional images not managed by ResourceManager
         for (Image img : colorIcons) {
             if (img != null && !img.isDisposed()) {
                 img.dispose();
             }
         }
         colorIcons.clear();
+        // ResourceManager is tied to parent lifecycle
         super.dispose();
     }
     

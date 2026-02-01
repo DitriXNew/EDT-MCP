@@ -25,6 +25,8 @@ import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.jface.layout.GridDataFactory;
 import org.eclipse.jface.layout.GridLayoutFactory;
 import org.eclipse.jface.resource.ImageDescriptor;
+import org.eclipse.jface.resource.LocalResourceManager;
+import org.eclipse.jface.resource.ResourceManager;
 import org.eclipse.jface.viewers.CheckStateChangedEvent;
 import org.eclipse.jface.viewers.CheckboxTreeViewer;
 import org.eclipse.jface.viewers.ColumnLabelProvider;
@@ -37,23 +39,19 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.ModifyListener;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
-import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.Tree;
-import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.dialogs.SelectionDialog;
+import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 
 import com._1c.g5.v8.dt.core.platform.IV8Project;
@@ -70,7 +68,6 @@ import com.ditrix.edt.mcp.server.tags.model.Tag;
 public class FilterByTagDialog extends SelectionDialog {
     
     private static final int TURN_OFF_ID = 1024;
-    private static final int COLOR_ICON_SIZE = 12;
     
     private CheckboxTreeViewer treeViewer;
     private final TagService tagService;
@@ -80,11 +77,13 @@ public class FilterByTagDialog extends SelectionDialog {
     private Map<IProject, Set<Tag>> selectedTags = new HashMap<>();
     
     // Result flags
-    private boolean isTurnedOn = false;
+    private boolean isFilterEnabled = false;
     private boolean isTurnedOff = false;
     
-    // Color icons cache
-    private List<Image> colorIcons = new ArrayList<>();
+    // ResourceManager for image lifecycle
+    private ResourceManager resourceManager;
+    // Additional images to dispose (from icon descriptors not using factory)
+    private List<Image> disposableImages = new ArrayList<>();
     
     // Search filter
     private Text searchText;
@@ -106,8 +105,8 @@ public class FilterByTagDialog extends SelectionDialog {
     /**
      * Returns whether filter was turned on.
      */
-    public boolean isTurnedOn() {
-        return isTurnedOn;
+    public boolean isFilterEnabled() {
+        return isFilterEnabled;
     }
     
     /**
@@ -139,7 +138,7 @@ public class FilterByTagDialog extends SelectionDialog {
             isTurnedOff = true;
             turnOffPressed();
         } else if (buttonId == IDialogConstants.OK_ID) {
-            isTurnedOn = true;
+            isFilterEnabled = true;
             okPressed();
         } else {
             cancelPressed();
@@ -157,6 +156,9 @@ public class FilterByTagDialog extends SelectionDialog {
     protected Control createDialogArea(Composite parent) {
         Composite container = (Composite) super.createDialogArea(parent);
         GridLayoutFactory.fillDefaults().margins(10, 10).applyTo(container);
+        
+        // Create resource manager tied to container lifecycle
+        resourceManager = new LocalResourceManager(TagColorIconFactory.getJFaceResources(), container);
         
         // Info label
         Label infoLabel = new Label(container, SWT.WRAP);
@@ -178,9 +180,7 @@ public class FilterByTagDialog extends SelectionDialog {
         Button selectAllButton = new Button(searchBar, SWT.PUSH);
         selectAllButton.setToolTipText(Messages.FilterByTagDialog_SelectAll);
         if (selectAllIcon != null) {
-            Image img = selectAllIcon.createImage();
-            selectAllButton.setImage(img);
-            colorIcons.add(img); // Dispose later
+            selectAllButton.setImage(resourceManager.get(selectAllIcon));
         }
         selectAllButton.addSelectionListener(new SelectionAdapter() {
             @Override
@@ -193,9 +193,7 @@ public class FilterByTagDialog extends SelectionDialog {
         Button deselectAllButton = new Button(searchBar, SWT.PUSH);
         deselectAllButton.setToolTipText(Messages.FilterByTagDialog_DeselectAll);
         if (deselectAllIcon != null) {
-            Image img = deselectAllIcon.createImage();
-            deselectAllButton.setImage(img);
-            colorIcons.add(img); // Dispose later
+            deselectAllButton.setImage(resourceManager.get(deselectAllIcon));
         }
         deselectAllButton.addSelectionListener(new SelectionAdapter() {
             @Override
@@ -322,13 +320,14 @@ public class FilterByTagDialog extends SelectionDialog {
     
     @Override
     public boolean close() {
-        // Dispose color icons
-        for (Image img : colorIcons) {
+        // Dispose additional images not managed by ResourceManager
+        for (Image img : disposableImages) {
             if (img != null && !img.isDisposed()) {
                 img.dispose();
             }
         }
-        colorIcons.clear();
+        disposableImages.clear();
+        // ResourceManager is tied to container lifecycle, no explicit disposal needed
         return super.close();
     }
     
@@ -433,32 +432,7 @@ public class FilterByTagDialog extends SelectionDialog {
     }
     
     private Image createColorIcon(String hexColor) {
-        Display display = Display.getCurrent();
-        Image image = new Image(display, COLOR_ICON_SIZE, COLOR_ICON_SIZE);
-        
-        try {
-            int r = Integer.parseInt(hexColor.substring(1, 3), 16);
-            int g = Integer.parseInt(hexColor.substring(3, 5), 16);
-            int b = Integer.parseInt(hexColor.substring(5, 7), 16);
-            
-            GC gc = new GC(image);
-            Color color = new Color(display, new RGB(r, g, b));
-            gc.setBackground(color);
-            gc.fillRectangle(0, 0, COLOR_ICON_SIZE, COLOR_ICON_SIZE);
-            gc.setForeground(display.getSystemColor(SWT.COLOR_DARK_GRAY));
-            gc.drawRectangle(0, 0, COLOR_ICON_SIZE - 1, COLOR_ICON_SIZE - 1);
-            color.dispose();
-            gc.dispose();
-        } catch (Exception e) {
-            // Invalid color, return gray
-            GC gc = new GC(image);
-            gc.setBackground(display.getSystemColor(SWT.COLOR_GRAY));
-            gc.fillRectangle(0, 0, COLOR_ICON_SIZE, COLOR_ICON_SIZE);
-            gc.dispose();
-        }
-        
-        colorIcons.add(image);
-        return image;
+        return resourceManager.get(TagColorIconFactory.getColorIcon(hexColor, 12));
     }
     
     /**
@@ -565,7 +539,7 @@ public class FilterByTagDialog extends SelectionDialog {
         public Image getImage(Object element) {
             if (element instanceof IProject) {
                 return PlatformUI.getWorkbench().getSharedImages()
-                    .getImage(ISharedImages.IMG_OBJ_PROJECT);
+                    .getImage(IDE.SharedImages.IMG_OBJ_PROJECT);
             }
             if (element instanceof TagEntry tagEntry) {
                 return createColorIcon(tagEntry.tag.getColor());

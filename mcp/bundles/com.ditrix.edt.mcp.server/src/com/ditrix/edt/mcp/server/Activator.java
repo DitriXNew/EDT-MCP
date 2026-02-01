@@ -378,6 +378,22 @@ public class Activator extends AbstractUIPlugin
     }
 
     /**
+     * Logs a debug message.
+     * Only logs if debug mode is enabled (via .options file or preference).
+     * 
+     * @param message the debug message
+     */
+    public static void logDebug(String message)
+    {
+        // Debug logging is currently disabled to avoid excessive output.
+        // Uncomment for troubleshooting:
+        // if (plugin != null && plugin.isDebugging())
+        // {
+        //     plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, "[DEBUG] " + message));
+        // }
+    }
+
+    /**
      * Logs an error.
      * 
      * @param message the message

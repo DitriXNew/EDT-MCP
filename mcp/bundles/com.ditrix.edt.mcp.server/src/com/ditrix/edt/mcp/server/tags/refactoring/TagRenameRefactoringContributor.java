@@ -27,6 +27,7 @@ import com._1c.g5.wiring.ServiceAccess;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
+import com.ditrix.edt.mcp.server.tags.TagUtils;
 import com.ditrix.edt.mcp.server.tags.model.TagStorage;
 
 /**
@@ -107,121 +108,20 @@ public class TagRenameRefactoringContributor implements IRenameRefactoringContri
      * Extracts the FQN from a BM object.
      */
     private String extractFqn(IBmObject bmObject) {
-        try {
-            String fqn = bmObject.bmGetFqn();
-            if (fqn != null && !fqn.isEmpty()) {
-                return fqn;
-            }
-        } catch (Exception e) {
-            // Fallback to manual extraction
+        // First try the BM API
+        String fqn = TagUtils.extractFqn(bmObject);
+        if (fqn != null && !fqn.isEmpty()) {
+            return fqn;
         }
-        
-        return extractFqnManually((EObject) bmObject);
-    }
-    
-    /**
-     * Manually extracts FQN from an EObject.
-     */
-    private String extractFqnManually(EObject mdObject) {
-        if (mdObject == null) {
-            return null;
-        }
-        
-        try {
-            StringBuilder fqnBuilder = new StringBuilder();
-            EObject current = mdObject;
-            
-            while (current != null) {
-                String typeName = current.eClass().getName();
-                
-                if ("Configuration".equals(typeName) || typeName.startsWith("Md")) {
-                    break;
-                }
-                
-                String name = getObjectName(current);
-                
-                if (name != null && !name.isEmpty()) {
-                    String part = typeName + "." + name;
-                    if (fqnBuilder.length() > 0) {
-                        fqnBuilder.insert(0, ".");
-                    }
-                    fqnBuilder.insert(0, part);
-                }
-                
-                current = getParentForFqn(current);
-            }
-            
-            return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-    
-    /**
-     * Gets the parent object for FQN building.
-     * Special handling for Subsystem to use getParentSubsystem() for nested subsystems.
-     */
-    private EObject getParentForFqn(EObject eObject) {
-        if (eObject == null) {
-            return null;
-        }
-        
-        String typeName = eObject.eClass().getName();
-        if ("Subsystem".equals(typeName)) {
-            try {
-                for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
-                    if ("getParentSubsystem".equals(m.getName()) && m.getParameterCount() == 0) {
-                        Object parent = m.invoke(eObject);
-                        if (parent instanceof EObject) {
-                            return (EObject) parent;
-                        }
-                        break;
-                    }
-                }
-            } catch (Exception e) {
-                // Fallback to eContainer
-            }
-        }
-        
-        return eObject.eContainer();
-    }
-    
-    /**
-     * Gets the name of an object using reflection.
-     */
-    private String getObjectName(EObject eObject) {
-        try {
-            for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
-                if ("getName".equals(m.getName()) && m.getParameterCount() == 0 
-                        && String.class.isAssignableFrom(m.getReturnType())) {
-                    Object result = m.invoke(eObject);
-                    if (result instanceof String) {
-                        return (String) result;
-                    }
-                }
-            }
-        } catch (Exception e) {
-            // Ignore
-        }
-        return null;
+        // Fallback to EObject-based extraction (IBmObject extends EObject)
+        return TagUtils.extractFqn((EObject) bmObject);
     }
     
     /**
      * Builds a new FQN by replacing the last name component with the new name.
      */
     private String buildNewFqn(String oldFqn, String newName) {
-        if (oldFqn == null || newName == null) {
-            return null;
-        }
-        
-        // FQN format: Type.Name or Type.Name.Type.Name...
-        // We need to replace the last Name with newName
-        int lastDot = oldFqn.lastIndexOf('.');
-        if (lastDot > 0) {
-            return oldFqn.substring(0, lastDot + 1) + newName;
-        }
-        
-        return newName;
+        return TagUtils.buildNewFqn(oldFqn, newName);
     }
     
     /**

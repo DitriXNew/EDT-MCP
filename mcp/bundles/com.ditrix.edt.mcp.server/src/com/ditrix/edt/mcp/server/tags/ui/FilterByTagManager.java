@@ -25,8 +25,8 @@ import org.eclipse.ui.navigator.CommonViewer;
 
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.tags.TagConstants;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
-import com.google.inject.Inject;
 
 /**
  * Manager for filter by tag functionality.
@@ -36,9 +36,6 @@ import com.google.inject.Inject;
 public class FilterByTagManager {
     
     private static FilterByTagManager instance;
-    
-    @Inject
-    private IV8ProjectManager v8ProjectManager;
     
     /** Currently selected tags per project */
     private Map<IProject, Set<Tag>> selectedTags = new HashMap<>();
@@ -84,7 +81,7 @@ public class FilterByTagManager {
                 dialog.setInitialSelection(selectedTags);
                 dialog.open();
                 
-                if (dialog.isTurnedOn()) {
+                if (dialog.isFilterEnabled()) {
                     // Apply new filter
                     selectedTags = dialog.getSelectedTags();
                     if (!selectedTags.isEmpty()) {
@@ -231,7 +228,7 @@ public class FilterByTagManager {
         try {
             IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
             if (window != null) {
-                return (CommonNavigator) window.getActivePage().findView("com._1c.g5.v8.dt.ui2.navigator");
+                return (CommonNavigator) window.getActivePage().findView(TagConstants.NAVIGATOR_VIEW_ID);
             }
         } catch (Exception e) {
             Activator.logError("Failed to get navigator", e);
@@ -248,10 +245,7 @@ public class FilterByTagManager {
     }
     
     private IV8ProjectManager getV8ProjectManager() {
-        if (v8ProjectManager != null) {
-            return v8ProjectManager;
-        }
-        // Try to get from Activator's service tracker
+        // Get from Activator's service tracker
         try {
             return Activator.getDefault().getV8ProjectManager();
         } catch (Exception e) {

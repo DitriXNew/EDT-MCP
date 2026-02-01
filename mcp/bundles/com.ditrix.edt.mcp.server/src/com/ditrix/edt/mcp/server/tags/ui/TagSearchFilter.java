@@ -15,13 +15,13 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.jface.viewers.ViewerFilter;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
+import com.ditrix.edt.mcp.server.tags.TagUtils;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
 import com.ditrix.edt.mcp.server.tags.model.TagStorage;
 
@@ -133,9 +133,9 @@ public class TagSearchFilter extends ViewerFilter {
         }
         
         // Try to determine current project context from element or parent
-        currentFilterProject = extractProjectFromElement(element);
+        currentFilterProject = TagUtils.extractProjectFromElement(element);
         if (currentFilterProject == null) {
-            currentFilterProject = extractProjectFromElement(parentElement);
+            currentFilterProject = TagUtils.extractProjectFromElement(parentElement);
         }
         
         // Projects always visible if they have matching children
@@ -146,7 +146,7 @@ public class TagSearchFilter extends ViewerFilter {
         // Check if element matches
         if (element instanceof EObject eObject) {
             // Get the project this EObject belongs to for project-specific matching
-            IProject project = extractProjectFromEObject(eObject);
+            IProject project = TagUtils.extractProject(eObject);
             if (project != null) {
                 currentFilterProject = project;
             }
@@ -158,7 +158,7 @@ public class TagSearchFilter extends ViewerFilter {
                 return !projectFqns.isEmpty();
             }
             
-            String fqn = extractFqn(eObject);
+            String fqn = TagUtils.extractFqn(eObject);
             
             // Debug: log what we're checking
             if (fqn != null && fqn.contains("AddDataProc")) {
@@ -237,9 +237,9 @@ public class TagSearchFilter extends ViewerFilter {
             }
             
             // Try to unwrap CommonNavigatorAdapter or similar
-            EObject unwrapped = unwrapToEObject(element);
+            EObject unwrapped = TagUtils.unwrapToEObject(element);
             if (unwrapped != null) {
-                String fqn = extractFqn(unwrapped);
+                String fqn = TagUtils.extractFqn(unwrapped);
                 if (fqn != null) {
                     return matchesFqnOrParent(fqn);
                 }
@@ -307,7 +307,7 @@ public class TagSearchFilter extends ViewerFilter {
             if (result instanceof java.util.Collection<?> children) {
                 for (Object child : children) {
                     if (child instanceof EObject childEObject) {
-                        String childFqn = extractFqn(childEObject);
+                        String childFqn = TagUtils.extractFqn(childEObject);
                         if (childFqn != null && matchesFqnOrParentInProject(childFqn, project)) {
                             return true;
                         }
@@ -322,130 +322,6 @@ public class TagSearchFilter extends ViewerFilter {
             // Not a subsystem or no getSubsystems method - ignore
         }
         return false;
-    }
-    
-    /**
-     * Extracts FQN from an EObject using reflection.
-     * Special handling for nested Subsystems.
-     */
-    private String extractFqn(EObject mdObject) {
-        if (mdObject == null) {
-            return null;
-        }
-        
-        try {
-            StringBuilder fqnBuilder = new StringBuilder();
-            EObject current = mdObject;
-            
-            while (current != null) {
-                String typeName = current.eClass().getName();
-                
-                if ("Configuration".equals(typeName) || typeName.startsWith("Md")) {
-                    break;
-                }
-                
-                String name = getObjectName(current);
-                
-                if (name != null && !name.isEmpty()) {
-                    String part = typeName + "." + name;
-                    if (fqnBuilder.length() > 0) {
-                        fqnBuilder.insert(0, ".");
-                    }
-                    fqnBuilder.insert(0, part);
-                }
-                
-                current = getParentForFqn(current);
-            }
-            
-            return fqnBuilder.length() > 0 ? fqnBuilder.toString() : null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-    
-    /**
-     * Gets the parent object for FQN building.
-     * Special handling for Subsystem to use getParentSubsystem() for nested subsystems.
-     */
-    private EObject getParentForFqn(EObject eObject) {
-        if (eObject == null) {
-            return null;
-        }
-        
-        // Special handling for Subsystem - use getParentSubsystem() for nested subsystems
-        String typeName = eObject.eClass().getName();
-        if ("Subsystem".equals(typeName)) {
-            try {
-                for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
-                    if ("getParentSubsystem".equals(m.getName()) && m.getParameterCount() == 0) {
-                        Object parent = m.invoke(eObject);
-                        if (parent instanceof EObject parentEObj) {
-                            return parentEObj;
-                        }
-                        break;
-                    }
-                }
-            } catch (Exception e) {
-                // Fallback to eContainer
-            }
-        }
-        
-        return eObject.eContainer();
-    }
-    
-    /**
-     * Gets object name using reflection.
-     */
-    private String getObjectName(EObject eObject) {
-        try {
-            for (java.lang.reflect.Method m : eObject.getClass().getMethods()) {
-                if ("getName".equals(m.getName()) && m.getParameterCount() == 0) {
-                    Object name = m.invoke(eObject);
-                    return name != null ? name.toString() : null;
-                }
-            }
-        } catch (Exception e) {
-            // Ignore
-        }
-        return null;
-    }
-    
-    /**
-     * Attempts to unwrap a wrapper object to find an EObject inside.
-     * This handles various navigator wrapper classes.
-     */
-    private EObject unwrapToEObject(Object element) {
-        if (element == null) {
-            return null;
-        }
-        
-        try {
-            // Try common wrapper methods: getTarget(), getData(), getElement(), getValue()
-            String[] methodNames = {"getTarget", "getData", "getElement", "getValue", "getObject", "getModel"};
-            
-            for (String methodName : methodNames) {
-                try {
-                    var method = element.getClass().getMethod(methodName);
-                    Object result = method.invoke(element);
-                    if (result instanceof EObject eObj) {
-                        return eObj;
-                    }
-                    // Recurse one level
-                    if (result != null && !(result instanceof EObject)) {
-                        EObject nested = unwrapToEObject(result);
-                        if (nested != null) {
-                            return nested;
-                        }
-                    }
-                } catch (NoSuchMethodException e) {
-                    // Method not found, try next
-                }
-            }
-        } catch (Exception e) {
-            // Ignore
-        }
-        
-        return null;
     }
     
     /**
@@ -494,7 +370,7 @@ public class TagSearchFilter extends ViewerFilter {
             }
             
             // Get the parent's FQN
-            String parentFqn = extractFqn(parent);
+            String parentFqn = TagUtils.extractFqn(parent);
             if (parentFqn == null) {
                 return null;
             }
@@ -686,158 +562,6 @@ public class TagSearchFilter extends ViewerFilter {
             }
         }
         return false;
-    }
-    
-    /**
-     * Extracts the project from any element type (IProject, EObject, or wrapper).
-     * 
-     * @param element the element
-     * @return the project or null if not found
-     */
-    private IProject extractProjectFromElement(Object element) {
-        if (element == null) {
-            return null;
-        }
-        
-        // If it's a project directly
-        if (element instanceof IProject project) {
-            return project;
-        }
-        
-        // If it's an EObject
-        if (element instanceof EObject eObject) {
-            return extractProjectFromEObject(eObject);
-        }
-        
-        // Try to unwrap to EObject and get project
-        EObject unwrapped = unwrapToEObject(element);
-        if (unwrapped != null) {
-            return extractProjectFromEObject(unwrapped);
-        }
-        
-        // Try getProject() method via reflection
-        try {
-            java.lang.reflect.Method getProject = element.getClass().getMethod("getProject");
-            Object result = getProject.invoke(element);
-            if (result instanceof IProject project) {
-                return project;
-            }
-        } catch (Exception e) {
-            // Ignore
-        }
-        
-        // Try getModel() method and extract from that
-        try {
-            java.lang.reflect.Method getModel = element.getClass().getMethod("getModel");
-            Object model = getModel.invoke(element);
-            if (model instanceof EObject eObject) {
-                return extractProjectFromEObject(eObject);
-            }
-        } catch (Exception e) {
-            // Ignore
-        }
-        
-        return null;
-    }
-    
-    /**
-     * Extracts the project from an EObject using multiple strategies.
-     * 
-     * @param eObject the EObject
-     * @return the project or null if not found
-     */
-    private IProject extractProjectFromEObject(EObject eObject) {
-        if (eObject == null) {
-            return null;
-        }
-        
-        try {
-            // Try 1: Get project from resource URI (platform resource)
-            if (eObject.eResource() != null && eObject.eResource().getURI() != null) {
-                org.eclipse.emf.common.util.URI uri = eObject.eResource().getURI();
-                String uriPath = uri.toPlatformString(true);
-                
-                if (uriPath != null && uriPath.length() > 1) {
-                    String projectName = uriPath.split("/")[1];
-                    IProject project = ResourcesPlugin.getWorkspace()
-                        .getRoot().getProject(projectName);
-                    if (project != null && project.exists()) {
-                        return project;
-                    }
-                }
-                
-                // Try 2: Extract from bm: URI scheme
-                String uriString = uri.toString();
-                if (uriString.startsWith("bm://")) {
-                    // Format: bm://projectName/...
-                    String[] parts = uriString.substring(5).split("/");
-                    if (parts.length > 0) {
-                        IProject project = ResourcesPlugin.getWorkspace()
-                            .getRoot().getProject(parts[0]);
-                        if (project != null && project.exists()) {
-                            return project;
-                        }
-                    }
-                }
-            }
-            
-            // Try 3: Use V8ProjectManager
-            try {
-                com._1c.g5.v8.dt.core.platform.IV8ProjectManager v8ProjectManager = 
-                    Activator.getDefault().getV8ProjectManager();
-                if (v8ProjectManager != null) {
-                    com._1c.g5.v8.dt.core.platform.IV8Project v8Project = 
-                        v8ProjectManager.getProject(eObject);
-                    if (v8Project != null) {
-                        return v8Project.getProject();
-                    }
-                }
-            } catch (Exception e) {
-                // Ignore
-            }
-            
-            // Try 4: Traverse up to find Configuration and get project from there
-            EObject current = eObject;
-            while (current != null) {
-                String typeName = current.eClass().getName();
-                if ("Configuration".equals(typeName)) {
-                    // Found Configuration - try to get project from its resource
-                    if (current.eResource() != null && current.eResource().getURI() != null) {
-                        org.eclipse.emf.common.util.URI uri = current.eResource().getURI();
-                        
-                        // Try platform string
-                        String uriPath = uri.toPlatformString(true);
-                        if (uriPath != null && uriPath.length() > 1) {
-                            String projectName = uriPath.split("/")[1];
-                            IProject project = ResourcesPlugin.getWorkspace()
-                                .getRoot().getProject(projectName);
-                            if (project != null && project.exists()) {
-                                return project;
-                            }
-                        }
-                        
-                        // Try bm: scheme
-                        String uriString = uri.toString();
-                        if (uriString.startsWith("bm://")) {
-                            String[] parts = uriString.substring(5).split("/");
-                            if (parts.length > 0) {
-                                IProject project = ResourcesPlugin.getWorkspace()
-                                    .getRoot().getProject(parts[0]);
-                                if (project != null && project.exists()) {
-                                    return project;
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-                current = current.eContainer();
-            }
-        } catch (Exception e) {
-            // Ignore - return null
-        }
-        
-        return null;
     }
     
     /**
