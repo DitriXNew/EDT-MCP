@@ -16,6 +16,7 @@ import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
 import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -193,8 +194,8 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
                 watchThread = null;
             }
             
-            // Cancel all watch keys
-            for (WatchKey key : watchKeyToPath.keySet()) {
+            // Cancel all watch keys (use copy to avoid concurrent modification)
+            for (WatchKey key : new ArrayList<>(watchKeyToPath.keySet())) {
                 try {
                     key.cancel();
                 } catch (Exception e) {

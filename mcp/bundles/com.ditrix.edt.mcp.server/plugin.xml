@@ -499,7 +499,8 @@
             name="Hide Grouped Objects"
             description="Hides objects from their original location when they are placed in a group"
             class="com.ditrix.edt.mcp.server.groups.ui.GroupedObjectsFilter"
-            activeByDefault="true">
+            activeByDefault="true"
+            visibleInUI="false">
       </commonFilter>
    </extension>
    
@@ -508,10 +509,6 @@
       <viewerContentBinding viewerId="com._1c.g5.v8.dt.ui2.navigator">
          <includes>
             <contentExtension pattern="com.ditrix.edt.mcp.server.groups.navigatorContent"/>
-         </includes>
-      </viewerContentBinding>
-      <viewerContentBinding viewerId="com._1c.g5.v8.dt.ui2.navigator">
-         <includes>
             <contentExtension pattern="com.ditrix.edt.mcp.server.groups.groupedObjectsFilter"/>
          </includes>
       </viewerContentBinding>

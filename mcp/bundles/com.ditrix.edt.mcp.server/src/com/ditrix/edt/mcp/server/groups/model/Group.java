@@ -104,11 +104,11 @@ public class Group {
     }
     
     public List<String> getChildren() {
-        return children;
+        return new ArrayList<>(children);
     }
     
     public void setChildren(List<String> children) {
-        this.children = children != null ? children : new ArrayList<>();
+        this.children = children != null ? new ArrayList<>(children) : new ArrayList<>();
     }
     
     // === Convenience methods ===

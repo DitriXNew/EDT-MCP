@@ -32,6 +32,12 @@ public class GroupedObjectsFilter extends ViewerFilter {
     
     @Override
     public boolean select(Viewer viewer, Object parentElement, Object element) {
+        // Check if search/filter is active on the viewer
+        // When search is active, we should show all objects (disable group filtering)
+        if (isSearchActive(viewer)) {
+            return true;
+        }
+        
         // Skip filtering inside groups - don't hide objects displayed in GroupNavigatorAdapter
         if (parentElement instanceof GroupNavigatorAdapter) {
             return true;
@@ -73,5 +79,39 @@ public class GroupedObjectsFilter extends ViewerFilter {
         
         // If object is in a group, hide it from the original location
         return containingGroup == null;
+    }
+    
+    /**
+     * Checks if a search/filter is currently active on the viewer.
+     * When search is active, we disable group filtering to allow finding objects in groups.
+     */
+    private boolean isSearchActive(Viewer viewer) {
+        if (viewer == null) {
+            return false;
+        }
+        
+        // Check if there are any PatternFilter-like filters active on the viewer
+        if (viewer instanceof org.eclipse.jface.viewers.StructuredViewer sv) {
+            ViewerFilter[] filters = sv.getFilters();
+            for (ViewerFilter filter : filters) {
+                // Skip ourselves and our own filters
+                if (filter == this) {
+                    continue;
+                }
+                String className = filter.getClass().getName();
+                // Skip our own package filters
+                if (className.startsWith("com.ditrix.edt.mcp.server")) {
+                    continue;
+                }
+                // Check for common search filter types
+                if (className.contains("Pattern") || className.contains("Search") || 
+                    className.contains("Quick") || className.contains("Text")) {
+                    // This is a search filter - our filter should be disabled
+                    return true;
+                }
+            }
+        }
+        
+        return false;
     }
 }

@@ -170,26 +170,12 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
         return false;
     }
     
-    private GroupedObjectsFilter groupedObjectsFilter;
-    
     @Override
     public void inputChanged(Viewer viewer, Object oldInput, Object newInput) {
         if (viewer instanceof StructuredViewer sv) {
             this.viewer = sv;
-            // Add our filter directly to the viewer
-            // CommonFilter in plugin.xml may not work reliably, so we add it programmatically
-            if (groupedObjectsFilter == null) {
-                groupedObjectsFilter = new GroupedObjectsFilter();
-                // Use asyncExec to avoid reentrant viewer call
-                Display display = sv.getControl().getDisplay();
-                if (display != null && !display.isDisposed()) {
-                    display.asyncExec(() -> {
-                        if (!sv.getControl().isDisposed()) {
-                            sv.addFilter(groupedObjectsFilter);
-                        }
-                    });
-                }
-            }
+            // Note: Filter is added via commonFilter in plugin.xml with activeByDefault="true"
+            // No need to add programmatically - this avoids duplicate filter issues
         }
     }
     
@@ -202,14 +188,6 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
             }
             listenerRegistered = false;
         }
-        if (viewer != null && groupedObjectsFilter != null) {
-            try {
-                viewer.removeFilter(groupedObjectsFilter);
-            } catch (Exception e) {
-                // Ignore - viewer may be disposed
-            }
-        }
-        groupedObjectsFilter = null;
         viewer = null;
     }
     
