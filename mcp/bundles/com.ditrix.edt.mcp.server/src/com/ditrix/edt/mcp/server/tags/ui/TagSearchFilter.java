@@ -53,14 +53,9 @@ public class TagSearchFilter extends ViewerFilter {
     private Map<IProject, Set<Tag>> selectedTagsByProject = new HashMap<>();
     
     /**
-     * Set of metadata types that appear under "Common" folder in the navigator.
-     * Derived dynamically from MdClassPackage using reflection.
-     */
-    private static final Set<String> COMMON_METADATA_TYPES = initCommonMetadataTypes();
-    
-    /**
      * Common metadata type names that appear in the "Common" folder.
      * These are the types that don't have their own top-level folder in navigator.
+     * IMPORTANT: Must be declared BEFORE COMMON_METADATA_TYPES to avoid null during static init.
      */
     private static final Set<String> COMMON_TYPE_NAMES = Set.of(
         "Subsystem", "CommonModule", "SessionParameter", "Role", "CommonAttribute",
@@ -70,6 +65,12 @@ public class TagSearchFilter extends ViewerFilter {
         "XDTOPackage", "WebService", "HTTPService", "WSReference", "WebSocketClient",
         "IntegrationService", "Style", "StyleItem", "Language"
     );
+    
+    /**
+     * Set of metadata types that appear under "Common" folder in the navigator.
+     * Derived dynamically from MdClassPackage using reflection.
+     */
+    private static final Set<String> COMMON_METADATA_TYPES = initCommonMetadataTypes();
     
     /**
      * Initializes the set of common metadata types from MdClassPackage.
