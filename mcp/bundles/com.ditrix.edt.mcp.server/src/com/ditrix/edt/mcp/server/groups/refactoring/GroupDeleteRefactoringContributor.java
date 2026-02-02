@@ -17,7 +17,6 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.refactoring.core.IBmRefactoringOperation;
 import com._1c.g5.v8.dt.refactoring.core.IDeleteRefactoringContributor;
-import com._1c.g5.v8.dt.refactoring.core.IRefactoringOperation;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringOperationDescriptor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;

@@ -14,7 +14,14 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,6 +37,7 @@ import org.eclipse.core.resources.IResourceChangeListener;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.LoaderOptions;
@@ -73,9 +81,30 @@ public class GroupService implements IResourceChangeListener {
      */
     private final List<IGroupChangeListener> listeners = new CopyOnWriteArrayList<>();
     
+    /**
+     * File system watcher for external changes.
+     */
+    private WatchService watchService;
+    
+    /**
+     * Thread for watching file system changes.
+     */
+    private Thread watchThread;
+    
+    /**
+     * Map from watch key to project path for file watcher.
+     */
+    private final Map<WatchKey, java.nio.file.Path> watchKeyToPath = new HashMap<>();
+    
+    /**
+     * Set of projects being watched.
+     */
+    private final Set<String> watchedProjects = new HashSet<>();
+    
     private GroupService() {
         ResourcesPlugin.getWorkspace().addResourceChangeListener(this, 
             IResourceChangeEvent.POST_CHANGE);
+        startFileWatcher();
     }
     
     /**
@@ -103,6 +132,7 @@ public class GroupService implements IResourceChangeListener {
         synchronized (INSTANCE_LOCK) {
             if (instance != null) {
                 ResourcesPlugin.getWorkspace().removeResourceChangeListener(instance);
+                instance.stopFileWatcher();
                 instance.cacheLock.writeLock().lock();
                 try {
                     instance.projectStorageCache.clear();
@@ -110,8 +140,148 @@ public class GroupService implements IResourceChangeListener {
                     instance.cacheLock.writeLock().unlock();
                 }
                 instance.listeners.clear();
+                instance.watchedProjects.clear();
+                instance.watchKeyToPath.clear();
                 instance = null;
             }
+        }
+    }
+    
+    /**
+     * Starts the file system watcher thread.
+     */
+    private void startFileWatcher() {
+        try {
+            watchService = FileSystems.getDefault().newWatchService();
+            watchThread = new Thread(this::runFileWatcher, "GroupService-FileWatcher");
+            watchThread.setDaemon(true);
+            watchThread.start();
+        } catch (IOException e) {
+            Activator.logError("Failed to start file watcher", e);
+        }
+    }
+    
+    /**
+     * Stops the file system watcher thread.
+     */
+    private void stopFileWatcher() {
+        if (watchThread != null) {
+            watchThread.interrupt();
+            watchThread = null;
+        }
+        if (watchService != null) {
+            try {
+                watchService.close();
+            } catch (IOException e) {
+                Activator.logError("Error closing watch service", e);
+            }
+            watchService = null;
+        }
+    }
+    
+    /**
+     * Runs the file watcher loop in a background thread.
+     */
+    private void runFileWatcher() {
+        while (!Thread.currentThread().isInterrupted() && watchService != null) {
+            try {
+                WatchKey key = watchService.take();
+                java.nio.file.Path settingsPath = watchKeyToPath.get(key);
+                
+                if (settingsPath != null) {
+                    for (WatchEvent<?> event : key.pollEvents()) {
+                        if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
+                            continue;
+                        }
+                        
+                        @SuppressWarnings("unchecked")
+                        WatchEvent<java.nio.file.Path> pathEvent = (WatchEvent<java.nio.file.Path>) event;
+                        java.nio.file.Path fileName = pathEvent.context();
+                        
+                        if (GroupConstants.GROUPS_FILE.equals(fileName.toString())) {
+                            // File was modified externally - refresh the workspace resource
+                            java.nio.file.Path projectPath = settingsPath.getParent();
+                            if (projectPath != null) {
+                                refreshProjectGroups(projectPath.getFileName().toString());
+                            }
+                        }
+                    }
+                }
+                
+                boolean valid = key.reset();
+                if (!valid) {
+                    watchKeyToPath.remove(key);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                Activator.logError("Error in file watcher", e);
+            }
+        }
+    }
+    
+    /**
+     * Refreshes group file from disk and updates Navigator.
+     * Called when external file change is detected.
+     */
+    private void refreshProjectGroups(String projectName) {
+        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+        if (project != null && project.isOpen()) {
+            try {
+                // Refresh the groups file from disk
+                IFile groupsFile = project.getFile(GROUPS_PATH);
+                if (groupsFile.exists()) {
+                    groupsFile.refreshLocal(1, new NullProgressMonitor());
+                }
+            } catch (CoreException e) {
+                Activator.logError("Error refreshing groups file", e);
+            }
+        }
+    }
+    
+    /**
+     * Registers a project for file watching.
+     * Should be called when groups are accessed for a project.
+     */
+    private void ensureProjectWatched(IProject project) {
+        if (watchService == null) {
+            return;
+        }
+        
+        String projectName = project.getName();
+        if (watchedProjects.contains(projectName)) {
+            return;
+        }
+        
+        java.nio.file.Path projectLocation = project.getLocation() != null 
+            ? project.getLocation().toFile().toPath() 
+            : null;
+        
+        if (projectLocation == null) {
+            return;
+        }
+        
+        java.nio.file.Path settingsPath = projectLocation.resolve(GroupConstants.SETTINGS_FOLDER);
+        
+        // Create .settings folder if it doesn't exist
+        if (!Files.exists(settingsPath)) {
+            try {
+                Files.createDirectories(settingsPath);
+            } catch (IOException e) {
+                // Ignore - folder may not be creatable
+                return;
+            }
+        }
+        
+        try {
+            WatchKey key = settingsPath.register(watchService, 
+                StandardWatchEventKinds.ENTRY_MODIFY,
+                StandardWatchEventKinds.ENTRY_CREATE);
+            watchKeyToPath.put(key, settingsPath);
+            watchedProjects.add(projectName);
+        } catch (IOException e) {
+            Activator.logError("Failed to watch project: " + projectName, e);
         }
     }
     
@@ -144,6 +314,9 @@ public class GroupService implements IResourceChangeListener {
      */
     public GroupStorage getGroupStorage(IProject project) {
         String projectName = project.getName();
+        
+        // Ensure project is watched for external file changes
+        ensureProjectWatched(project);
         
         // Try read lock first (fast path)
         cacheLock.readLock().lock();
@@ -235,6 +408,25 @@ public class GroupService implements IResourceChangeListener {
     public boolean renameGroup(IProject project, String oldFullPath, String newName) {
         GroupStorage storage = getGroupStorage(project);
         if (storage.renameGroup(oldFullPath, newName)) {
+            saveGroupStorage(project, storage);
+            fireGroupsChanged(project);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Updates a group's name and description.
+     * 
+     * @param project the project
+     * @param oldFullPath the current full path of the group
+     * @param newName the new name (can be same as old)
+     * @param description the new description (can be null)
+     * @return true if updated
+     */
+    public boolean updateGroup(IProject project, String oldFullPath, String newName, String description) {
+        GroupStorage storage = getGroupStorage(project);
+        if (storage.updateGroup(oldFullPath, newName, description)) {
             saveGroupStorage(project, storage);
             fireGroupsChanged(project);
             return true;

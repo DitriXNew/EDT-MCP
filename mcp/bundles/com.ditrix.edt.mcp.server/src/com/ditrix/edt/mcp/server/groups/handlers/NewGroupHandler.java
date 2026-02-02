@@ -17,8 +17,6 @@ import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IAdaptable;
 import org.eclipse.emf.ecore.EObject;
-import org.eclipse.jface.dialogs.IInputValidator;
-import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.window.Window;
@@ -29,6 +27,7 @@ import org.eclipse.ui.model.IWorkbenchAdapter;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.groups.GroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
+import com.ditrix.edt.mcp.server.groups.ui.EditGroupDialog;
 import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter;
 
 /**
@@ -107,44 +106,37 @@ public class NewGroupHandler extends AbstractHandler {
             return null;
         }
         
-        // Show input dialog for group name
+        // Show dialog for group name and description
         final IProject finalProject = project;
         final String finalParentPath = parentPath;
         
-        InputDialog dialog = new InputDialog(
-            shell,
-            "New Group",
-            "Enter group name:",
-            "",
-            new IInputValidator() {
-                @Override
-                public String isValid(String newText) {
-                    if (newText == null || newText.trim().isEmpty()) {
-                        return "Group name cannot be empty";
-                    }
-                    String trimmed = newText.trim();
-                    if (trimmed.contains("/") || trimmed.contains("\\")) {
-                        return "Group name cannot contain path separators";
-                    }
-                    // Check for existing group with same name
-                    GroupService service = GroupService.getInstance();
-                    String fullPath = finalParentPath.isEmpty() 
-                        ? trimmed 
-                        : finalParentPath + "/" + trimmed;
-                    if (service.getGroupStorage(finalProject).getGroupByFullPath(fullPath) != null) {
-                        return "A group with this name already exists";
-                    }
-                    return null;
-                }
+        EditGroupDialog dialog = new EditGroupDialog(shell, name -> {
+            if (name == null || name.trim().isEmpty()) {
+                return "Group name cannot be empty";
             }
-        );
+            String trimmed = name.trim();
+            if (trimmed.contains("/") || trimmed.contains("\\")) {
+                return "Group name cannot contain path separators";
+            }
+            // Check for existing group with same name
+            GroupService service = GroupService.getInstance();
+            String fullPath = finalParentPath.isEmpty() 
+                ? trimmed 
+                : finalParentPath + "/" + trimmed;
+            if (service.getGroupStorage(finalProject).getGroupByFullPath(fullPath) != null) {
+                return "A group with this name already exists";
+            }
+            return null;
+        });
         
         if (dialog.open() == Window.OK) {
-            String groupName = dialog.getValue().trim();
+            String groupName = dialog.getGroupName();
+            String description = dialog.getGroupDescription();
             
             try {
                 GroupService service = GroupService.getInstance();
-                Group newGroup = service.createGroup(project, groupName, parentPath, null);
+                Group newGroup = service.createGroup(project, groupName, parentPath, 
+                    description.isEmpty() ? null : description);
                 
                 if (newGroup == null) {
                     Activator.logInfo("Failed to create group: " + groupName);

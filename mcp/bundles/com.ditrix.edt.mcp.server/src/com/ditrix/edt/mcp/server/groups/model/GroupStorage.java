@@ -155,6 +155,45 @@ public class GroupStorage {
     }
     
     /**
+     * Updates a group's name and description.
+     * 
+     * @param oldFullPath the current full path of the group
+     * @param newName the new name (can be same as old)
+     * @param description the new description (can be null)
+     * @return true if updated
+     */
+    public boolean updateGroup(String oldFullPath, String newName, String description) {
+        Group group = getGroupByFullPath(oldFullPath);
+        if (group == null) {
+            return false;
+        }
+        
+        // If name is changing, check for conflicts
+        if (!group.getName().equals(newName)) {
+            String path = group.getPath();
+            String newFullPath = (path == null || path.isEmpty()) ? newName : path + "/" + newName;
+            if (getGroupByFullPath(newFullPath) != null) {
+                return false; // Conflict with existing group
+            }
+            
+            // Update child groups that have this group as parent
+            String oldPrefix = group.getFullPath();
+            group.setName(newName);
+            String newPrefix = group.getFullPath();
+            
+            for (Group g : groups) {
+                if (g.getPath() != null && g.getPath().startsWith(oldPrefix)) {
+                    g.setPath(newPrefix + g.getPath().substring(oldPrefix.length()));
+                }
+            }
+        }
+        
+        // Update description
+        group.setDescription(description);
+        return true;
+    }
+    
+    /**
      * Finds which group contains a specific object.
      * 
      * @param objectFqn the FQN of the object
