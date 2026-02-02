@@ -132,12 +132,6 @@
                id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
                value="0"/>
       </key>
-      <!-- Delete key binding for groups - no contextId, relies on handler enabledWhen -->
-      <key
-            commandId="com.ditrix.edt.mcp.server.groups.deleteGroup"
-            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
-            sequence="Del">
-      </key>
    </extension>
    
    <!-- Handlers for tag commands -->

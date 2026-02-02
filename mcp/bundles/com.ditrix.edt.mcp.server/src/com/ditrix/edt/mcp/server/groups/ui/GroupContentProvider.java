@@ -180,7 +180,15 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
             // CommonFilter in plugin.xml may not work reliably, so we add it programmatically
             if (groupedObjectsFilter == null) {
                 groupedObjectsFilter = new GroupedObjectsFilter();
-                sv.addFilter(groupedObjectsFilter);
+                // Use asyncExec to avoid reentrant viewer call
+                Display display = sv.getControl().getDisplay();
+                if (display != null && !display.isDisposed()) {
+                    display.asyncExec(() -> {
+                        if (!sv.getControl().isDisposed()) {
+                            sv.addFilter(groupedObjectsFilter);
+                        }
+                    });
+                }
             }
         }
     }
