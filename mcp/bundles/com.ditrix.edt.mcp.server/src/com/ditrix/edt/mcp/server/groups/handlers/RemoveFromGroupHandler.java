@@ -24,7 +24,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.handlers.HandlerUtil;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.groups.GroupService;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
 
@@ -45,7 +45,7 @@ public class RemoveFromGroupHandler extends AbstractHandler {
             return;
         }
         
-        GroupService service = GroupService.getInstance();
+        IGroupService service = Activator.getGroupServiceStatic();
         
         // Enable if any selected element is an EObject in a group
         for (Object element : structuredSelection.toList()) {
@@ -74,7 +74,7 @@ public class RemoveFromGroupHandler extends AbstractHandler {
             return null;
         }
         
-        GroupService service = GroupService.getInstance();
+        IGroupService service = Activator.getGroupServiceStatic();
         
         // Collect selected objects that are in groups
         List<ObjectInGroup> objectsToRemove = new ArrayList<>();

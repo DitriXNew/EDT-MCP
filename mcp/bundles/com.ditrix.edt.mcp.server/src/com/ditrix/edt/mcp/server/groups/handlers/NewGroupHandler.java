@@ -25,7 +25,7 @@ import org.eclipse.ui.handlers.HandlerUtil;
 import org.eclipse.ui.model.IWorkbenchAdapter;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.groups.GroupService;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.groups.ui.EditGroupDialog;
 import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter;
@@ -119,7 +119,7 @@ public class NewGroupHandler extends AbstractHandler {
                 return "Group name cannot contain path separators";
             }
             // Check for existing group with same name
-            GroupService service = GroupService.getInstance();
+            IGroupService service = Activator.getGroupServiceStatic();
             String fullPath = finalParentPath.isEmpty() 
                 ? trimmed 
                 : finalParentPath + "/" + trimmed;
@@ -134,8 +134,8 @@ public class NewGroupHandler extends AbstractHandler {
             String description = dialog.getGroupDescription();
             
             try {
-                GroupService service = GroupService.getInstance();
-                Group newGroup = service.createGroup(project, groupName, parentPath, 
+                IGroupService svc = Activator.getGroupServiceStatic();
+                Group newGroup = svc.createGroup(project, groupName, parentPath, 
                     description.isEmpty() ? null : description);
                 
                 if (newGroup == null) {

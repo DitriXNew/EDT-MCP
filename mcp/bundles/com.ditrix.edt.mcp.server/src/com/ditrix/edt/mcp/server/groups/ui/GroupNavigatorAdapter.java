@@ -29,7 +29,7 @@ import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.groups.GroupService;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 
 /**
@@ -99,14 +99,16 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
     
     @Override
     public Object[] getChildren(Object object) {
-        GroupService service = GroupService.getInstance();
+        IGroupService service = Activator.getGroupServiceStatic();
         
         List<Object> children = new ArrayList<>();
         
-        // Add nested groups
-        List<Group> nestedGroups = service.getGroupsAtPath(project, group.getFullPath());
-        for (Group nestedGroup : nestedGroups) {
-            children.add(new GroupNavigatorAdapter(nestedGroup, project, this));
+        // Add nested groups (only if service is available)
+        if (service != null) {
+            List<Group> nestedGroups = service.getGroupsAtPath(project, group.getFullPath());
+            for (Group nestedGroup : nestedGroups) {
+                children.add(new GroupNavigatorAdapter(nestedGroup, project, this));
+            }
         }
         
         // Add objects in this group - return real EObjects so context menu works properly

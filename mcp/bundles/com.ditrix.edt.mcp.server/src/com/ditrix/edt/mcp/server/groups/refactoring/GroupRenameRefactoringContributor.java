@@ -23,7 +23,7 @@ import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.groups.GroupService;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
 
@@ -72,7 +72,7 @@ public class GroupRenameRefactoringContributor implements IRenameRefactoringCont
             return null;
         }
         
-        GroupService groupService = GroupService.getInstance();
+        IGroupService groupService = Activator.getGroupServiceStatic();
         
         // Check if this object is in any group
         Group group = groupService.findGroupForObject(project, oldFqn);
@@ -135,7 +135,7 @@ public class GroupRenameRefactoringContributor implements IRenameRefactoringCont
         public Change perform(org.eclipse.core.runtime.IProgressMonitor pm) 
                 throws org.eclipse.core.runtime.CoreException {
             
-            GroupService groupService = GroupService.getInstance();
+            IGroupService groupService = Activator.getGroupServiceStatic();
             
             // Rename the object in group storage
             boolean success = groupService.renameObject(project, oldFqn, newFqn);

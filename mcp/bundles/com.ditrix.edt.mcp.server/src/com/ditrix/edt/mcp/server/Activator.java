@@ -18,6 +18,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 
@@ -48,6 +49,9 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<BmAwareResourceSetProvider, BmAwareResourceSetProvider> resourceSetProviderTracker;
     private ServiceTracker<IApplicationManager, IApplicationManager> applicationManagerTracker;
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
+    
+    /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
+    private IGroupService groupService;
 
     @Override
     public void start(BundleContext context) throws Exception
@@ -89,6 +93,10 @@ public class Activator extends AbstractUIPlugin
         
         navigatorStateProviderTracker = new ServiceTracker<>(context, INavigatorContentProviderStateProvider.class, null);
         navigatorStateProviderTracker.open();
+        
+        // Create group service directly (not via OSGi DS to avoid circular references)
+        groupService = new com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl();
+        ((com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl) groupService).activate();
         
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
@@ -157,6 +165,13 @@ public class Activator extends AbstractUIPlugin
             navigatorStateProviderTracker.close();
             navigatorStateProviderTracker = null;
         }
+        
+        // Deactivate group service
+        if (groupService instanceof com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl impl)
+        {
+            impl.deactivate();
+        }
+        groupService = null;
         
         logInfo("EDT MCP Server plugin stopped"); //$NON-NLS-1$
         plugin = null;
@@ -341,6 +356,28 @@ public class Activator extends AbstractUIPlugin
         }
         return navigatorStateProviderTracker.getService();
     }
+    
+    /**
+     * Returns the IGroupService for group operations.
+     * Used for virtual folder groups in the Navigator.
+     * 
+     * @return group service or null if not available
+     */
+    public IGroupService getGroupService()
+    {
+        return groupService;
+    }
+    
+    /**
+     * Static convenience method to get the group service.
+     * 
+     * @return group service or null if not available
+     */
+    public static IGroupService getGroupServiceStatic()
+    {
+        Activator activator = getDefault();
+        return activator != null ? activator.getGroupService() : null;
+    }
 
     /**
      * Returns the default result limit for tools from preferences.
@@ -391,6 +428,19 @@ public class Activator extends AbstractUIPlugin
         // {
         //     plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, "[DEBUG] " + message));
         // }
+    }
+
+    /**
+     * Logs a warning message.
+     * 
+     * @param message the warning message
+     */
+    public static void logWarning(String message)
+    {
+        if (plugin != null)
+        {
+            plugin.getLog().log(new Status(IStatus.WARNING, PLUGIN_ID, message));
+        }
     }
 
     /**

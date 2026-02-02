@@ -9,49 +9,33 @@
  ******************************************************************************/
 package com.ditrix.edt.mcp.server.groups.handlers;
 
-import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
-import org.eclipse.core.resources.IProject;
-import org.eclipse.jface.viewers.ISelection;
-import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.window.Window;
-import org.eclipse.swt.widgets.Shell;
-import org.eclipse.ui.handlers.HandlerUtil;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.groups.GroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.groups.ui.EditGroupDialog;
-import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter;
 
 /**
  * Handler for the "Rename Group" command.
  * Allows editing name and description of a virtual folder group in the Navigator.
  */
-public class RenameGroupHandler extends AbstractHandler {
+public class RenameGroupHandler extends AbstractGroupHandler {
     
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException {
-        Shell shell = HandlerUtil.getActiveShell(event);
-        ISelection selection = HandlerUtil.getCurrentSelection(event);
-        
-        if (!(selection instanceof IStructuredSelection structuredSelection)) {
+        GroupSelection sel = extractSelection(event);
+        if (sel == null || !sel.isValid()) {
             return null;
         }
         
-        Object selected = structuredSelection.getFirstElement();
-        if (!(selected instanceof GroupNavigatorAdapter groupAdapter)) {
-            return null;
-        }
-        
-        Group group = groupAdapter.getGroup();
-        IProject project = groupAdapter.getProject();
+        Group group = sel.group;
         String oldFullPath = group.getFullPath();
         String parentPath = group.getPath();
         
         // Show dialog for editing name and description
-        EditGroupDialog dialog = new EditGroupDialog(shell, group, name -> {
+        EditGroupDialog dialog = new EditGroupDialog(sel.shell, group, name -> {
             if (name == null || name.trim().isEmpty()) {
                 return "Group name cannot be empty";
             }
@@ -64,11 +48,10 @@ public class RenameGroupHandler extends AbstractHandler {
                 return null; // Same name is OK
             }
             // Check for existing group with new name
-            GroupService service = GroupService.getInstance();
             String newFullPath = (parentPath == null || parentPath.isEmpty()) 
                 ? trimmed 
                 : parentPath + "/" + trimmed;
-            if (service.getGroupStorage(project).getGroupByFullPath(newFullPath) != null) {
+            if (getGroupService().getGroupStorage(sel.project).getGroupByFullPath(newFullPath) != null) {
                 return "A group with this name already exists";
             }
             return null;
@@ -79,8 +62,7 @@ public class RenameGroupHandler extends AbstractHandler {
             String description = dialog.getGroupDescription();
             
             try {
-                GroupService service = GroupService.getInstance();
-                boolean updated = service.updateGroup(project, oldFullPath, newName, 
+                boolean updated = getGroupService().updateGroup(sel.project, oldFullPath, newName, 
                     description.isEmpty() ? null : description);
                 
                 if (!updated) {

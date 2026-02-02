@@ -577,7 +577,7 @@ assignments:
 </details>
 
 <details>
-<summary><strong>1.19.0</strong> - Metadata Tags: organize objects with custom tags, filter Navigator, find by tags</summary>
+<summary><strong>1.20.0</strong> - Metadata Tags: organize objects with custom tags, filter Navigator, find by tags</summary>
 
 - **New**: Metadata Tags feature
   - Assign custom tags to any metadata object for organization
@@ -733,4 +733,4 @@ assignments:
 Copyright (c) 2025 DitriX. All rights reserved.
 
 ---
-*EDT MCP Server v1.19.0*
+*EDT MCP Server v1.20.0*

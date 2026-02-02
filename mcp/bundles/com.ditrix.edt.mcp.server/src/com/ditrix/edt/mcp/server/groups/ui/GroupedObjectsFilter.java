@@ -15,7 +15,8 @@ import org.eclipse.jface.viewers.TreePath;
 import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.jface.viewers.ViewerFilter;
 
-import com.ditrix.edt.mcp.server.groups.GroupService;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
 
@@ -64,7 +65,10 @@ public class GroupedObjectsFilter extends ViewerFilter {
         }
         
         // Check if this object is in any group
-        GroupService service = GroupService.getInstance();
+        IGroupService service = Activator.getGroupServiceStatic();
+        if (service == null) {
+            return true; // Service not available, show object
+        }
         Group containingGroup = service.findGroupForObject(project, fqn);
         
         // If object is in a group, hide it from the original location

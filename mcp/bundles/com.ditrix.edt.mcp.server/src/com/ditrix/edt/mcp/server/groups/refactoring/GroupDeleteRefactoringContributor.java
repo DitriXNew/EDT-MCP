@@ -22,7 +22,7 @@ import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.groups.GroupService;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
 
@@ -51,7 +51,7 @@ public class GroupDeleteRefactoringContributor implements IDeleteRefactoringCont
             return null;
         }
         
-        GroupService groupService = GroupService.getInstance();
+        IGroupService groupService = Activator.getGroupServiceStatic();
         
         // Check if this object is in any group
         Group group = groupService.findGroupForObject(project, fqn);
@@ -94,7 +94,7 @@ public class GroupDeleteRefactoringContributor implements IDeleteRefactoringCont
         
         @Override
         public void perform() {
-            GroupService groupService = GroupService.getInstance();
+            IGroupService groupService = Activator.getGroupServiceStatic();
             
             // Remove the object from the group
             boolean removed = groupService.removeObjectFromGroup(project, fqn);

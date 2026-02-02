@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: %pluginName
 Bundle-Vendor: %providerName
-Bundle-Version: 1.19.0.qualifier
+Bundle-Version: 1.20.0.qualifier
 Bundle-SymbolicName: com.ditrix.edt.mcp.server;singleton:=true
 Bundle-Activator: com.ditrix.edt.mcp.server.Activator
 Bundle-ActivationPolicy: lazy
@@ -63,5 +63,3 @@ Import-Package: com._1c.g5.v8.bm.common.collections,
  org.eclipse.ltk.core.refactoring,
  org.eclipse.ui.navigator,
  org.eclipse.xtext.resource
-
-

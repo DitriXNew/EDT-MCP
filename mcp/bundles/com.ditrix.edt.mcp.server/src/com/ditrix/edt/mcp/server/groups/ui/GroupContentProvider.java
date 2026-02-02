@@ -9,23 +9,19 @@
  ******************************************************************************/
 package com.ditrix.edt.mcp.server.groups.ui;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.IAdaptable;
-import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.viewers.StructuredViewer;
 import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IMemento;
-import org.eclipse.ui.model.IWorkbenchAdapter;
 import org.eclipse.ui.navigator.ICommonContentExtensionSite;
 import org.eclipse.ui.navigator.ICommonContentProvider;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.groups.GroupService;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.IGroupChangeListener;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
@@ -44,14 +40,31 @@ import com.ditrix.edt.mcp.server.tags.TagUtils;
 public class GroupContentProvider implements ICommonContentProvider, IGroupChangeListener {
     
     private static final Object[] NO_CHILDREN = new Object[0];
-    private static final String COLLECTION_ADAPTER_CLASS_NAME = 
-        "com._1c.g5.v8.dt.navigator.adapters.CollectionNavigatorAdapterBase";
     
     private StructuredViewer viewer;
+    private volatile boolean listenerRegistered = false;
+    
+    /**
+     * Gets the group service with lazy listener registration.
+     * Returns null if service is not available.
+     */
+    private IGroupService getGroupService() {
+        IGroupService service = Activator.getGroupServiceStatic();
+        if (service != null && !listenerRegistered) {
+            synchronized (this) {
+                if (!listenerRegistered) {
+                    service.addGroupChangeListener(this);
+                    listenerRegistered = true;
+                }
+            }
+        }
+        return service;
+    }
     
     @Override
     public void init(ICommonContentExtensionSite aConfig) {
-        GroupService.getInstance().addGroupChangeListener(this);
+        // Lazy registration - service may not be available yet
+        getGroupService();
     }
     
     @Override
@@ -75,21 +88,10 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     }
     
     /**
-     * Checks if the element is a collection adapter (using reflection to avoid API restriction).
+     * Checks if the element is a collection adapter (using utility class).
      */
     private boolean isCollectionAdapter(Object element) {
-        if (element == null) {
-            return false;
-        }
-        Class<?> clazz = element.getClass();
-        while (clazz != null) {
-            String className = clazz.getName();
-            if (COLLECTION_ADAPTER_CLASS_NAME.equals(className)) {
-                return true;
-            }
-            clazz = clazz.getSuperclass();
-        }
-        return false;
+        return CollectionAdapterUtils.isCollectionAdapter(element);
     }
     
     /**
@@ -97,18 +99,22 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
      */
     private Object[] getChildrenForCollection(Object collectionAdapter) {
         // Get the project from the collection adapter
-        IProject project = getProjectFromAdapter(collectionAdapter);
+        IProject project = CollectionAdapterUtils.getProjectFromAdapter(collectionAdapter);
         if (project == null) {
             return NO_CHILDREN;
         }
         
         // Get the path for this collection (e.g., "CommonModules")
-        String collectionPath = getCollectionPath(collectionAdapter);
+        String collectionPath = CollectionAdapterUtils.getFullCollectionPath(collectionAdapter, 
+            TagUtils::extractFqn);
         if (collectionPath == null) {
             return NO_CHILDREN;
         }
         
-        GroupService groupService = GroupService.getInstance();
+        IGroupService groupService = getGroupService();
+        if (groupService == null) {
+            return NO_CHILDREN;
+        }
         
         // Check if there are any groups at this path
         if (!groupService.hasGroupsAtPath(project, collectionPath)) {
@@ -140,7 +146,10 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
             Group group = groupAdapter.getGroup();
             // Has children if has nested groups or objects
             IProject project = groupAdapter.getProject();
-            GroupService service = GroupService.getInstance();
+            IGroupService service = getGroupService();
+            if (service == null) {
+                return !group.getChildren().isEmpty();
+            }
             
             boolean hasNestedGroups = service.hasGroupsAtPath(project, group.getFullPath());
             boolean hasObjects = !group.getChildren().isEmpty();
@@ -150,10 +159,11 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
         
         if (isCollectionAdapter(element)) {
             // Check if this collection has any groups
-            IProject project = getProjectFromAdapter(element);
-            String path = getCollectionPath(element);
+            IProject project = CollectionAdapterUtils.getProjectFromAdapter(element);
+            String path = CollectionAdapterUtils.getFullCollectionPath(element, TagUtils::extractFqn);
             if (project != null && path != null) {
-                return GroupService.getInstance().hasGroupsAtPath(project, path);
+                IGroupService svc = getGroupService();
+                return svc != null && svc.hasGroupsAtPath(project, path);
             }
         }
         
@@ -177,7 +187,13 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     
     @Override
     public void dispose() {
-        GroupService.getInstance().removeGroupChangeListener(this);
+        if (listenerRegistered) {
+            IGroupService service = Activator.getGroupServiceStatic();
+            if (service != null) {
+                service.removeGroupChangeListener(this);
+            }
+            listenerRegistered = false;
+        }
         if (viewer != null && groupedObjectsFilter != null) {
             try {
                 viewer.removeFilter(groupedObjectsFilter);
@@ -213,73 +229,5 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     @Override
     public void saveState(IMemento aMemento) {
         // No state to save
-    }
-    
-    // === Helper methods ===
-    
-    /**
-     * Gets the project from a navigator adapter using IAdaptable.
-     */
-    private IProject getProjectFromAdapter(Object adapter) {
-        if (adapter instanceof IAdaptable adaptable) {
-            return adaptable.getAdapter(IProject.class);
-        }
-        return null;
-    }
-    
-    /**
-     * Gets the full collection path for a collection adapter using reflection.
-     * For nested collections (like Catalog.Products.Attribute), returns the full path.
-     */
-    private String getCollectionPath(Object adapter) {
-        try {
-            // Get the model object name (e.g., "Attribute", "CommonModule")
-            String modelObjectName = null;
-            try {
-                Method getModelObjectNameMethod = adapter.getClass().getMethod("getModelObjectName");
-                Object result = getModelObjectNameMethod.invoke(adapter);
-                if (result instanceof String) {
-                    modelObjectName = (String) result;
-                }
-            } catch (NoSuchMethodException e) {
-                // Method doesn't exist
-            }
-            
-            if (modelObjectName == null) {
-                // Fallback: try using IWorkbenchAdapter label
-                if (adapter instanceof IWorkbenchAdapter workbenchAdapter) {
-                    String label = workbenchAdapter.getLabel(adapter);
-                    if (label != null) {
-                        modelObjectName = label.replace(" ", "");
-                    }
-                }
-            }
-            
-            if (modelObjectName == null) {
-                return null;
-            }
-            
-            // Try to get parent object FQN for nested collections
-            try {
-                Method getParentMethod = adapter.getClass().getMethod("getParent", Object.class);
-                Object parent = getParentMethod.invoke(adapter, adapter);
-                if (parent instanceof EObject parentEObject) {
-                    String parentFqn = TagUtils.extractFqn(parentEObject);
-                    if (parentFqn != null) {
-                        // Return full path: ParentFqn.CollectionType
-                        return parentFqn + "." + modelObjectName;
-                    }
-                }
-            } catch (NoSuchMethodException e) {
-                // Method doesn't exist, fall through to simple path
-            }
-            
-            return modelObjectName;
-            
-        } catch (Exception e) {
-            Activator.logError("Error getting collection path", e);
-        }
-        
-        return null;
     }
 }

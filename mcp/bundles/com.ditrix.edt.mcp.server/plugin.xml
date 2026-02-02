@@ -408,6 +408,18 @@
             commandId="com.ditrix.edt.mcp.server.groups.removeFromGroup">
          <!-- Handler has setEnabled() that checks for EObjects in groups -->
       </handler>
+      <!-- Copy handler for groups - copies group name to clipboard -->
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.CopyGroupHandler"
+            commandId="org.eclipse.ui.edit.copy">
+         <activeWhen>
+            <with variable="selection">
+               <iterate operator="and" ifEmpty="false">
+                  <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"/>
+               </iterate>
+            </with>
+         </activeWhen>
+      </handler>
    </extension>
    
    <!-- Context menu contributions for groups -->

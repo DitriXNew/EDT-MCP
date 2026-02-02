@@ -27,7 +27,7 @@ import org.eclipse.ui.dialogs.ElementListSelectionDialog;
 import org.eclipse.ui.handlers.HandlerUtil;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.groups.GroupService;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
 
@@ -106,7 +106,7 @@ public class AddToGroupHandler extends AbstractHandler {
         }
         
         // Get groups filtered by object type
-        GroupService service = GroupService.getInstance();
+        IGroupService service = Activator.getGroupServiceStatic();
         final String filterPath = objectType;
         List<Group> matchingGroups = service.getAllGroups(project).stream()
             .filter(g -> filterPath.equals(g.getPath()))
