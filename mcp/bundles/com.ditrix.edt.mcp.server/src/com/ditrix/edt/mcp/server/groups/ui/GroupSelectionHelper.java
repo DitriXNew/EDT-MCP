@@ -10,7 +10,6 @@
 package com.ditrix.edt.mcp.server.groups.ui;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -20,7 +19,6 @@ import org.eclipse.jface.viewers.ISelectionChangedListener;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.ITreeContentProvider;
 import org.eclipse.jface.viewers.SelectionChangedEvent;
-import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.jface.viewers.TreePath;
 import org.eclipse.jface.viewers.TreeSelection;
 import org.eclipse.jface.viewers.TreeViewer;
@@ -40,6 +38,12 @@ import com.ditrix.edt.mcp.server.tags.TagUtils;
  * the group and selecting the object inside it.</p>
  */
 public class GroupSelectionHelper implements ISelectionChangedListener {
+    
+    /**
+     * Maximum time (in milliseconds) between selection and empty selection event
+     * for which we attempt to restore the selection.
+     */
+    private static final long SELECTION_RESTORE_TIMEOUT_MS = 2000;
     
     private final TreeViewer viewer;
     private volatile IStructuredSelection lastNonEmptySelection;
@@ -72,21 +76,15 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
     public void selectionChanged(SelectionChangedEvent event) {
         IStructuredSelection selection = (IStructuredSelection) event.getSelection();
         
-        Activator.logDebug("GroupSelectionHelper: selectionChanged, isEmpty=" + selection.isEmpty() 
-            + ", size=" + selection.size());
-        
         if (selection.isEmpty()) {
             // Selection became empty - possibly after search reset
             // Check if we should restore selection for grouped objects
             long timeSinceLastSelection = System.currentTimeMillis() - lastSelectionTime;
             
-            Activator.logDebug("GroupSelectionHelper: empty selection, timeSince=" + timeSinceLastSelection 
-                + "ms, hasLast=" + (lastNonEmptySelection != null && !lastNonEmptySelection.isEmpty()));
-            
-            // Only try to restore if the last non-empty selection was recent (within 2 seconds)
+            // Only try to restore if the last non-empty selection was recent
             // This avoids interfering with intentional selection clearing
             if (lastNonEmptySelection != null && !lastNonEmptySelection.isEmpty() 
-                    && timeSinceLastSelection < 2000) {
+                    && timeSinceLastSelection < SELECTION_RESTORE_TIMEOUT_MS) {
                 tryRestoreGroupedSelection();
             }
         } else {
@@ -96,13 +94,6 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
             if (firstElement instanceof EObject) {
                 lastNonEmptySelection = selection;
                 lastSelectionTime = System.currentTimeMillis();
-                
-                String typeName = firstElement.getClass().getName();
-                Activator.log("GroupSelectionHelper: remembered METADATA selection with " + selection.size() 
-                    + " elements, first type=" + typeName);
-            } else {
-                String typeName = firstElement != null ? firstElement.getClass().getName() : "null";
-                Activator.log("GroupSelectionHelper: ignoring non-metadata selection, type=" + typeName);
             }
         }
     }
@@ -112,13 +103,11 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
      */
     private void tryRestoreGroupedSelection() {
         if (lastNonEmptySelection == null || lastNonEmptySelection.isEmpty()) {
-            Activator.logDebug("GroupSelectionHelper: tryRestore - no last selection");
             return;
         }
         
         IGroupService groupService = Activator.getGroupServiceStatic();
         if (groupService == null) {
-            Activator.logDebug("GroupSelectionHelper: tryRestore - no group service");
             return;
         }
         
@@ -127,38 +116,27 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
         
         for (Iterator<?> it = lastNonEmptySelection.iterator(); it.hasNext();) {
             Object element = it.next();
-            Activator.log("GroupSelectionHelper: element type=" + element.getClass().getName());
             
             if (element instanceof EObject eObject) {
                 IProject project = TagUtils.extractProject(eObject);
                 String fqn = TagUtils.extractFqn(eObject);
                 
-                Activator.log("GroupSelectionHelper: checking element fqn=" + fqn);
-                
                 if (project != null && fqn != null) {
                     Group group = groupService.findGroupForObject(project, fqn);
                     if (group != null) {
-                        Activator.log("GroupSelectionHelper: found in group '" + group.getName() + "'");
                         hasGroupedElements = true;
                         break;
-                    } else {
-                        Activator.log("GroupSelectionHelper: not in any group");
                     }
                 }
-            } else {
-                Activator.log("GroupSelectionHelper: element is not EObject");
             }
         }
         
         if (hasGroupedElements) {
-            Activator.logDebug("GroupSelectionHelper: scheduling selection restoration");
             // Schedule selection restoration asynchronously
             Display display = viewer.getControl().getDisplay();
             if (display != null && !display.isDisposed()) {
                 display.asyncExec(this::restoreSelection);
             }
-        } else {
-            Activator.logDebug("GroupSelectionHelper: no grouped elements found");
         }
     }
     
@@ -168,8 +146,6 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
      * so we need to tell the TreeViewer to look for it inside the group.
      */
     private void restoreSelection() {
-        Activator.log("GroupSelectionHelper: restoreSelection called");
-        
         if (viewer.getControl() == null || viewer.getControl().isDisposed()) {
             return;
         }
@@ -203,7 +179,6 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
                             // Create TreePath: groupAdapter -> element
                             TreePath path = new TreePath(new Object[] { groupAdapter, element });
                             treePaths.add(path);
-                            Activator.log("GroupSelectionHelper: created TreePath through group '" + group.getName() + "'");
                         }
                     }
                 }
@@ -212,11 +187,9 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
         
         if (!treePaths.isEmpty()) {
             TreeSelection treeSelection = new TreeSelection(treePaths.toArray(new TreePath[0]));
-            Activator.log("GroupSelectionHelper: setting TreeSelection with " + treePaths.size() + " paths");
             viewer.setSelection(treeSelection, true);
         } else {
             // Fallback to original selection
-            Activator.log("GroupSelectionHelper: no TreePaths created, trying original selection");
             viewer.setSelection(lastNonEmptySelection, true);
         }
     }
@@ -227,12 +200,10 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
      */
     private GroupNavigatorAdapter findOrCreateGroupAdapter(IProject project, Group group) {
         if (!(viewer.getContentProvider() instanceof ITreeContentProvider tcp)) {
-            Activator.log("GroupSelectionHelper: content provider is not ITreeContentProvider");
             return null;
         }
         
         String targetPath = group.getPath(); // e.g., "CommonModule"
-        Activator.log("GroupSelectionHelper: looking for group '" + group.getName() + "' at path=" + targetPath);
         
         // Expand project to see its children
         viewer.expandToLevel(project, 1);
@@ -241,11 +212,8 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
         Object collection = findCollectionByPath(tcp, project, targetPath);
         
         if (collection == null) {
-            Activator.log("GroupSelectionHelper: collection not found for path=" + targetPath);
             return null;
         }
-        
-        Activator.log("GroupSelectionHelper: found collection, expanding to reveal groups");
         
         // Expand the collection to see groups
         viewer.expandToLevel(collection, 1);
@@ -257,7 +225,6 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
                 if (adapter.getProject().equals(project) 
                         && adapter.getGroup().getName().equals(group.getName())
                         && adapter.getGroup().getPath().equals(group.getPath())) {
-                    Activator.log("GroupSelectionHelper: found GroupNavigatorAdapter for group '" + group.getName() + "'");
                     // Expand the group to see its children
                     viewer.expandToLevel(adapter, 1);
                     return adapter;
@@ -265,7 +232,6 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
             }
         }
         
-        Activator.log("GroupSelectionHelper: GroupNavigatorAdapter not found in collection children");
         return null;
     }
     

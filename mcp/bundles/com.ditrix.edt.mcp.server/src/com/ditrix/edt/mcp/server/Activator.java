@@ -432,11 +432,11 @@ public class Activator extends AbstractUIPlugin
      */
     public static void logDebug(String message)
     {
-        // Temporarily enabled for troubleshooting
-        if (plugin != null)
-        {
-            plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, "[DEBUG] " + message));
-        }
+        // Disabled by default - enable by uncommenting the body below for troubleshooting
+        // if (plugin != null)
+        // {
+        //     plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, "[DEBUG] " + message));
+        // }
     }
 
     /**
