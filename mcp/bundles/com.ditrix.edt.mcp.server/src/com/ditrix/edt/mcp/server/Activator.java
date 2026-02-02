@@ -413,6 +413,16 @@ public class Activator extends AbstractUIPlugin
             plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, message));
         }
     }
+    
+    /**
+     * Convenience method for logging (uses INFO level).
+     * 
+     * @param message the message
+     */
+    public static void log(String message)
+    {
+        logInfo(message);
+    }
 
     /**
      * Logs a debug message.
@@ -422,12 +432,11 @@ public class Activator extends AbstractUIPlugin
      */
     public static void logDebug(String message)
     {
-        // Debug logging is currently disabled to avoid excessive output.
-        // Uncomment for troubleshooting:
-        // if (plugin != null && plugin.isDebugging())
-        // {
-        //     plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, "[DEBUG] " + message));
-        // }
+        // Temporarily enabled for troubleshooting
+        if (plugin != null)
+        {
+            plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, "[DEBUG] " + message));
+        }
     }
 
     /**

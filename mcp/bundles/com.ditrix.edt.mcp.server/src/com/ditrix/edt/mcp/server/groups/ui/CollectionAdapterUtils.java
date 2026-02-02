@@ -98,21 +98,30 @@ public final class CollectionAdapterUtils {
         
         Class<?> clazz = adapter.getClass();
         
-        // Try cached MethodHandle first
-        MethodHandle mh = MODEL_OBJECT_NAME_CACHE.get(clazz);
-        
-        if (mh == null && !MODEL_OBJECT_NAME_CACHE.containsKey(clazz)) {
-            // Cache miss - try to find and cache the method
-            mh = findGetModelObjectNameMethod(clazz);
-            MODEL_OBJECT_NAME_CACHE.put(clazz, mh);
-        }
-        
-        if (mh != null) {
-            try {
-                return (String) mh.invoke(adapter);
-            } catch (Throwable e) {
-                // Fall through to fallback
+        // Check if we've already cached this class (including negative results)
+        if (MODEL_OBJECT_NAME_CACHE.containsKey(clazz)) {
+            MethodHandle cached = MODEL_OBJECT_NAME_CACHE.get(clazz);
+            if (cached != null) {
+                try {
+                    return (String) cached.invoke(adapter);
+                } catch (Throwable e) {
+                    // Fall through to fallback
+                }
             }
+            // cached is null - means we tried before and there's no method
+        } else {
+            // Cache miss - try to find and cache the method
+            MethodHandle mh = findGetModelObjectNameMethod(clazz);
+            if (mh != null) {
+                MODEL_OBJECT_NAME_CACHE.put(clazz, mh);
+                try {
+                    return (String) mh.invoke(adapter);
+                } catch (Throwable e) {
+                    // Fall through to fallback
+                }
+            }
+            // Don't cache null - ConcurrentHashMap doesn't allow null values
+            // We'll just repeat the lookup for classes without the method
         }
         
         // Fallback: try IWorkbenchAdapter label

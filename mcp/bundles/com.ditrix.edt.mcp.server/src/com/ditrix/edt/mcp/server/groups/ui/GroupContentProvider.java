@@ -14,6 +14,7 @@ import java.util.List;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.viewers.StructuredViewer;
+import org.eclipse.jface.viewers.TreeViewer;
 import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IMemento;
@@ -42,7 +43,12 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     private static final Object[] NO_CHILDREN = new Object[0];
     
     private StructuredViewer viewer;
+    private GroupSelectionHelper selectionHelper;
     private volatile boolean listenerRegistered = false;
+    
+    public GroupContentProvider() {
+        Activator.logDebug("GroupContentProvider: constructor called");
+    }
     
     /**
      * Gets the group service with lazy listener registration.
@@ -63,6 +69,7 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     
     @Override
     public void init(ICommonContentExtensionSite aConfig) {
+        Activator.logDebug("GroupContentProvider.init called");
         // Lazy registration - service may not be available yet
         getGroupService();
     }
@@ -172,15 +179,29 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     
     @Override
     public void inputChanged(Viewer viewer, Object oldInput, Object newInput) {
+        Activator.logDebug("GroupContentProvider.inputChanged called, viewer type: " 
+            + (viewer != null ? viewer.getClass().getName() : "null"));
+        
         if (viewer instanceof StructuredViewer sv) {
             this.viewer = sv;
             // Note: Filter is added via commonFilter in plugin.xml with activeByDefault="true"
             // No need to add programmatically - this avoids duplicate filter issues
+            
+            // Attach selection helper for grouped object selection restoration
+            if (viewer instanceof TreeViewer tv && selectionHelper == null) {
+                selectionHelper = new GroupSelectionHelper(tv);
+                selectionHelper.attach();
+                Activator.logDebug("GroupContentProvider: attached GroupSelectionHelper");
+            }
         }
     }
     
     @Override
     public void dispose() {
+        if (selectionHelper != null) {
+            selectionHelper.detach();
+            selectionHelper = null;
+        }
         if (listenerRegistered) {
             IGroupService service = Activator.getGroupServiceStatic();
             if (service != null) {
