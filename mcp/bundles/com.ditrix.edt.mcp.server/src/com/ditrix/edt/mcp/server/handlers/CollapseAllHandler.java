@@ -16,12 +16,12 @@ import org.eclipse.ui.handlers.HandlerUtil;
 import org.eclipse.ui.navigator.CommonNavigator;
 import org.eclipse.ui.navigator.CommonViewer;
 
+import com.ditrix.edt.mcp.server.tags.TagConstants;
+
 /**
  * Handler that collapses all nodes in the EDT Navigator tree.
  */
 public class CollapseAllHandler extends AbstractHandler {
-
-    private static final String NAVIGATOR_VIEW_ID = "com._1c.g5.v8.dt.ui2.navigator";
 
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException {
@@ -36,7 +36,7 @@ public class CollapseAllHandler extends AbstractHandler {
         }
 
         // Get Navigator view
-        var viewPart = page.findView(NAVIGATOR_VIEW_ID);
+        var viewPart = page.findView(TagConstants.NAVIGATOR_VIEW_ID);
         if (viewPart instanceof CommonNavigator navigator) {
             CommonViewer viewer = navigator.getCommonViewer();
             if (viewer != null && !viewer.getTree().isDisposed()) {

@@ -349,6 +349,12 @@ public class TagSearchFilter extends ViewerFilter {
         IProject project = groupAdapter.getProject();
         
         Set<String> projectFqns = matchingFqnsByProject.get(project);
+        
+        // In untagged mode with no tagged objects, show all groups
+        if (showUntaggedOnly && (projectFqns == null || projectFqns.isEmpty())) {
+            return !group.getChildren().isEmpty();
+        }
+        
         if (projectFqns == null || projectFqns.isEmpty()) {
             return false;
         }
@@ -358,14 +364,37 @@ public class TagSearchFilter extends ViewerFilter {
             if (showUntaggedOnly) {
                 // In untagged mode, matchingFqns contains TAGGED objects
                 // So we show the group if any child is NOT in matchingFqns
-                if (!projectFqns.contains(childFqn)) {
+                // Also check that no child descendants are tagged
+                if (!matchesFqnOrChildInSet(childFqn, projectFqns)) {
                     return true;
                 }
             } else {
-                // Normal mode - show if child is in matchingFqns
-                if (projectFqns.contains(childFqn)) {
+                // Normal mode - show if child or any of its descendants is in matchingFqns
+                if (matchesFqnOrChildInSet(childFqn, projectFqns)) {
                     return true;
                 }
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Checks if an FQN or any of its descendants is in the given set.
+     * For example, if set contains "Catalog.X.Attribute.Y" and fqn is "Catalog.X",
+     * this returns true.
+     */
+    private boolean matchesFqnOrChildInSet(String fqn, Set<String> fqnSet) {
+        // Direct match
+        if (fqnSet.contains(fqn)) {
+            return true;
+        }
+        
+        // Check if any matching FQN is a child of this FQN
+        String prefix = fqn + ".";
+        for (String matchingFqn : fqnSet) {
+            if (matchingFqn.startsWith(prefix)) {
+                return true;
             }
         }
         

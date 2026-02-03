@@ -15,6 +15,7 @@ import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.TreeViewer;
+import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.handlers.HandlerUtil;
 import org.eclipse.ui.navigator.CommonNavigator;
@@ -35,17 +36,17 @@ public class ExpandBelowHandler extends AbstractHandler {
             return null;
         }
         
-        try {
-            CommonNavigator navigator = (CommonNavigator) window.getActivePage()
-                    .findView(TagConstants.NAVIGATOR_VIEW_ID);
-            if (navigator != null) {
-                CommonViewer viewer = navigator.getCommonViewer();
-                if (viewer != null && !viewer.getControl().isDisposed()) {
-                    expandSelectedElements(viewer);
-                }
+        IWorkbenchPage page = window.getActivePage();
+        if (page == null) {
+            return null;
+        }
+        
+        var viewPart = page.findView(TagConstants.NAVIGATOR_VIEW_ID);
+        if (viewPart instanceof CommonNavigator navigator) {
+            CommonViewer viewer = navigator.getCommonViewer();
+            if (viewer != null && !viewer.getControl().isDisposed()) {
+                expandSelectedElements(viewer);
             }
-        } catch (Exception e) {
-            // Ignore - view may not be open
         }
         
         return null;

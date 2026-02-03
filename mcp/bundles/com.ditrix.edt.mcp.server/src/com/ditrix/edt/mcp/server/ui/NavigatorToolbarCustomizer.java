@@ -7,6 +7,11 @@
  */
 package com.ditrix.edt.mcp.server.ui;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.eclipse.jface.action.ActionContributionItem;
 import org.eclipse.jface.action.IAction;
 import org.eclipse.jface.action.IContributionItem;
@@ -14,22 +19,28 @@ import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.ui.IPageListener;
 import org.eclipse.ui.IPartListener2;
 import org.eclipse.ui.IViewPart;
+import org.eclipse.ui.IWindowListener;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.navigator.CommonNavigator;
 
+import com.ditrix.edt.mcp.server.tags.TagConstants;
+
 /**
  * Manager that hides the standard Collapse All button from EDT Navigator.
  */
 public class NavigatorToolbarCustomizer {
 
-    private static final String NAVIGATOR_VIEW_ID = "com._1c.g5.v8.dt.ui2.navigator";
     private static final String COLLAPSE_ALL_ACTION_DEF_ID = "org.eclipse.ui.navigate.collapseAll";
 
     private static NavigatorToolbarCustomizer instance;
     private IPartListener2 partListener;
+    private IWindowListener windowListener;
+    private Map<IWorkbenchWindow, IPageListener> pageListeners = new HashMap<>();
+    private List<IWorkbenchPage> registeredPages = new ArrayList<>();
+    private boolean initialized = false;
 
     private NavigatorToolbarCustomizer() {
     }
@@ -45,11 +56,15 @@ public class NavigatorToolbarCustomizer {
      * Initialize the customizer to listen for Navigator view activation.
      */
     public void initialize() {
+        if (initialized) {
+            return;
+        }
+        initialized = true;
         // Create part listener
         partListener = new IPartListener2() {
             @Override
             public void partOpened(IWorkbenchPartReference partRef) {
-                if (NAVIGATOR_VIEW_ID.equals(partRef.getId())) {
+                if (TagConstants.NAVIGATOR_VIEW_ID.equals(partRef.getId())) {
                     hideCollapseAllButton(partRef);
                 }
             }
@@ -57,7 +72,7 @@ public class NavigatorToolbarCustomizer {
             @Override
             public void partActivated(IWorkbenchPartReference partRef) {
                 // Also check on activation in case we missed the open
-                if (NAVIGATOR_VIEW_ID.equals(partRef.getId())) {
+                if (TagConstants.NAVIGATOR_VIEW_ID.equals(partRef.getId())) {
                     hideCollapseAllButton(partRef);
                 }
             }
@@ -94,7 +109,7 @@ public class NavigatorToolbarCustomizer {
         }
 
         // Also listen for new windows
-        PlatformUI.getWorkbench().addWindowListener(new org.eclipse.ui.IWindowListener() {
+        windowListener = new IWindowListener() {
             @Override
             public void windowOpened(IWorkbenchWindow window) {
                 registerOnWindow(window);
@@ -102,6 +117,7 @@ public class NavigatorToolbarCustomizer {
 
             @Override
             public void windowClosed(IWorkbenchWindow window) {
+                unregisterFromWindow(window);
             }
 
             @Override
@@ -111,13 +127,14 @@ public class NavigatorToolbarCustomizer {
             @Override
             public void windowDeactivated(IWorkbenchWindow window) {
             }
-        });
+        };
+        PlatformUI.getWorkbench().addWindowListener(windowListener);
 
         // Check if Navigator is already open
         for (IWorkbenchWindow window : windows) {
             IWorkbenchPage page = window.getActivePage();
             if (page != null) {
-                IViewPart view = page.findView(NAVIGATOR_VIEW_ID);
+                IViewPart view = page.findView(TagConstants.NAVIGATOR_VIEW_ID);
                 if (view != null) {
                     hideCollapseAllButtonFromView(view);
                 }
@@ -126,26 +143,39 @@ public class NavigatorToolbarCustomizer {
     }
 
     private void registerOnWindow(IWorkbenchWindow window) {
-        window.addPageListener(new IPageListener() {
+        IPageListener pageListener = new IPageListener() {
             @Override
             public void pageOpened(IWorkbenchPage page) {
                 page.addPartListener(partListener);
+                registeredPages.add(page);
             }
 
             @Override
             public void pageClosed(IWorkbenchPage page) {
                 page.removePartListener(partListener);
+                registeredPages.remove(page);
             }
 
             @Override
             public void pageActivated(IWorkbenchPage page) {
             }
-        });
+        };
+        window.addPageListener(pageListener);
+        pageListeners.put(window, pageListener);
 
         // Register on existing pages
         for (IWorkbenchPage page : window.getPages()) {
             page.addPartListener(partListener);
+            registeredPages.add(page);
         }
+    }
+
+    private void unregisterFromWindow(IWorkbenchWindow window) {
+        IPageListener pageListener = pageListeners.remove(window);
+        if (pageListener != null) {
+            window.removePageListener(pageListener);
+        }
+        // Pages from this window will be automatically removed when closed
     }
 
     private void hideCollapseAllButton(IWorkbenchPartReference partRef) {
@@ -192,11 +222,43 @@ public class NavigatorToolbarCustomizer {
     }
 
     /**
-     * Dispose the customizer and remove listeners.
+     * Dispose the customizer and remove all listeners.
      */
     public void dispose() {
-        // Listeners will be cleaned up when the workbench closes
+        // Remove window listener
+        if (windowListener != null) {
+            try {
+                PlatformUI.getWorkbench().removeWindowListener(windowListener);
+            } catch (Exception e) {
+                // Workbench may be closing
+            }
+            windowListener = null;
+        }
+
+        // Remove page listeners
+        for (Map.Entry<IWorkbenchWindow, IPageListener> entry : pageListeners.entrySet()) {
+            try {
+                entry.getKey().removePageListener(entry.getValue());
+            } catch (Exception e) {
+                // Window may be closed
+            }
+        }
+        pageListeners.clear();
+
+        // Remove part listeners from registered pages
+        if (partListener != null) {
+            for (IWorkbenchPage page : registeredPages) {
+                try {
+                    page.removePartListener(partListener);
+                } catch (Exception e) {
+                    // Page may be closed
+                }
+            }
+            registeredPages.clear();
+        }
+
         partListener = null;
+        initialized = false;
         instance = null;
     }
 }

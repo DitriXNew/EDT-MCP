@@ -12,6 +12,7 @@ package com.ditrix.edt.mcp.server.handlers;
 import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
+import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.handlers.HandlerUtil;
 import org.eclipse.ui.navigator.CommonNavigator;
@@ -32,17 +33,17 @@ public class ExpandAllHandler extends AbstractHandler {
             return null;
         }
         
-        try {
-            CommonNavigator navigator = (CommonNavigator) window.getActivePage()
-                    .findView(TagConstants.NAVIGATOR_VIEW_ID);
-            if (navigator != null) {
-                CommonViewer viewer = navigator.getCommonViewer();
-                if (viewer != null && !viewer.getControl().isDisposed()) {
-                    viewer.expandAll();
-                }
+        IWorkbenchPage page = window.getActivePage();
+        if (page == null) {
+            return null;
+        }
+        
+        var viewPart = page.findView(TagConstants.NAVIGATOR_VIEW_ID);
+        if (viewPart instanceof CommonNavigator navigator) {
+            CommonViewer viewer = navigator.getCommonViewer();
+            if (viewer != null && !viewer.getControl().isDisposed()) {
+                viewer.expandAll();
             }
-        } catch (Exception e) {
-            // Ignore - view may not be open
         }
         
         return null;

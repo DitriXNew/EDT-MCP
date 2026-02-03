@@ -533,20 +533,20 @@ Tags are stored in `.settings/metadata-tags.yaml` file in each project. This fil
 ```yaml
 assignments:
   CommonModule.Utils:
-  - Utils
+    - Utils
   Document.SalesOrder:
-  - Important
-  - Sales
+    - Important
+    - Sales
 tags:
-- color: '#FF0000'
-  description: Critical business logic
-  name: Important
-- color: '#00FF00'
-  description: ''
-  name: Utils
-- color: '#0066FF'
-  description: Sales department documents
-  name: Sales
+  - color: '#FF0000'
+    description: Critical business logic
+    name: Important
+  - color: '#00FF00'
+    description: ''
+    name: Utils
+  - color: '#0066FF'
+    description: Sales department documents
+    name: Sales
 ```
 
 ## Metadata Groups

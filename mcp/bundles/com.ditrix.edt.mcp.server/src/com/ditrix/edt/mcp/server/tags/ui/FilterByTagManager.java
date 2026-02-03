@@ -216,10 +216,10 @@ public class FilterByTagManager {
         // Refresh the tree
         viewer.refresh();
         
-        // Expand tree to show all matched objects
-        // Use expandAll() to reveal all objects with matching tags
+        // Expand tree to show matched objects
+        // Use limited depth to avoid UI freeze on large configurations
         try {
-            viewer.expandAll();
+            viewer.expandToLevel(3);
         } catch (Exception e) {
             // Ignore - may fail if project is being cleaned/closed
         }
