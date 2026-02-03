@@ -52,6 +52,19 @@
                name="Tag Index"
                optional="false"/>
       </command>
+      <!-- Navigator tree expansion commands -->
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.expandAll"
+            name="Expand All"
+            description="Expand all nodes in the Navigator tree">
+      </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.expandBelow"
+            name="Expand Below"
+            description="Expand all nodes below the selected element">
+      </command>
    </extension>
    
    <!-- Key bindings for toggle tag commands -->
@@ -168,6 +181,19 @@
             </with>
          </enabledWhen>
       </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.handlers.ExpandAllHandler"
+            commandId="com.ditrix.edt.mcp.server.expandAll">
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.handlers.ExpandBelowHandler"
+            commandId="com.ditrix.edt.mcp.server.expandBelow">
+         <enabledWhen>
+            <with variable="selection">
+               <count value="+"/>
+            </with>
+         </enabledWhen>
+      </handler>
    </extension>
    
    <!-- Context menu contributions -->
@@ -194,6 +220,20 @@
                label="Filter by Tag"
                tooltip="Filter navigator by tags"
                style="toggle">
+         </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.expandAll"
+               icon="icons/expandall.png"
+               label="Expand All"
+               tooltip="Expand all nodes in the tree"
+               style="push">
+         </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.expandBelow"
+               icon="icons/expandbelow.png"
+               label="Expand Below"
+               tooltip="Expand all nodes below the selected element"
+               style="push">
          </command>
       </menuContribution>
       
