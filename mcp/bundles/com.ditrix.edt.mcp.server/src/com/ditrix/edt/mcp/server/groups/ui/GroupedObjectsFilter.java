@@ -99,12 +99,12 @@ public class GroupedObjectsFilter extends ViewerFilter {
                 if (filter == this) {
                     continue;
                 }
-                String className = filter.getClass().getName();
-                // Skip TagSearchFilter - it handles groups itself
-                if (className.contains("TagSearchFilter")) {
+                // Skip TagSearchFilter - it handles groups itself (use instanceof for type safety)
+                if (filter instanceof com.ditrix.edt.mcp.server.tags.ui.TagSearchFilter) {
                     continue;
                 }
-                // Check for common text search filter types
+                // Check for common text search filter types by class name
+                String className = filter.getClass().getName();
                 if (className.contains("Pattern") || className.contains("Search") || 
                     className.contains("Quick") || className.contains("Text")) {
                     // This is a text search filter - our filter should be disabled

@@ -178,6 +178,29 @@ public class Activator extends AbstractUIPlugin
             navigatorStateProviderTracker = null;
         }
         
+        // Dispose navigator toolbar customizer
+        try
+        {
+            org.eclipse.swt.widgets.Display display = org.eclipse.swt.widgets.Display.getDefault();
+            if (display != null && !display.isDisposed())
+            {
+                display.syncExec(() -> {
+                    try
+                    {
+                        com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().dispose();
+                    }
+                    catch (Exception e)
+                    {
+                        // Ignore - workbench may be closing
+                    }
+                });
+            }
+        }
+        catch (Exception e)
+        {
+            // Ignore - display may be disposed
+        }
+        
         // Deactivate group service
         if (groupService instanceof com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl impl)
         {
