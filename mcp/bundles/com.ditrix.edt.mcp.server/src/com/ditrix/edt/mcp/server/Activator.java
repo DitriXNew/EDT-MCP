@@ -98,6 +98,9 @@ public class Activator extends AbstractUIPlugin
         groupService = new com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl();
         ((com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl) groupService).activate();
         
+        // Initialize filter manager to reset toggle state on startup
+        com.ditrix.edt.mcp.server.tags.ui.FilterByTagManager.getInstance();
+        
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
 

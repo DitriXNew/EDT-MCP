@@ -54,7 +54,19 @@ public class FilterByTagManager {
     private TagSearchFilter tagFilter;
     
     private FilterByTagManager() {
-        // Singleton
+        // Singleton - reset toggle state on creation (fresh start)
+        resetToggleState();
+    }
+    
+    /**
+     * Resets the toggle state of the filter command button to off.
+     * Called at startup to ensure button state matches actual filter state.
+     */
+    private void resetToggleState() {
+        // Delay execution to ensure command service is available
+        org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
+            updateToggleState(false);
+        });
     }
     
     /**
@@ -203,6 +215,14 @@ public class FilterByTagManager {
         
         // Refresh the tree
         viewer.refresh();
+        
+        // Expand tree to show all matched objects
+        // Use expandAll() to reveal all objects with matching tags
+        try {
+            viewer.expandAll();
+        } catch (Exception e) {
+            // Ignore - may fail if project is being cleaned/closed
+        }
         
         Activator.logInfo("Tag filter activated with " + countSelectedTags() + " tags selected");
     }

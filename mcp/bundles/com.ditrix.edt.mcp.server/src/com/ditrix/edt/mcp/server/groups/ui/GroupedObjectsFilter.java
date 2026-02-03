@@ -82,8 +82,9 @@ public class GroupedObjectsFilter extends ViewerFilter {
     }
     
     /**
-     * Checks if a search/filter is currently active on the viewer.
-     * When search is active, we disable group filtering to allow finding objects in groups.
+     * Checks if a text search filter is currently active on the viewer.
+     * When text search is active, we disable group filtering to allow finding objects in groups.
+     * Note: Tag filter (TagSearchFilter) does NOT disable group filtering - it handles groups itself.
      */
     private boolean isSearchActive(Viewer viewer) {
         if (viewer == null) {
@@ -94,16 +95,19 @@ public class GroupedObjectsFilter extends ViewerFilter {
         if (viewer instanceof org.eclipse.jface.viewers.StructuredViewer sv) {
             ViewerFilter[] filters = sv.getFilters();
             for (ViewerFilter filter : filters) {
-                // Skip ourselves and our own filters
+                // Skip ourselves
                 if (filter == this) {
                     continue;
                 }
                 String className = filter.getClass().getName();
-                // Check for common search filter types
+                // Skip TagSearchFilter - it handles groups itself
+                if (className.contains("TagSearchFilter")) {
+                    continue;
+                }
+                // Check for common text search filter types
                 if (className.contains("Pattern") || className.contains("Search") || 
-                    className.contains("Quick") || className.contains("Text") ||
-                    className.contains("TagSearchFilter")) {
-                    // This is a search filter - our filter should be disabled
+                    className.contains("Quick") || className.contains("Text")) {
+                    // This is a text search filter - our filter should be disabled
                     return true;
                 }
             }

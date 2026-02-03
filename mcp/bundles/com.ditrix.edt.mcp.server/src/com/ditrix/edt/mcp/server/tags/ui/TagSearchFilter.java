@@ -20,6 +20,8 @@ import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.jface.viewers.ViewerFilter;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.groups.model.Group;
+import com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
@@ -243,6 +245,11 @@ public class TagSearchFilter extends ViewerFilter {
             return hasMatchingChildrenInProject(project);
         }
         
+        // Groups should be visible if any of their children match the filter
+        if (element instanceof GroupNavigatorAdapter groupAdapter) {
+            return hasMatchingChildrenInGroup(groupAdapter);
+        }
+        
         // Check if element matches
         if (element instanceof EObject eObject) {
             // Get the project this EObject belongs to for project-specific matching
@@ -331,6 +338,38 @@ public class TagSearchFilter extends ViewerFilter {
     private boolean hasMatchingChildrenInProject(IProject project) {
         Set<String> projectFqns = matchingFqnsByProject.get(project);
         return projectFqns != null && !projectFqns.isEmpty();
+    }
+    
+    /**
+     * Checks if a group has any children that match the current filter.
+     * A group should be visible if any of its FQNs match the selected tags.
+     */
+    private boolean hasMatchingChildrenInGroup(GroupNavigatorAdapter groupAdapter) {
+        Group group = groupAdapter.getGroup();
+        IProject project = groupAdapter.getProject();
+        
+        Set<String> projectFqns = matchingFqnsByProject.get(project);
+        if (projectFqns == null || projectFqns.isEmpty()) {
+            return false;
+        }
+        
+        // Check if any child FQN of this group matches
+        for (String childFqn : group.getChildren()) {
+            if (showUntaggedOnly) {
+                // In untagged mode, matchingFqns contains TAGGED objects
+                // So we show the group if any child is NOT in matchingFqns
+                if (!projectFqns.contains(childFqn)) {
+                    return true;
+                }
+            } else {
+                // Normal mode - show if child is in matchingFqns
+                if (projectFqns.contains(childFqn)) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
     }
     
     /**
