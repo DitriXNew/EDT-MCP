@@ -14,12 +14,16 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.core.commands.Command;
+import org.eclipse.core.commands.State;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.viewers.ViewerFilter;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.commands.ICommandService;
+import org.eclipse.ui.handlers.RegistryToggleState;
 import org.eclipse.ui.navigator.CommonNavigator;
 import org.eclipse.ui.navigator.CommonViewer;
 
@@ -194,6 +198,9 @@ public class FilterByTagManager {
         
         isFilterActive = true;
         
+        // Update toggle button state
+        updateToggleState(true);
+        
         // Refresh the tree
         viewer.refresh();
         
@@ -221,10 +228,36 @@ public class FilterByTagManager {
         
         isFilterActive = false;
         
+        // Update toggle button state
+        updateToggleState(false);
+        
         // Refresh the tree
         viewer.refresh();
         
         Activator.logInfo("Tag filter deactivated");
+    }
+    
+    /**
+     * Updates the toggle state of the filter command button.
+     * 
+     * @param active true if filter is active, false otherwise
+     */
+    private void updateToggleState(boolean active) {
+        try {
+            ICommandService commandService = PlatformUI.getWorkbench().getService(ICommandService.class);
+            if (commandService != null) {
+                Command command = commandService.getCommand("com.ditrix.edt.mcp.server.tags.filterByTag");
+                if (command != null) {
+                    State state = command.getState(RegistryToggleState.STATE_ID);
+                    if (state != null) {
+                        state.setValue(active);
+                        commandService.refreshElements("com.ditrix.edt.mcp.server.tags.filterByTag", null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Ignore - just visual feedback
+        }
     }
     
     private int countSelectedTags() {

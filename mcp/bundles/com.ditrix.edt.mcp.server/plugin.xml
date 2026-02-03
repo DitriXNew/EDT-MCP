@@ -36,6 +36,10 @@
             id="com.ditrix.edt.mcp.server.tags.filterByTag"
             name="Filter by Tag..."
             description="Filter navigator by tags">
+         <state
+               class="org.eclipse.ui.handlers.RegistryToggleState:false"
+               id="org.eclipse.ui.commands.toggleState">
+         </state>
       </command>
       <!-- Toggle tag commands (Ctrl+Alt+1 through Ctrl+Alt+0) -->
       <command
@@ -189,7 +193,7 @@
                icon="icons/tag.png"
                label="Filter by Tag"
                tooltip="Filter navigator by tags"
-               style="push">
+               style="toggle">
          </command>
       </menuContribution>
       
@@ -201,7 +205,7 @@
                commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
                icon="icons/tag.png"
                label="Filter by Tag..."
-               style="push">
+               style="toggle">
          </command>
       </menuContribution>
       

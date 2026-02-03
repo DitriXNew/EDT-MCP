@@ -99,13 +99,10 @@ public class GroupedObjectsFilter extends ViewerFilter {
                     continue;
                 }
                 String className = filter.getClass().getName();
-                // Skip our own package filters
-                if (className.startsWith("com.ditrix.edt.mcp.server")) {
-                    continue;
-                }
                 // Check for common search filter types
                 if (className.contains("Pattern") || className.contains("Search") || 
-                    className.contains("Quick") || className.contains("Text")) {
+                    className.contains("Quick") || className.contains("Text") ||
+                    className.contains("TagSearchFilter")) {
                     // This is a search filter - our filter should be disabled
                     return true;
                 }
