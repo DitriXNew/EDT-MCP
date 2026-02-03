@@ -101,6 +101,15 @@ public class Activator extends AbstractUIPlugin
         // Initialize filter manager to reset toggle state on startup
         com.ditrix.edt.mcp.server.tags.ui.FilterByTagManager.getInstance();
         
+        // Initialize navigator toolbar customizer to hide standard Collapse All button
+        org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
+            try {
+                com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().initialize();
+            } catch (Exception e) {
+                logError("Failed to initialize NavigatorToolbarCustomizer", e);
+            }
+        });
+        
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
 

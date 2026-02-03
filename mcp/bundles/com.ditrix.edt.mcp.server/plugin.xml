@@ -65,6 +65,12 @@
             name="Expand Below"
             description="Expand all nodes below the selected element">
       </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.collapseAll"
+            name="Collapse All"
+            description="Collapse all nodes in the Navigator tree">
+      </command>
    </extension>
    
    <!-- Key bindings for toggle tag commands -->
@@ -194,6 +200,10 @@
             </with>
          </enabledWhen>
       </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.handlers.CollapseAllHandler"
+            commandId="com.ditrix.edt.mcp.server.collapseAll">
+      </handler>
    </extension>
    
    <!-- Context menu contributions -->
@@ -210,17 +220,10 @@
          </toolbar>
       </menuContribution>
       
-      <!-- Filter by Tag button in EDT Navigator toolbar -->
+      <!-- Navigator toolbar buttons (positioned after filterBySubsystems) -->
       <menuContribution
             allPopups="false"
-            locationURI="toolbar:com._1c.g5.v8.dt.ui2.navigator">
-         <command
-               commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
-               icon="icons/tag.png"
-               label="Filter by Tag"
-               tooltip="Filter navigator by tags"
-               style="toggle">
-         </command>
+            locationURI="toolbar:com._1c.g5.v8.dt.ui2.navigator?after=com._1c.g5.v8.dt.navigator.ui.filterBySubsystems">
          <command
                commandId="com.ditrix.edt.mcp.server.expandAll"
                icon="icons/expandall.png"
@@ -229,11 +232,25 @@
                style="push">
          </command>
          <command
+               commandId="com.ditrix.edt.mcp.server.collapseAll"
+               icon="icons/collapseall.png"
+               label="Collapse All"
+               tooltip="Collapse all nodes in the tree"
+               style="push">
+         </command>
+         <command
                commandId="com.ditrix.edt.mcp.server.expandBelow"
                icon="icons/expandbelow.png"
                label="Expand Below"
                tooltip="Expand all nodes below the selected element"
                style="push">
+         </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
+               icon="icons/tag.png"
+               label="Filter by Tag"
+               tooltip="Filter navigator by tags"
+               style="toggle">
          </command>
       </menuContribution>
       

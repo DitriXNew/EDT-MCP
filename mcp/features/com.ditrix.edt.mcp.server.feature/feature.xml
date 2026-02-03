@@ -2,7 +2,7 @@
 <feature
     id="com.ditrix.edt.mcp.server.feature"
     label="%featureName"
-    version="1.20.0.qualifier"
+    version="1.20.1.qualifier"
     provider-name="%providerName">
 
     <description>

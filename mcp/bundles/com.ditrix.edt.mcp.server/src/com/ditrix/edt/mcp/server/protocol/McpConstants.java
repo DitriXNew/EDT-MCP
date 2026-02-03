@@ -22,7 +22,7 @@ public final class McpConstants
     public static final String AUTHOR = "DitriX"; //$NON-NLS-1$
     
     /** Plugin version - synced with Bundle-Version in MANIFEST.MF */
-    public static final String PLUGIN_VERSION = "1.20.0"; //$NON-NLS-1$
+    public static final String PLUGIN_VERSION = "1.20.1"; //$NON-NLS-1$
     
     // JSON-RPC error codes
     /** Parse error */
