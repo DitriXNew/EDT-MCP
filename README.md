@@ -679,7 +679,7 @@ groups:
 </details>
 
 <details>
-<summary><strong>1.20.1</strong> - Metadata Groups: custom folder hierarchy in Navigator</summary>
+<summary><strong>1.20.0</strong> - Metadata Groups: custom folder hierarchy in Navigator</summary>
 
 - **New**: Metadata Groups feature
   - Create custom folder hierarchy in Navigator tree per metadata collection
