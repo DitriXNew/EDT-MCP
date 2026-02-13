@@ -13,7 +13,7 @@
 
   <groupId>com.ditrix.edt.mcp</groupId>
   <artifactId>bom</artifactId>
-  <version>1.20.1-SNAPSHOT</version>
+  <version>1.21.9-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>BOM</name>
@@ -51,11 +51,21 @@
               <artifact>
                 <groupId>com.ditrix.edt.mcp</groupId>
                 <artifactId>default</artifactId>
-                <version>1.0.0-SNAPSHOT</version>
+                <version>1.21.9-SNAPSHOT</version>
               </artifact>
             </target>
             <dependency-resolution>
               <extraRequirements>
+                <requirement>
+                  <type>eclipse-plugin</type>
+                  <id>org.apache.felix.scr</id>
+                  <versionRange>0.0.0</versionRange>
+                </requirement>
+                <requirement>
+                  <type>eclipse-plugin</type>
+                  <id>org.apache.aries.spifly.dynamic.bundle</id>
+                  <versionRange>1.3.7</versionRange>
+                </requirement>
               </extraRequirements>
             </dependency-resolution>
             <environments>

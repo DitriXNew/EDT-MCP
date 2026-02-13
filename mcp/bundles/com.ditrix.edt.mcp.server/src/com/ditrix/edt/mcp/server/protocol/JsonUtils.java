@@ -263,7 +263,16 @@ public final class JsonUtils
         
         try
         {
-            return Integer.parseInt(value.trim());
+            // Handle both "1" and "1.0" (Gson converts JSON numbers to Double.toString())
+            // "1" and "1.0" → 1
+            // "1.1" → defaultValue
+            // "abc" → defaultValue
+            double d = Double.parseDouble(value.trim());
+            if (d != Math.floor(d) || d < Integer.MIN_VALUE || d > Integer.MAX_VALUE)
+            {
+                return defaultValue;
+            }
+            return (int) d;
         }
         catch (NumberFormatException e)
         {

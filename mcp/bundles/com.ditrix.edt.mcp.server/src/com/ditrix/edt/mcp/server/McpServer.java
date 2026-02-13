@@ -36,6 +36,12 @@ import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool;
+import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetModuleStructureTool;
+import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
+import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
+import com.ditrix.edt.mcp.server.tools.impl.ReadMethodSourceTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -136,7 +142,15 @@ public class McpServer
         registry.register(new GetApplicationsTool());
         registry.register(new UpdateDatabaseTool());
         registry.register(new DebugLaunchTool());
-        
+
+        // BSL code analysis tools
+        registry.register(new ReadModuleSourceTool());
+        registry.register(new GetModuleStructureTool());
+        registry.register(new ListModulesTool());
+        registry.register(new SearchInCodeTool());
+        registry.register(new ReadMethodSourceTool());
+        registry.register(new GetMethodCallHierarchyTool());
+
         Activator.logInfo("Registered " + registry.getToolCount() + " MCP tools"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 

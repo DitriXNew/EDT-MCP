@@ -180,6 +180,12 @@ Add to `claude_desktop_config.json`:
 | `get_applications` | Get list of applications (infobases) for a project with update state |
 | `update_database` | Update database (infobase) with full or incremental update mode |
 | `debug_launch` | Launch application in debug mode (auto-updates database before launch) |
+| `list_modules` | List all BSL modules in a project with module type and parent object |
+| `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
+| `read_module_source` | Read BSL module source code with line numbers (full file or line range) |
+| `read_method_source` | Read a specific procedure/function from a BSL module by name |
+| `search_in_code` | Full-text/regex search across BSL modules with outputMode: full/count/files |
+| `get_method_call_hierarchy` | Find method callers or callees via semantic BSL analysis |
 
 <details>
 <summary><strong>Tool Details</strong> - Parameters and usage examples for each tool</summary>
@@ -392,6 +398,101 @@ Add to `claude_desktop_config.json`:
 - Requires a launch configuration to be created in EDT first (Run → Run Configurations...)
 - If no configuration exists, returns list of available configurations
 - `updateBeforeLaunch=true` skips update if database is already up to date
+
+### BSL Code Analysis Tools
+
+#### List Modules Tool
+
+**`list_modules`** - List all BSL modules in an EDT project. Can filter by metadata type or specific object name. Returns module path, type, and parent object.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `metadataType` | No | Filter: `all`, `documents`, `catalogs`, `commonModules`, `informationRegisters`, `accumulationRegisters`, `reports`, `dataProcessors`, `exchangePlans`, `businessProcesses`, `tasks`, `constants`, `commonCommands`, `commonForms`, `webServices`, `httpServices` (default: `all`) |
+| `objectName` | No | Name of specific metadata object to list modules for (e.g. `Products`) |
+| `nameFilter` | No | Substring filter on module path (case-insensitive) |
+| `limit` | No | Maximum results (default: 200, max: 1000) |
+
+#### Get Module Structure Tool
+
+**`get_module_structure`** - Get structure of a BSL module: all procedures/functions with signatures, line numbers, regions, execution context (`&AtServer`, `&AtClient`), export flag, and parameters.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `modulePath` | Yes | Path from `src/` folder (e.g. `CommonModules/MyModule/Module.bsl`) |
+
+**Returns:** Markdown with:
+
+- Module summary (procedure/function counts, total lines)
+- Regions list with line ranges
+- Methods table: type, name, export, context, lines, parameters, region
+
+#### Read Module Source Tool
+
+**`read_module_source`** - Read BSL module source code from EDT project. Returns source with line numbers. Supports reading full file or a specific line range. Max 5000 lines per call.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `modulePath` | Yes | Path from `src/` folder (e.g. `CommonModules/MyModule/Module.bsl` or `Documents/SalesOrder/ObjectModule.bsl`) |
+| `startLine` | No | Start line number (1-based, inclusive). If omitted, reads from beginning |
+| `endLine` | No | End line number (1-based, inclusive). If omitted, reads to end |
+
+#### Read Method Source Tool
+
+**`read_method_source`** - Read a specific procedure/function from a BSL module by name. Returns method source code with line numbers and signature. If method not found, returns list of all available methods.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `modulePath` | Yes | Path from `src/` folder (e.g. `CommonModules/MyModule/Module.bsl`) |
+| `methodName` | Yes | Name of the procedure/function to read (case-insensitive) |
+
+**Returns:** Method source code with:
+
+- Method type (Procedure/Function), signature, export flag
+- Line range and line count
+- Source code with line numbers
+
+#### Search in Code Tool
+
+**`search_in_code`** - Full-text search across all BSL modules in a project. Supports plain text and regex patterns, case sensitivity, context lines around matches, and file path filtering.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `query` | Yes | Search string or regex pattern |
+| `caseSensitive` | No | Case-sensitive search (default: `false`) |
+| `isRegex` | No | Treat query as regular expression (default: `false`) |
+| `maxResults` | No | Maximum number of matches to return with context (default: 100, max: 500) |
+| `contextLines` | No | Lines of context before/after each match (default: 2, max: 5) |
+| `fileMask` | No | Filter by module path substring (e.g. `CommonModules` or `Documents/SalesOrder`) |
+| `outputMode` | No | Output mode: `full` (matches with context, default), `count` (only total count, fast), `files` (file list with match counts, no context) |
+
+#### Get Method Call Hierarchy Tool
+
+**`get_method_call_hierarchy`** - Find method call hierarchy: who calls this method (callers) or what this method calls (callees). Uses semantic BSL analysis via BM-index, not text search.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `modulePath` | Yes | Path from `src/` folder (e.g. `CommonModules/MyModule/Module.bsl`) |
+| `methodName` | Yes | Name of the procedure/function (case-insensitive) |
+| `direction` | No | `callers` (who calls this method, default) or `callees` (what this method calls) |
+| `limit` | No | Maximum results (default: 100, max: 500) |
+
+**Notes:**
+
+- Requires EMF model (BSL AST) — does not work in text fallback mode
+- `callers` uses IReferenceFinder to search across the entire project
+- `callees` traverses the method's AST to find all invocations
 
 ### Output Formats
 
@@ -666,6 +767,47 @@ groups:
 ## Version History
 
 <details>
+<summary><strong>1.21.9</strong> - BSL Code Analysis: module browsing, method reading, code search, call hierarchy</summary>
+
+- **New**: `list_modules` tool - List all BSL modules in a project
+  - Filter by metadata type (documents, catalogs, commonModules, informationRegisters, accumulationRegisters, accountingRegisters, calculationRegisters, reports, dataProcessors, exchangePlans, businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices)
+  - Filter by specific object name or path substring
+  - Returns module path, type, and parent object
+  - `metadataType=all` uses filesystem scan for 100% coverage of all metadata types (including ChartsOfAccounts, Enums, DocumentJournals, Sequences, etc.)
+- **New**: `get_module_structure` tool - Get BSL module structure
+  - Lists all procedures/functions with signatures, line numbers, regions
+  - Shows execution context (`&AtServer`, `&AtClient`), export flag, parameters
+  - Text-based region parsing for accurate region boundaries
+- **New**: `read_module_source` tool - Read BSL module source code
+  - Returns source with line numbers
+  - Supports reading full file or specific line range
+  - Max 5000 lines per call with truncation warning
+- **New**: `read_method_source` tool - Read specific procedure/function by name
+  - Returns method source with line numbers and full signature
+  - Shows method type (Procedure/Function), export flag, line range
+  - Lists available methods if requested method not found
+- **New**: `search_in_code` tool - Full-text/regex search across BSL modules
+  - Plain text and regex patterns with case sensitivity control
+  - Context lines around matches (configurable 0-5)
+  - File path filtering by substring (`fileMask`)
+  - `outputMode`: `full` (matches with context), `count` (total count, fast), `files` (file list with match counts)
+  - Always scans all files for accurate totals even when limit is reached
+- **New**: `get_method_call_hierarchy` tool - Semantic method call analysis
+  - Find callers (who calls this method) via IReferenceFinder
+  - Find callees (what this method calls) via AST traversal
+  - Returns caller/callee module, method name, line number, and call code
+  - Smart truncation for long calls: `Foo(...)` instead of raw text
+  - Comment lines stripped from call code display
+  - Shows total reference count even when limit is reached
+  - Shared ResourceSet for faster reference resolution
+- **Internal**: `BslModuleUtils` utility class for BSL EMF model operations
+  - Module loading via BmAwareResourceSetProvider with fallback
+  - UTF-8 BOM detection, file reading, method search
+  - Source text extraction via NodeModelUtils
+
+</details>
+
+<details>
 <summary><strong>1.20.1</strong> - Navigator toolbar buttons: Expand All, Expand Below, Collapse All</summary>
 
 - **New**: Navigator toolbar buttons for tree expansion control
@@ -871,4 +1013,4 @@ groups:
 # Licensed under GNU AGPL v3.0
 
 ---
-*EDT MCP Server v1.20.1*
+*EDT MCP Server v1.21.9*
