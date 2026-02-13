@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Select-Object -First 10)"
+    ]
+  }
+}

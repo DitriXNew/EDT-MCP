@@ -23,5 +23,11 @@ public class PreferenceInitializer extends AbstractPreferenceInitializer
         store.setDefault(PreferenceConstants.PREF_DEFAULT_LIMIT, PreferenceConstants.DEFAULT_DEFAULT_LIMIT);
         store.setDefault(PreferenceConstants.PREF_MAX_LIMIT, PreferenceConstants.DEFAULT_MAX_LIMIT);
         store.setDefault(PreferenceConstants.PREF_PLAIN_TEXT_MODE, PreferenceConstants.DEFAULT_PLAIN_TEXT_MODE);
+        
+        // Tag decoration preferences
+        store.setDefault(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR, 
+            PreferenceConstants.DEFAULT_TAGS_SHOW_IN_NAVIGATOR);
+        store.setDefault(PreferenceConstants.PREF_TAGS_DECORATION_STYLE, 
+            PreferenceConstants.DEFAULT_TAGS_DECORATION_STYLE);
     }
 }

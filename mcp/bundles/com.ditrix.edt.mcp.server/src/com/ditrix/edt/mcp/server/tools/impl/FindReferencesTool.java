@@ -7,12 +7,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
-
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.NullProgressMonitor;
@@ -1511,31 +1508,6 @@ public class FindReferencesTool implements IMcpTool
         public List<ReferenceInfo> getAllReferences()
         {
             return new ArrayList<>(references);
-        }
-        
-        public Map<String, List<ReferenceInfo>> getGroupedReferences()
-        {
-            // Group by category
-            Map<String, List<ReferenceInfo>> grouped = references.stream()
-                .collect(Collectors.groupingBy(r -> r.category));
-            
-            // Apply limit per category
-            Map<String, List<ReferenceInfo>> limited = new HashMap<>();
-            for (Map.Entry<String, List<ReferenceInfo>> entry : grouped.entrySet())
-            {
-                List<ReferenceInfo> refs = entry.getValue();
-                if (refs.size() > limit)
-                {
-                    limited.put(entry.getKey() + " (showing first " + limit + " of " + refs.size() + ")", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                               refs.subList(0, limit));
-                }
-                else
-                {
-                    limited.put(entry.getKey(), refs);
-                }
-            }
-            
-            return limited;
         }
     }
 }

@@ -15,6 +15,7 @@ public class McpServerStartup implements IStartup
     @Override
     public void earlyStartup()
     {
+        
         // Check auto-start preference
         boolean autoStart = Activator.getDefault().getPreferenceStore()
             .getBoolean(PreferenceConstants.PREF_AUTO_START);

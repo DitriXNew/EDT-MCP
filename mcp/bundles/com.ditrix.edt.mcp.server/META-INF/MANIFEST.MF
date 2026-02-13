@@ -2,14 +2,15 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: %pluginName
 Bundle-Vendor: %providerName
-Bundle-Version: 1.18.0.qualifier
+Bundle-Version: 1.20.1.qualifier
 Bundle-SymbolicName: com.ditrix.edt.mcp.server;singleton:=true
 Bundle-Activator: com.ditrix.edt.mcp.server.Activator
 Bundle-ActivationPolicy: lazy
 Bundle-Localization: plugin
 Bundle-ClassPath: .,
  lib/copy-down-1.1.jar,
- lib/jsoup-1.17.2.jar
+ lib/jsoup-1.17.2.jar,
+ lib/snakeyaml-2.2.jar
 Require-Bundle: org.eclipse.core.runtime;bundle-version="[3.30.0,4.0.0)",
  org.eclipse.core.resources;bundle-version="[3.18.0,4.0.0)",
  org.eclipse.ui;bundle-version="[3.201.0,4.0.0)",
@@ -19,8 +20,11 @@ Require-Bundle: org.eclipse.core.runtime;bundle-version="[3.30.0,4.0.0)",
  org.eclipse.xtext.ui;bundle-version="[2.31.0,3.0.0)"
 Bundle-RequiredExecutionEnvironment: JavaSE-17
 Automatic-Module-Name: com.ditrix.edt.mcp.server
-Import-Package: com._1c.g5.v8.bm.core,
+Import-Package: com._1c.g5.v8.bm.common.collections,
+ com._1c.g5.v8.bm.core,
+ com._1c.g5.v8.bm.core.event,
  com._1c.g5.v8.bm.integration,
+ com._1c.g5.v8.bm.integration.event,
  com._1c.g5.v8.derived,
  com._1c.g5.v8.dt.bm.xtext,
  com._1c.g5.v8.dt.bsl.model,
@@ -32,16 +36,22 @@ Import-Package: com._1c.g5.v8.bm.core,
  com._1c.g5.v8.dt.mcore,
  com._1c.g5.v8.dt.mcore.util,
  com._1c.g5.v8.dt.md,
+ com._1c.g5.v8.dt.md.ui.shared,
  com._1c.g5.v8.dt.metadata.common;version="[3.0.0,4.0.0)",
  com._1c.g5.v8.dt.metadata.mdclass;version="[11.0.0,12.0.0)",
  com._1c.g5.v8.dt.metadata.mdclass.util;version="[5.18.0,6.0.0)",
  com._1c.g5.v8.dt.metadata.mdtype;version="[2.5.0,3.0.0)",
+ com._1c.g5.v8.dt.navigator.providers,
+ com._1c.g5.v8.dt.navigator.util,
  com._1c.g5.v8.dt.platform,
  com._1c.g5.v8.dt.platform.version,
+ com._1c.g5.v8.dt.refactoring.core,
  com._1c.g5.v8.dt.rights.model,
+ com._1c.g5.v8.dt.ui.util,
  com._1c.g5.v8.dt.validation.marker,
  com.e1c.g5.dt.applications,
  com.e1c.g5.v8.dt.check,
+ com._1c.g5.wiring,
  com.google.common.base;version="[32.1.0,33.0.0)",
  com.google.gson,
  org.eclipse.debug.core,
@@ -50,6 +60,6 @@ Import-Package: com._1c.g5.v8.bm.core,
  org.eclipse.emf.ecore,
  org.eclipse.emf.ecore.resource,
  org.eclipse.emf.ecore.util,
+ org.eclipse.ltk.core.refactoring,
+ org.eclipse.ui.navigator,
  org.eclipse.xtext.resource
-
-

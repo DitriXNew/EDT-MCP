@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?eclipse version="3.4"?>
 <plugin>
-   <!-- Страница настроек плагина -->
+   <!-- Preferences page -->
    <extension point="org.eclipse.ui.preferencePages">
       <page
             id="com.ditrix.edt.mcp.server.preferences"
@@ -10,18 +10,205 @@
       </page>
    </extension>
    
-   <!-- Инициализатор настроек по умолчанию -->
+   <!-- Default preferences initializer -->
    <extension point="org.eclipse.core.runtime.preferences">
       <initializer class="com.ditrix.edt.mcp.server.preferences.PreferenceInitializer"/>
    </extension>
    
-   <!-- Startup для автозапуска сервера если включено -->
+   <!-- Startup for auto-starting server if enabled -->
    <extension point="org.eclipse.ui.startup">
       <startup class="com.ditrix.edt.mcp.server.McpServerStartup"/>
    </extension>
    
-   <!-- Status bar indicator for MCP server in the trim area -->
+   <!-- Commands for tag management -->
+   <extension point="org.eclipse.ui.commands">
+      <category
+            id="com.ditrix.edt.mcp.server.tags.category"
+            name="Metadata Tags">
+      </category>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.tags.manageTags"
+            name="Manage Tags...">
+      </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.tags.filterByTag"
+            name="Filter by Tag..."
+            description="Filter navigator by tags">
+         <state
+               class="org.eclipse.ui.handlers.RegistryToggleState:false"
+               id="org.eclipse.ui.commands.toggleState">
+         </state>
+      </command>
+      <!-- Toggle tag commands (Ctrl+Alt+1 through Ctrl+Alt+0) -->
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.tags.toggleTag"
+            name="Toggle Tag by Index"
+            description="Toggle tag assignment by position (1-10)">
+         <commandParameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               name="Tag Index"
+               optional="false"/>
+      </command>
+      <!-- Navigator tree expansion commands -->
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.expandAll"
+            name="Expand All"
+            description="Expand all nodes in the Navigator tree">
+      </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.expandBelow"
+            name="Expand Below"
+            description="Expand all nodes below the selected element">
+      </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.tags.category"
+            id="com.ditrix.edt.mcp.server.collapseAll"
+            name="Collapse All"
+            description="Collapse all nodes in the Navigator tree">
+      </command>
+   </extension>
+   
+   <!-- Key bindings for toggle tag commands -->
+   <extension point="org.eclipse.ui.bindings">
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+1">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="1"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+2">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="2"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+3">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="3"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+4">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="4"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+5">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="5"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+6">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="6"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+7">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="7"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+8">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="8"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+9">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="9"/>
+      </key>
+      <key
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+0">
+         <parameter
+               id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
+               value="0"/>
+      </key>
+   </extension>
+   
+   <!-- Handlers for tag commands -->
+   <extension point="org.eclipse.ui.handlers">
+      <handler
+            class="com.ditrix.edt.mcp.server.tags.handlers.ManageTagsHandler"
+            commandId="com.ditrix.edt.mcp.server.tags.manageTags">
+         <enabledWhen>
+            <with variable="selection">
+               <count value="1"/>
+               <iterate operator="and">
+                  <instanceof value="org.eclipse.emf.ecore.EObject"/>
+               </iterate>
+            </with>
+         </enabledWhen>
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.tags.handlers.FilterByTagHandler"
+            commandId="com.ditrix.edt.mcp.server.tags.filterByTag">
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.tags.handlers.ToggleTagByIndexHandler"
+            commandId="com.ditrix.edt.mcp.server.tags.toggleTag">
+         <enabledWhen>
+            <with variable="selection">
+               <count value="+"/>
+               <iterate operator="or">
+                  <instanceof value="org.eclipse.emf.ecore.EObject"/>
+               </iterate>
+            </with>
+         </enabledWhen>
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.handlers.ExpandAllHandler"
+            commandId="com.ditrix.edt.mcp.server.expandAll">
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.handlers.ExpandBelowHandler"
+            commandId="com.ditrix.edt.mcp.server.expandBelow">
+         <enabledWhen>
+            <with variable="selection">
+               <count value="+"/>
+            </with>
+         </enabledWhen>
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.handlers.CollapseAllHandler"
+            commandId="com.ditrix.edt.mcp.server.collapseAll">
+      </handler>
+   </extension>
+   
+   <!-- Context menu contributions -->
    <extension point="org.eclipse.ui.menus">
+      <!-- Status bar indicator for MCP server in the trim area -->
       <menuContribution
             locationURI="toolbar:org.eclipse.ui.trim.status">
          <toolbar
@@ -32,5 +219,359 @@
             </control>
          </toolbar>
       </menuContribution>
+      
+      <!-- Navigator toolbar buttons (positioned after filterBySubsystems) -->
+      <menuContribution
+            allPopups="false"
+            locationURI="toolbar:com._1c.g5.v8.dt.ui2.navigator?after=com._1c.g5.v8.dt.navigator.ui.filterBySubsystems">
+         <command
+               commandId="com.ditrix.edt.mcp.server.expandAll"
+               icon="icons/expandall.png"
+               label="Expand All"
+               tooltip="Expand all nodes in the tree"
+               style="push">
+         </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.collapseAll"
+               icon="icons/collapseall.png"
+               label="Collapse All"
+               tooltip="Collapse all nodes in the tree"
+               style="push">
+         </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.expandBelow"
+               icon="icons/expandbelow.png"
+               label="Expand Below"
+               tooltip="Expand all nodes below the selected element"
+               style="push">
+         </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
+               icon="icons/tag.png"
+               label="Filter by Tag"
+               tooltip="Filter navigator by tags"
+               style="toggle">
+         </command>
+      </menuContribution>
+      
+      <!-- Filter by Tag in EDT Navigator view menu -->
+      <menuContribution
+            allPopups="false"
+            locationURI="menu:com._1c.g5.v8.dt.ui2.navigator?after=additions">
+         <command
+               commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
+               icon="icons/tag.png"
+               label="Filter by Tag..."
+               style="toggle">
+         </command>
+      </menuContribution>
+      
+      <!-- Tag management in EDT navigator context menu -->
+      <menuContribution
+            allPopups="false"
+            locationURI="popup:com._1c.g5.v8.dt.navigator.ui.navigator.popup?after=group.edit">
+         <separator name="com.ditrix.edt.mcp.server.tags.separator" visible="true"/>
+         <menu
+               id="com.ditrix.edt.mcp.server.tags.menu"
+               icon="icons/tag.png"
+               label="Tags">
+            <!-- Dynamic tags list -->
+            <dynamic
+                  class="com.ditrix.edt.mcp.server.tags.ui.TagsMenuContribution"
+                  id="com.ditrix.edt.mcp.server.tags.dynamicTags">
+            </dynamic>
+            <!-- Manage Tags command at the bottom -->
+            <command
+                  commandId="com.ditrix.edt.mcp.server.tags.manageTags"
+                  label="Manage Tags..."
+                  style="push">
+               <visibleWhen checkEnabled="false">
+                  <with variable="selection">
+                     <count value="1"/>
+                     <iterate operator="and">
+                        <instanceof value="org.eclipse.emf.ecore.EObject"/>
+                     </iterate>
+                  </with>
+               </visibleWhen>
+            </command>
+         </menu>
+      </menuContribution>
+   </extension>
+   
+   <!-- Label decorator for showing tags on metadata objects -->
+   <extension point="org.eclipse.ui.decorators">
+      <decorator
+            class="com.ditrix.edt.mcp.server.tags.ui.TagLabelDecorator"
+            id="com.ditrix.edt.mcp.server.tags.decorator"
+            label="Metadata Tags Decorator"
+            lightweight="true"
+            state="true">
+         <description>Shows tags assigned to metadata objects</description>
+         <enablement>
+            <objectClass name="org.eclipse.emf.ecore.EObject"/>
+         </enablement>
+      </decorator>
+   </extension>
+   
+   <!-- Tag Filter View -->
+   <extension point="org.eclipse.ui.views">
+      <category
+            id="com.ditrix.edt.mcp.server.tags.viewCategory"
+            name="MCP Server">
+      </category>
+      <view
+            id="com.ditrix.edt.mcp.server.tags.filterView"
+            name="Tag Filter"
+            icon="icons/tag.png"
+            category="com.ditrix.edt.mcp.server.tags.viewCategory"
+            class="com.ditrix.edt.mcp.server.tags.ui.TagFilterView"
+            allowMultiple="false"
+            restorable="true">
+         <description>Filter metadata objects by tags</description>
+      </view>
+   </extension>
+   
+   <!-- Add Tag Filter View to Window > Show View menu -->
+   <extension point="org.eclipse.ui.perspectiveExtensions">
+      <perspectiveExtension targetID="*">
+         <viewShortcut id="com.ditrix.edt.mcp.server.tags.filterView"/>
+      </perspectiveExtension>
+   </extension>
+   
+   <!-- Tag Search Filter for EDT Navigator -->
+   <extension point="org.eclipse.ui.navigator.navigatorContent">
+      <commonFilter
+            id="com.ditrix.edt.mcp.server.tags.TagSearchFilter"
+            name="Tag Search Filter"
+            description="Filters metadata objects by tag when search starts with #"
+            activeByDefault="false"
+            visibleInUI="false"
+            class="com.ditrix.edt.mcp.server.tags.ui.TagSearchFilter">
+      </commonFilter>
+   </extension>
+   
+   <!-- Bind Tag Search Filter to EDT Navigator -->
+   <extension point="org.eclipse.ui.navigator.viewer">
+      <viewerContentBinding viewerId="com._1c.g5.v8.dt.ui2.navigator">
+         <includes>
+            <contentExtension pattern="com.ditrix.edt.mcp.server.tags.TagSearchFilter"/>
+         </includes>
+      </viewerContentBinding>
+   </extension>
+   
+   <!-- Refactoring contributors for tag sync on rename/delete -->
+   <extension point="com._1c.g5.v8.dt.refactoring.core.refactoringContributors">
+      <contributor
+            class="com.ditrix.edt.mcp.server.tags.refactoring.TagRenameRefactoringContributor">
+      </contributor>
+      <contributor
+            class="com.ditrix.edt.mcp.server.tags.refactoring.TagDeleteRefactoringContributor">
+      </contributor>
+      <contributor
+            class="com.ditrix.edt.mcp.server.groups.refactoring.GroupRenameRefactoringContributor">
+      </contributor>
+      <contributor
+            class="com.ditrix.edt.mcp.server.groups.refactoring.GroupDeleteRefactoringContributor">
+      </contributor>
+   </extension>
+   
+   <!-- ============================================== -->
+   <!-- Navigator Object Groups                       -->
+   <!-- ============================================== -->
+   
+   <!-- Commands for group management -->
+   <extension point="org.eclipse.ui.commands">
+      <category
+            id="com.ditrix.edt.mcp.server.groups.category"
+            name="Navigator Groups">
+      </category>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.groups.category"
+            id="com.ditrix.edt.mcp.server.groups.newGroup"
+            name="New Group..."
+            description="Create a new virtual folder group">
+      </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.groups.category"
+            id="com.ditrix.edt.mcp.server.groups.addToGroup"
+            name="Add to Group..."
+            description="Add selected objects to a group">
+      </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.groups.category"
+            id="com.ditrix.edt.mcp.server.groups.deleteGroup"
+            name="Delete Group"
+            description="Delete the selected group">
+      </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.groups.category"
+            id="com.ditrix.edt.mcp.server.groups.renameGroup"
+            name="Rename Group..."
+            description="Rename the selected group">
+      </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.groups.category"
+            id="com.ditrix.edt.mcp.server.groups.removeFromGroup"
+            name="Remove from Group"
+            description="Remove object from group (return to original location)">
+      </command>
+   </extension>
+   
+   <!-- Handlers for group commands -->
+   <extension point="org.eclipse.ui.handlers">
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.NewGroupHandler"
+            commandId="com.ditrix.edt.mcp.server.groups.newGroup">
+         <!-- Handler does internal validation, always enabled in Navigator -->
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.AddToGroupHandler"
+            commandId="com.ditrix.edt.mcp.server.groups.addToGroup">
+         <enabledWhen>
+            <with variable="selection">
+               <count value="+"/>
+               <iterate operator="or">
+                  <instanceof value="org.eclipse.emf.ecore.EObject"/>
+               </iterate>
+            </with>
+         </enabledWhen>
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.DeleteGroupHandler"
+            commandId="com.ditrix.edt.mcp.server.groups.deleteGroup">
+         <enabledWhen>
+            <with variable="selection">
+               <iterate operator="and">
+                  <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"/>
+               </iterate>
+            </with>
+         </enabledWhen>
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.RenameGroupHandler"
+            commandId="com.ditrix.edt.mcp.server.groups.renameGroup">
+         <enabledWhen>
+            <with variable="selection">
+               <iterate operator="and">
+                  <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"/>
+               </iterate>
+            </with>
+         </enabledWhen>
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.RemoveFromGroupHandler"
+            commandId="com.ditrix.edt.mcp.server.groups.removeFromGroup">
+         <!-- Handler has setEnabled() that checks for EObjects in groups -->
+      </handler>
+      <!-- Copy handler for groups - copies group name to clipboard -->
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.CopyGroupHandler"
+            commandId="org.eclipse.ui.edit.copy">
+         <activeWhen>
+            <with variable="selection">
+               <iterate operator="and" ifEmpty="false">
+                  <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"/>
+               </iterate>
+            </with>
+         </activeWhen>
+      </handler>
+   </extension>
+   
+   <!-- Context menu contributions for groups -->
+   <extension point="org.eclipse.ui.menus">
+      <!-- New Group in collection folders context menu -->
+      <menuContribution
+            allPopups="false"
+            locationURI="popup:com._1c.g5.v8.dt.navigator.ui.navigator.popup?after=group.new">
+         <command
+               commandId="com.ditrix.edt.mcp.server.groups.newGroup"
+               icon="icons/group.png"
+               label="New Group..."
+               style="push">
+            <visibleWhen checkEnabled="true"/>
+         </command>
+      </menuContribution>
+      
+      <!-- Add to Group command for metadata objects -->
+      <menuContribution
+            allPopups="false"
+            locationURI="popup:com._1c.g5.v8.dt.navigator.ui.navigator.popup?after=group.edit">
+         <command
+               commandId="com.ditrix.edt.mcp.server.groups.addToGroup"
+               icon="icons/add_to_group.png"
+               label="Add to Group..."
+               style="push">
+            <visibleWhen checkEnabled="true"/>
+         </command>
+      </menuContribution>
+      
+      <!-- Group management submenu on group nodes -->
+      <menuContribution
+            allPopups="false"
+            locationURI="popup:com._1c.g5.v8.dt.navigator.ui.navigator.popup?after=group.edit">
+         <command
+               commandId="com.ditrix.edt.mcp.server.groups.renameGroup"
+               label="Rename Group..."
+               style="push">
+            <visibleWhen checkEnabled="true"/>
+         </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.groups.deleteGroup"
+               label="Delete Group"
+               style="push">
+            <visibleWhen checkEnabled="true"/>
+         </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.groups.removeFromGroup"
+               label="Remove from Group"
+               style="push">
+            <visibleWhen checkEnabled="true"/>
+         </command>
+      </menuContribution>
+   </extension>
+   
+   <!-- Navigator Content Extension for Groups -->
+   <extension point="org.eclipse.ui.navigator.navigatorContent">
+      <navigatorContent
+            id="com.ditrix.edt.mcp.server.groups.navigatorContent"
+            name="Navigator Groups"
+            contentProvider="com.ditrix.edt.mcp.server.groups.ui.GroupContentProvider"
+            labelProvider="com.ditrix.edt.mcp.server.groups.ui.GroupLabelProvider"
+            activeByDefault="true"
+            priority="highest">
+         <triggerPoints>
+            <or>
+               <!-- Use IWorkbenchAdapter which all EDT navigator elements implement -->
+               <instanceof value="org.eclipse.ui.model.IWorkbenchAdapter"/>
+            </or>
+         </triggerPoints>
+         <possibleChildren>
+            <or>
+               <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"/>
+               <instanceof value="org.eclipse.ui.model.IWorkbenchAdapter"/>
+               <instanceof value="org.eclipse.emf.ecore.EObject"/>
+            </or>
+         </possibleChildren>
+      </navigatorContent>
+      
+      <!-- Filter to hide grouped objects from their original location -->
+      <commonFilter
+            id="com.ditrix.edt.mcp.server.groups.groupedObjectsFilter"
+            name="Hide Grouped Objects"
+            description="Hides objects from their original location when they are placed in a group"
+            class="com.ditrix.edt.mcp.server.groups.ui.GroupedObjectsFilter"
+            activeByDefault="true"
+            visibleInUI="false">
+      </commonFilter>
+   </extension>
+   
+   <!-- Bind Groups Content to EDT Navigator -->
+   <extension point="org.eclipse.ui.navigator.viewer">
+      <viewerContentBinding viewerId="com._1c.g5.v8.dt.ui2.navigator">
+         <includes>
+            <contentExtension pattern="com.ditrix.edt.mcp.server.groups.navigatorContent"/>
+            <contentExtension pattern="com.ditrix.edt.mcp.server.groups.groupedObjectsFilter"/>
+         </includes>
+      </viewerContentBinding>
    </extension>
 </plugin>

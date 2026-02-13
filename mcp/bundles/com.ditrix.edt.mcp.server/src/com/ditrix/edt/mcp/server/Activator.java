@@ -16,7 +16,9 @@ import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
+import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
+import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 
@@ -46,6 +48,10 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<IServicesOrchestrator, IServicesOrchestrator> servicesOrchestratorTracker;
     private ServiceTracker<BmAwareResourceSetProvider, BmAwareResourceSetProvider> resourceSetProviderTracker;
     private ServiceTracker<IApplicationManager, IApplicationManager> applicationManagerTracker;
+    private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
+    
+    /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
+    private IGroupService groupService;
 
     @Override
     public void start(BundleContext context) throws Exception
@@ -84,6 +90,25 @@ public class Activator extends AbstractUIPlugin
         
         applicationManagerTracker = new ServiceTracker<>(context, IApplicationManager.class, null);
         applicationManagerTracker.open();
+        
+        navigatorStateProviderTracker = new ServiceTracker<>(context, INavigatorContentProviderStateProvider.class, null);
+        navigatorStateProviderTracker.open();
+        
+        // Create group service directly (not via OSGi DS to avoid circular references)
+        groupService = new com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl();
+        ((com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl) groupService).activate();
+        
+        // Initialize filter manager to reset toggle state on startup
+        com.ditrix.edt.mcp.server.tags.ui.FilterByTagManager.getInstance();
+        
+        // Initialize navigator toolbar customizer to hide standard Collapse All button
+        org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
+            try {
+                com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().initialize();
+            } catch (Exception e) {
+                logError("Failed to initialize NavigatorToolbarCustomizer", e);
+            }
+        });
         
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
@@ -147,6 +172,41 @@ public class Activator extends AbstractUIPlugin
             applicationManagerTracker.close();
             applicationManagerTracker = null;
         }
+        if (navigatorStateProviderTracker != null)
+        {
+            navigatorStateProviderTracker.close();
+            navigatorStateProviderTracker = null;
+        }
+        
+        // Dispose navigator toolbar customizer
+        try
+        {
+            org.eclipse.swt.widgets.Display display = org.eclipse.swt.widgets.Display.getDefault();
+            if (display != null && !display.isDisposed())
+            {
+                display.syncExec(() -> {
+                    try
+                    {
+                        com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().dispose();
+                    }
+                    catch (Exception e)
+                    {
+                        // Ignore - workbench may be closing
+                    }
+                });
+            }
+        }
+        catch (Exception e)
+        {
+            // Ignore - display may be disposed
+        }
+        
+        // Deactivate group service
+        if (groupService instanceof com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl impl)
+        {
+            impl.deactivate();
+        }
+        groupService = null;
         
         logInfo("EDT MCP Server plugin stopped"); //$NON-NLS-1$
         plugin = null;
@@ -316,6 +376,43 @@ public class Activator extends AbstractUIPlugin
         }
         return applicationManagerTracker.getService();
     }
+    
+    /**
+     * Returns the INavigatorContentProviderStateProvider service.
+     * Used for controlling navigator content filtering state.
+     * 
+     * @return navigator state provider or null if not available
+     */
+    public INavigatorContentProviderStateProvider getNavigatorStateProvider()
+    {
+        if (navigatorStateProviderTracker == null)
+        {
+            return null;
+        }
+        return navigatorStateProviderTracker.getService();
+    }
+    
+    /**
+     * Returns the IGroupService for group operations.
+     * Used for virtual folder groups in the Navigator.
+     * 
+     * @return group service or null if not available
+     */
+    public IGroupService getGroupService()
+    {
+        return groupService;
+    }
+    
+    /**
+     * Static convenience method to get the group service.
+     * 
+     * @return group service or null if not available
+     */
+    public static IGroupService getGroupServiceStatic()
+    {
+        Activator activator = getDefault();
+        return activator != null ? activator.getGroupService() : null;
+    }
 
     /**
      * Returns the default result limit for tools from preferences.
@@ -349,6 +446,44 @@ public class Activator extends AbstractUIPlugin
         if (plugin != null)
         {
             plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, message));
+        }
+    }
+    
+    /**
+     * Convenience method for logging (uses INFO level).
+     * 
+     * @param message the message
+     */
+    public static void log(String message)
+    {
+        logInfo(message);
+    }
+
+    /**
+     * Logs a debug message.
+     * Only logs if debug mode is enabled (via .options file or preference).
+     * 
+     * @param message the debug message
+     */
+    public static void logDebug(String message)
+    {
+        // Disabled by default - enable by uncommenting the body below for troubleshooting
+        // if (plugin != null)
+        // {
+        //     plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, "[DEBUG] " + message));
+        // }
+    }
+
+    /**
+     * Logs a warning message.
+     * 
+     * @param message the warning message
+     */
+    public static void logWarning(String message)
+    {
+        if (plugin != null)
+        {
+            plugin.getLog().log(new Status(IStatus.WARNING, PLUGIN_ID, message));
         }
     }
 
