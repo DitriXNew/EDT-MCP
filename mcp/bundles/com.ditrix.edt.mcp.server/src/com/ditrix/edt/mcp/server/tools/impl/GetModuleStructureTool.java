@@ -21,7 +21,6 @@ import org.eclipse.ui.PlatformUI;
 import org.eclipse.xtext.nodemodel.INode;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
 
-import com._1c.g5.v8.dt.bsl.model.FormalParam;
 import com._1c.g5.v8.dt.bsl.model.Function;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
@@ -82,21 +81,6 @@ public class GetModuleStructureTool implements IMcpTool
         }
         return "module-structure.md"; //$NON-NLS-1$
     }
-
-    /** Regex for BSL method start (Russian and English) */
-    private static final Pattern METHOD_START = Pattern.compile(
-        "^\\s*(?:\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Procedure|Function)\\s+(\\S+?)\\s*\\((.*)$", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Regex for BSL method end (Russian and English) */
-    private static final Pattern METHOD_END = Pattern.compile(
-        "^\\s*(?:\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b|\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438|EndProcedure|EndFunction)", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Regex for function keyword check */
-    private static final Pattern FUNC_KEYWORD = Pattern.compile(
-        "^\\s*(?:\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Function)\\s", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Regex for pragma annotation */
     private static final Pattern PRAGMA_PATTERN = Pattern.compile(
@@ -245,23 +229,7 @@ public class GetModuleStructureTool implements IMcpTool
             return sb.toString();
         }
 
-        sb.append("### Methods\n\n"); //$NON-NLS-1$
-        sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region |\n"); //$NON-NLS-1$
-        sb.append("|---|------|------|--------|---------|-------|------------|--------|\n"); //$NON-NLS-1$
-
-        int idx = 1;
-        for (MethodInfo m : methods)
-        {
-            sb.append("| ").append(idx++); //$NON-NLS-1$
-            sb.append(" | ").append(m.isFunction ? "Function" : "Procedure"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append(" | ").append(MarkdownUtils.escapeForTable(m.name)); //$NON-NLS-1$
-            sb.append(" | ").append(m.isExport ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append(" | ").append(m.executionContext != null ? MarkdownUtils.escapeForTable(m.executionContext) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append(" | ").append(m.startLine).append("-").append(m.endLine); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append(" | ").append(MarkdownUtils.escapeForTable(m.paramsString)); //$NON-NLS-1$
-            sb.append(" | ").append(m.region != null ? MarkdownUtils.escapeForTable(m.region) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append(" |\n"); //$NON-NLS-1$
-        }
+        appendMethodsTable(sb, methods);
 
         return sb.toString();
     }
@@ -331,12 +299,12 @@ public class GetModuleStructureTool implements IMcpTool
                 }
 
                 // Check for method start
-                Matcher methodMatcher = METHOD_START.matcher(line);
+                Matcher methodMatcher = BslModuleUtils.METHOD_START_PATTERN.matcher(line);
                 if (methodMatcher.find())
                 {
                     MethodInfo info = new MethodInfo();
                     info.name = methodMatcher.group(1);
-                    info.isFunction = FUNC_KEYWORD.matcher(line).find();
+                    info.isFunction = BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher(line).find();
                     info.startLine = i + 1;
                     info.executionContext = pendingPragma;
                     pendingPragma = null;
@@ -383,7 +351,7 @@ public class GetModuleStructureTool implements IMcpTool
                     // Find method end
                     for (int j = i + 1; j < lines.size(); j++)
                     {
-                        if (METHOD_END.matcher(lines.get(j)).find())
+                        if (BslModuleUtils.METHOD_END_PATTERN.matcher(lines.get(j)).find())
                         {
                             info.endLine = j + 1;
                             break;
@@ -395,7 +363,7 @@ public class GetModuleStructureTool implements IMcpTool
                     }
 
                     // Find containing region
-                    info.region = findContainingRegionText(info.startLine, regionStack, regions);
+                    info.region = findContainingRegion(info.startLine, regionStack, regions);
 
                     methods.add(info);
                 }
@@ -442,23 +410,7 @@ public class GetModuleStructureTool implements IMcpTool
                 return sb.toString();
             }
 
-            sb.append("### Methods\n\n"); //$NON-NLS-1$
-            sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region |\n"); //$NON-NLS-1$
-            sb.append("|---|------|------|--------|---------|-------|------------|--------|\n"); //$NON-NLS-1$
-
-            int idx = 1;
-            for (MethodInfo m : methods)
-            {
-                sb.append("| ").append(idx++); //$NON-NLS-1$
-                sb.append(" | ").append(m.isFunction ? "Function" : "Procedure"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                sb.append(" | ").append(MarkdownUtils.escapeForTable(m.name)); //$NON-NLS-1$
-                sb.append(" | ").append(m.isExport ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                sb.append(" | ").append(m.executionContext != null ? MarkdownUtils.escapeForTable(m.executionContext) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
-                sb.append(" | ").append(m.startLine).append("-").append(m.endLine); //$NON-NLS-1$ //$NON-NLS-2$
-                sb.append(" | ").append(MarkdownUtils.escapeForTable(m.paramsString)); //$NON-NLS-1$
-                sb.append(" | ").append(m.region != null ? MarkdownUtils.escapeForTable(m.region) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
-                sb.append(" |\n"); //$NON-NLS-1$
-            }
+            appendMethodsTable(sb, methods);
 
             return sb.toString();
         }
@@ -468,14 +420,51 @@ public class GetModuleStructureTool implements IMcpTool
         }
     }
 
-    private String findContainingRegionText(int line, List<RegionInfo> openRegions, List<RegionInfo> closedRegions)
+    /**
+     * Appends a markdown methods table to the StringBuilder.
+     * Shared between EMF and text-based paths to avoid duplication.
+     */
+    private void appendMethodsTable(StringBuilder sb, List<MethodInfo> methods)
+    {
+        sb.append("### Methods\n\n"); //$NON-NLS-1$
+        sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region |\n"); //$NON-NLS-1$
+        sb.append("|---|------|------|--------|---------|-------|------------|--------|\n"); //$NON-NLS-1$
+
+        int idx = 1;
+        for (MethodInfo m : methods)
+        {
+            sb.append("| ").append(idx++); //$NON-NLS-1$
+            sb.append(" | ").append(m.isFunction ? "Function" : "Procedure"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            sb.append(" | ").append(MarkdownUtils.escapeForTable(m.name)); //$NON-NLS-1$
+            sb.append(" | ").append(m.isExport ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            sb.append(" | ").append(m.executionContext != null ? MarkdownUtils.escapeForTable(m.executionContext) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(" | ").append(m.startLine).append("-").append(m.endLine); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(" | ").append(MarkdownUtils.escapeForTable(m.paramsString)); //$NON-NLS-1$
+            sb.append(" | ").append(m.region != null ? MarkdownUtils.escapeForTable(m.region) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(" |\n"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Finds the innermost region containing the given line.
+     * Checks open (stack) regions first, then closed regions by narrowest range.
+     *
+     * @param line the line number to check
+     * @param openRegions still-open regions (from text parsing stack), may be null
+     * @param closedRegions fully closed regions with start/end lines
+     * @return region name or null
+     */
+    private String findContainingRegion(int line, List<RegionInfo> openRegions, List<RegionInfo> closedRegions)
     {
         // Find innermost region from open (active) regions — last one on the stack is innermost
-        for (int i = openRegions.size() - 1; i >= 0; i--)
+        if (openRegions != null)
         {
-            if (line >= openRegions.get(i).startLine)
+            for (int i = openRegions.size() - 1; i >= 0; i--)
             {
-                return openRegions.get(i).name;
+                if (line >= openRegions.get(i).startLine)
+                {
+                    return openRegions.get(i).name;
+                }
             }
         }
         // Find innermost region from closed regions (narrowest range)
@@ -592,41 +581,14 @@ public class GetModuleStructureTool implements IMcpTool
                 info.startLine = BslModuleUtils.getStartLine(method);
                 info.endLine = BslModuleUtils.getEndLine(method);
 
-                // Collect parameters
-                StringBuilder paramsBuilder = new StringBuilder();
-                EList<FormalParam> formalParams = method.getFormalParams();
-                if (formalParams != null)
-                {
-                    for (int i = 0; i < formalParams.size(); i++)
-                    {
-                        FormalParam param = formalParams.get(i);
-                        if (i > 0)
-                        {
-                            paramsBuilder.append(", "); //$NON-NLS-1$
-                        }
-                        if (param.isByValue())
-                        {
-                            paramsBuilder.append("Val "); //$NON-NLS-1$
-                        }
-                        paramsBuilder.append(param.getName());
-                        // Check for default value
-                        if (param.getDefaultValue() != null)
-                        {
-                            String defaultText = BslModuleUtils.getSourceText(param.getDefaultValue());
-                            if (defaultText != null)
-                            {
-                                paramsBuilder.append(" = ").append(defaultText.trim()); //$NON-NLS-1$
-                            }
-                        }
-                    }
-                }
-                info.paramsString = paramsBuilder.length() > 0 ? paramsBuilder.toString() : "-"; //$NON-NLS-1$
+                // Collect parameters via shared utility
+                info.paramsString = BslModuleUtils.buildParamsString(method);
 
                 // Collect execution context from pragmas
                 info.executionContext = collectPragmas(method);
 
                 // Find containing region (innermost)
-                info.region = findContainingRegion(info.startLine, regions);
+                info.region = findContainingRegion(info.startLine, null, regions);
 
                 methods.add(info);
             }
@@ -664,26 +626,6 @@ public class GetModuleStructureTool implements IMcpTool
             // Ignore - pragmas may not be available in all module types
         }
         return null;
-    }
-
-    private String findContainingRegion(int methodStartLine, List<RegionInfo> regions)
-    {
-        // Find the innermost (narrowest) region containing this line
-        String bestRegion = null;
-        int bestRange = Integer.MAX_VALUE;
-        for (RegionInfo region : regions)
-        {
-            if (methodStartLine >= region.startLine && methodStartLine <= region.endLine)
-            {
-                int range = region.endLine - region.startLine;
-                if (range < bestRange)
-                {
-                    bestRange = range;
-                    bestRegion = region.name;
-                }
-            }
-        }
-        return bestRegion;
     }
 
     // ========== Internal data structures ==========

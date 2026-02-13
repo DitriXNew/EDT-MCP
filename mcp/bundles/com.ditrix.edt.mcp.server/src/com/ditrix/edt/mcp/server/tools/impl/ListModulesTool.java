@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import org.eclipse.core.resources.IContainer;
 import org.eclipse.core.resources.IFile;
@@ -46,6 +47,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 public class ListModulesTool implements IMcpTool
 {
     public static final String NAME = "list_modules"; //$NON-NLS-1$
+
+    private static final int MAX_RECURSION_DEPTH = 20;
 
     @Override
     public String getName()
@@ -177,49 +180,74 @@ public class ListModulesTool implements IMcpTool
         switch (type)
         {
             case "commonmodules": //$NON-NLS-1$
-                collectCommonModules(project, config, modules, objectName, nameFilter);
+                collectSingleModuleType(project, modules, objectName, nameFilter,
+                    config.getCommonModules(), CommonModule::getName,
+                    "CommonModules", "Module.bsl", "Module", "CommonModule"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 break;
             case "documents": //$NON-NLS-1$
-                collectDocumentModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getDocuments(), Document::getName, "Documents", "Document"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "catalogs": //$NON-NLS-1$
-                collectCatalogModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getCatalogs(), Catalog::getName, "Catalogs", "Catalog"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "informationregisters": //$NON-NLS-1$
-                collectInfoRegisterModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getInformationRegisters(), InformationRegister::getName,
+                    "InformationRegisters", "InformationRegister"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "accumulationregisters": //$NON-NLS-1$
-                collectAccumRegisterModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getAccumulationRegisters(), AccumulationRegister::getName,
+                    "AccumulationRegisters", "AccumulationRegister"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "reports": //$NON-NLS-1$
-                collectReportModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getReports(), Report::getName, "Reports", "Report"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "dataprocessors": //$NON-NLS-1$
-                collectDataProcessorModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getDataProcessors(), DataProcessor::getName,
+                    "DataProcessors", "DataProcessor"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "exchangeplans": //$NON-NLS-1$
-                collectExchangePlanModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getExchangePlans(), ExchangePlan::getName,
+                    "ExchangePlans", "ExchangePlan"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "businessprocesses": //$NON-NLS-1$
-                collectBusinessProcessModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getBusinessProcesses(), BusinessProcess::getName,
+                    "BusinessProcesses", "BusinessProcess"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "tasks": //$NON-NLS-1$
-                collectTaskModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getTasks(), Task::getName, "Tasks", "Task"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "constants": //$NON-NLS-1$
-                collectConstantModules(project, config, modules, objectName, nameFilter);
+                collectMultiModuleType(project, modules, objectName, nameFilter,
+                    config.getConstants(), Constant::getName, "Constants", "Constant"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "commoncommands": //$NON-NLS-1$
-                collectCommonCommandModules(project, config, modules, objectName, nameFilter);
+                collectSingleModuleType(project, modules, objectName, nameFilter,
+                    config.getCommonCommands(), CommonCommand::getName,
+                    "CommonCommands", "CommandModule.bsl", "CommandModule", "CommonCommand"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 break;
             case "commonforms": //$NON-NLS-1$
-                collectCommonFormModules(project, config, modules, objectName, nameFilter);
+                collectSingleModuleType(project, modules, objectName, nameFilter,
+                    config.getCommonForms(), CommonForm::getName,
+                    "CommonForms", "Module.bsl", "FormModule", "CommonForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 break;
             case "webservices": //$NON-NLS-1$
-                collectWebServiceModules(project, config, modules, objectName, nameFilter);
+                collectSingleModuleType(project, modules, objectName, nameFilter,
+                    config.getWebServices(), WebService::getName,
+                    "WebServices", "Module.bsl", "Module", "WebService"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 break;
             case "httpservices": //$NON-NLS-1$
-                collectHTTPServiceModules(project, config, modules, objectName, nameFilter);
+                collectSingleModuleType(project, modules, objectName, nameFilter,
+                    config.getHttpServices(), HTTPService::getName,
+                    "HTTPServices", "Module.bsl", "Module", "HTTPService"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 break;
             default:
                 return "Error: Unknown metadata type: " + metadataType + //$NON-NLS-1$
@@ -232,230 +260,68 @@ public class ListModulesTool implements IMcpTool
         return formatOutput(projectName, modules, limit, metadataType);
     }
 
-    // ========== Collection methods ==========
+    // ========== Generic collection methods ==========
 
-    private void collectCommonModules(IProject project, Configuration config,
-                                       List<ModuleInfo> modules, String objectName, String nameFilter)
+    /**
+     * Generic collector for metadata types with a single known BSL module file.
+     * Used for CommonModules, CommonCommands, CommonForms, WebServices, HTTPServices.
+     *
+     * @param project the workspace project
+     * @param modules target list for collected module info
+     * @param objectName optional filter by object name (case-insensitive)
+     * @param nameFilter optional filter by module path substring
+     * @param objects the metadata objects to iterate
+     * @param nameGetter function to extract the name from a metadata object
+     * @param folderName the folder name in src/ (e.g. "CommonModules", "WebServices")
+     * @param fileName the BSL file name (e.g. "Module.bsl", "CommandModule.bsl")
+     * @param moduleType the module type label (e.g. "Module", "FormModule", "CommandModule")
+     * @param parentType the parent type label (e.g. "CommonModule", "WebService")
+     */
+    private <T> void collectSingleModuleType(IProject project, List<ModuleInfo> modules,
+        String objectName, String nameFilter, Iterable<T> objects, Function<T, String> nameGetter,
+        String folderName, String fileName, String moduleType, String parentType)
     {
-        for (CommonModule mod : config.getCommonModules())
+        for (T obj : objects)
         {
+            String name = nameGetter.apply(obj);
             if (objectName != null && !objectName.isEmpty()
-                && !mod.getName().equalsIgnoreCase(objectName))
+                && !name.equalsIgnoreCase(objectName))
             {
                 continue;
             }
-            String path = "CommonModules/" + mod.getName() + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
-            addIfExists(project, modules, path, "Module", "CommonModule", mod.getName(), nameFilter); //$NON-NLS-1$ //$NON-NLS-2$
+            String path = folderName + "/" + name + "/" + fileName; //$NON-NLS-1$ //$NON-NLS-2$
+            addIfExists(project, modules, path, moduleType, parentType, name, nameFilter);
         }
     }
 
-    private void collectDocumentModules(IProject project, Configuration config,
-                                          List<ModuleInfo> modules, String objectName, String nameFilter)
+    /**
+     * Generic collector for metadata types with multiple possible BSL modules.
+     * Recursively scans the object directory for all .bsl files.
+     * Used for Documents, Catalogs, Registers, Reports, DataProcessors, etc.
+     *
+     * @param project the workspace project
+     * @param modules target list for collected module info
+     * @param objectName optional filter by object name (case-insensitive)
+     * @param nameFilter optional filter by module path substring
+     * @param objects the metadata objects to iterate
+     * @param nameGetter function to extract the name from a metadata object
+     * @param folderName the folder name in src/ (e.g. "Documents", "Catalogs")
+     * @param parentType the parent type label (e.g. "Document", "Catalog")
+     */
+    private <T> void collectMultiModuleType(IProject project, List<ModuleInfo> modules,
+        String objectName, String nameFilter, Iterable<T> objects, Function<T, String> nameGetter,
+        String folderName, String parentType)
     {
-        for (Document doc : config.getDocuments())
+        for (T obj : objects)
         {
+            String name = nameGetter.apply(obj);
             if (objectName != null && !objectName.isEmpty()
-                && !doc.getName().equalsIgnoreCase(objectName))
+                && !name.equalsIgnoreCase(objectName))
             {
                 continue;
             }
-            collectAllBslModules(project, modules, "Documents/" + doc.getName(), //$NON-NLS-1$
-                "Document", doc.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectCatalogModules(IProject project, Configuration config,
-                                         List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (Catalog cat : config.getCatalogs())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !cat.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "Catalogs/" + cat.getName(), //$NON-NLS-1$
-                "Catalog", cat.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectInfoRegisterModules(IProject project, Configuration config,
-                                              List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (InformationRegister reg : config.getInformationRegisters())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !reg.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "InformationRegisters/" + reg.getName(), //$NON-NLS-1$
-                "InformationRegister", reg.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectAccumRegisterModules(IProject project, Configuration config,
-                                               List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (AccumulationRegister reg : config.getAccumulationRegisters())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !reg.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "AccumulationRegisters/" + reg.getName(), //$NON-NLS-1$
-                "AccumulationRegister", reg.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectReportModules(IProject project, Configuration config,
-                                        List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (Report rep : config.getReports())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !rep.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "Reports/" + rep.getName(), //$NON-NLS-1$
-                "Report", rep.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectDataProcessorModules(IProject project, Configuration config,
-                                               List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (DataProcessor dp : config.getDataProcessors())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !dp.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "DataProcessors/" + dp.getName(), //$NON-NLS-1$
-                "DataProcessor", dp.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectExchangePlanModules(IProject project, Configuration config,
-                                              List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (ExchangePlan ep : config.getExchangePlans())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !ep.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "ExchangePlans/" + ep.getName(), //$NON-NLS-1$
-                "ExchangePlan", ep.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectBusinessProcessModules(IProject project, Configuration config,
-                                                 List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (BusinessProcess bp : config.getBusinessProcesses())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !bp.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "BusinessProcesses/" + bp.getName(), //$NON-NLS-1$
-                "BusinessProcess", bp.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectTaskModules(IProject project, Configuration config,
-                                      List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (Task task : config.getTasks())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !task.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "Tasks/" + task.getName(), //$NON-NLS-1$
-                "Task", task.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectConstantModules(IProject project, Configuration config,
-                                          List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (Constant con : config.getConstants())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !con.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            collectAllBslModules(project, modules, "Constants/" + con.getName(), //$NON-NLS-1$
-                "Constant", con.getName(), nameFilter); //$NON-NLS-1$
-        }
-    }
-
-    private void collectCommonCommandModules(IProject project, Configuration config,
-                                               List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (CommonCommand cmd : config.getCommonCommands())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !cmd.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            String path = "CommonCommands/" + cmd.getName() + "/CommandModule.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
-            addIfExists(project, modules, path, "CommandModule", "CommonCommand", cmd.getName(), nameFilter); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-    }
-
-    private void collectCommonFormModules(IProject project, Configuration config,
-                                            List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (CommonForm form : config.getCommonForms())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !form.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            String path = "CommonForms/" + form.getName() + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
-            addIfExists(project, modules, path, "FormModule", "CommonForm", form.getName(), nameFilter); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-    }
-
-    private void collectWebServiceModules(IProject project, Configuration config,
-                                            List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (WebService ws : config.getWebServices())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !ws.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            String path = "WebServices/" + ws.getName() + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
-            addIfExists(project, modules, path, "Module", "WebService", ws.getName(), nameFilter); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-    }
-
-    private void collectHTTPServiceModules(IProject project, Configuration config,
-                                             List<ModuleInfo> modules, String objectName, String nameFilter)
-    {
-        for (HTTPService hs : config.getHttpServices())
-        {
-            if (objectName != null && !objectName.isEmpty()
-                && !hs.getName().equalsIgnoreCase(objectName))
-            {
-                continue;
-            }
-            String path = "HTTPServices/" + hs.getName() + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
-            addIfExists(project, modules, path, "Module", "HTTPService", hs.getName(), nameFilter); //$NON-NLS-1$ //$NON-NLS-2$
+            collectAllBslModules(project, modules, folderName + "/" + name, //$NON-NLS-1$
+                parentType, name, nameFilter);
         }
     }
 
@@ -476,7 +342,7 @@ public class ListModulesTool implements IMcpTool
 
         try
         {
-            scanBslFilesRecursive(srcFolder, modules, objectName, nameFilter);
+            scanBslFilesRecursive(srcFolder, modules, objectName, nameFilter, 0);
         }
         catch (Exception e)
         {
@@ -485,9 +351,13 @@ public class ListModulesTool implements IMcpTool
     }
 
     private void scanBslFilesRecursive(IContainer container, List<ModuleInfo> modules,
-                                         String objectName, String nameFilter)
+                                         String objectName, String nameFilter, int depth)
         throws Exception
     {
+        if (depth > MAX_RECURSION_DEPTH)
+        {
+            return;
+        }
         for (IResource member : container.members())
         {
             if (member instanceof IFile)
@@ -546,7 +416,7 @@ public class ListModulesTool implements IMcpTool
             }
             else if (member instanceof IContainer)
             {
-                scanBslFilesRecursive((IContainer) member, modules, objectName, nameFilter);
+                scanBslFilesRecursive((IContainer) member, modules, objectName, nameFilter, depth + 1);
             }
         }
     }
@@ -629,7 +499,7 @@ public class ListModulesTool implements IMcpTool
 
         try
         {
-            collectBslFilesRecursive(folder, modules, basePath, parentType, parentName, nameFilter);
+            collectBslFilesRecursive(folder, modules, basePath, parentType, parentName, nameFilter, 0);
         }
         catch (Exception e)
         {
@@ -639,9 +509,13 @@ public class ListModulesTool implements IMcpTool
 
     private void collectBslFilesRecursive(IContainer container, List<ModuleInfo> modules,
                                             String basePath, String parentType, String parentName,
-                                            String nameFilter)
+                                            String nameFilter, int depth)
         throws Exception
     {
+        if (depth > MAX_RECURSION_DEPTH)
+        {
+            return;
+        }
         for (IResource member : container.members())
         {
             if (member instanceof IFile)
@@ -672,7 +546,7 @@ public class ListModulesTool implements IMcpTool
             else if (member instanceof IContainer)
             {
                 collectBslFilesRecursive((IContainer) member, modules,
-                    basePath, parentType, parentName, nameFilter);
+                    basePath, parentType, parentName, nameFilter, depth + 1);
             }
         }
     }

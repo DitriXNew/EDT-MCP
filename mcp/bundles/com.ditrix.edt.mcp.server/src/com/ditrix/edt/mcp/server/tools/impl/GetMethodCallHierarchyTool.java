@@ -44,9 +44,6 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 {
     public static final String NAME = "get_method_call_hierarchy"; //$NON-NLS-1$
 
-    /** URI for getting BSL resource service provider */
-    private static final URI BSL_URI = URI.createURI("/nopr/module.bsl"); //$NON-NLS-1$
-
     @Override
     public String getName()
     {
@@ -182,7 +179,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Method method = BslModuleUtils.findMethod(module, methodName);
         if (method == null)
         {
-            return buildMethodNotFoundResponse(module, modulePath, methodName);
+            return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
         }
 
         // Get URI of the method
@@ -190,7 +187,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
         // Find references using IReferenceFinder
         IResourceServiceProvider resourceServiceProvider =
-            IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(BSL_URI);
+            IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(BslModuleUtils.BSL_LOOKUP_URI);
         if (resourceServiceProvider == null)
         {
             return "Error: BSL resource service provider not available"; //$NON-NLS-1$
@@ -244,6 +241,22 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         {
             Activator.logError("Error finding callers", e); //$NON-NLS-1$
         }
+        finally
+        {
+            // Clean up shared ResourceSet to prevent memory leaks
+            for (org.eclipse.emf.ecore.resource.Resource res : sharedResourceSet.getResources())
+            {
+                try
+                {
+                    res.unload();
+                }
+                catch (Exception e)
+                {
+                    // Ignore cleanup errors
+                }
+            }
+            sharedResourceSet.getResources().clear();
+        }
 
         return formatCallersOutput(modulePath, methodName, callers, limit, totalReferences[0]);
     }
@@ -269,7 +282,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Method method = BslModuleUtils.findMethod(module, methodName);
         if (method == null)
         {
-            return buildMethodNotFoundResponse(module, modulePath, methodName);
+            return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
         }
 
         // Traverse AST of this method to find invocations
@@ -536,20 +549,6 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             sb.append(" | ").append(callee.line > 0 ? String.valueOf(callee.line) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
             sb.append(" | `").append(MarkdownUtils.escapeForTable( //$NON-NLS-1$
                 callee.callCode != null ? callee.callCode : "-")).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        return sb.toString();
-    }
-
-    private String buildMethodNotFoundResponse(Module module, String modulePath, String methodName)
-    {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Error: Method '").append(methodName).append("' not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-        sb.append("**Available methods:**\n\n"); //$NON-NLS-1$
-        for (Method m : module.allMethods())
-        {
-            sb.append("- ").append(m.getName()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         return sb.toString();

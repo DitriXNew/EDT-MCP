@@ -8,17 +8,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
-import org.eclipse.emf.common.util.EList;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
-import com._1c.g5.v8.dt.bsl.model.FormalParam;
 import com._1c.g5.v8.dt.bsl.model.Function;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
@@ -34,16 +31,6 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 public class ReadMethodSourceTool implements IMcpTool
 {
     public static final String NAME = "read_method_source"; //$NON-NLS-1$
-
-    /** Regex for BSL method start (Russian and English) */
-    private static final Pattern METHOD_START_PATTERN = Pattern.compile(
-        "^\\s*(?:\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Procedure|Function)\\s+(\\S+)\\s*\\(", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Regex for BSL method end (Russian and English) */
-    private static final Pattern METHOD_END_PATTERN = Pattern.compile(
-        "^\\s*(?:\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b|\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438|EndProcedure|EndFunction)", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     @Override
     public String getName()
@@ -158,7 +145,7 @@ public class ReadMethodSourceTool implements IMcpTool
         if (method == null)
         {
             // Method not found - list all available methods
-            return buildMethodNotFoundResponse(module, modulePath, methodName);
+            return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
         }
 
         // Get line range from EMF node
@@ -189,7 +176,7 @@ public class ReadMethodSourceTool implements IMcpTool
 
         // Build signature info
         String typeStr = method instanceof Function ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
-        String signature = buildSignature(method);
+        String signature = BslModuleUtils.buildSignature(method);
 
         StringBuilder sb = new StringBuilder();
         sb.append("## Method: ").append(method.getName()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -237,7 +224,7 @@ public class ReadMethodSourceTool implements IMcpTool
 
             for (int i = 0; i < allLines.size(); i++)
             {
-                Matcher startMatcher = METHOD_START_PATTERN.matcher(allLines.get(i));
+                Matcher startMatcher = BslModuleUtils.METHOD_START_PATTERN.matcher(allLines.get(i));
                 if (startMatcher.find())
                 {
                     String foundName = startMatcher.group(1);
@@ -251,7 +238,7 @@ public class ReadMethodSourceTool implements IMcpTool
 
                 if (methodStart >= 0 && methodEnd < 0)
                 {
-                    Matcher endMatcher = METHOD_END_PATTERN.matcher(allLines.get(i));
+                    Matcher endMatcher = BslModuleUtils.METHOD_END_PATTERN.matcher(allLines.get(i));
                     if (endMatcher.find())
                     {
                         methodEnd = i;
@@ -318,7 +305,7 @@ public class ReadMethodSourceTool implements IMcpTool
         int lineCount = endLine - startLine + 1;
 
         String typeStr = method instanceof Function ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
-        String signature = buildSignature(method);
+        String signature = BslModuleUtils.buildSignature(method);
 
         StringBuilder sb = new StringBuilder();
         sb.append("## Method: ").append(method.getName()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -366,65 +353,5 @@ public class ReadMethodSourceTool implements IMcpTool
 
         int docStart = idx + 2; // convert back to 1-based
         return docStart < methodKeywordLine ? docStart : methodKeywordLine;
-    }
-
-    private String buildSignature(Method method)
-    {
-        StringBuilder sb = new StringBuilder();
-        sb.append(method instanceof Function ? "Function " : "Procedure "); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append(method.getName()).append("("); //$NON-NLS-1$
-
-        EList<FormalParam> formalParams = method.getFormalParams();
-        if (formalParams != null)
-        {
-            for (int i = 0; i < formalParams.size(); i++)
-            {
-                if (i > 0)
-                {
-                    sb.append(", "); //$NON-NLS-1$
-                }
-                FormalParam param = formalParams.get(i);
-                if (param.isByValue())
-                {
-                    sb.append("Val "); //$NON-NLS-1$
-                }
-                sb.append(param.getName());
-                if (param.getDefaultValue() != null)
-                {
-                    String defaultText = BslModuleUtils.getSourceText(param.getDefaultValue());
-                    if (defaultText != null)
-                    {
-                        sb.append(" = ").append(defaultText.trim()); //$NON-NLS-1$
-                    }
-                }
-            }
-        }
-
-        sb.append(")"); //$NON-NLS-1$
-        if (method.isExport())
-        {
-            sb.append(" Export"); //$NON-NLS-1$
-        }
-        return sb.toString();
-    }
-
-    private String buildMethodNotFoundResponse(Module module, String modulePath, String methodName)
-    {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Error: Method '").append(methodName).append("' not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-        List<String> methodNames = new ArrayList<>();
-        for (Method m : module.allMethods())
-        {
-            methodNames.add(m.getName());
-        }
-
-        sb.append("**Available methods** (").append(methodNames.size()).append("):\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        for (String name : methodNames)
-        {
-            sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        return sb.toString();
     }
 }

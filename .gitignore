@@ -3,4 +3,6 @@ nulq
 nul
 /source
 log.log
+.serena/
+.claude/
 /mcp/repositories/com.ditrix.edt.mcp.server.repository/target

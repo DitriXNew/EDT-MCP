@@ -221,6 +221,10 @@ public class SearchInCodeTool implements IMcpTool
             sb.append("**Warning:** ").append(collector.skippedFiles) //$NON-NLS-1$
               .append(" file(s) could not be read\n"); //$NON-NLS-1$
         }
+        if (collector.wasInterrupted())
+        {
+            sb.append("**Warning:** Search was interrupted, results may be incomplete\n"); //$NON-NLS-1$
+        }
         return sb.toString();
     }
 
@@ -238,6 +242,10 @@ public class SearchInCodeTool implements IMcpTool
         {
             sb.append("**Warning:** ").append(collector.skippedFiles) //$NON-NLS-1$
               .append(" file(s) could not be read\n\n"); //$NON-NLS-1$
+        }
+        if (collector.wasInterrupted())
+        {
+            sb.append("**Warning:** Search was interrupted, results may be incomplete\n\n"); //$NON-NLS-1$
         }
 
         if (collector.matchCountByFile.isEmpty())
@@ -283,6 +291,10 @@ public class SearchInCodeTool implements IMcpTool
         {
             sb.append("**Warning:** ").append(collector.skippedFiles) //$NON-NLS-1$
               .append(" file(s) could not be read (check EDT Error Log)\n"); //$NON-NLS-1$
+        }
+        if (collector.wasInterrupted())
+        {
+            sb.append("**Warning:** Search was interrupted, results may be incomplete\n"); //$NON-NLS-1$
         }
         sb.append("\n"); //$NON-NLS-1$
 
@@ -340,6 +352,7 @@ public class SearchInCodeTool implements IMcpTool
         int totalMatchedFiles = 0;
         int skippedFiles = 0;
         private int collectedMatches = 0;
+        private boolean wasInterrupted = false;
 
         SearchCollector(Pattern pattern, String fileMask, int maxResults, int contextLines, boolean collectDetails)
         {
@@ -355,6 +368,7 @@ public class SearchInCodeTool implements IMcpTool
         {
             if (Thread.currentThread().isInterrupted())
             {
+                wasInterrupted = true;
                 return false;
             }
 
@@ -447,6 +461,11 @@ public class SearchInCodeTool implements IMcpTool
         int getShownMatches()
         {
             return collectedMatches;
+        }
+
+        boolean wasInterrupted()
+        {
+            return wasInterrupted;
         }
     }
 }

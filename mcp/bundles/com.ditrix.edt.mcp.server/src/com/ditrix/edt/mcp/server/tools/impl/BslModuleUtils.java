@@ -10,9 +10,11 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
@@ -23,6 +25,8 @@ import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
 import org.eclipse.xtext.resource.IResourceServiceProvider;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
+import com._1c.g5.v8.dt.bsl.model.FormalParam;
+import com._1c.g5.v8.dt.bsl.model.Function;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
 import com.ditrix.edt.mcp.server.Activator;
@@ -39,7 +43,22 @@ public final class BslModuleUtils
     }
 
     /** Dummy BSL URI for IResourceServiceProvider lookup */
-    private static final URI BSL_LOOKUP_URI = URI.createURI("/nopr/module.bsl"); //$NON-NLS-1$
+    public static final URI BSL_LOOKUP_URI = URI.createURI("/nopr/module.bsl"); //$NON-NLS-1$
+
+    /** Regex for BSL method start (Russian and English). Group 1 = method name, group 2 = params text after '(' */
+    public static final Pattern METHOD_START_PATTERN = Pattern.compile(
+        "^\\s*(?:\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Procedure|Function)\\s+(\\S+?)\\s*\\((.*)$", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Regex for BSL method end (Russian and English) */
+    public static final Pattern METHOD_END_PATTERN = Pattern.compile(
+        "^\\s*(?:\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b|\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438|EndProcedure|EndFunction)", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Regex for function keyword check */
+    public static final Pattern FUNC_KEYWORD_PATTERN = Pattern.compile(
+        "^\\s*(?:\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Function)\\s", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
      * Loads BSL Module EMF model via BmAwareResourceSetProvider.
@@ -174,7 +193,8 @@ public final class BslModuleUtils
         }
 
         List<String> lines = new ArrayList<>();
-        // Wrap in BufferedInputStream to support mark/reset for BOM detection
+        // Wrap in BufferedInputStream to support mark/reset for BOM detection;
+        // rawIs is closed by try-with-resources since BufferedInputStream wraps it
         try (InputStream input = new BufferedInputStream(rawIs))
         {
             // Detect UTF-8 BOM (EF BB BF)
@@ -301,5 +321,92 @@ public final class BslModuleUtils
         }
 
         return null;
+    }
+
+    /**
+     * Builds an error response when a method is not found, listing all available methods.
+     *
+     * @param module the BSL module
+     * @param modulePath the module path for display
+     * @param methodName the method name that was not found
+     * @return formatted error message with available methods
+     */
+    public static String buildMethodNotFoundResponse(Module module, String modulePath, String methodName)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Error: Method '").append(methodName).append("' not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        List<String> methodNames = new ArrayList<>();
+        for (Method m : module.allMethods())
+        {
+            methodNames.add(m.getName());
+        }
+
+        sb.append("**Available methods** (").append(methodNames.size()).append("):\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String name : methodNames)
+        {
+            sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Builds a full method signature string from EMF Method model.
+     * E.g. "Function MyFunc(Param1, Val Param2 = 0) Export"
+     *
+     * @param method the BSL method
+     * @return formatted signature string
+     */
+    public static String buildSignature(Method method)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append(method instanceof Function ? "Function " : "Procedure "); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(method.getName()).append("("); //$NON-NLS-1$
+        sb.append(buildParamsString(method));
+        sb.append(")"); //$NON-NLS-1$
+        if (method.isExport())
+        {
+            sb.append(" Export"); //$NON-NLS-1$
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Builds a parameters string from EMF Method model.
+     * E.g. "Param1, Val Param2 = 0"
+     *
+     * @param method the BSL method
+     * @return formatted parameters string, or "-" if no parameters
+     */
+    public static String buildParamsString(Method method)
+    {
+        StringBuilder paramsBuilder = new StringBuilder();
+        EList<FormalParam> formalParams = method.getFormalParams();
+        if (formalParams != null)
+        {
+            for (int i = 0; i < formalParams.size(); i++)
+            {
+                FormalParam param = formalParams.get(i);
+                if (i > 0)
+                {
+                    paramsBuilder.append(", "); //$NON-NLS-1$
+                }
+                if (param.isByValue())
+                {
+                    paramsBuilder.append("Val "); //$NON-NLS-1$
+                }
+                paramsBuilder.append(param.getName());
+                if (param.getDefaultValue() != null)
+                {
+                    String defaultText = getSourceText(param.getDefaultValue());
+                    if (defaultText != null)
+                    {
+                        paramsBuilder.append(" = ").append(defaultText.trim()); //$NON-NLS-1$
+                    }
+                }
+            }
+        }
+        return paramsBuilder.length() > 0 ? paramsBuilder.toString() : "-"; //$NON-NLS-1$
     }
 }

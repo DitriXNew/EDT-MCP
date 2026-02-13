@@ -57,9 +57,6 @@ public class FindReferencesTool implements IMcpTool
 {
     public static final String NAME = "find_references"; //$NON-NLS-1$
     
-    /** URI for getting BSL resource service provider */
-    private static final URI BSL_URI = URI.createURI("/nopr/module.bsl"); //$NON-NLS-1$
-    
     @Override
     public String getName()
     {
@@ -756,7 +753,7 @@ public class FindReferencesTool implements IMcpTool
             try
             {
                 IResourceServiceProvider resourceServiceProvider = 
-                    IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(BSL_URI);
+                    IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(BslModuleUtils.BSL_LOOKUP_URI);
                 
                 if (resourceServiceProvider == null)
                 {
