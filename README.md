@@ -423,12 +423,15 @@ Add to `claude_desktop_config.json`:
 |-----------|----------|-------------|
 | `projectName` | Yes | EDT project name |
 | `modulePath` | Yes | Path from `src/` folder (e.g. `CommonModules/MyModule/Module.bsl`) |
+| `includeVariables` | No | Include module-level variable declarations (default: `false`) |
+| `includeComments` | No | Include doc-comments for methods (default: `false`) |
 
 **Returns:** Markdown with:
 
 - Module summary (procedure/function counts, total lines)
 - Regions list with line ranges
-- Methods table: type, name, export, context, lines, parameters, region
+- Methods table: type, name, export, context, lines, parameters, region, description (when `includeComments=true`)
+- Variables table: name, export flag, line, region (when `includeVariables=true`)
 
 #### Read Module Source Tool
 
@@ -474,6 +477,7 @@ Add to `claude_desktop_config.json`:
 | `contextLines` | No | Lines of context before/after each match (default: 2, max: 5) |
 | `fileMask` | No | Filter by module path substring (e.g. `CommonModules` or `Documents/SalesOrder`) |
 | `outputMode` | No | Output mode: `full` (matches with context, default), `count` (only total count, fast), `files` (file list with match counts, no context) |
+| `metadataType` | No | Filter by metadata type: `documents`, `catalogs`, `commonModules`, `informationRegisters`, `accumulationRegisters`, `reports`, `dataProcessors`, `exchangePlans`, `businessProcesses`, `tasks`, `constants`, `commonCommands`, `commonForms`, `webServices`, `httpServices` |
 
 #### Get Method Call Hierarchy Tool
 
@@ -767,6 +771,28 @@ groups:
 ## Version History
 
 <details>
+<summary><strong>1.22.0</strong> - BSL tool improvements: variables, doc-comments, metadata type filter</summary>
+
+- **Improved**: `get_module_structure` - New `includeVariables` parameter
+  - Lists module-level variable declarations with name, export flag, line number, and region
+  - Uses `Module.allDeclareStatements()` EMF API with text-based fallback
+- **Improved**: `get_module_structure` - New `includeComments` parameter
+  - Extracts doc-comments (// comment blocks) above each method
+  - Adds Description column to methods table
+  - Uses NodeModelUtils for AST-based extraction with text-based fallback
+- **Improved**: `search_in_code` - New `metadataType` parameter
+  - Filter search results by metadata type (documents, catalogs, commonModules, etc.)
+  - Supports 15 metadata types matching folder structure
+  - Returns descriptive error for unknown metadata type values
+- **Internal**: Code quality improvements
+  - Removed code duplications across BSL tools (BslModuleUtils centralization)
+  - Added recursion depth limit (MAX_RECURSION_DEPTH=20) for filesystem traversal
+  - Fixed resource cleanup with try-finally for shared ResourceSet
+  - Fixed potential exceptions in method call hierarchy tool
+
+</details>
+
+<details>
 <summary><strong>1.21.9</strong> - BSL Code Analysis: module browsing, method reading, code search, call hierarchy</summary>
 
 - **New**: `list_modules` tool - List all BSL modules in a project
@@ -1013,4 +1039,4 @@ groups:
 # Licensed under GNU AGPL v3.0
 
 ---
-*EDT MCP Server v1.21.9*
+*EDT MCP Server v1.22.0*

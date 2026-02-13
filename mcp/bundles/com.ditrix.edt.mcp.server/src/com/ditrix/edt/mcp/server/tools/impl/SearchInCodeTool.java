@@ -76,6 +76,12 @@ public class SearchInCodeTool implements IMcpTool
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
             .stringProperty("fileMask", //$NON-NLS-1$
                 "Filter by module path substring (e.g. 'CommonModules' or 'Documents/SalesOrder')") //$NON-NLS-1$
+            .stringProperty("metadataType", //$NON-NLS-1$
+                "Filter by metadata type: 'documents', 'catalogs', 'commonModules', " + //$NON-NLS-1$
+                "'informationRegisters', 'accumulationRegisters', 'reports', 'dataProcessors', " + //$NON-NLS-1$
+                "'exchangePlans', 'businessProcesses', 'tasks', 'constants', " + //$NON-NLS-1$
+                "'commonCommands', 'commonForms', 'webServices', 'httpServices'. " + //$NON-NLS-1$
+                "More precise than fileMask.") //$NON-NLS-1$
             .stringProperty("outputMode", //$NON-NLS-1$
                 "Output mode: 'full' (matches with context, default), " + //$NON-NLS-1$
                 "'count' (only total count, fast), " + //$NON-NLS-1$
@@ -116,6 +122,7 @@ public class SearchInCodeTool implements IMcpTool
         int maxResults = JsonUtils.extractIntArgument(params, "maxResults", DEFAULT_MAX_RESULTS); //$NON-NLS-1$
         int contextLines = JsonUtils.extractIntArgument(params, "contextLines", DEFAULT_CONTEXT_LINES); //$NON-NLS-1$
         String fileMask = JsonUtils.extractStringArgument(params, "fileMask"); //$NON-NLS-1$
+        String metadataType = JsonUtils.extractStringArgument(params, "metadataType"); //$NON-NLS-1$
         String outputMode = JsonUtils.extractStringArgument(params, "outputMode"); //$NON-NLS-1$
 
         // Validate required parameters
@@ -173,9 +180,21 @@ public class SearchInCodeTool implements IMcpTool
             return "Error: Invalid regex pattern '" + query + "': " + e.getMessage(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
+        // Resolve metadataType to folder prefix
+        String metadataFolderPrefix = resolveMetadataFolder(metadataType);
+        if (metadataType != null && !metadataType.isEmpty() && metadataFolderPrefix == null)
+        {
+            return "Error: Unknown metadataType '" + metadataType + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
+                "Supported: documents, catalogs, commonModules, informationRegisters, " + //$NON-NLS-1$
+                "accumulationRegisters, reports, dataProcessors, exchangePlans, " + //$NON-NLS-1$
+                "businessProcesses, tasks, constants, commonCommands, commonForms, " + //$NON-NLS-1$
+                "webServices, httpServices"; //$NON-NLS-1$
+        }
+
         // Search
         boolean collectDetails = MODE_FULL.equals(outputMode);
-        SearchCollector collector = new SearchCollector(pattern, fileMask, maxResults, contextLines, collectDetails);
+        SearchCollector collector = new SearchCollector(pattern, fileMask, metadataFolderPrefix,
+            maxResults, contextLines, collectDetails);
 
         try
         {
@@ -325,6 +344,62 @@ public class SearchInCodeTool implements IMcpTool
     }
 
     /**
+     * Resolves a metadataType string to the corresponding folder prefix.
+     *
+     * @return folder prefix (e.g. "Documents/") or null if type is unknown
+     */
+    private String resolveMetadataFolder(String metadataType)
+    {
+        if (metadataType == null || metadataType.isEmpty())
+        {
+            return null;
+        }
+        switch (metadataType.toLowerCase())
+        {
+            case "documents": //$NON-NLS-1$
+                return "Documents/"; //$NON-NLS-1$
+            case "catalogs": //$NON-NLS-1$
+                return "Catalogs/"; //$NON-NLS-1$
+            case "commonmodules": //$NON-NLS-1$
+                return "CommonModules/"; //$NON-NLS-1$
+            case "informationregisters": //$NON-NLS-1$
+                return "InformationRegisters/"; //$NON-NLS-1$
+            case "accumulationregisters": //$NON-NLS-1$
+                return "AccumulationRegisters/"; //$NON-NLS-1$
+            case "reports": //$NON-NLS-1$
+                return "Reports/"; //$NON-NLS-1$
+            case "dataprocessors": //$NON-NLS-1$
+                return "DataProcessors/"; //$NON-NLS-1$
+            case "exchangeplans": //$NON-NLS-1$
+                return "ExchangePlans/"; //$NON-NLS-1$
+            case "businessprocesses": //$NON-NLS-1$
+                return "BusinessProcesses/"; //$NON-NLS-1$
+            case "tasks": //$NON-NLS-1$
+                return "Tasks/"; //$NON-NLS-1$
+            case "constants": //$NON-NLS-1$
+                return "Constants/"; //$NON-NLS-1$
+            case "commoncommands": //$NON-NLS-1$
+                return "CommonCommands/"; //$NON-NLS-1$
+            case "commonforms": //$NON-NLS-1$
+                return "CommonForms/"; //$NON-NLS-1$
+            case "webservices": //$NON-NLS-1$
+                return "WebServices/"; //$NON-NLS-1$
+            case "httpservices": //$NON-NLS-1$
+                return "HTTPServices/"; //$NON-NLS-1$
+            case "enums": //$NON-NLS-1$
+                return "Enums/"; //$NON-NLS-1$
+            case "chartsofcharacteristictypes": //$NON-NLS-1$
+                return "ChartsOfCharacteristicTypes/"; //$NON-NLS-1$
+            case "chartsofaccounts": //$NON-NLS-1$
+                return "ChartsOfAccounts/"; //$NON-NLS-1$
+            case "chartsofcalculationtypes": //$NON-NLS-1$
+                return "ChartsOfCalculationTypes/"; //$NON-NLS-1$
+            default:
+                return null;
+        }
+    }
+
+    /**
      * Holds a single match with context.
      */
     private static class MatchInfo
@@ -342,6 +417,7 @@ public class SearchInCodeTool implements IMcpTool
     {
         private final Pattern pattern;
         private final String fileMask;
+        private final String metadataFolderPrefix;
         private final int maxResults;
         private final int contextLines;
         private final boolean collectDetails;
@@ -354,10 +430,12 @@ public class SearchInCodeTool implements IMcpTool
         private int collectedMatches = 0;
         private boolean wasInterrupted = false;
 
-        SearchCollector(Pattern pattern, String fileMask, int maxResults, int contextLines, boolean collectDetails)
+        SearchCollector(Pattern pattern, String fileMask, String metadataFolderPrefix,
+            int maxResults, int contextLines, boolean collectDetails)
         {
             this.pattern = pattern;
             this.fileMask = fileMask;
+            this.metadataFolderPrefix = metadataFolderPrefix;
             this.maxResults = maxResults;
             this.contextLines = contextLines;
             this.collectDetails = collectDetails;
@@ -396,6 +474,15 @@ public class SearchInCodeTool implements IMcpTool
             if (fileMask != null && !fileMask.isEmpty())
             {
                 if (!displayPath.toLowerCase().contains(fileMask.toLowerCase()))
+                {
+                    return false;
+                }
+            }
+
+            // Apply metadata type filter
+            if (metadataFolderPrefix != null)
+            {
+                if (!displayPath.startsWith(metadataFolderPrefix))
                 {
                     return false;
                 }

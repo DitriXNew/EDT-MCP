@@ -21,6 +21,8 @@ import org.eclipse.ui.PlatformUI;
 import org.eclipse.xtext.nodemodel.INode;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
 
+import com._1c.g5.v8.dt.bsl.model.DeclareStatement;
+import com._1c.g5.v8.dt.bsl.model.ExplicitVariable;
 import com._1c.g5.v8.dt.bsl.model.Function;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
@@ -61,6 +63,10 @@ public class GetModuleStructureTool implements IMcpTool
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("modulePath", //$NON-NLS-1$
                 "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
+            .booleanProperty("includeVariables", //$NON-NLS-1$
+                "Include module-level variable declarations. Default: false") //$NON-NLS-1$
+            .booleanProperty("includeComments", //$NON-NLS-1$
+                "Include documentation comments for methods. Default: false") //$NON-NLS-1$
             .build();
     }
 
@@ -101,11 +107,18 @@ public class GetModuleStructureTool implements IMcpTool
         "(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
+    /** Regex for Var/Перем declaration */
+    private static final Pattern VAR_PATTERN = Pattern.compile(
+        "^\\s*(?:\u041f\u0435\u0440\u0435\u043c|Var)\\s+(.+?)\\s*;", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
     @Override
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        boolean includeVariables = JsonUtils.extractBooleanArgument(params, "includeVariables", false); //$NON-NLS-1$
+        boolean includeComments = JsonUtils.extractBooleanArgument(params, "includeComments", false); //$NON-NLS-1$
 
         if (projectName == null || projectName.isEmpty())
         {
@@ -123,7 +136,7 @@ public class GetModuleStructureTool implements IMcpTool
         display.syncExec(() -> {
             try
             {
-                String result = getStructureInternal(projectName, modulePath);
+                String result = getStructureInternal(projectName, modulePath, includeVariables, includeComments);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -140,10 +153,11 @@ public class GetModuleStructureTool implements IMcpTool
         }
 
         // Fallback: text-based structure parsing
-        return getStructureViaText(projectName, modulePath);
+        return getStructureViaText(projectName, modulePath, includeVariables);
     }
 
-    private String getStructureInternal(String projectName, String modulePath)
+    private String getStructureInternal(String projectName, String modulePath,
+        boolean includeVariables, boolean includeComments)
     {
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
@@ -178,7 +192,10 @@ public class GetModuleStructureTool implements IMcpTool
         }
 
         // Collect methods
-        List<MethodInfo> methods = collectMethods(module, regions);
+        List<MethodInfo> methods = collectMethods(module, regions, includeComments);
+
+        // Collect variables if requested
+        List<VariableInfo> variables = includeVariables ? collectVariables(module, regions) : null;
 
         // Count procedures and functions
         int procCount = 0;
@@ -222,6 +239,12 @@ public class GetModuleStructureTool implements IMcpTool
             sb.append("\n"); //$NON-NLS-1$
         }
 
+        // Variables section
+        if (variables != null && !variables.isEmpty())
+        {
+            appendVariablesTable(sb, variables);
+        }
+
         // Methods table
         if (methods.isEmpty())
         {
@@ -237,7 +260,7 @@ public class GetModuleStructureTool implements IMcpTool
     /**
      * Text-based fallback: parses module structure using regex when EMF model is not available.
      */
-    private String getStructureViaText(String projectName, String modulePath)
+    private String getStructureViaText(String projectName, String modulePath, boolean includeVariables)
     {
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
@@ -258,8 +281,10 @@ public class GetModuleStructureTool implements IMcpTool
 
             List<RegionInfo> regions = new ArrayList<>();
             List<MethodInfo> methods = new ArrayList<>();
+            List<VariableInfo> textVariables = new ArrayList<>();
             List<RegionInfo> regionStack = new ArrayList<>();
             String pendingPragma = null;
+            boolean insideMethod = false;
 
             for (int i = 0; i < lines.size(); i++)
             {
@@ -298,10 +323,41 @@ public class GetModuleStructureTool implements IMcpTool
                     continue;
                 }
 
+                // Check for module-level Var declarations (only outside methods)
+                if (includeVariables && !insideMethod)
+                {
+                    Matcher varMatcher = VAR_PATTERN.matcher(line);
+                    if (varMatcher.find())
+                    {
+                        String varList = varMatcher.group(1);
+                        boolean lineExport = EXPORT_PATTERN.matcher(varList).find();
+                        if (lineExport)
+                        {
+                            varList = varList.replaceAll("(?i)\\s*(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*$", "").trim(); //$NON-NLS-1$ //$NON-NLS-2$
+                        }
+                        for (String varName : varList.split(",")) //$NON-NLS-1$
+                        {
+                            String trimmed = varName.trim();
+                            if (!trimmed.isEmpty())
+                            {
+                                VariableInfo vi = new VariableInfo();
+                                vi.name = trimmed;
+                                vi.isExport = lineExport;
+                                vi.line = i + 1;
+                                vi.region = findContainingRegion(vi.line, regionStack, regions);
+                                textVariables.add(vi);
+                            }
+                        }
+                        pendingPragma = null;
+                        continue;
+                    }
+                }
+
                 // Check for method start
                 Matcher methodMatcher = BslModuleUtils.METHOD_START_PATTERN.matcher(line);
                 if (methodMatcher.find())
                 {
+                    insideMethod = true;
                     MethodInfo info = new MethodInfo();
                     info.name = methodMatcher.group(1);
                     info.isFunction = BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher(line).find();
@@ -404,6 +460,12 @@ public class GetModuleStructureTool implements IMcpTool
                 sb.append("\n"); //$NON-NLS-1$
             }
 
+            // Variables section (text fallback)
+            if (includeVariables && !textVariables.isEmpty())
+            {
+                appendVariablesTable(sb, textVariables);
+            }
+
             if (methods.isEmpty())
             {
                 sb.append("No methods found in this module.\n"); //$NON-NLS-1$
@@ -426,9 +488,28 @@ public class GetModuleStructureTool implements IMcpTool
      */
     private void appendMethodsTable(StringBuilder sb, List<MethodInfo> methods)
     {
+        // Check if any method has doc-comments
+        boolean hasComments = false;
+        for (MethodInfo m : methods)
+        {
+            if (m.docComment != null)
+            {
+                hasComments = true;
+                break;
+            }
+        }
+
         sb.append("### Methods\n\n"); //$NON-NLS-1$
-        sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region |\n"); //$NON-NLS-1$
-        sb.append("|---|------|------|--------|---------|-------|------------|--------|\n"); //$NON-NLS-1$
+        if (hasComments)
+        {
+            sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region | Description |\n"); //$NON-NLS-1$
+            sb.append("|---|------|------|--------|---------|-------|------------|--------|-------------|\n"); //$NON-NLS-1$
+        }
+        else
+        {
+            sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region |\n"); //$NON-NLS-1$
+            sb.append("|---|------|------|--------|---------|-------|------------|--------|\n"); //$NON-NLS-1$
+        }
 
         int idx = 1;
         for (MethodInfo m : methods)
@@ -441,6 +522,10 @@ public class GetModuleStructureTool implements IMcpTool
             sb.append(" | ").append(m.startLine).append("-").append(m.endLine); //$NON-NLS-1$ //$NON-NLS-2$
             sb.append(" | ").append(MarkdownUtils.escapeForTable(m.paramsString)); //$NON-NLS-1$
             sb.append(" | ").append(m.region != null ? MarkdownUtils.escapeForTable(m.region) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (hasComments)
+            {
+                sb.append(" | ").append(m.docComment != null ? MarkdownUtils.escapeForTable(m.docComment) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
             sb.append(" |\n"); //$NON-NLS-1$
         }
     }
@@ -566,7 +651,8 @@ public class GetModuleStructureTool implements IMcpTool
         return regions;
     }
 
-    private List<MethodInfo> collectMethods(Module module, List<RegionInfo> regions)
+    private List<MethodInfo> collectMethods(Module module, List<RegionInfo> regions,
+        boolean includeComments)
     {
         List<MethodInfo> methods = new ArrayList<>();
 
@@ -589,6 +675,12 @@ public class GetModuleStructureTool implements IMcpTool
 
                 // Find containing region (innermost)
                 info.region = findContainingRegion(info.startLine, null, regions);
+
+                // Collect doc-comment if requested
+                if (includeComments)
+                {
+                    info.docComment = extractDocComment(method);
+                }
 
                 methods.add(info);
             }
@@ -640,6 +732,7 @@ public class GetModuleStructureTool implements IMcpTool
         String executionContext;
         String region;
         String paramsString;
+        String docComment;
     }
 
     private static class RegionInfo
@@ -647,5 +740,137 @@ public class GetModuleStructureTool implements IMcpTool
         String name;
         int startLine;
         int endLine;
+    }
+
+    private static class VariableInfo
+    {
+        String name;
+        boolean isExport;
+        int line;
+        String region;
+    }
+
+    // ========== Variables collection ==========
+
+    /**
+     * Collects module-level variable declarations from the EMF model.
+     */
+    private List<VariableInfo> collectVariables(Module module, List<RegionInfo> regions)
+    {
+        List<VariableInfo> variables = new ArrayList<>();
+        try
+        {
+            EList<DeclareStatement> declareStatements = module.allDeclareStatements();
+            if (declareStatements != null)
+            {
+                for (DeclareStatement decl : declareStatements)
+                {
+                    EList<ExplicitVariable> vars = decl.getVariables();
+                    if (vars == null)
+                    {
+                        continue;
+                    }
+                    for (ExplicitVariable var : vars)
+                    {
+                        VariableInfo info = new VariableInfo();
+                        info.name = var.getName();
+                        info.isExport = var.isExport();
+                        info.line = BslModuleUtils.getStartLine(var);
+                        info.region = findContainingRegion(info.line, null, regions);
+                        variables.add(info);
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error collecting variables", e); //$NON-NLS-1$
+        }
+        return variables;
+    }
+
+    /**
+     * Appends a markdown variables table to the StringBuilder.
+     */
+    private void appendVariablesTable(StringBuilder sb, List<VariableInfo> variables)
+    {
+        sb.append("### Variables\n\n"); //$NON-NLS-1$
+        sb.append("| # | Name | Export | Line | Region |\n"); //$NON-NLS-1$
+        sb.append("|---|------|--------|------|--------|\n"); //$NON-NLS-1$
+
+        int idx = 1;
+        for (VariableInfo v : variables)
+        {
+            sb.append("| ").append(idx++); //$NON-NLS-1$
+            sb.append(" | ").append(MarkdownUtils.escapeForTable(v.name)); //$NON-NLS-1$
+            sb.append(" | ").append(v.isExport ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            sb.append(" | ").append(v.line); //$NON-NLS-1$
+            sb.append(" | ").append(v.region != null ? MarkdownUtils.escapeForTable(v.region) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(" |\n"); //$NON-NLS-1$
+        }
+        sb.append("\n"); //$NON-NLS-1$
+    }
+
+    // ========== Documentation comments ==========
+
+    /**
+     * Extracts documentation comment text for a method by reading lines
+     * immediately preceding the method declaration (lines starting with //).
+     */
+    private String extractDocComment(Method method)
+    {
+        try
+        {
+            INode methodNode = NodeModelUtils.findActualNodeFor(method);
+            if (methodNode == null)
+            {
+                return null;
+            }
+
+            // Walk backward from method node to find comment lines
+            INode current = methodNode.getPreviousSibling();
+            List<String> commentLines = new ArrayList<>();
+
+            while (current != null)
+            {
+                String text = current.getText();
+                if (text == null)
+                {
+                    break;
+                }
+                text = text.trim();
+                if (text.startsWith("//")) //$NON-NLS-1$
+                {
+                    // Strip the leading // and optional space
+                    String commentText = text.substring(2);
+                    if (commentText.startsWith(" ")) //$NON-NLS-1$
+                    {
+                        commentText = commentText.substring(1);
+                    }
+                    commentLines.add(0, commentText);
+                    current = current.getPreviousSibling();
+                }
+                else if (text.isEmpty())
+                {
+                    // Skip empty lines between comment and method
+                    current = current.getPreviousSibling();
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (commentLines.isEmpty())
+            {
+                return null;
+            }
+
+            return String.join(" ", commentLines); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
     }
 }
