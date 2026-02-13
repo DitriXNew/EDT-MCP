@@ -62,4 +62,6 @@ Import-Package: com._1c.g5.v8.bm.common.collections,
  org.eclipse.emf.ecore.util,
  org.eclipse.ltk.core.refactoring,
  org.eclipse.ui.navigator,
+ org.eclipse.xtext.nodemodel,
+ org.eclipse.xtext.nodemodel.util,
  org.eclipse.xtext.resource

@@ -1,5 +1,15 @@
-/mcp/bundles/com.ditrix.edt.mcp.server/target
+# Maven build output
+**/target/
+
+# Temp files
 nulq
 nul
-/source
 log.log
+
+# Build script backup
+*.target.bak
+
+# Claude Code local settings (may contain personal paths)
+.claude/settings.json
+
+/source
