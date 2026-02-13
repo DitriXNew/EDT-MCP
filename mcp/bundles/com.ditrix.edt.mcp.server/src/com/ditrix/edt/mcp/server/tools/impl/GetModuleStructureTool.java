@@ -18,6 +18,7 @@ import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.xtext.nodemodel.ILeafNode;
 import org.eclipse.xtext.nodemodel.INode;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
 
@@ -833,6 +834,11 @@ public class GetModuleStructureTool implements IMcpTool
 
             while (current != null)
             {
+                // Only process leaf nodes (individual tokens) — skip composite nodes (entire methods)
+                if (!(current instanceof ILeafNode))
+                {
+                    break;
+                }
                 String text = current.getText();
                 if (text == null)
                 {
