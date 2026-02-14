@@ -21,9 +21,21 @@ jobs:
           java-version: 17
           cache: maven
 
+      - name: Cache Tycho P2 repositories
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository/.cache/tycho
+            ~/.m2/repository/p2
+          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-tycho-p2-
+
       - name: Maven build
         working-directory: mcp
-        run: mvn clean verify --batch-mode --no-transfer-progress
+        env:
+          MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
+        run: mvn clean verify --batch-mode --no-transfer-progress -T 1C
 
       - name: Extract version
         id: version

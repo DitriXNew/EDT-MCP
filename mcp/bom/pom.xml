@@ -34,6 +34,11 @@
 
     <maven.build.timestamp.format>'v'yyyyMMdd-HHmm</maven.build.timestamp.format>
     <qualifier>${maven.build.timestamp}</qualifier>
+
+    <!-- Performance optimizations -->
+    <tycho.localArtifacts>ignore</tycho.localArtifacts>
+    <tycho.resolver.classic>false</tycho.resolver.classic>
+    <tycho.baseline.skip>true</tycho.baseline.skip>
   </properties>
 
   <build>
