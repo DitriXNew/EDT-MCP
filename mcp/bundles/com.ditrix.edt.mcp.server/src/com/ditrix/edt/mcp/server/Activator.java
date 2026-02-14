@@ -556,27 +556,38 @@ public class Activator extends AbstractUIPlugin
      */
     private static boolean isHeadless()
     {
-        // Check system property first
-        String headlessProperty = System.getProperty("org.eclipse.ui.testsuite"); //$NON-NLS-1$
-        if ("true".equals(headlessProperty)) //$NON-NLS-1$
+        // Check various headless indicators without accessing Display
+        // (Display.getDefault() will try to initialize GTK which fails in headless env)
+        
+        // 1. Check Eclipse test mode property
+        String testSuite = System.getProperty("org.eclipse.ui.testsuite"); //$NON-NLS-1$
+        if ("true".equals(testSuite)) //$NON-NLS-1$
         {
             return true;
         }
         
-        // Check if Display is available
-        try
+        // 2. Check Eclipse application type (headlesstest = no UI)
+        String eclipseApplication = System.getProperty("eclipse.application"); //$NON-NLS-1$
+        if (eclipseApplication != null && eclipseApplication.contains("headless")) //$NON-NLS-1$
         {
-            org.eclipse.swt.widgets.Display display = org.eclipse.swt.widgets.Display.getCurrent();
-            if (display == null)
-            {
-                display = org.eclipse.swt.widgets.Display.getDefault();
-            }
-            return display == null;
-        }
-        catch (Exception e)
-        {
-            // If we can't get a display, assume headless
             return true;
         }
+        
+        // 3. Check OSGi console property
+        String osgiConsole = System.getProperty("osgi.console"); //$NON-NLS-1$
+        if (osgiConsole != null)
+        {
+            // Console mode usually means headless
+            return true;
+        }
+        
+        // 4. Check if running in CI environment
+        if (System.getenv("CI") != null || System.getenv("GITHUB_ACTIONS") != null) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return true;
+        }
+        
+        // Default to false (assume UI is available)
+        return false;
     }
 }
