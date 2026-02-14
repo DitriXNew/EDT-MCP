@@ -196,6 +196,10 @@ public class McpProtocolHandler
             case IMAGE:
                 // Images always returned as embedded resource (ignore plain text mode)
                 // For images, user signals are ignored
+                if (isJsonErrorPayload(result))
+                {
+                    return buildToolCallJsonResponse(result, requestId);
+                }
                 String imageFileName = tool.getResultFileName(params);
                 return buildToolCallResourceBlobResponse(result, "image/png", imageFileName, requestId); //$NON-NLS-1$
             case TEXT:
@@ -342,6 +346,40 @@ public class McpProtocolHandler
     {
         ToolCallResult toolResult = ToolCallResult.resourceBlob("embedded://" + fileName, mimeType, base64Blob); //$NON-NLS-1$
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
+    }
+
+    /**
+     * Checks whether tool result is a JSON error payload (ToolResult.error JSON).
+     */
+    private boolean isJsonErrorPayload(String result)
+    {
+        if (result == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            JsonElement element = JsonParser.parseString(result);
+            if (!element.isJsonObject())
+            {
+                return false;
+            }
+
+            com.google.gson.JsonObject obj = element.getAsJsonObject();
+            if (obj.has("success") && obj.get("success").isJsonPrimitive()
+                && obj.get("success").getAsJsonPrimitive().isBoolean()
+                && !obj.get("success").getAsBoolean())
+            {
+                return true;
+            }
+
+            return obj.has("error");
+        }
+        catch (Exception e)
+        {
+            return false;
+        }
     }
     
     /**

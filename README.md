@@ -180,6 +180,7 @@ Add to `claude_desktop_config.json`:
 | `get_applications` | Get list of applications (infobases) for a project with update state |
 | `update_database` | Update database (infobase) with full or incremental update mode |
 | `debug_launch` | Launch application in debug mode (auto-updates database before launch) |
+| `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
 | `read_module_source` | Read BSL module source code with line numbers (full file or line range) |
@@ -771,7 +772,16 @@ groups:
 ## Version History
 
 <details>
-<summary><strong>1.23.0</strong> - BSL Code Analysis: module browsing, method reading, code search, call hierarchy</summary>
+<summary><strong>1.23.0</strong> - Form screenshots as image resources</summary>
+
+- **New**: `get_form_screenshot` tool returns PNG image as resource
+  - Returns embedded `image/png` resources that AI clients can preview directly in chat
+  - Not stable. Some times - return black image. Then try to restart EDT.
+
+</details>
+
+<details>
+<summary><strong>1.22.0</strong> - BSL Code Analysis: module browsing, method reading, code search, call hierarchy</summary>
 
 - **New**: `list_modules` tool - List all BSL modules in a project
   - Filter by metadata type (documents, catalogs, commonModules, informationRegisters, accumulationRegisters, accountingRegisters, calculationRegisters, reports, dataProcessors, exchangePlans, businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices)
@@ -807,18 +817,6 @@ groups:
   - Comment lines stripped from call code display
   - Shows total reference count even when limit is reached
   - Shared ResourceSet for faster reference resolution
-- **Fixed**: `get_form_screenshot` tool now returns PNG image as resource
-  - Returns embedded resource with `image/png` MIME type
-  - File name derived from form path (e.g., `ItemForm.png`)
-  - Added `ResponseType.IMAGE` for image responses
-  - Fixed OSGi ClassLoader issue: added `com._1c.g5.v8.dt.form.ui.editor` package import
-  - Improved UI event processing and diagnostic logging
-- **Internal**: Code quality improvements
-  - `BslModuleUtils` utility class for BSL EMF model operations (module loading via BmAwareResourceSetProvider with fallback, UTF-8 BOM detection, file reading, method search, source text extraction via NodeModelUtils)
-  - Removed code duplications across BSL tools (BslModuleUtils centralization)
-  - Added recursion depth limit (MAX_RECURSION_DEPTH=20) for filesystem traversal
-  - Fixed resource cleanup with try-finally for shared ResourceSet
-  - Fixed potential exceptions in method call hierarchy tool
 
 </details>
 
