@@ -1,6 +1,9 @@
-/**
- * Copyright (c) 2025 DitriX
+﻿/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
  */
+
 package com.ditrix.edt.mcp.server;
 
 import org.eclipse.core.runtime.IStatus;
@@ -21,6 +24,7 @@ import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
+import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 
 /**
  * EDT MCP Server plugin activator.
@@ -43,6 +47,7 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<IConfigurationProvider, IConfigurationProvider> configurationProviderTracker;
     private ServiceTracker<IMarkerManager, IMarkerManager> markerManagerTracker;
     private ServiceTracker<ICheckScheduler, ICheckScheduler> checkSchedulerTracker;
+    private ServiceTracker<ICheckRepository, ICheckRepository> checkRepositoryTracker;
     private ServiceTracker<IBmModelManager, IBmModelManager> bmModelManagerTracker;
     private ServiceTracker<IDerivedDataManagerProvider, IDerivedDataManagerProvider> derivedDataManagerProviderTracker;
     private ServiceTracker<IServicesOrchestrator, IServicesOrchestrator> servicesOrchestratorTracker;
@@ -75,6 +80,9 @@ public class Activator extends AbstractUIPlugin
         
         checkSchedulerTracker = new ServiceTracker<>(context, ICheckScheduler.class, null);
         checkSchedulerTracker.open();
+        
+        checkRepositoryTracker = new ServiceTracker<>(context, ICheckRepository.class, null);
+        checkRepositoryTracker.open();
         
         bmModelManagerTracker = new ServiceTracker<>(context, IBmModelManager.class, null);
         bmModelManagerTracker.open();
@@ -146,6 +154,11 @@ public class Activator extends AbstractUIPlugin
         {
             checkSchedulerTracker.close();
             checkSchedulerTracker = null;
+        }
+        if (checkRepositoryTracker != null)
+        {
+            checkRepositoryTracker.close();
+            checkRepositoryTracker = null;
         }
         if (bmModelManagerTracker != null)
         {
@@ -301,6 +314,21 @@ public class Activator extends AbstractUIPlugin
             return null;
         }
         return checkSchedulerTracker.getService();
+    }
+    
+    /**
+     * Returns the ICheckRepository service for accessing check registry.
+     * Used for converting short UIDs to symbolic check IDs.
+     * 
+     * @return check repository or null if not available
+     */
+    public ICheckRepository getCheckRepository()
+    {
+        if (checkRepositoryTracker == null)
+        {
+            return null;
+        }
+        return checkRepositoryTracker.getService();
     }
     
     /**

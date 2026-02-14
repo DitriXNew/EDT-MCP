@@ -1,12 +1,9 @@
-/*******************************************************************************
- * Copyright (c) 2025 DITRIX
- * 
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- * 
- * SPDX-License-Identifier: EPL-2.0
- ******************************************************************************/
+﻿/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+
 package com.ditrix.edt.mcp.server.tags.handlers;
 
 import org.eclipse.core.commands.AbstractHandler;

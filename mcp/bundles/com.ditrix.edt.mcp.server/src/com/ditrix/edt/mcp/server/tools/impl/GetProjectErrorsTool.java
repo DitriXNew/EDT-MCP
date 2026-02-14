@@ -1,6 +1,9 @@
-/**
- * Copyright (c) 2025 DitriX
+﻿/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
  */
+
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
@@ -14,6 +17,8 @@ import org.eclipse.core.resources.ResourcesPlugin;
 
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
+import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
+import com.e1c.g5.v8.dt.check.settings.CheckUid;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -159,6 +164,8 @@ public class GetProjectErrorsTool implements IMcpTool
                 return "# Error\n\nIMarkerManager service is not available"; //$NON-NLS-1$
             }
             
+            ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
+            
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             
             // Parse severity filter
@@ -192,6 +199,7 @@ public class GetProjectErrorsTool implements IMcpTool
             final List<String> finalObjects = objects != null ? objects : new ArrayList<>();
             
             // Use filter + limit instead of forEach with early return (which doesn't work)
+            final ICheckRepository finalCheckRepo = checkRepository;
             List<ErrorInfo> errors = markerManager.markers()
                 .filter(marker -> {
                     // Get project
@@ -260,10 +268,34 @@ public class GetProjectErrorsTool implements IMcpTool
                 .limit(limit)
                 .map(marker -> {
                     ErrorInfo error = new ErrorInfo();
-                    error.checkId = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
+                    String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
+                    error.checkCode = shortUid;
+                    
+                    // Try to convert short UID (e.g. "SU23") to symbolic check ID (e.g. "bsl-legacy-check-expression-type")
+                    if (finalCheckRepo != null && !shortUid.isEmpty() && marker.getProject() != null)
+                    {
+                        try
+                        {
+                            CheckUid checkUid = finalCheckRepo.getUidForShortUid(shortUid, marker.getProject());
+                            if (checkUid != null)
+                            {
+                                error.checkId = checkUid.getCheckId();
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            // Ignore - will use short UID instead
+                        }
+                    }
+                    
+                    // Check if documentation exists for this check
+                    error.hasDocumentation = false;
+                    if (error.checkId != null && !error.checkId.isEmpty())
+                    {
+                        error.hasDocumentation = GetCheckDescriptionTool.hasCheckDocumentation(error.checkId);
+                    }
+                    
                     error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
-                    MarkerSeverity sev = marker.getSeverity();
-                    error.severity = sev != null ? sev.name() : "NONE"; //$NON-NLS-1$
                     error.objectPresentation = marker.getObjectPresentation() != null ? 
                         marker.getObjectPresentation() : ""; //$NON-NLS-1$
                     return error;
@@ -300,17 +332,23 @@ public class GetProjectErrorsTool implements IMcpTool
                 }
                 md.append("\n\n"); //$NON-NLS-1$
                 
-                // Group by severity for better overview
-                md.append("| Severity | Check ID | Message | Location |\n"); //$NON-NLS-1$
-                md.append("|----------|----------|---------|----------|\n"); //$NON-NLS-1$
+                // Build table matching EDT's Configuration Problems view
+                md.append("| Description | Location | Check code | Has docs |\n"); //$NON-NLS-1$
+                md.append("|-------------|----------|------------|----------|\n"); //$NON-NLS-1$
                 
                 for (ErrorInfo error : errors)
                 {
-                    md.append("| ").append(error.severity); //$NON-NLS-1$
-                    md.append(" | `").append(error.checkId).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
-                    md.append(" | ").append(MarkdownUtils.escapeForTable(error.message)); //$NON-NLS-1$
+                    md.append("| ").append(MarkdownUtils.escapeForTable(error.message)); //$NON-NLS-1$
                     md.append(" | ").append(MarkdownUtils.escapeForTable(error.objectPresentation)); //$NON-NLS-1$
-                    md.append(" |\n"); //$NON-NLS-1$
+                    
+                    // Show symbolic check ID if available, otherwise show check code
+                    String displayCheckId = error.checkId != null && !error.checkId.isEmpty() 
+                        ? error.checkId 
+                        : error.checkCode;
+                    md.append(" | `").append(displayCheckId).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
+                    
+                    // Add documentation availability flag
+                    md.append(" | ").append(error.hasDocumentation ? "true" : "false").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 }
             }
             
@@ -328,9 +366,10 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     private static class ErrorInfo
     {
-        String checkId;
+        String checkCode;          // Short UID like "SU23"
+        String checkId;            // Symbolic ID like "bsl-legacy-check-expression-type"
         String message;
-        String severity;
         String objectPresentation;
+        boolean hasDocumentation;  // Whether documentation exists for this check
     }
 }
