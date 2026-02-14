@@ -193,6 +193,11 @@ public class McpProtocolHandler
                 }
                 String fileName = tool.getResultFileName(params);
                 return buildToolCallResourceResponse(result, "text/markdown", fileName, requestId); //$NON-NLS-1$
+            case IMAGE:
+                // Images always returned as embedded resource (ignore plain text mode)
+                // For images, user signals are ignored
+                String imageFileName = tool.getResultFileName(params);
+                return buildToolCallResourceResponse(result, "image/png", imageFileName, requestId); //$NON-NLS-1$
             case TEXT:
             default:
                 // Append user signal as text

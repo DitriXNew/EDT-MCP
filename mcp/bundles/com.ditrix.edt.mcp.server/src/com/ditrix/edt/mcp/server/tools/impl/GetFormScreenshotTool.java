@@ -111,7 +111,23 @@ public class GetFormScreenshotTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        return ResponseType.JSON;
+        return ResponseType.IMAGE;
+    }
+
+    @Override
+    public String getResultFileName(Map<String, String> params)
+    {
+        String formPath = params.get("formPath"); //$NON-NLS-1$
+        if (formPath != null && !formPath.isEmpty())
+        {
+            // Extract form name from path (e.g., "Catalog.AccessGroups.Forms.ItemForm" -> "ItemForm")
+            String[] parts = formPath.split("\\."); //$NON-NLS-1$
+            if (parts.length > 0)
+            {
+                return parts[parts.length - 1] + ".png"; //$NON-NLS-1$
+            }
+        }
+        return "form.png"; //$NON-NLS-1$
     }
 
     @Override
@@ -125,24 +141,58 @@ public class GetFormScreenshotTool implements IMcpTool
         if (formPath != null && !formPath.isEmpty()
             && (projectName == null || projectName.isEmpty()))
         {
+            // Return error as JSON - won't be used as IMAGE, but for error reporting
             return ToolResult.error("projectName is required when formPath is specified").toJson(); //$NON-NLS-1$
         }
 
         Display display = Display.getDefault();
         if (display == null || display.isDisposed())
         {
+            // Return error as JSON - won't be used as IMAGE, but for error reporting
             return ToolResult.error("Display is not available").toJson(); //$NON-NLS-1$
         }
 
-        AtomicReference<ToolResult> resultRef = new AtomicReference<>(ToolResult.error("Capture failed")); //$NON-NLS-1$
+        AtomicReference<CaptureResult> resultRef = new AtomicReference<>();
         display.syncExec(() -> resultRef.set(captureScreenshot(projectName, formPath, refresh)));
-        return resultRef.get().toJson();
+        
+        CaptureResult result = resultRef.get();
+        if (result.error != null)
+        {
+            // Return error as JSON
+            return result.error;
+        }
+        
+        // Return base64 PNG data directly
+        return result.base64Data;
+    }
+    
+    /**
+     * Result of screenshot capture - either base64 data or error JSON.
+     */
+    private static class CaptureResult
+    {
+        String base64Data;
+        String error;
+        
+        static CaptureResult success(String base64)
+        {
+            CaptureResult r = new CaptureResult();
+            r.base64Data = base64;
+            return r;
+        }
+        
+        static CaptureResult error(String errorJson)
+        {
+            CaptureResult r = new CaptureResult();
+            r.error = errorJson;
+            return r;
+        }
     }
 
     /**
      * Main capture logic. Runs on UI thread.
      */
-    private ToolResult captureScreenshot(String projectName, String formPath, boolean refresh)
+    private CaptureResult captureScreenshot(String projectName, String formPath, boolean refresh)
     {
         try
         {
@@ -151,10 +201,10 @@ public class GetFormScreenshotTool implements IMcpTool
             if (formPath != null && !formPath.isEmpty())
             {
                 // Open/activate the specified form
-                ToolResult openResult = openAndActivateForm(projectName, formPath);
-                if (openResult != null)
+                String openError = openAndActivateForm(projectName, formPath);
+                if (openError != null)
                 {
-                    return openResult; // Error occurred
+                    return CaptureResult.error(openError); // Error occurred
                 }
 
                 // Give UI time to process after activation
@@ -187,9 +237,9 @@ public class GetFormScreenshotTool implements IMcpTool
                     String diagnostic = getDiagnosticInfo();
                     Activator.logWarning("Form editor opened but WYSIWYG page is not available. " + diagnostic); //$NON-NLS-1$
                     
-                    return ToolResult.error(
+                    return CaptureResult.error(ToolResult.error(
                         "Form editor opened but WYSIWYG page is not available. " + //$NON-NLS-1$
-                        "The form may still be loading. " + diagnostic); //$NON-NLS-1$
+                        "The form may still be loading. " + diagnostic).toJson()); //$NON-NLS-1$
                 }
             }
             else
@@ -198,16 +248,16 @@ public class GetFormScreenshotTool implements IMcpTool
                 editorPage = getActiveFormEditorPage();
                 if (editorPage == null)
                 {
-                    return ToolResult.error(
+                    return CaptureResult.error(ToolResult.error(
                         "No active form editor page found. " + //$NON-NLS-1$
-                        "Specify formPath parameter to open a form automatically."); //$NON-NLS-1$
+                        "Specify formPath parameter to open a form automatically.").toJson()); //$NON-NLS-1$
                 }
             }
 
             Object wysiwygViewer = getFieldValue(editorPage, WYSIWYG_VIEWER_FIELD);
             if (wysiwygViewer == null)
             {
-                return ToolResult.error("WYSIWYG viewer is not available"); //$NON-NLS-1$
+                return CaptureResult.error(ToolResult.error("WYSIWYG viewer is not available").toJson()); //$NON-NLS-1$
             }
 
             if (refresh)
@@ -216,37 +266,23 @@ public class GetFormScreenshotTool implements IMcpTool
             }
 
             ImageData imageData = extractFormImageData(wysiwygViewer);
-            String source = "form_image_data"; //$NON-NLS-1$
             if (imageData == null)
             {
                 imageData = captureControlImageData(wysiwygViewer);
-                source = "control_print"; //$NON-NLS-1$
             }
 
             if (imageData == null || imageData.width <= 0 || imageData.height <= 0)
             {
-                return ToolResult.error("Form image data is not available"); //$NON-NLS-1$
+                return CaptureResult.error(ToolResult.error("Form image data is not available").toJson()); //$NON-NLS-1$
             }
 
             String base64 = encodePng(imageData);
-            ToolResult result = ToolResult.success()
-                .put("mimeType", "image/png") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("width", imageData.width) //$NON-NLS-1$
-                .put("height", imageData.height) //$NON-NLS-1$
-                .put("source", source); //$NON-NLS-1$
-
-            if (formPath != null && !formPath.isEmpty())
-            {
-                result.put("formPath", formPath); //$NON-NLS-1$
-            }
-
-            result.put("dataBase64", base64); //$NON-NLS-1$
-            return result;
+            return CaptureResult.success(base64);
         }
         catch (Exception e)
         {
             Activator.logError("Failed to capture form screenshot", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to capture form screenshot: " + e.getMessage()); //$NON-NLS-1$
+            return CaptureResult.error(ToolResult.error("Failed to capture form screenshot: " + e.getMessage()).toJson()); //$NON-NLS-1$
         }
     }
 
@@ -255,9 +291,9 @@ public class GetFormScreenshotTool implements IMcpTool
      *
      * @param projectName EDT project name
      * @param formPath FQN path like "Catalog.Products.Forms.ItemForm" or "CommonForm.MyForm"
-     * @return null on success, ToolResult with error on failure
+     * @return null on success, error JSON on failure
      */
-    private ToolResult openAndActivateForm(String projectName, String formPath)
+    private String openAndActivateForm(String projectName, String formPath)
     {
         // Resolve the form file
         String relativePath = resolveFormFilePath(formPath);
@@ -267,19 +303,19 @@ public class GetFormScreenshotTool implements IMcpTool
                 "Cannot resolve form path: " + formPath + ". " + //$NON-NLS-1$ //$NON-NLS-2$
                 "Expected format: 'MetadataType.ObjectName.Forms.FormName' " + //$NON-NLS-1$
                 "(e.g. 'Catalog.Products.Forms.ItemForm') " + //$NON-NLS-1$
-                "or 'CommonForm.FormName' (e.g. 'CommonForm.MyForm')."); //$NON-NLS-1$
+                "or 'CommonForm.FormName' (e.g. 'CommonForm.MyForm').").toJson(); //$NON-NLS-1$
         }
 
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
         {
-            return ToolResult.error("Project not found: " + projectName); //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
 
         IFile formFile = project.getFile(new Path(relativePath));
         if (!formFile.exists())
         {
-            return ToolResult.error("Form file not found: " + relativePath + " in project " + projectName); //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Form file not found: " + relativePath + " in project " + projectName).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         // Get workbench page
@@ -294,13 +330,13 @@ public class GetFormScreenshotTool implements IMcpTool
         }
         if (window == null)
         {
-            return ToolResult.error("No workbench window available"); //$NON-NLS-1$
+            return ToolResult.error("No workbench window available").toJson(); //$NON-NLS-1$
         }
 
         IWorkbenchPage page = window.getActivePage();
         if (page == null)
         {
-            return ToolResult.error("No active workbench page"); //$NON-NLS-1$
+            return ToolResult.error("No active workbench page").toJson(); //$NON-NLS-1$
         }
 
         try
@@ -309,7 +345,7 @@ public class GetFormScreenshotTool implements IMcpTool
             IEditorPart editorPart = IDE.openEditor(page, formFile, FORM_EDITOR_ID, true);
             if (editorPart == null)
             {
-                return ToolResult.error("Could not open form editor for: " + formPath); //$NON-NLS-1$
+                return ToolResult.error("Could not open form editor for: " + formPath).toJson(); //$NON-NLS-1$
             }
 
             // Activate the WYSIWYG (main) page via reflection
@@ -320,7 +356,7 @@ public class GetFormScreenshotTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Failed to open form editor for: " + formPath, e); //$NON-NLS-1$
-            return ToolResult.error("Failed to open form editor: " + e.getMessage()); //$NON-NLS-1$
+            return ToolResult.error("Failed to open form editor: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 
