@@ -1,10 +1,9 @@
-/**
- * Copyright (c) 2025, Dmitriy Safonov
- * https://github.com/desfarik/
- * 
- * Handler for "Collapse All" command in EDT Navigator.
- * Collapses all nodes in the Navigator tree.
+﻿/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
  */
+
 package com.ditrix.edt.mcp.server.handlers;
 
 import org.eclipse.core.commands.AbstractHandler;

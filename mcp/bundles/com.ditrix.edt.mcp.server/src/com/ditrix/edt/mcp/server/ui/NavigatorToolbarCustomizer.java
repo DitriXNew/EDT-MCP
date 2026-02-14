@@ -1,10 +1,9 @@
-/**
- * Copyright (c) 2025, Dmitriy Safonov
- * https://github.com/desfarik/
- * 
- * Utility class to hide the standard Collapse All button from EDT Navigator toolbar.
- * This allows us to use our own Collapse All button with proper positioning.
+﻿/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
  */
+
 package com.ditrix.edt.mcp.server.ui;
 
 import java.util.ArrayList;
