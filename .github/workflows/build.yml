@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Maven build
+        working-directory: mcp
+        run: mvn clean verify --batch-mode --no-transfer-progress
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep -oP 'Bundle-Version:\s*\K[\d.]+' mcp/bundles/com.ditrix.edt.mcp.server/META-INF/MANIFEST.MF)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package archive
+        run: |
+          cd mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository
+          zip -r "$GITHUB_WORKSPACE/MCP-EDT.v${{ steps.version.outputs.version }}.zip" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MCP-EDT.v${{ steps.version.outputs.version }}
+          path: MCP-EDT.v*.zip
