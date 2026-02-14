@@ -66,6 +66,76 @@ public class GetCheckDescriptionTool implements IMcpTool
     }
     
     /**
+     * Finds the documentation file for a given check ID.
+     * 
+     * @param checkId the check ID
+     * @return Path to the documentation file, or null if not found or invalid
+     */
+    private static Path findCheckDocumentationFile(String checkId)
+    {
+        if (checkId == null || checkId.isEmpty())
+        {
+            return null;
+        }
+        
+        try
+        {
+            // Get checks folder from preferences
+            IPreferenceStore store = Activator.getDefault().getPreferenceStore();
+            String checksFolder = store.getString(PreferenceConstants.PREF_CHECKS_FOLDER);
+            
+            if (checksFolder == null || checksFolder.isEmpty())
+            {
+                return null;
+            }
+            
+            Path folderPath = Paths.get(checksFolder);
+            if (!Files.exists(folderPath) || !Files.isDirectory(folderPath))
+            {
+                return null;
+            }
+            
+            // Sanitize checkId to prevent path traversal
+            String sanitizedCheckId = checkId.replaceAll("[^a-zA-Z0-9_-]", ""); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!sanitizedCheckId.equals(checkId))
+            {
+                return null;
+            }
+            
+            // Try to find the file with .md extension
+            Path checkFile = folderPath.resolve(checkId + ".md"); //$NON-NLS-1$
+            if (Files.exists(checkFile))
+            {
+                return checkFile;
+            }
+            
+            // Try lowercase version
+            Path checkFileLower = folderPath.resolve(checkId.toLowerCase() + ".md"); //$NON-NLS-1$
+            if (Files.exists(checkFileLower))
+            {
+                return checkFileLower;
+            }
+            
+            return null;
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+    
+    /**
+     * Checks if documentation exists for a given check ID.
+     * 
+     * @param checkId the check ID
+     * @return true if documentation file exists, false otherwise
+     */
+    public static boolean hasCheckDocumentation(String checkId)
+    {
+        return findCheckDocumentationFile(checkId) != null;
+    }
+    
+    /**
      * Gets check description from the configured folder.
      * 
      * @param checkId the check ID
@@ -81,7 +151,7 @@ public class GetCheckDescriptionTool implements IMcpTool
         
         try
         {
-            // Get checks folder from preferences
+            // Get checks folder from preferences for error messages
             IPreferenceStore store = Activator.getDefault().getPreferenceStore();
             String checksFolder = store.getString(PreferenceConstants.PREF_CHECKS_FOLDER);
             
@@ -97,28 +167,11 @@ public class GetCheckDescriptionTool implements IMcpTool
                 return "**Error:** Check descriptions folder does not exist: " + checksFolder; //$NON-NLS-1$
             }
             
-            // Sanitize checkId to prevent path traversal
-            String sanitizedCheckId = checkId.replaceAll("[^a-zA-Z0-9_-]", ""); //$NON-NLS-1$ //$NON-NLS-2$
-            if (!sanitizedCheckId.equals(checkId))
+            // Find the documentation file
+            Path checkFile = findCheckDocumentationFile(checkId);
+            if (checkFile == null)
             {
-                return "**Error:** Invalid checkId format. Only alphanumeric characters, dashes and underscores are allowed."; //$NON-NLS-1$
-            }
-            
-            // Try to find the file with .md extension
-            Path checkFile = folderPath.resolve(checkId + ".md"); //$NON-NLS-1$
-            
-            if (!Files.exists(checkFile))
-            {
-                // Try lowercase version
-                Path checkFileLower = folderPath.resolve(checkId.toLowerCase() + ".md"); //$NON-NLS-1$
-                if (Files.exists(checkFileLower))
-                {
-                    checkFile = checkFileLower;
-                }
-                else
-                {
-                    return "**Error:** Check description not found for: " + checkId; //$NON-NLS-1$
-                }
+                return "**Error:** Check description not found for: " + checkId; //$NON-NLS-1$
             }
             
             // Read and return file content directly (it's already Markdown)
