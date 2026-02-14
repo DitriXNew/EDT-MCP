@@ -197,7 +197,7 @@ public class McpProtocolHandler
                 // Images always returned as embedded resource (ignore plain text mode)
                 // For images, user signals are ignored
                 String imageFileName = tool.getResultFileName(params);
-                return buildToolCallResourceResponse(result, "image/png", imageFileName, requestId); //$NON-NLS-1$
+                return buildToolCallResourceBlobResponse(result, "image/png", imageFileName, requestId); //$NON-NLS-1$
             case TEXT:
             default:
                 // Append user signal as text
@@ -332,6 +332,15 @@ public class McpProtocolHandler
     private String buildToolCallResourceResponse(String content, String mimeType, String fileName, Object requestId)
     {
         ToolCallResult toolResult = ToolCallResult.resource("embedded://" + fileName, mimeType, content); //$NON-NLS-1$
+        return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
+    }
+    
+    /**
+     * Builds tool call response for resource with blob data (e.g., images).
+     */
+    private String buildToolCallResourceBlobResponse(String base64Blob, String mimeType, String fileName, Object requestId)
+    {
+        ToolCallResult toolResult = ToolCallResult.resourceBlob("embedded://" + fileName, mimeType, base64Blob); //$NON-NLS-1$
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
     }
     

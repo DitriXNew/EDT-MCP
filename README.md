@@ -771,7 +771,7 @@ groups:
 ## Version History
 
 <details>
-<summary><strong>1.22.0</strong> - BSL Code Analysis: module browsing, method reading, code search, call hierarchy</summary>
+<summary><strong>1.23.0</strong> - BSL Code Analysis: module browsing, method reading, code search, call hierarchy</summary>
 
 - **New**: `list_modules` tool - List all BSL modules in a project
   - Filter by metadata type (documents, catalogs, commonModules, informationRegisters, accumulationRegisters, accountingRegisters, calculationRegisters, reports, dataProcessors, exchangePlans, businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices)
@@ -807,6 +807,12 @@ groups:
   - Comment lines stripped from call code display
   - Shows total reference count even when limit is reached
   - Shared ResourceSet for faster reference resolution
+- **Fixed**: `get_form_screenshot` tool now returns PNG image as resource
+  - Returns embedded resource with `image/png` MIME type
+  - File name derived from form path (e.g., `ItemForm.png`)
+  - Added `ResponseType.IMAGE` for image responses
+  - Fixed OSGi ClassLoader issue: added `com._1c.g5.v8.dt.form.ui.editor` package import
+  - Improved UI event processing and diagnostic logging
 - **Internal**: Code quality improvements
   - `BslModuleUtils` utility class for BSL EMF model operations (module loading via BmAwareResourceSetProvider with fallback, UTF-8 BOM detection, file reading, method search, source text extraction via NodeModelUtils)
   - Removed code duplications across BSL tools (BslModuleUtils centralization)
@@ -1022,4 +1028,4 @@ groups:
 # Licensed under GNU AGPL v3.0
 
 ---
-*EDT MCP Server v1.22.0*
+*EDT MCP Server v1.23.0*
