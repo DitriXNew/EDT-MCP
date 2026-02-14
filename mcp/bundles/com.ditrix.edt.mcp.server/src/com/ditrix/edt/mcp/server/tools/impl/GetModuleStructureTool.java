@@ -15,7 +15,9 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.xtext.nodemodel.ILeafNode;
@@ -656,6 +658,33 @@ public class GetModuleStructureTool implements IMcpTool
         boolean includeComments)
     {
         List<MethodInfo> methods = new ArrayList<>();
+        
+        // Load source lines if includeComments is enabled
+        List<String> sourceLines = null;
+        if (includeComments)
+        {
+            try
+            {
+                Resource resource = module.eResource();
+                if (resource != null)
+                {
+                    URI uri = resource.getURI();
+                    if (uri.isPlatformResource())
+                    {
+                        String platformString = uri.toPlatformString(true);
+                        IFile file = ResourcesPlugin.getWorkspace().getRoot().getFile(new Path(platformString));
+                        if (file != null && file.exists())
+                        {
+                            sourceLines = BslModuleUtils.readFileLines(file);
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Activator.logWarning("Failed to load source for comment extraction: " + e.getMessage()); //$NON-NLS-1$
+            }
+        }
 
         for (Method method : module.allMethods())
         {
@@ -678,9 +707,9 @@ public class GetModuleStructureTool implements IMcpTool
                 info.region = findContainingRegion(info.startLine, null, regions);
 
                 // Collect doc-comment if requested
-                if (includeComments)
+                if (includeComments && sourceLines != null)
                 {
-                    info.docComment = extractDocComment(method);
+                    info.docComment = extractDocCommentFromLines(sourceLines, info.startLine);
                 }
 
                 methods.add(info);
@@ -815,9 +844,63 @@ public class GetModuleStructureTool implements IMcpTool
     // ========== Documentation comments ==========
 
     /**
-     * Extracts documentation comment text for a method by reading lines
-     * immediately preceding the method declaration (lines starting with //).
+     * Extracts documentation comment from source lines by scanning backwards
+     * from the method's start line.
+     * 
+     * @param sourceLines all lines of the source file (1-based indexing)
+     * @param methodStartLine method's start line number (1-based)
+     * @return concatenated doc-comment or null
      */
+    private String extractDocCommentFromLines(List<String> sourceLines, int methodStartLine)
+    {
+        if (sourceLines == null || methodStartLine <= 1)
+        {
+            return null;
+        }
+        
+        List<String> commentLines = new ArrayList<>();
+        
+        // Scan backwards from line before method (convert to 0-based index)
+        for (int i = methodStartLine - 2; i >= 0; i--)
+        {
+            String line = sourceLines.get(i).trim();
+            
+            if (line.startsWith("//")) //$NON-NLS-1$
+            {
+                // Strip leading // and optional space
+                String commentText = line.substring(2);
+                if (commentText.startsWith(" ")) //$NON-NLS-1$
+                {
+                    commentText = commentText.substring(1);
+                }
+                commentLines.add(0, commentText);
+            }
+            else if (line.isEmpty())
+            {
+                // Skip empty lines between comment and method
+                continue;
+            }
+            else
+            {
+                // Hit non-comment, non-empty line → stop
+                break;
+            }
+        }
+        
+        if (commentLines.isEmpty())
+        {
+            return null;
+        }
+        
+        return String.join(" ", commentLines); //$NON-NLS-1$
+    }
+
+    /**
+     * Extracts documentation comment text for a method by reading nodes
+     * immediately preceding the method declaration.
+     * (DEPRECATED: replaced by extractDocCommentFromLines for reliability)
+     */
+    @SuppressWarnings("unused")
     private String extractDocComment(Method method)
     {
         try
@@ -834,11 +917,13 @@ public class GetModuleStructureTool implements IMcpTool
 
             while (current != null)
             {
-                // Only process leaf nodes (individual tokens) — skip composite nodes (entire methods)
+                // Skip composite nodes (entire methods, regions, etc.) — only process leaf nodes
                 if (!(current instanceof ILeafNode))
                 {
-                    break;
+                    current = current.getPreviousSibling();
+                    continue;
                 }
+                
                 String text = current.getText();
                 if (text == null)
                 {
@@ -863,6 +948,7 @@ public class GetModuleStructureTool implements IMcpTool
                 }
                 else
                 {
+                    // Hit non-comment, non-empty content → stop
                     break;
                 }
             }
