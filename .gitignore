@@ -1,4 +1,6 @@
 /mcp/bundles/com.ditrix.edt.mcp.server/target
+/mcp/tests/com.ditrix.edt.mcp.server.tests/target
+/mcp/tests/com.ditrix.edt.mcp.server.tests/bin
 nulq
 nul
 /source
@@ -6,3 +8,5 @@ log.log
 .serena/
 .claude/
 /mcp/repositories/com.ditrix.edt.mcp.server.repository/target
+/tests/e2e/__pycache__/
+/tests/e2e/*.xml

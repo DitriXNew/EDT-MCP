@@ -1,0 +1,75 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      mcp_host:
+        description: "MCP server host"
+        required: false
+        default: "localhost"
+      mcp_port:
+        description: "MCP server port"
+        required: false
+        default: "8765"
+      project_name:
+        description: "EDT project name for testing"
+        required: false
+        default: "TestConfiguration"
+
+jobs:
+  e2e-test:
+    runs-on: ubuntu-latest
+    # E2E tests require a running EDT instance with the MCP plugin.
+    # This workflow is designed for self-hosted runners that have EDT installed,
+    # or for manual triggering against an existing MCP server.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Wait for MCP server
+        env:
+          MCP_HOST: ${{ github.event.inputs.mcp_host }}
+          MCP_PORT: ${{ github.event.inputs.mcp_port }}
+        run: |
+          echo "Checking MCP server at $MCP_HOST:$MCP_PORT ..."
+          for i in $(seq 1 30); do
+            if curl -sf "http://$MCP_HOST:$MCP_PORT/health" > /dev/null 2>&1; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30 - waiting 5s..."
+            sleep 5
+          done
+          echo "ERROR: MCP server not available"
+          exit 1
+
+      - name: Run E2E tests
+        env:
+          MCP_HOST: ${{ github.event.inputs.mcp_host }}
+          MCP_PORT: ${{ github.event.inputs.mcp_port }}
+          MCP_PROJECT: ${{ github.event.inputs.project_name }}
+        run: |
+          python tests/e2e/run_e2e_tests.py \
+            --host "$MCP_HOST" \
+            --port "$MCP_PORT" \
+            --project "$MCP_PROJECT" \
+            --junit-xml tests/e2e/e2e-results.xml
+
+      - name: Publish E2E Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: tests/e2e/e2e-results.xml
+
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results
+          path: tests/e2e/e2e-results.xml

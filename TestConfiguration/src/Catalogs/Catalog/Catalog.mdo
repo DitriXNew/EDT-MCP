@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:Catalog xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:core="http://g5.1c.ru/v8/dt/mcore" xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="7b1423c7-b837-457a-b75d-a2b546573341">
+  <producedTypes>
+    <objectType typeId="e9b5dc98-f4b6-49bc-95ab-0a2b87014ea9" valueTypeId="70d7f4b8-0ac0-4c38-bd00-9dedc75a265f"/>
+    <refType typeId="68c789ba-2001-4dd9-9f34-50e985e12847" valueTypeId="cbcd21e0-314e-401a-9f45-21117de44343"/>
+    <selectionType typeId="11de0ff7-2250-4ad9-b12a-7cecd527697e" valueTypeId="da49c6d5-ad45-465c-b4d3-c8f55aee1b12"/>
+    <listType typeId="3d4983d0-0f99-4766-9ba5-1f6bdee3b6f1" valueTypeId="ba1d4605-d4f2-44f0-8916-749325c31b91"/>
+    <managerType typeId="2f697205-575b-469d-9f42-d9ab8b3e9959" valueTypeId="ef728dda-e552-4f1e-a9b1-994751403737"/>
+  </producedTypes>
+  <name>Catalog</name>
+  <synonym>
+    <key>en</key>
+    <value>Catalog</value>
+  </synonym>
+  <useStandardCommands>true</useStandardCommands>
+  <inputByString>Catalog.Catalog.StandardAttribute.Code</inputByString>
+  <inputByString>Catalog.Catalog.StandardAttribute.Description</inputByString>
+  <fullTextSearchOnInputByString>DontUse</fullTextSearchOnInputByString>
+  <createOnInput>Use</createOnInput>
+  <dataLockControlMode>Managed</dataLockControlMode>
+  <fullTextSearch>Use</fullTextSearch>
+  <levelCount>2</levelCount>
+  <foldersOnTop>true</foldersOnTop>
+  <codeLength>9</codeLength>
+  <descriptionLength>25</descriptionLength>
+  <codeType>String</codeType>
+  <codeAllowedLength>Variable</codeAllowedLength>
+  <checkUnique>true</checkUnique>
+  <autonumbering>true</autonumbering>
+  <defaultPresentation>AsDescription</defaultPresentation>
+  <editType>InDialog</editType>
+  <choiceMode>BothWays</choiceMode>
+  <defaultObjectForm>Catalog.Catalog.Form.ItemForm</defaultObjectForm>
+  <attributes uuid="cd89416e-e409-4d43-92f5-f4b2561d8454">
+    <name>Attribute</name>
+    <synonym>
+      <key>en</key>
+      <value>Attribute</value>
+    </synonym>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fillValue xsi:type="core:StringValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+    <dataHistory>Use</dataHistory>
+  </attributes>
+  <forms uuid="411c7313-5077-4fa7-8bc0-6bbbf0d119da">
+    <name>ItemForm</name>
+    <synonym>
+      <key>en</key>
+      <value>Item form</value>
+    </synonym>
+    <usePurposes>PersonalComputer</usePurposes>
+    <usePurposes>MobileDevice</usePurposes>
+  </forms>
+</mdclass:Catalog>
