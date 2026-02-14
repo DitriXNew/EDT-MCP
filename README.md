@@ -771,29 +771,7 @@ groups:
 ## Version History
 
 <details>
-<summary><strong>1.22.0</strong> - BSL tool improvements: variables, doc-comments, metadata type filter</summary>
-
-- **Improved**: `get_module_structure` - New `includeVariables` parameter
-  - Lists module-level variable declarations with name, export flag, line number, and region
-  - Uses `Module.allDeclareStatements()` EMF API with text-based fallback
-- **Improved**: `get_module_structure` - New `includeComments` parameter
-  - Extracts doc-comments (// comment blocks) above each method
-  - Adds Description column to methods table
-  - Uses NodeModelUtils for AST-based extraction with text-based fallback
-- **Improved**: `search_in_code` - New `metadataType` parameter
-  - Filter search results by metadata type (documents, catalogs, commonModules, etc.)
-  - Supports 15 metadata types matching folder structure
-  - Returns descriptive error for unknown metadata type values
-- **Internal**: Code quality improvements
-  - Removed code duplications across BSL tools (BslModuleUtils centralization)
-  - Added recursion depth limit (MAX_RECURSION_DEPTH=20) for filesystem traversal
-  - Fixed resource cleanup with try-finally for shared ResourceSet
-  - Fixed potential exceptions in method call hierarchy tool
-
-</details>
-
-<details>
-<summary><strong>1.21.9</strong> - BSL Code Analysis: module browsing, method reading, code search, call hierarchy</summary>
+<summary><strong>1.22.0</strong> - BSL Code Analysis: module browsing, method reading, code search, call hierarchy</summary>
 
 - **New**: `list_modules` tool - List all BSL modules in a project
   - Filter by metadata type (documents, catalogs, commonModules, informationRegisters, accumulationRegisters, accountingRegisters, calculationRegisters, reports, dataProcessors, exchangePlans, businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices)
@@ -804,6 +782,8 @@ groups:
   - Lists all procedures/functions with signatures, line numbers, regions
   - Shows execution context (`&AtServer`, `&AtClient`), export flag, parameters
   - Text-based region parsing for accurate region boundaries
+  - `includeVariables` parameter - Lists module-level variable declarations with name, export flag, line number, and region (uses `Module.allDeclareStatements()` EMF API with text-based fallback)
+  - `includeComments` parameter - Extracts doc-comments (// comment blocks) above each method, adds Description column to methods table (uses NodeModelUtils for AST-based extraction with text-based fallback)
 - **New**: `read_module_source` tool - Read BSL module source code
   - Returns source with line numbers
   - Supports reading full file or specific line range
@@ -816,6 +796,7 @@ groups:
   - Plain text and regex patterns with case sensitivity control
   - Context lines around matches (configurable 0-5)
   - File path filtering by substring (`fileMask`)
+  - `metadataType` parameter - Filter by metadata type (documents, catalogs, commonModules, etc.) supporting 15 metadata types matching folder structure
   - `outputMode`: `full` (matches with context), `count` (total count, fast), `files` (file list with match counts)
   - Always scans all files for accurate totals even when limit is reached
 - **New**: `get_method_call_hierarchy` tool - Semantic method call analysis
@@ -826,10 +807,12 @@ groups:
   - Comment lines stripped from call code display
   - Shows total reference count even when limit is reached
   - Shared ResourceSet for faster reference resolution
-- **Internal**: `BslModuleUtils` utility class for BSL EMF model operations
-  - Module loading via BmAwareResourceSetProvider with fallback
-  - UTF-8 BOM detection, file reading, method search
-  - Source text extraction via NodeModelUtils
+- **Internal**: Code quality improvements
+  - `BslModuleUtils` utility class for BSL EMF model operations (module loading via BmAwareResourceSetProvider with fallback, UTF-8 BOM detection, file reading, method search, source text extraction via NodeModelUtils)
+  - Removed code duplications across BSL tools (BslModuleUtils centralization)
+  - Added recursion depth limit (MAX_RECURSION_DEPTH=20) for filesystem traversal
+  - Fixed resource cleanup with try-finally for shared ResourceSet
+  - Fixed potential exceptions in method call hierarchy tool
 
 </details>
 
