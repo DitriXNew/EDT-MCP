@@ -64,6 +64,14 @@ public class Activator extends AbstractUIPlugin
         super.start(context);
         plugin = this;
         mcpServer = new McpServer();
+
+        // In Tycho headless test runtime, avoid eager workspace/UI/platform initialization.
+        // This prevents background platform startup races that can fail the test process.
+        if (isHeadless())
+        {
+            logInfo("EDT MCP Server plugin started in headless mode (startup integrations skipped)"); //$NON-NLS-1$
+            return;
+        }
         
         // Initialize service trackers
         v8ProjectManagerTracker = new ServiceTracker<>(context, IV8ProjectManager.class, null);
@@ -556,37 +564,30 @@ public class Activator extends AbstractUIPlugin
      */
     private static boolean isHeadless()
     {
-        // Check various headless indicators without accessing Display
-        // (Display.getDefault() will try to initialize GTK which fails in headless env)
-        
-        // 1. Check Eclipse test mode property
+        // Check headless indicators without accessing Display.
+        // (Display.getDefault() initializes GTK and fails in headless environments.)
+
+        // 1) Eclipse test mode property
         String testSuite = System.getProperty("org.eclipse.ui.testsuite"); //$NON-NLS-1$
         if ("true".equals(testSuite)) //$NON-NLS-1$
         {
             return true;
         }
-        
-        // 2. Check Eclipse application type (headlesstest = no UI)
+
+        // 2) Eclipse application type (Tycho uses headlesstest)
         String eclipseApplication = System.getProperty("eclipse.application"); //$NON-NLS-1$
         if (eclipseApplication != null && eclipseApplication.contains("headless")) //$NON-NLS-1$
         {
             return true;
         }
-        
-        // 3. Check OSGi console property
-        String osgiConsole = System.getProperty("osgi.console"); //$NON-NLS-1$
-        if (osgiConsole != null)
-        {
-            // Console mode usually means headless
-            return true;
-        }
-        
-        // 4. Check if running in CI environment
-        if (System.getenv("CI") != null || System.getenv("GITHUB_ACTIONS") != null) //$NON-NLS-1$ //$NON-NLS-2$
+
+        // 3) Standard AWT headless flag (if provided by runtime)
+        String awtHeadless = System.getProperty("java.awt.headless"); //$NON-NLS-1$
+        if ("true".equalsIgnoreCase(awtHeadless)) //$NON-NLS-1$
         {
             return true;
         }
-        
+
         // Default to false (assume UI is available)
         return false;
     }
