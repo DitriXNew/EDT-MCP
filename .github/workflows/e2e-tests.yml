@@ -19,6 +19,10 @@ on:
 jobs:
   e2e-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     # E2E tests require a running EDT instance with the MCP plugin.
     # This workflow is designed for self-hosted runners that have EDT installed,
     # or for manual triggering against an existing MCP server.
@@ -64,6 +68,7 @@ jobs:
       - name: Publish E2E Test Results
         uses: EnricoMi/publish-unit-test-result-action@v2
         if: always()
+        continue-on-error: true
         with:
           files: tests/e2e/e2e-results.xml
 
