@@ -157,13 +157,39 @@ public class GetFormScreenshotTool implements IMcpTool
                     return openResult; // Error occurred
                 }
 
+                // Give UI time to process after activation
+                Display display = Display.getCurrent();
+                if (display != null)
+                {
+                    for (int i = 0; i < 5; i++)
+                    {
+                        while (display.readAndDispatch())
+                        {
+                            // Process all pending UI events
+                        }
+                        try
+                        {
+                            Thread.sleep(100);
+                        }
+                        catch (InterruptedException e)
+                        {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                }
+
                 // Wait for WYSIWYG to be ready and get the editor page
                 editorPage = waitForFormEditorPage();
                 if (editorPage == null)
                 {
+                    // Try to get diagnostic info about what's available
+                    String diagnostic = getDiagnosticInfo();
+                    Activator.logWarning("Form editor opened but WYSIWYG page is not available. " + diagnostic); //$NON-NLS-1$
+                    
                     return ToolResult.error(
                         "Form editor opened but WYSIWYG page is not available. " + //$NON-NLS-1$
-                        "The form may still be loading. Try again with refresh=true."); //$NON-NLS-1$
+                        "The form may still be loading. " + diagnostic); //$NON-NLS-1$
                 }
             }
             else
@@ -355,13 +381,22 @@ public class GetFormScreenshotTool implements IMcpTool
                     Object viewer = getFieldValue(page, WYSIWYG_VIEWER_FIELD);
                     if (viewer != null)
                     {
+                        Activator.logInfo("WYSIWYG viewer found after " + (i + 1) + " attempts"); //$NON-NLS-1$ //$NON-NLS-2$
                         return page;
                     }
+                    else
+                    {
+                        Activator.logInfo("Page found but viewer is null (attempt " + (i + 1) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                }
+                else
+                {
+                    Activator.logInfo("Page is null (attempt " + (i + 1) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
             catch (Exception e)
             {
-                // Ignore and retry
+                Activator.logInfo("Exception while checking WYSIWYG (attempt " + (i + 1) + "): " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
             }
 
             // Brief sleep (non-blocking on UI thread — we process events)
@@ -388,10 +423,16 @@ public class GetFormScreenshotTool implements IMcpTool
         // Final attempt
         try
         {
-            return getActiveFormEditorPage();
+            Object page = getActiveFormEditorPage();
+            if (page != null)
+            {
+                Activator.logWarning("Page found on final attempt but might not have viewer"); //$NON-NLS-1$
+            }
+            return page;
         }
         catch (Exception e)
         {
+            Activator.logError("Final attempt failed", e); //$NON-NLS-1$
             return null;
         }
     }
@@ -460,6 +501,104 @@ public class GetFormScreenshotTool implements IMcpTool
         }
 
         return null;
+    }
+
+    /**
+     * Collects diagnostic information about the current editor state.
+     * Helps understand why WYSIWYG page might not be available.
+     *
+     * @return diagnostic message
+     */
+    private String getDiagnosticInfo()
+    {
+        StringBuilder sb = new StringBuilder();
+        
+        try
+        {
+            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+            if (window == null)
+            {
+                sb.append("No active workbench window. ");
+            }
+            else
+            {
+                IWorkbenchPage page = window.getActivePage();
+                if (page == null)
+                {
+                    sb.append("No active workbench page. ");
+                }
+                else
+                {
+                    IEditorPart activeEditor = page.getActiveEditor();
+                    if (activeEditor == null)
+                    {
+                        sb.append("No active editor. ");
+                    }
+                    else
+                    {
+                        sb.append("Active editor: ").append(activeEditor.getClass().getName()).append(". "); //$NON-NLS-1$ //$NON-NLS-2$
+                        
+                        // Check if it's a FormEditor
+                        try
+                        {
+                            Class<?> editorClass = Class.forName(FORM_EDITOR_CLASS);
+                            if (editorClass.isInstance(activeEditor))
+                            {
+                                sb.append("Is FormEditor. "); //$NON-NLS-1$
+                                
+                                // Try to get active page ID
+                                try
+                                {
+                                    Method getActivePageMethod = findMethod(activeEditor.getClass(), "getActivePageId"); //$NON-NLS-1$
+                                    if (getActivePageMethod != null)
+                                    {
+                                        getActivePageMethod.setAccessible(true);
+                                        Object pageId = getActivePageMethod.invoke(activeEditor);
+                                        sb.append("Active page ID: ").append(pageId).append(". "); //$NON-NLS-1$ //$NON-NLS-2$
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    sb.append("Could not get active page ID: ").append(e.getMessage()).append(". "); //$NON-NLS-1$ //$NON-NLS-2$
+                                }
+                            }
+                            else
+                            {
+                                sb.append("Not a FormEditor. "); //$NON-NLS-1$
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            sb.append("Could not check FormEditor: ").append(e.getMessage()).append(". "); //$NON-NLS-1$ //$NON-NLS-2$
+                        }
+                    }
+                }
+            }
+            
+            // Check what getActiveFormEditorPage() returns
+            try
+            {
+                Object formEditorPage = getActiveFormEditorPage();
+                if (formEditorPage == null)
+                {
+                    sb.append("getActiveFormEditorPage() returned null. "); //$NON-NLS-1$
+                }
+                else
+                {
+                    sb.append("getActiveFormEditorPage() returned: ").append(formEditorPage.getClass().getName()).append(". "); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+            catch (Exception e)
+            {
+                sb.append("getActiveFormEditorPage() threw exception: ").append(e.getMessage()).append(". "); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        catch (Exception e)
+        {
+            sb.append("Error collecting diagnostics: ").append(e.getMessage()); //$NON-NLS-1$
+        }
+        
+        return sb.toString();
     }
 
     // ========== Existing screenshot capture methods ==========
