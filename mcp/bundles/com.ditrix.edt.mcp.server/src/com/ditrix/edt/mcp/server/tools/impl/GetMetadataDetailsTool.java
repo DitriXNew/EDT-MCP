@@ -6,16 +6,12 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
-import org.eclipse.emf.common.util.EList;
-import org.eclipse.emf.ecore.EObject;
-import org.eclipse.emf.ecore.EReference;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
@@ -27,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
  * Tool to get detailed properties of metadata objects from 1C configuration.
@@ -56,7 +53,8 @@ public class GetMetadataDetailsTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringArrayProperty("objectFqns", //$NON-NLS-1$
-                "Array of FQNs (e.g. ['Catalog.Products', 'Document.SalesOrder']). Required.", //$NON-NLS-1$
+                "Array of FQNs (e.g. ['Catalog.Products', 'Document.SalesOrder']). " + //$NON-NLS-1$
+                "Russian type names are also supported (e.g. '\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.\u041D\u043E\u043C\u0435\u043D\u043A\u043B\u0430\u0442\u0443\u0440\u0430'). Required.", //$NON-NLS-1$
                 true)
             .booleanProperty("full", //$NON-NLS-1$
                 "Return all properties (true) or only key info (false). Default: false") //$NON-NLS-1$
@@ -195,12 +193,16 @@ public class GetMetadataDetailsTool implements IMcpTool
         
         String mdType = parts[0];
         String mdName = parts[1];
-        
-        // Normalize metadata type to singular form (accept both singular and plural)
-        mdType = normalizeMetadataTypeName(mdType);
-        
+
+        // Normalize metadata type to English singular form (supports Russian and plural forms)
+        String normalized = MetadataTypeUtils.toEnglishSingular(mdType);
+        if (normalized != null)
+        {
+            mdType = normalized;
+        }
+
         // Find the object
-        MdObject mdObject = findMdObject(config, mdType, mdName);
+        MdObject mdObject = MetadataTypeUtils.findObject(config, mdType, mdName);
         if (mdObject == null)
         {
             return "**Error:** Object not found: " + fqn + "\n"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -210,166 +212,4 @@ public class GetMetadataDetailsTool implements IMcpTool
         return MetadataFormatterRegistry.format(mdObject, full, language);
     }
     
-    /**
-     * Normalizes metadata type name to singular form.
-     * Accepts both singular and plural forms and returns singular.
-     * 
-     * @param mdType metadata type name (e.g. "Catalogs" or "Catalog")
-     * @return normalized singular form (e.g. "Catalog")
-     */
-    private String normalizeMetadataTypeName(String mdType)
-    {
-        if (mdType == null || mdType.isEmpty())
-        {
-            return mdType;
-        }
-        
-        // Handle irregular plurals first (must be exact matches)
-        switch (mdType)
-        {
-            case "ChartsOfCharacteristicTypes": //$NON-NLS-1$
-                return "ChartOfCharacteristicTypes"; //$NON-NLS-1$
-            case "FilterCriteria": //$NON-NLS-1$
-                return "FilterCriterion"; //$NON-NLS-1$
-            case "ChartsOfAccounts": //$NON-NLS-1$
-                return "ChartOfAccounts"; //$NON-NLS-1$
-            case "ChartsOfCalculationTypes": //$NON-NLS-1$
-                return "ChartOfCalculationTypes"; //$NON-NLS-1$
-        }
-        
-        // Handle regular plurals - if ends with 's', try removing it
-        // But only for known plural forms to avoid breaking singular forms that end in 's'
-        if (mdType.endsWith("s")) //$NON-NLS-1$
-        {
-            String singularCandidate = mdType.substring(0, mdType.length() - 1);
-            // Check against known singular forms
-            switch (singularCandidate.toLowerCase())
-            {
-                case "catalog": //$NON-NLS-1$
-                case "document": //$NON-NLS-1$
-                case "enum": //$NON-NLS-1$
-                case "constant": //$NON-NLS-1$
-                case "report": //$NON-NLS-1$
-                case "dataprocessor": //$NON-NLS-1$
-                case "exchangeplan": //$NON-NLS-1$
-                case "businessprocess": //$NON-NLS-1$
-                case "task": //$NON-NLS-1$
-                case "language": //$NON-NLS-1$
-                case "subsystem": //$NON-NLS-1$
-                case "styleitem": //$NON-NLS-1$
-                case "style": //$NON-NLS-1$
-                case "commonpicture": //$NON-NLS-1$
-                case "interface": //$NON-NLS-1$
-                case "sessionparameter": //$NON-NLS-1$
-                case "role": //$NON-NLS-1$
-                case "commontemplate": //$NON-NLS-1$
-                case "commonmodule": //$NON-NLS-1$
-                case "commonattribute": //$NON-NLS-1$
-                case "xdtopackage": //$NON-NLS-1$
-                case "webservice": //$NON-NLS-1$
-                case "httpservice": //$NON-NLS-1$
-                case "wsreference": //$NON-NLS-1$
-                case "eventsubscription": //$NON-NLS-1$
-                case "scheduledjob": //$NON-NLS-1$
-                case "settingsstorage": //$NON-NLS-1$
-                case "functionaloption": //$NON-NLS-1$
-                case "functionaloptionsparameter": //$NON-NLS-1$
-                case "definedtype": //$NON-NLS-1$
-                case "commoncommand": //$NON-NLS-1$
-                case "commandgroup": //$NON-NLS-1$
-                case "commonform": //$NON-NLS-1$
-                case "documentnumerator": //$NON-NLS-1$
-                case "sequence": //$NON-NLS-1$
-                case "documentjournal": //$NON-NLS-1$
-                case "informationregister": //$NON-NLS-1$
-                case "accumulationregister": //$NON-NLS-1$
-                case "accountingregister": //$NON-NLS-1$
-                case "calculationregister": //$NON-NLS-1$
-                case "externaldatasource": //$NON-NLS-1$
-                case "integrationservice": //$NON-NLS-1$
-                case "bot": //$NON-NLS-1$
-                case "websocketclient": //$NON-NLS-1$
-                case "palettecolor": //$NON-NLS-1$
-                    return singularCandidate;
-            }
-        }
-        
-        // Return as-is if no transformation needed (already singular or unknown type)
-        return mdType;
-    }
-    
-    /**
-     * Finds a metadata object by type and name using EMF reflection.
-     * Maps type names to configuration reference names and searches dynamically.
-     */
-    @SuppressWarnings("unchecked")
-    private MdObject findMdObject(Configuration config, String mdType, String mdName)
-    {
-        // Get the reference name for this type (e.g., "document" -> "documents")
-        String refName = getConfigurationReferenceName(mdType.toLowerCase());
-        
-        // Find the EReference by name
-        for (EReference ref : config.eClass().getEAllReferences())
-        {
-            if (ref.getName().equalsIgnoreCase(refName))
-            {
-                Object value = config.eGet(ref);
-                if (value instanceof EList)
-                {
-                    EList<EObject> list = (EList<EObject>) value;
-                    for (EObject item : list)
-                    {
-                        if (item instanceof MdObject)
-                        {
-                            MdObject mdObj = (MdObject) item;
-                            if (mdObj.getName().equals(mdName))
-                            {
-                                return mdObj;
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-        }
-        return null;
-    }
-    
-    /**
-     * Maps metadata type name to Configuration reference name.
-     * Most types just need 's' suffix, but some have irregular plurals.
-     */
-    private static final Map<String, String> TYPE_TO_REFERENCE = new HashMap<>();
-    
-    static
-    {
-        // Irregular plurals and special cases
-        TYPE_TO_REFERENCE.put("chartofcharacteristictypes", "chartsOfCharacteristicTypes"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("chartofaccounts", "chartsOfAccounts"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("chartofcalculationtypes", "chartsOfCalculationTypes"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("filtercriterion", "filterCriteria"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("businessprocess", "businessProcesses"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("settingsstorage", "settingsStorages"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("httpservice", "httpServices"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("wsreference", "wsReferences"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("xdtopackage", "xdtoPackages"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("externaldatasource", "externalDataSources"); //$NON-NLS-1$ //$NON-NLS-2$
-        TYPE_TO_REFERENCE.put("integrationservice", "integrationServices"); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-    
-    /**
-     * Gets the configuration reference name for a metadata type.
-     */
-    private String getConfigurationReferenceName(String mdType)
-    {
-        // Check for known irregular forms first
-        String special = TYPE_TO_REFERENCE.get(mdType);
-        if (special != null)
-        {
-            return special;
-        }
-        
-        // Default: add 's' suffix for regular plurals
-        return mdType + "s"; //$NON-NLS-1$
-    }
 }

@@ -48,6 +48,7 @@ import com._1c.g5.v8.dt.metadata.mdtype.MdTypeSet;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypes;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 
@@ -71,7 +72,10 @@ public class FindReferencesTool implements IMcpTool
     {
         return "Find all references to a metadata object. " + //$NON-NLS-1$
                "Returns all places where the object is used: in other metadata objects, " + //$NON-NLS-1$
-               "in BSL code modules with line numbers, forms, roles, subsystems, etc."; //$NON-NLS-1$
+               "in BSL code modules with line numbers, forms, roles, subsystems, etc. " + //$NON-NLS-1$
+               "Supports both English and Russian metadata type names " + //$NON-NLS-1$
+               "(e.g., '\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.\u041D\u043E\u043C\u0435\u043D\u043A\u043B\u0430\u0442\u0443\u0440\u0430', " + //$NON-NLS-1$ // Справочник.Номенклатура
+               "'\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u0417\u0430\u043A\u0430\u0437')."; //$NON-NLS-1$ // Документ.Заказ
     }
     
     @Override
@@ -82,7 +86,8 @@ public class FindReferencesTool implements IMcpTool
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("objectFqn", //$NON-NLS-1$
                 "Fully qualified name of the object to find references for " + //$NON-NLS-1$
-                "(e.g. 'Catalog.Products', 'Document.SalesOrder', 'CommonModule.Common')", true) //$NON-NLS-1$
+                "(e.g. 'Catalog.Products', 'Document.SalesOrder', 'CommonModule.Common'). " + //$NON-NLS-1$
+                "Russian type names are also supported (e.g. '\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.\u041D\u043E\u043C\u0435\u043D\u043A\u043B\u0430\u0442\u0443\u0440\u0430')", true) //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
                 "Maximum number of results per category. Default: 100") //$NON-NLS-1$
             .build();
@@ -162,6 +167,9 @@ public class FindReferencesTool implements IMcpTool
      */
     private String findReferencesInternal(String projectName, String objectFqn, int limit)
     {
+        // Normalize Russian metadata type names: "Справочник.Номенклатура" -> "Catalog.Номенклатура"
+        objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
+
         // Get project
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
@@ -222,6 +230,8 @@ public class FindReferencesTool implements IMcpTool
     
     /**
      * Finds MdObject by FQN in configuration.
+     * Delegates to {@link MetadataTypeUtils} which supports English, Russian,
+     * singular and plural forms.
      */
     private MdObject findMdObjectByFqn(Configuration config, String fqn)
     {
@@ -229,146 +239,14 @@ public class FindReferencesTool implements IMcpTool
         {
             return null;
         }
-        
-        String[] parts = fqn.split("\\."); //$NON-NLS-1$
+
+        String[] parts = fqn.split("\\.", 2); //$NON-NLS-1$
         if (parts.length < 2)
         {
             return null;
         }
-        
-        String metadataType = parts[0].toLowerCase();
-        String objectName = parts[1];
-        
-        List<? extends MdObject> objects = null;
-        
-        switch (metadataType)
-        {
-            case "catalog":
-            case "catalogs":
-                objects = config.getCatalogs();
-                break;
-            case "document":
-            case "documents":
-                objects = config.getDocuments();
-                break;
-            case "commonmodule":
-            case "commonmodules":
-                objects = config.getCommonModules();
-                break;
-            case "informationregister":
-            case "informationregisters":
-                objects = config.getInformationRegisters();
-                break;
-            case "accumulationregister":
-            case "accumulationregisters":
-                objects = config.getAccumulationRegisters();
-                break;
-            case "report":
-            case "reports":
-                objects = config.getReports();
-                break;
-            case "dataprocessor":
-            case "dataprocessors":
-                objects = config.getDataProcessors();
-                break;
-            case "enum":
-            case "enums":
-                objects = config.getEnums();
-                break;
-            case "constant":
-            case "constants":
-                objects = config.getConstants();
-                break;
-            case "exchangeplan":
-            case "exchangeplans":
-                objects = config.getExchangePlans();
-                break;
-            case "businessprocess":
-            case "businessprocesses":
-                objects = config.getBusinessProcesses();
-                break;
-            case "task":
-            case "tasks":
-                objects = config.getTasks();
-                break;
-            case "role":
-            case "roles":
-                objects = config.getRoles();
-                break;
-            case "subsystem":
-            case "subsystems":
-                objects = config.getSubsystems();
-                break;
-            case "commonattribute":
-            case "commonattributes":
-                objects = config.getCommonAttributes();
-                break;
-            case "eventsubscription":
-            case "eventsubscriptions":
-                objects = config.getEventSubscriptions();
-                break;
-            case "scheduledjob":
-            case "scheduledjobs":
-                objects = config.getScheduledJobs();
-                break;
-            case "commonform":
-            case "commonforms":
-                objects = config.getCommonForms();
-                break;
-            case "commoncommand":
-            case "commoncommands":
-                objects = config.getCommonCommands();
-                break;
-            case "sessionparameter":
-            case "sessionparameters":
-                objects = config.getSessionParameters();
-                break;
-            case "functionaloptionsparameter":
-            case "functionaloptionsparameters":
-                objects = config.getFunctionalOptionsParameters();
-                break;
-            case "functionaloption":
-            case "functionaloptions":
-                objects = config.getFunctionalOptions();
-                break;
-            case "commonpicture":
-            case "commonpictures":
-                objects = config.getCommonPictures();
-                break;
-            case "styleitem":
-            case "styleitems":
-                objects = config.getStyleItems();
-                break;
-            case "definedtype":
-            case "definedtypes":
-                objects = config.getDefinedTypes();
-                break;
-            case "webservice":
-            case "webservices":
-                objects = config.getWebServices();
-                break;
-            case "httpservice":
-            case "httpservices":
-                objects = config.getHttpServices();
-                break;
-            default:
-                return null;
-        }
-        
-        if (objects == null)
-        {
-            return null;
-        }
-        
-        for (MdObject obj : objects)
-        {
-            if (obj.getName().equalsIgnoreCase(objectName))
-            {
-                return obj;
-            }
-        }
-        
-        return null;
+
+        return MetadataTypeUtils.findObject(config, parts[0], parts[1]);
     }
     
     /**
