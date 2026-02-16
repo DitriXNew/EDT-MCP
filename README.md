@@ -779,7 +779,7 @@ groups:
 ## Version History
 
 <details>
-<summary><strong>1.24.0</strong> - Query validation tool</summary>
+<summary><strong>1.24.1</strong> - Query validation tool</summary>
 
 - **New**: `validate_query` tool validates 1C query text in project context
   - Returns syntax and semantic issues with line/column/offset
@@ -1067,4 +1067,4 @@ groups:
 # Licensed under GNU AGPL v3.0
 
 ---
-*EDT MCP Server v1.23.1*
+*EDT MCP Server v1.24.1*
