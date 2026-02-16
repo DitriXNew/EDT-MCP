@@ -42,6 +42,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
  * Tool to list all BSL modules in a project or for a specific metadata object.
@@ -426,63 +427,8 @@ public class ListModulesTool implements IMcpTool
 
     private static String mapCollectionToParentType(String collectionName)
     {
-        switch (collectionName)
-        {
-            case "Documents": //$NON-NLS-1$
-                return "Document"; //$NON-NLS-1$
-            case "Catalogs": //$NON-NLS-1$
-                return "Catalog"; //$NON-NLS-1$
-            case "CommonModules": //$NON-NLS-1$
-                return "CommonModule"; //$NON-NLS-1$
-            case "InformationRegisters": //$NON-NLS-1$
-                return "InformationRegister"; //$NON-NLS-1$
-            case "AccumulationRegisters": //$NON-NLS-1$
-                return "AccumulationRegister"; //$NON-NLS-1$
-            case "AccountingRegisters": //$NON-NLS-1$
-                return "AccountingRegister"; //$NON-NLS-1$
-            case "CalculationRegisters": //$NON-NLS-1$
-                return "CalculationRegister"; //$NON-NLS-1$
-            case "Reports": //$NON-NLS-1$
-                return "Report"; //$NON-NLS-1$
-            case "DataProcessors": //$NON-NLS-1$
-                return "DataProcessor"; //$NON-NLS-1$
-            case "ExchangePlans": //$NON-NLS-1$
-                return "ExchangePlan"; //$NON-NLS-1$
-            case "BusinessProcesses": //$NON-NLS-1$
-                return "BusinessProcess"; //$NON-NLS-1$
-            case "Tasks": //$NON-NLS-1$
-                return "Task"; //$NON-NLS-1$
-            case "Constants": //$NON-NLS-1$
-                return "Constant"; //$NON-NLS-1$
-            case "CommonCommands": //$NON-NLS-1$
-                return "CommonCommand"; //$NON-NLS-1$
-            case "CommonForms": //$NON-NLS-1$
-                return "CommonForm"; //$NON-NLS-1$
-            case "WebServices": //$NON-NLS-1$
-                return "WebService"; //$NON-NLS-1$
-            case "HTTPServices": //$NON-NLS-1$
-                return "HTTPService"; //$NON-NLS-1$
-            case "ChartsOfAccounts": //$NON-NLS-1$
-                return "ChartOfAccounts"; //$NON-NLS-1$
-            case "ChartsOfCharacteristicTypes": //$NON-NLS-1$
-                return "ChartOfCharacteristicTypes"; //$NON-NLS-1$
-            case "ChartsOfCalculationTypes": //$NON-NLS-1$
-                return "ChartOfCalculationTypes"; //$NON-NLS-1$
-            case "Enums": //$NON-NLS-1$
-                return "Enum"; //$NON-NLS-1$
-            case "DocumentJournals": //$NON-NLS-1$
-                return "DocumentJournal"; //$NON-NLS-1$
-            case "Sequences": //$NON-NLS-1$
-                return "Sequence"; //$NON-NLS-1$
-            case "SettingsStorages": //$NON-NLS-1$
-                return "SettingsStorage"; //$NON-NLS-1$
-            case "FilterCriteria": //$NON-NLS-1$
-                return "FilterCriterion"; //$NON-NLS-1$
-            case "ExternalDataSources": //$NON-NLS-1$
-                return "ExternalDataSource"; //$NON-NLS-1$
-            default:
-                return collectionName;
-        }
+        String type = MetadataTypeUtils.getTypeByDirectoryName(collectionName);
+        return type != null ? type : collectionName;
     }
 
     // ========== Recursive BSL scanning ==========

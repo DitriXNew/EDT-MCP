@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetConfigurationPropertiesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetFormScreenshotTool;
+import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMetadataDetailsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMetadataObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetPlatformDocumentationTool;
@@ -155,6 +156,7 @@ public class McpServer
         registry.register(new SearchInCodeTool());
         registry.register(new ReadMethodSourceTool());
         registry.register(new GetMethodCallHierarchyTool());
+        registry.register(new GoToDefinitionTool());
         registry.register(new GetFormScreenshotTool());
         registry.register(new ValidateQueryTool());
 
