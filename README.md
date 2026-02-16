@@ -788,6 +788,31 @@ groups:
 </details>
 
 <details>
+<summary><strong>1.23.1</strong> - GoToDefinition tool and metadata type utilities</summary>
+
+- **New**: `goto_definition` tool for navigating to symbol definitions
+  - Navigate to procedure/function implementation by name
+  - Supports both English and Russian metadata type names
+  - Returns file path and line number for quick navigation
+- **Enhanced**: Metadata type name normalization
+  - Added `MetadataTypeUtils` class for centralized type name resolution
+  - Support for various type name forms (plural/singular, Russian/English)
+  - Consistent FQN handling across all metadata tools
+- **Improved**: `find_references` tool
+  - Added Russian metadata type names support in descriptions
+  - Enhanced input schema with bilingual type names
+- **Improved**: `get_metadata_details` tool
+  - Utilizes `MetadataTypeUtils` for type normalization
+  - Better handling of Russian type names
+- **Improved**: `list_modules` tool
+  - Refactored to use `MetadataTypeUtils` for directory name resolution
+- **Tests**: Added unit tests for `MetadataTypeUtils`
+  - Validates type name resolution across different languages
+  - Ensures accurate type name matching
+
+</details>
+
+<details>
 <summary><strong>1.23.0</strong> - Form screenshots as image resources</summary>
 
 - **New**: `get_form_screenshot` tool returns PNG image as resource
@@ -1042,4 +1067,4 @@ groups:
 # Licensed under GNU AGPL v3.0
 
 ---
-*EDT MCP Server v1.24.0*
+*EDT MCP Server v1.23.1*
