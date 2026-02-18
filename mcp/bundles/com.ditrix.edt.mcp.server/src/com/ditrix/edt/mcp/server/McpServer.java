@@ -730,7 +730,9 @@ public class McpServer
         
         /**
          * Handles GET request for SSE stream.
-         * As per spec: server MAY initiate SSE stream or return 405.
+         * As per MCP Streamable HTTP spec: supports SSE GET for clients like LM Studio
+         * that require an established SSE stream before sending POST requests.
+         * The server keeps the connection alive with periodic heartbeats.
          */
         private void handleSseStream(HttpExchange exchange) throws IOException
         {
@@ -738,10 +740,42 @@ public class McpServer
             
             if (acceptHeader != null && acceptHeader.contains("text/event-stream")) //$NON-NLS-1$
             {
-                // Client wants SSE stream - we could support server-initiated messages here
-                // For now, return 405 as we don't use server-initiated notifications
-                Activator.logInfo("SSE GET request received - returning 405 (not supported)"); //$NON-NLS-1$
-                sendResponse(exchange, 405, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildSimpleError("Server-initiated SSE not supported")); //$NON-NLS-1$
+                Activator.logInfo("SSE GET request received - opening SSE stream"); //$NON-NLS-1$
+                
+                exchange.getResponseHeaders().add("Content-Type", "text/event-stream"); //$NON-NLS-1$ //$NON-NLS-2$
+                exchange.getResponseHeaders().add("Cache-Control", "no-cache"); //$NON-NLS-1$ //$NON-NLS-2$
+                exchange.getResponseHeaders().add("Connection", "keep-alive"); //$NON-NLS-1$ //$NON-NLS-2$
+                exchange.sendResponseHeaders(200, 0);
+                
+                // Keep SSE stream open with periodic heartbeat comments
+                try (java.io.OutputStream os = exchange.getResponseBody())
+                {
+                    while (!Thread.currentThread().isInterrupted())
+                    {
+                        try
+                        {
+                            byte[] heartbeat = ": keep-alive\n\n".getBytes(StandardCharsets.UTF_8); //$NON-NLS-1$
+                            os.write(heartbeat);
+                            os.flush();
+                            Thread.sleep(15000);
+                        }
+                        catch (InterruptedException e)
+                        {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                        catch (IOException e)
+                        {
+                            // Client disconnected
+                            break;
+                        }
+                    }
+                }
+                catch (IOException e)
+                {
+                    // Client disconnected before headers were sent
+                }
+                Activator.logInfo("SSE stream closed"); //$NON-NLS-1$
             }
             else
             {
