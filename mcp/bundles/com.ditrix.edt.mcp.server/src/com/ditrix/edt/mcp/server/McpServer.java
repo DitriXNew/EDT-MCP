@@ -715,6 +715,7 @@ public class McpServer
             // Build SSE message with event ID (per 2025-11-25 spec)
             long eventId = ++eventIdCounter;
             StringBuilder sseMessage = new StringBuilder();
+            sseMessage.append("event: message\n"); //$NON-NLS-1$
             sseMessage.append("id: ").append(eventId).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
             sseMessage.append("data: ").append(response).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
             

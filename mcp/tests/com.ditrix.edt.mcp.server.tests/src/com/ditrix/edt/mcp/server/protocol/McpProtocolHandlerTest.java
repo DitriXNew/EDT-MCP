@@ -71,6 +71,32 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testInitializeEchosClientProtocolVersion()
+    {
+        // Per MCP spec: server must echo back client's requested protocol version
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},"
+            + "\"clientInfo\":{\"name\":\"lmstudio\",\"version\":\"1.0.0\"}}}";
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        String echoed = json.getAsJsonObject("result").get("protocolVersion").getAsString();
+        assertEquals("Server must echo back client's protocol version", "2025-06-18", echoed);
+    }
+
+    @Test
+    public void testInitializeUsesOwnVersionWhenClientVersionMissing()
+    {
+        // When no protocolVersion in params, fall back to server's latest
+        String request = buildJsonRpcRequest(1, "initialize", null);
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        String version = json.getAsJsonObject("result").get("protocolVersion").getAsString();
+        assertEquals(McpConstants.PROTOCOL_VERSION, version);
+    }
+
+    @Test
     public void testInitializePreservesRequestId()
     {
         String request = buildJsonRpcRequest(42, "initialize", null);
