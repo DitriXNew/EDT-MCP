@@ -81,6 +81,19 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testInitializeWithIdZeroPreservesIntegerType()
+    {
+        // LM Studio sends "id":0 - must not become "id":0.0 in response
+        String request = buildJsonRpcRequest(0, "initialize", null);
+        String response = handler.processRequest(request);
+
+        assertNotNull(response);
+        assertFalse("Response must not contain 0.0 as id", response.contains("\"id\":0.0"));
+        JsonObject json = parseResponse(response);
+        assertEquals(0, json.get("id").getAsInt());
+    }
+
+    @Test
     public void testInitializeStringId()
     {
         String request = "{\"jsonrpc\":\"2.0\",\"id\":\"abc-123\",\"method\":\"initialize\"}";
