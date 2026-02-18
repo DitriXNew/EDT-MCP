@@ -6,7 +6,7 @@
 
 package com.ditrix.edt.mcp.server.protocol;
 
-import java.io.IOException;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,12 +14,11 @@ import java.util.Map;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.TypeAdapter;
-import com.google.gson.TypeAdapterFactory;
-import com.google.gson.reflect.TypeToken;
-import com.google.gson.stream.JsonReader;
-import com.google.gson.stream.JsonToken;
-import com.google.gson.stream.JsonWriter;
+import com.google.gson.JsonDeserializationContext;
+import com.google.gson.JsonDeserializer;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonPrimitive;
 
 /**
  * Provides a shared Gson instance for JSON serialization/deserialization.
@@ -29,7 +28,7 @@ public final class GsonProvider
 {
     /** Shared Gson instance - thread-safe for serialization/deserialization */
     private static final Gson GSON = new GsonBuilder()
-        .registerTypeAdapterFactory(new IntegerAwareLongTypeAdapterFactory())
+        .registerTypeAdapter(Object.class, new IntegerAwareObjectDeserializer())
         .create();
     
     private GsonProvider()
@@ -72,93 +71,58 @@ public final class GsonProvider
     }
 
     /**
-     * TypeAdapterFactory that parses integer JSON numbers as Long instead of Double
-     * when the target type is Object.
+     * JsonDeserializer for Object.class that parses integer JSON numbers as Long
+     * instead of Double. Uses only public com.google.gson API (no stream classes).
      * This fixes the JSON-RPC id round-trip: "id":0 must not become "id":0.0.
      */
-    private static class IntegerAwareLongTypeAdapterFactory implements TypeAdapterFactory
+    private static class IntegerAwareObjectDeserializer implements JsonDeserializer<Object>
     {
-        @SuppressWarnings("unchecked")
         @Override
-        public <T> TypeAdapter<T> create(Gson gson, TypeToken<T> type)
+        public Object deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
+            throws JsonParseException
         {
-            if (type.getRawType() != Object.class)
+            if (json.isJsonNull())
             {
                 return null;
             }
-            return (TypeAdapter<T>) new ObjectTypeAdapter(gson);
-        }
-    }
-
-    /**
-     * Object type adapter that parses integer JSON numbers as Long (not Double).
-     */
-    private static class ObjectTypeAdapter extends TypeAdapter<Object>
-    {
-        private final Gson gson;
-
-        ObjectTypeAdapter(Gson gson)
-        {
-            this.gson = gson;
-        }
-
-        @Override
-        @SuppressWarnings("unchecked")
-        public void write(JsonWriter out, Object value) throws IOException
-        {
-            if (value == null)
+            if (json.isJsonPrimitive())
             {
-                out.nullValue();
-                return;
+                JsonPrimitive prim = json.getAsJsonPrimitive();
+                if (prim.isBoolean())
+                {
+                    return prim.getAsBoolean();
+                }
+                if (prim.isString())
+                {
+                    return prim.getAsString();
+                }
+                // Number: try Long first (preserves integer IDs), fall back to Double
+                String raw = prim.getAsNumber().toString();
+                try
+                {
+                    return Long.parseLong(raw);
+                }
+                catch (NumberFormatException e)
+                {
+                    return prim.getAsDouble();
+                }
             }
-            TypeAdapter<Object> adapter = (TypeAdapter<Object>) gson.getAdapter(value.getClass());
-            adapter.write(out, value);
-        }
-
-        @Override
-        public Object read(JsonReader in) throws IOException
-        {
-            JsonToken token = in.peek();
-            switch (token)
+            if (json.isJsonArray())
             {
-                case NUMBER:
-                    String raw = in.nextString();
-                    try
-                    {
-                        return Long.parseLong(raw);
-                    }
-                    catch (NumberFormatException e)
-                    {
-                        return Double.parseDouble(raw);
-                    }
-                case STRING:
-                    return in.nextString();
-                case BOOLEAN:
-                    return in.nextBoolean();
-                case NULL:
-                    in.nextNull();
-                    return null;
-                case BEGIN_ARRAY:
-                    List<Object> list = new ArrayList<>();
-                    in.beginArray();
-                    while (in.hasNext())
-                    {
-                        list.add(read(in));
-                    }
-                    in.endArray();
-                    return list;
-                case BEGIN_OBJECT:
-                    Map<String, Object> map = new LinkedHashMap<>();
-                    in.beginObject();
-                    while (in.hasNext())
-                    {
-                        map.put(in.nextName(), read(in));
-                    }
-                    in.endObject();
-                    return map;
-                default:
-                    throw new IllegalStateException("Unexpected JSON token: " + token); //$NON-NLS-1$
+                List<Object> list = new ArrayList<>();
+                for (JsonElement element : json.getAsJsonArray())
+                {
+                    list.add(context.deserialize(element, Object.class));
+                }
+                return list;
             }
+            // JsonObject
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (Map.Entry<String, JsonElement> entry : json.getAsJsonObject().entrySet())
+            {
+                map.put(entry.getKey(), context.deserialize(entry.getValue(), Object.class));
+            }
+            return map;
         }
     }
 }
