@@ -69,7 +69,15 @@ public final class PreferenceConstants
     
     /** Default decoration style */
     public static final String DEFAULT_TAGS_DECORATION_STYLE = TAGS_STYLE_SUFFIX;
-    
+
+    // === Vanessa Automation preferences ===
+
+    /** Path to vanessa-automation.epf file */
+    public static final String PREF_VANESSA_EPF_PATH = "vanessaEpfPath"; //$NON-NLS-1$
+
+    /** Default: empty (not configured) */
+    public static final String DEFAULT_VANESSA_EPF_PATH = ""; //$NON-NLS-1$
+
     private PreferenceConstants()
     {
         // Utility class

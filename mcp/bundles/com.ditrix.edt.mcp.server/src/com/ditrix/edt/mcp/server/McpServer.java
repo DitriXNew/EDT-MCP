@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadMethodSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool;
+import com.ditrix.edt.mcp.server.tools.impl.RunVanessaTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ValidateQueryTool;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -148,6 +149,7 @@ public class McpServer
         registry.register(new GetApplicationsTool());
         registry.register(new UpdateDatabaseTool());
         registry.register(new DebugLaunchTool());
+        registry.register(new RunVanessaTestsTool());
 
         // BSL code analysis tools
         registry.register(new ReadModuleSourceTool());
