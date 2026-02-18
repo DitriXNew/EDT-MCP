@@ -59,6 +59,18 @@ public class McpProtocolHandler
             if (request != null && request.getId() != null)
             {
                 requestId = request.getId();
+                // Gson deserializes JSON numbers into Object fields as Double.
+                // Normalize whole-number Doubles to Long so "id":0 serializes
+                // back as 0 (not 0.0), which is required for JSON-RPC ID matching.
+                if (requestId instanceof Double)
+                {
+                    double d = (Double) requestId;
+                    if (!Double.isInfinite(d) && d == Math.floor(d)
+                        && d >= Long.MIN_VALUE && d <= Long.MAX_VALUE)
+                    {
+                        requestId = ((Double) requestId).longValue();
+                    }
+                }
             }
             
             // Validate JSON-RPC version
