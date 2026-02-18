@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: %pluginName
 Bundle-Vendor: %providerName
-Bundle-Version: 1.24.1.qualifier
+Bundle-Version: 1.24.2.qualifier
 Bundle-SymbolicName: com.ditrix.edt.mcp.server;singleton:=true
 Bundle-Activator: com.ditrix.edt.mcp.server.Activator
 Bundle-ActivationPolicy: lazy

@@ -1067,4 +1067,4 @@ groups:
 # Licensed under GNU AGPL v3.0
 
 ---
-*EDT MCP Server v1.24.1*
+*EDT MCP Server v1.24.2*
