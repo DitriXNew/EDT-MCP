@@ -182,6 +182,11 @@ public class McpProtocolHandler
                     // Parse JSON and add userSignal field
                     result = addUserSignalToJson(result, signal);
                 }
+                // In plain text mode, return markdown as plain text instead of structured content
+                if (plainTextMode)
+                {
+                    return buildToolCallTextResponse(result, requestId);
+                }
                 return buildToolCallJsonResponse(result, requestId);
             case MARKDOWN:
                 // Append user signal as markdown
