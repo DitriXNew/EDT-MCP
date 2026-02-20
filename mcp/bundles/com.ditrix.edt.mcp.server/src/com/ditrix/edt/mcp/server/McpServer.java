@@ -28,8 +28,9 @@ import com.ditrix.edt.mcp.server.tools.impl.GetConfigurationPropertiesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetFormScreenshotTool;
-import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMetadataDetailsTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetSymbolInfoTool;
+import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMetadataObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetPlatformDocumentationTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProblemSummaryTool;
@@ -47,7 +48,6 @@ import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadMethodSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool;
-import com.ditrix.edt.mcp.server.tools.impl.RunVanessaTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ValidateQueryTool;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -149,7 +149,6 @@ public class McpServer
         registry.register(new GetApplicationsTool());
         registry.register(new UpdateDatabaseTool());
         registry.register(new DebugLaunchTool());
-        registry.register(new RunVanessaTestsTool());
 
         // BSL code analysis tools
         registry.register(new ReadModuleSourceTool());
@@ -159,6 +158,7 @@ public class McpServer
         registry.register(new ReadMethodSourceTool());
         registry.register(new GetMethodCallHierarchyTool());
         registry.register(new GoToDefinitionTool());
+        registry.register(new GetSymbolInfoTool());
         registry.register(new GetFormScreenshotTool());
         registry.register(new ValidateQueryTool());
 

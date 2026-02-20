@@ -11,7 +11,6 @@ import java.io.IOException;
 import org.eclipse.jface.preference.BooleanFieldEditor;
 import org.eclipse.jface.preference.DirectoryFieldEditor;
 import org.eclipse.jface.preference.FieldEditorPreferencePage;
-import org.eclipse.jface.preference.FileFieldEditor;
 import org.eclipse.jface.preference.IntegerFieldEditor;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.swt.SWT;
@@ -118,37 +117,8 @@ public class McpServerPreferencePage extends FieldEditorPreferencePage implement
             "Enable this if your AI client (e.g., Cursor) doesn't support MCP resources.");
         addField(plainTextModeEditor);
 
-        // Vanessa Automation section
-        createVanessaAutomationGroup(parent);
-
         // Server control group
         createServerControlGroup(parent);
-    }
-
-    private void createVanessaAutomationGroup(Composite parent)
-    {
-        // Separator line
-        Label vaSeparator = new Label(parent, SWT.HORIZONTAL | SWT.SEPARATOR);
-        GridData vaSeparatorGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        vaSeparatorGd.horizontalSpan = 2;
-        vaSeparatorGd.verticalIndent = 10;
-        vaSeparator.setLayoutData(vaSeparatorGd);
-
-        // Section title
-        Label vaSectionTitle = new Label(parent, SWT.NONE);
-        vaSectionTitle.setText("Vanessa Automation");
-        GridData vaTitleGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        vaTitleGd.horizontalSpan = 2;
-        vaSectionTitle.setLayoutData(vaTitleGd);
-
-        // Path to vanessa-automation.epf
-        FileFieldEditor vanessaEpfEditor = new FileFieldEditor(
-            PreferenceConstants.PREF_VANESSA_EPF_PATH,
-            "Vanessa Automation (*.epf):",
-            parent);
-        vanessaEpfEditor.setFileExtensions(new String[] {"*.epf"}); //$NON-NLS-1$
-        vanessaEpfEditor.setEmptyStringAllowed(true);
-        addField(vanessaEpfEditor);
     }
 
     private void createServerControlGroup(Composite parent)

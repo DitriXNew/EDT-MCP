@@ -28,13 +28,9 @@ public class PreferenceInitializer extends AbstractPreferenceInitializer
         store.setDefault(PreferenceConstants.PREF_PLAIN_TEXT_MODE, PreferenceConstants.DEFAULT_PLAIN_TEXT_MODE);
         
         // Tag decoration preferences
-        store.setDefault(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR,
+        store.setDefault(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR, 
             PreferenceConstants.DEFAULT_TAGS_SHOW_IN_NAVIGATOR);
-        store.setDefault(PreferenceConstants.PREF_TAGS_DECORATION_STYLE,
+        store.setDefault(PreferenceConstants.PREF_TAGS_DECORATION_STYLE, 
             PreferenceConstants.DEFAULT_TAGS_DECORATION_STYLE);
-
-        // Vanessa Automation preferences
-        store.setDefault(PreferenceConstants.PREF_VANESSA_EPF_PATH,
-            PreferenceConstants.DEFAULT_VANESSA_EPF_PATH);
     }
 }
