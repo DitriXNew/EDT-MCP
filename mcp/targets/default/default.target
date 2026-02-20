@@ -13,7 +13,7 @@
 
 <!-- EDT Platform Support -->
 <location followRepositoryReferences="false" includeAllPlatforms="true" includeConfigurePhase="false" includeMode="slicer" includeSource="true" type="InstallableUnit">
-<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2025.2/"/>
+<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2024.2/"/>
 <unit id="com._1c.g5.v8.dt.platform.support_v8.3.8.feature.feature.group" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.platform.support_v8.3.9.feature.feature.group" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.platform.support_v8.3.10.feature.feature.group" version="0.0.0"/>
@@ -39,7 +39,7 @@
 
 <!-- EDT -->
 <location followRepositoryReferences="false" includeAllPlatforms="true" includeConfigurePhase="false" includeMode="slicer" includeSource="true" type="InstallableUnit">
-<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2025.2/"/>
+<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2024.2/"/>
 <unit id="com._1c.g5.v8.dt.rcp" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.feature.feature.group" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.thirdparty.feature.group" version="0.0.0"/>

@@ -1,5 +1,5 @@
 [![GitHub all releases](https://img.shields.io/github/downloads/DitriXNew/EDT-MCP/total)](https://github.com/DitriXNew/EDT-MCP/releases)
-![EDT](https://img.shields.io/badge/EDT-2025.2.0+-blue?style=plastic)
+![EDT](https://img.shields.io/badge/EDT-2024.2.6+-blue?style=plastic)
 # EDT MCP Server
 
 MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (Claude, GitHub Copilot, Cursor, etc.) to interact with EDT workspace.
@@ -26,7 +26,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 
 ### From Update Site
 
-**Only EDT 2025.2.0+**
+**Only EDT 2024.2.6+**
 
 1. In EDT: **Help → Install New Software...**
 2. Add update site URL
@@ -773,7 +773,7 @@ groups:
 
 ## Requirements
 
-- 1C:EDT 2025.2 (Ruby) or later
+- 1C:EDT 2024.2.6 (Ruby) or later
 - Java 17+
 
 ## Version History
