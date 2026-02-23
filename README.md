@@ -190,6 +190,8 @@ Add to `claude_desktop_config.json`:
 | `read_method_source` | Read a specific procedure/function from a BSL module by name |
 | `search_in_code` | Full-text/regex search across BSL modules with outputMode: full/count/files |
 | `get_method_call_hierarchy` | Find method callers or callees via semantic BSL analysis |
+| `go_to_definition` | Navigate to symbol definition (method by name, metadata object by FQN) |
+| `get_symbol_info` | Get type/hover info about a symbol at a BSL code position (inferred types, signatures, docs) |
 | `validate_query` | Validate 1C query text in project context (syntax + semantic errors, optional DCS mode) |
 
 <details>
@@ -506,6 +508,50 @@ Add to `claude_desktop_config.json`:
 - `callers` uses IReferenceFinder to search across the entire project
 - `callees` traverses the method's AST to find all invocations
 
+### Go To Definition Tool
+
+**`go_to_definition`** - Navigate to the definition of a symbol. Resolves method calls like `CommonModuleName.MethodName` to the actual definition with source code, signature, and location. Also resolves metadata object FQNs like `Catalog.Products`. Supports both English and Russian metadata type names.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `symbol` | Yes | Symbol to find definition for. Formats: `ModuleName.MethodName` (method in a common module), `MethodName` (method in context module, requires `modulePath`), `Catalog.Products` (metadata object FQN). Russian metadata type names are also supported |
+| `modulePath` | No | Context module path from `src/` folder (e.g. `Documents/SalesOrder/ObjectModule.bsl`). Required when symbol is an unqualified method name |
+| `includeSource` | No | Include method source code in the response (default: `true`) |
+
+**Returns:** Markdown with:
+
+- Method signature, export flag, line range
+- Source code with line numbers (when `includeSource=true`)
+- File path for navigation
+- For metadata objects: FQN, synonym, available modules
+
+### Get Symbol Info Tool
+
+**`get_symbol_info`** - Get type and hover information about a symbol at a specific position in a BSL module. Returns inferred types, signatures, and documentation — the same info that EDT shows on mouse hover. Useful for understanding variable types in dynamically-typed BSL code.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `filePath` | Yes | Path to BSL file relative to project's `src/` folder (e.g. `CommonModules/MyModule/Module.bsl`) |
+| `line` | Yes | Line number (1-based) |
+| `column` | Yes | Column number (1-based) |
+
+**Returns:** Markdown with symbol information. Uses a multi-level approach:
+
+1. **Editor hover** (best): Returns inferred types, method signatures, documentation — same as IDE hover tooltip
+2. **EObject analysis** (fallback): Returns structural info — symbol kind, name, signature, export flag, line range
+3. **EMF model** (last resort): Basic node info without opening editor
+
+**Use cases:**
+
+- Determine the inferred type of a variable (BSL is dynamically typed)
+- Get method signature and documentation at a call site
+- Inspect property types on objects accessed via dot notation
+- Understand platform method parameter types
+
 ### Output Formats
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description` - return Markdown as EmbeddedResource with `mimeType: text/markdown`
@@ -777,6 +823,16 @@ groups:
 - Java 17+
 
 ## Version History
+
+<details>
+<summary><strong>1.24.6</strong> - Symbol info tool and GoToDefinition in tools list</summary>
+
+- **New**: `get_symbol_info` tool — get type/hover information about a symbol at a BSL code position
+  - Returns inferred types, method signatures, and documentation (same as EDT hover tooltip)
+  - Multi-level approach: editor hover → EObject analysis → EMF fallback
+  - Pre-validates position to avoid returning contextual info for whitespace/comments
+  - Useful for understanding variable types in dynamically-typed BSL code
+</details>
 
 <details>
 <summary><strong>1.24.1</strong> - Query validation tool</summary>
@@ -1067,4 +1123,4 @@ groups:
 # Licensed under GNU AGPL v3.0
 
 ---
-*EDT MCP Server v1.24.2*
+*EDT MCP Server v1.24.6*
