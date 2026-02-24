@@ -12,7 +12,12 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
@@ -81,6 +86,12 @@ public class McpServer
     /** Protocol handler */
     private McpProtocolHandler protocolHandler;
 
+    /** Main thread pool for POST/OPTIONS/DELETE requests */
+    private ThreadPoolExecutor mainExecutor;
+
+    /** Dedicated thread pool for long-lived SSE connections (isolated from main request pool) */
+    private ExecutorService sseExecutor;
+
     /**
      * Starts the MCP server on the specified port.
      * 
@@ -101,13 +112,49 @@ public class McpServer
         protocolHandler = new McpProtocolHandler();
 
         this.port = port;
+
+        // Configure HTTP server idle interval (seconds) to prevent premature connection drops
+        // This sets the time the server waits before closing idle connections
+        System.setProperty("sun.net.httpserver.idleInterval", "300"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Increase max idle connections to handle concurrent MCP clients
+        System.setProperty("sun.net.httpserver.maxIdleConnections", "32"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Increase max request time to allow long-running tool operations (10 minutes)
+        System.setProperty("sun.net.httpserver.maxReqTime", "600"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Increase max response time to allow large responses (10 minutes)
+        System.setProperty("sun.net.httpserver.maxRspTime", "600"); //$NON-NLS-1$ //$NON-NLS-2$
+
         server = HttpServer.create(new InetSocketAddress(port), 0);
-        
+
         // MCP endpoints
         server.createContext("/mcp", new McpHandler()); //$NON-NLS-1$
         server.createContext("/health", new HealthHandler()); //$NON-NLS-1$
-        
-        server.setExecutor(Executors.newFixedThreadPool(4));
+
+        // Main thread pool for POST/OPTIONS/DELETE requests (finite-duration only).
+        // Two-level overload protection:
+        //   1. Admission control in handle() at threshold 50 — returns 503 instantly
+        //   2. Bounded queue (200) — memory safety net; gap of 150 between admission
+        //      threshold and queue capacity ensures admission control always drains
+        //      the queue before executor rejection can occur.
+        // SSE (the only infinite-duration request type) is handled by the dedicated
+        // sseExecutor and never enters this pool.
+        mainExecutor = new ThreadPoolExecutor(
+            8, 8, 60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(200));
+        mainExecutor.allowCoreThreadTimeOut(true);
+        server.setExecutor(mainExecutor);
+
+        // Dedicated bounded pool for SSE streams (long-lived heartbeat connections).
+        // Hard limit of 10 concurrent SSE connections prevents unbounded thread growth.
+        // SynchronousQueue ensures immediate handoff; rejection is caught in
+        // handleSseInDedicatedPool() and returned as HTTP 503.
+        sseExecutor = new ThreadPoolExecutor(
+            0, 10, 60L, TimeUnit.SECONDS,
+            new SynchronousQueue<>(),
+            r -> {
+                Thread t = new Thread(r, "MCP-SSE-" + System.currentTimeMillis()); //$NON-NLS-1$
+                t.setDaemon(true);
+                return t;
+            });
         server.start();
         running = true;
         
@@ -185,6 +232,16 @@ public class McpServer
             server.stop(1);
             server = null;
             running = false;
+            if (mainExecutor != null)
+            {
+                mainExecutor.shutdownNow();
+                mainExecutor = null;
+            }
+            if (sseExecutor != null)
+            {
+                sseExecutor.shutdownNow();
+                sseExecutor = null;
+            }
             Activator.logInfo("MCP Server stopped"); //$NON-NLS-1$
         }
     }
@@ -393,50 +450,191 @@ public class McpServer
         @Override
         public void handle(HttpExchange exchange) throws IOException
         {
+            // SSE GET streams are offloaded to a dedicated pool so they never
+            // occupy threads in the main request pool or block the dispatcher.
             String method = exchange.getRequestMethod();
-            
-            // Validate Origin header for security (DNS rebinding prevention)
-            String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
-            if (origin != null && !isValidOrigin(origin))
+            if ("GET".equals(method)) //$NON-NLS-1$
             {
-                Activator.logInfo("Invalid Origin header rejected: " + origin); //$NON-NLS-1$
-                sendResponse(exchange, 403, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildJsonRpcError(
-                    McpConstants.ERROR_INVALID_REQUEST, "Invalid Origin", null)); //$NON-NLS-1$
+                handleSseInDedicatedPool(exchange);
                 return;
             }
-            
-            // Add CORS headers for valid origins
-            if (origin != null)
+
+            try
             {
-                exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
-                exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
-                exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Accept"); //$NON-NLS-1$ //$NON-NLS-2$
+                // Admission control: shed load before doing heavy work.
+                // Unbounded queue prevents connection resets (no executor rejection),
+                // and this check returns fast 503 to drain the queue under pressure.
+                if (mainExecutor != null)
+                {
+                    int queued = mainExecutor.getQueue().size();
+                    int active = mainExecutor.getActiveCount();
+                    if (queued + active > 50)
+                    {
+                        Activator.logInfo("Main pool overloaded (active=" + active //$NON-NLS-1$
+                            + ", queued=" + queued + "), returning 503"); //$NON-NLS-1$
+                        exchange.getResponseHeaders().add("Retry-After", "2"); //$NON-NLS-1$ //$NON-NLS-2$
+                        sendResponse(exchange, 503,
+                            com.ditrix.edt.mcp.server.protocol.JsonUtils.buildSimpleError("Server overloaded, retry later")); //$NON-NLS-1$
+                        return;
+                    }
+                }
+
+                // Validate Origin header for security (DNS rebinding prevention)
+                String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
+                if (origin != null && !isValidOrigin(origin))
+                {
+                    Activator.logInfo("Invalid Origin header rejected: " + origin); //$NON-NLS-1$
+                    sendResponse(exchange, 403, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildJsonRpcError(
+                        McpConstants.ERROR_INVALID_REQUEST, "Invalid Origin", null)); //$NON-NLS-1$
+                    return;
+                }
+
+                // Add CORS headers for valid origins
+                if (origin != null)
+                {
+                    exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
+                    exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
+                    exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Accept"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+
+                // Handle CORS preflight request
+                if ("OPTIONS".equals(method)) //$NON-NLS-1$
+                {
+                    exchange.sendResponseHeaders(204, -1);
+                    return;
+                }
+
+                if ("POST".equals(method)) //$NON-NLS-1$
+                {
+                    handleMcpRequest(exchange);
+                }
+                else if ("DELETE".equals(method)) //$NON-NLS-1$
+                {
+                    // Session termination - accept but we don't track sessions currently
+                    sendResponse(exchange, 200, ""); //$NON-NLS-1$
+                }
+                else
+                {
+                    sendResponse(exchange, 405, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildSimpleError("Method not allowed")); //$NON-NLS-1$
+                }
             }
-            
-            // Handle CORS preflight request
-            if ("OPTIONS".equals(method)) //$NON-NLS-1$
+            catch (IOException e)
             {
-                exchange.sendResponseHeaders(204, -1);
-                exchange.close();
+                // Client disconnected unexpectedly - log and clean up
+                Activator.logInfo("Client connection lost: " + e.getMessage()); //$NON-NLS-1$
+            }
+            catch (Exception e)
+            {
+                Activator.logError("Unexpected error handling MCP request", e); //$NON-NLS-1$
+                try
+                {
+                    sendResponse(exchange, 500, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildJsonRpcError(
+                        McpConstants.ERROR_INTERNAL, "Internal server error", null)); //$NON-NLS-1$
+                }
+                catch (IOException ioe)
+                {
+                    // Client already disconnected, nothing to do
+                    Activator.logInfo("Failed to send error response, client disconnected"); //$NON-NLS-1$
+                }
+            }
+            finally
+            {
+                try
+                {
+                    exchange.close();
+                }
+                catch (Exception ignored)
+                {
+                    // Already closed
+                }
+            }
+        }
+
+        /**
+         * Offloads SSE GET handling to the dedicated SSE thread pool.
+         * The exchange lifecycle (including close) is managed entirely by the SSE thread,
+         * so the main pool thread is released immediately.
+         */
+        private void handleSseInDedicatedPool(HttpExchange exchange)
+        {
+            ExecutorService sse = sseExecutor;
+            if (sse == null || sse.isShutdown())
+            {
+                try
+                {
+                    sendResponse(exchange, 503,
+                        com.ditrix.edt.mcp.server.protocol.JsonUtils.buildSimpleError("Server is shutting down")); //$NON-NLS-1$
+                }
+                catch (IOException e)
+                {
+                    // ignore
+                }
+                finally
+                {
+                    exchange.close();
+                }
                 return;
             }
-            
-            if ("POST".equals(method)) //$NON-NLS-1$
+
+            try
             {
-                handleMcpRequest(exchange);
+                sse.submit(() -> {
+                    try
+                    {
+                        // Validate Origin
+                        String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
+                        if (origin != null && !isValidOrigin(origin))
+                        {
+                            sendResponse(exchange, 403,
+                                com.ditrix.edt.mcp.server.protocol.JsonUtils.buildJsonRpcError(
+                                    McpConstants.ERROR_INVALID_REQUEST, "Invalid Origin", null)); //$NON-NLS-1$
+                            return;
+                        }
+                        if (origin != null)
+                        {
+                            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
+                            exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
+                            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Accept"); //$NON-NLS-1$ //$NON-NLS-2$
+                        }
+                        handleSseStream(exchange);
+                    }
+                    catch (IOException e)
+                    {
+                        Activator.logInfo("SSE client connection lost: " + e.getMessage()); //$NON-NLS-1$
+                    }
+                    catch (Exception e)
+                    {
+                        Activator.logError("Unexpected error in SSE stream", e); //$NON-NLS-1$
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            exchange.close();
+                        }
+                        catch (Exception ignored)
+                        {
+                            // Already closed
+                        }
+                    }
+                });
             }
-            else if ("GET".equals(method)) //$NON-NLS-1$
+            catch (RejectedExecutionException e)
             {
-                handleSseStream(exchange);
-            }
-            else if ("DELETE".equals(method)) //$NON-NLS-1$
-            {
-                // Session termination - accept but we don't track sessions currently
-                sendResponse(exchange, 200, ""); //$NON-NLS-1$
-            }
-            else
-            {
-                sendResponse(exchange, 405, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildSimpleError("Method not allowed")); //$NON-NLS-1$
+                // SSE pool shutting down
+                try
+                {
+                    sendResponse(exchange, 503,
+                        com.ditrix.edt.mcp.server.protocol.JsonUtils.buildSimpleError("Server overloaded")); //$NON-NLS-1$
+                }
+                catch (IOException ioe)
+                {
+                    // ignore
+                }
+                finally
+                {
+                    exchange.close();
+                }
             }
         }
         
@@ -459,24 +657,33 @@ public class McpServer
         {
             // Increment request counter
             incrementRequestCount();
-            
+
             Activator.logInfo("MCP request received from " + exchange.getRemoteAddress()); //$NON-NLS-1$
-            
+
             // Read request body
-            StringBuilder body = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)))
+            String requestBody;
+            try
             {
-                String line;
-                while ((line = reader.readLine()) != null)
+                StringBuilder body = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)))
                 {
-                    body.append(line);
+                    String line;
+                    while ((line = reader.readLine()) != null)
+                    {
+                        body.append(line);
+                    }
                 }
+                requestBody = body.toString();
+            }
+            catch (IOException e)
+            {
+                Activator.logInfo("Connection lost while reading request body: " + e.getMessage()); //$NON-NLS-1$
+                return;
             }
 
-            String requestBody = body.toString();
             Activator.logInfo("MCP request body: " + requestBody); //$NON-NLS-1$
-            
+
             String response;
             boolean isInitialize = requestBody.contains("\"" + McpConstants.METHOD_INITIALIZE + "\""); //$NON-NLS-1$ //$NON-NLS-2$
             boolean isToolCall = requestBody.contains("\"" + McpConstants.METHOD_TOOLS_CALL + "\""); //$NON-NLS-1$ //$NON-NLS-2$
@@ -497,16 +704,15 @@ public class McpServer
                 {
                     response = protocolHandler.processRequest(requestBody);
                 }
-                
+
                 // null response means notification (no response needed)
                 if (response == null)
                 {
                     Activator.logInfo("MCP notification processed, returning 202"); //$NON-NLS-1$
                     exchange.sendResponseHeaders(202, -1);
-                    exchange.close();
                     return;
                 }
-                
+
                 Activator.logInfo("MCP response: " + response.substring(0, Math.min(200, response.length())) + "..."); //$NON-NLS-1$ //$NON-NLS-2$
             }
             catch (Exception e)
@@ -519,7 +725,7 @@ public class McpServer
             // Check if client accepts SSE
             String acceptHeader = exchange.getRequestHeaders().getFirst("Accept"); //$NON-NLS-1$
             boolean acceptsSse = acceptHeader != null && acceptHeader.contains("text/event-stream"); //$NON-NLS-1$
-            
+
             if (acceptsSse)
             {
                 // Send response as SSE event
@@ -533,6 +739,7 @@ public class McpServer
                     exchange.getResponseHeaders().add(McpConstants.HEADER_SESSION_ID, generateSessionId());
                 }
                 exchange.getResponseHeaders().add("Content-Type", "application/json"); //$NON-NLS-1$ //$NON-NLS-2$
+                exchange.getResponseHeaders().add("Connection", "keep-alive"); //$NON-NLS-1$ //$NON-NLS-2$
                 sendResponse(exchange, 200, response);
             }
         }
@@ -760,7 +967,7 @@ public class McpServer
                             byte[] heartbeat = ": keep-alive\n\n".getBytes(StandardCharsets.UTF_8); //$NON-NLS-1$
                             os.write(heartbeat);
                             os.flush();
-                            Thread.sleep(15000);
+                            Thread.sleep(5000);
                         }
                         catch (InterruptedException e)
                         {
@@ -831,6 +1038,12 @@ public class McpServer
         try (OutputStream os = exchange.getResponseBody())
         {
             os.write(bytes);
+            os.flush();
+        }
+        catch (IOException e)
+        {
+            Activator.logInfo("Connection lost while sending response: " + e.getMessage()); //$NON-NLS-1$
+            throw e;
         }
     }
 }

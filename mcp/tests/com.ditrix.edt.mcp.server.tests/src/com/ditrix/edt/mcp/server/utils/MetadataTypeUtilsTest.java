@@ -387,4 +387,96 @@ public class MetadataTypeUtilsTest
             }
         }
     }
+
+    // ========== getAllFqnVariants ==========
+
+    @Test
+    public void testGetAllFqnVariantsRussianInput()
+    {
+        // Russian FQN should produce original (lowercased) + English variant
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants(
+            "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u0420\u0430\u0441\u0445\u043E\u0434\u044B"); // Документ.Расходы
+        assertTrue("Should contain original lowercased",
+            variants.contains("\u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u0440\u0430\u0441\u0445\u043E\u0434\u044B")); // документ.расходы
+        assertTrue("Should contain English variant",
+            variants.contains("document.\u0440\u0430\u0441\u0445\u043E\u0434\u044B")); // document.расходы
+    }
+
+    @Test
+    public void testGetAllFqnVariantsEnglishInput()
+    {
+        // English FQN should produce original (lowercased) + Russian variant
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Document.SalesOrder");
+        assertTrue("Should contain original lowercased",
+            variants.contains("document.salesorder"));
+        assertTrue("Should contain Russian variant",
+            variants.contains("\u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442.salesorder")); // документ.salesorder
+    }
+
+    @Test
+    public void testGetAllFqnVariantsPluralInput()
+    {
+        // Plural English should also work
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Catalogs.Products");
+        assertTrue("Should contain original lowercased",
+            variants.contains("catalogs.products"));
+        assertTrue("Should contain English singular variant",
+            variants.contains("catalog.products"));
+        assertTrue("Should contain Russian variant",
+            variants.contains("\u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.products")); // справочник.products
+    }
+
+    @Test
+    public void testGetAllFqnVariantsMixedCase()
+    {
+        // Mixed case input should be lowercased
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("DOCUMENT.SalesOrder");
+        assertTrue(variants.contains("document.salesorder"));
+        assertTrue(variants.contains("\u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442.salesorder")); // документ.salesorder
+    }
+
+    @Test
+    public void testGetAllFqnVariantsUnknownType()
+    {
+        // Unknown type — should return only original lowercased
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("UnknownType.Name");
+        assertEquals(1, variants.size());
+        assertTrue(variants.contains("unknowntype.name"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNoDot()
+    {
+        // No dot — single variant
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("MethodName");
+        assertEquals(1, variants.size());
+        assertTrue(variants.contains("methodname"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNullEmpty()
+    {
+        assertTrue(MetadataTypeUtils.getAllFqnVariants(null).isEmpty());
+        assertTrue(MetadataTypeUtils.getAllFqnVariants("").isEmpty());
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNoDuplicates()
+    {
+        // English singular input: original == English variant, so set should deduplicate
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Document.Test");
+        // Should have exactly 2: "document.test" and "документ.test"
+        assertEquals(2, variants.size());
+    }
+
+    @Test
+    public void testGetAllFqnVariantsAllLowercase()
+    {
+        // All returned variants must be lowercase
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Catalog.MyObject");
+        for (String v : variants)
+        {
+            assertEquals("Variant should be lowercase: " + v, v.toLowerCase(), v);
+        }
+    }
 }

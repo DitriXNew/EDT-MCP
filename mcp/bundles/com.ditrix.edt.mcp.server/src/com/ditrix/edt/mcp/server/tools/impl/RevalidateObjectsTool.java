@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 import com.google.gson.JsonArray;
@@ -64,7 +65,8 @@ public class RevalidateObjectsTool implements IMcpTool
     {
         return "Revalidate EDT project or specific objects. " + //$NON-NLS-1$
                "If objects array is empty or missing, revalidates entire project. " + //$NON-NLS-1$
-               "FQN examples: 'Document.SalesOrder', 'Catalog.Products', 'CommonModule.Common'."; //$NON-NLS-1$
+               "FQN examples: 'Document.SalesOrder', 'Catalog.Products', 'CommonModule.Common'. " + //$NON-NLS-1$
+               "Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура')."; //$NON-NLS-1$
     }
     
     @Override
@@ -72,7 +74,7 @@ public class RevalidateObjectsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty("objects", "FQNs to revalidate. Empty array = full project revalidation") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("objects", "FQNs to revalidate (e.g. ['Document.SalesOrder']). Russian type names supported (e.g. 'Документ.ПродажаТоваров'). Empty array = full project revalidation") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
     
@@ -255,38 +257,47 @@ public class RevalidateObjectsTool implements IMcpTool
         List<String> skippedNullUri = new ArrayList<>();
         Collection<Object> objectsToValidate = new ArrayList<>();
         
-        // Store FQNs in final list for lambda access
-        List<String> fqnList = new ArrayList<>(objectFqns);
-        
+        // Normalize FQNs to English singular form (supports Russian type names),
+        // but keep the original user input for result reporting
+        List<String> originalFqns = new ArrayList<>(objectFqns);
+        List<String> normalizedFqns = new ArrayList<>();
+        for (String fqn : objectFqns)
+        {
+            normalizedFqns.add(MetadataTypeUtils.normalizeFqn(fqn));
+        }
+
         bmModel.executeReadonlyTask(new AbstractBmTask<Void>("RevalidateObjectsLookup") //$NON-NLS-1$
         {
             @Override
             public Void execute(IBmTransaction tx, IProgressMonitor pm)
             {
-                for (String fqn : fqnList)
+                for (int i = 0; i < normalizedFqns.size(); i++)
                 {
-                    IBmObject obj = tx.getTopObjectByFqn(fqn);
+                    String normalizedFqn = normalizedFqns.get(i);
+                    String originalFqn = originalFqns.get(i);
+
+                    IBmObject obj = tx.getTopObjectByFqn(normalizedFqn);
                     if (obj != null)
                     {
                         // Use bmGetId() - returns Long which is accepted by scheduleValidation
                         long bmId = obj.bmGetId();
                         if (bmId > 0)
                         {
-                            Activator.logInfo("Found object: " + fqn + " -> bmId: " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
+                            Activator.logInfo("Found object: " + originalFqn + " -> bmId: " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
                             objectsToValidate.add(Long.valueOf(bmId));
-                            found.add(fqn);
+                            found.add(originalFqn);
                         }
                         else
                         {
                             // Object found but has invalid ID (transient object)
-                            Activator.logInfo("Object has invalid bmId: " + fqn + " -> " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
-                            skippedNullUri.add(fqn);
+                            Activator.logInfo("Object has invalid bmId: " + originalFqn + " -> " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
+                            skippedNullUri.add(originalFqn);
                         }
                     }
                     else
                     {
-                        Activator.logInfo("Object not found: " + fqn); //$NON-NLS-1$
-                        notFound.add(fqn);
+                        Activator.logInfo("Object not found: " + originalFqn + " (normalized: " + normalizedFqn + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        notFound.add(originalFqn);
                     }
                 }
                 return null;
