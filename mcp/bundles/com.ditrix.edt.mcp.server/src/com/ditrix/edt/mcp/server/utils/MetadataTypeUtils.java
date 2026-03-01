@@ -519,4 +519,62 @@ public final class MetadataTypeUtils
         }
         return LOOKUP.get(typeName.toLowerCase());
     }
+
+    /**
+     * Returns all FQN variants (original, English, Russian) for a given FQN, lowercased.
+     * Useful for case-insensitive matching of markers against user-provided FQNs
+     * regardless of the configuration language.
+     * <p>
+     * Example: "Документ.Встреча" produces:
+     * <ul>
+     *   <li>"документ.встреча" (original, lowercased)</li>
+     *   <li>"document.встреча" (English type)</li>
+     * </ul>
+     * Example: "Document.SalesOrder" produces:
+     * <ul>
+     *   <li>"document.salesorder" (original, lowercased)</li>
+     *   <li>"документ.salesorder" (Russian type, if available)</li>
+     * </ul>
+     *
+     * @param fqn fully qualified name with dot separator
+     * @return set of lowercase FQN variants (never empty if input is non-null)
+     */
+    public static Set<String> getAllFqnVariants(String fqn)
+    {
+        Set<String> variants = new LinkedHashSet<>();
+        if (fqn == null || fqn.isEmpty())
+        {
+            return variants;
+        }
+
+        // Always add the original (lowercased)
+        variants.add(fqn.toLowerCase());
+
+        int dotIdx = fqn.indexOf('.');
+        if (dotIdx <= 0)
+        {
+            return variants;
+        }
+
+        String typePart = fqn.substring(0, dotIdx);
+        String rest = fqn.substring(dotIdx); // includes the dot
+
+        MetadataTypeInfo typeInfo = resolve(typePart);
+        if (typeInfo == null)
+        {
+            return variants;
+        }
+
+        // Add English singular variant
+        variants.add((typeInfo.getEnglishSingular() + rest).toLowerCase());
+
+        // Add Russian variant (first Russian name)
+        String[] russianNames = typeInfo.getRussianNames();
+        if (russianNames.length > 0)
+        {
+            variants.add((russianNames[0] + rest).toLowerCase());
+        }
+
+        return variants;
+    }
 }

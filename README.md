@@ -825,13 +825,27 @@ groups:
 ## Version History
 
 <details>
-<summary><strong>1.24.6</strong> - Symbol info tool and GoToDefinition in tools list</summary>
+<summary><strong>1.24.6</strong> - Symbol info tool, connection stability, bilingual FQN support</summary>
 
 - **New**: `get_symbol_info` tool — get type/hover information about a symbol at a BSL code position
   - Returns inferred types, method signatures, and documentation (same as EDT hover tooltip)
   - Multi-level approach: editor hover → EObject analysis → EMF fallback
   - Pre-validates position to avoid returning contextual info for whitespace/comments
   - Useful for understanding variable types in dynamically-typed BSL code
+- **Improved**: Connection stability — reduced "socket connection was closed unexpectedly" errors
+  - Split into two thread pools: main pool (8 threads, queue 200) for POST/DELETE requests and dedicated SSE pool (max 10) for long-lived event streams — prevents SSE connections from starving request processing
+  - Two-level overload protection: admission control (threshold 50) returns HTTP 503 + `Retry-After` instantly; bounded queue (200) acts as memory safety net
+  - SSE pool returns HTTP 503 when connection limit (10) is exceeded
+  - Reduced SSE heartbeat interval from 15s to 5s to prevent proxy/client timeouts
+  - Added HTTP server timeout configuration (idle: 300s, request/response: 600s)
+  - Added `Connection: keep-alive` header to JSON responses
+  - Improved error handling with graceful recovery on client disconnection
+- **Improved**: `get_project_errors` tool — full bilingual FQN support
+  - Accepts both English and Russian metadata type names (e.g. 'Document.SalesOrder' or 'Документ.ПродажаТоваров')
+  - Automatically matches markers regardless of configuration language
+- **Improved**: `revalidate_objects` tool — Russian metadata type names support
+  - FQN normalization via `MetadataTypeUtils.normalizeFqn()` before BM API calls
+
 </details>
 
 <details>

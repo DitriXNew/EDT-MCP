@@ -7,8 +7,10 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
@@ -26,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -51,7 +54,8 @@ public class GetProjectErrorsTool implements IMcpTool
     {
         return "Get detailed configuration problems from EDT. " + //$NON-NLS-1$
                "Returns check code, description, object location, severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). " + //$NON-NLS-1$
-               "Can filter by specific objects using FQN (e.g. 'Document.SalesOrder', 'Catalog.Products')."; //$NON-NLS-1$
+               "Can filter by specific objects using FQN (e.g. 'Document.SalesOrder', 'Catalog.Products'). " + //$NON-NLS-1$
+               "Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура')."; //$NON-NLS-1$
     }
     
     @Override
@@ -61,7 +65,7 @@ public class GetProjectErrorsTool implements IMcpTool
             .stringProperty("projectName", "Filter by project name (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("severity", "Filter by severity: ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("checkId", "Filter by check ID substring (e.g. 'ql-temp-table-index') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty("objects", "Filter by object FQNs (e.g. ['Document.SalesOrder', 'Catalog.Products']). Returns errors only from these objects.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("objects", "Filter by object FQNs (e.g. ['Document.SalesOrder', 'Catalog.Products']). Russian type names supported (e.g. 'Документ.ПродажаТоваров'). Returns errors only from these objects.") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("limit", "Maximum number of results (default: 100, max: 1000)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -196,7 +200,18 @@ public class GetProjectErrorsTool implements IMcpTool
             final MarkerSeverity finalSeverityFilter = severityFilter;
             final String finalCheckId = checkId;
             final String finalProjectName = projectName;
-            final List<String> finalObjects = objects != null ? objects : new ArrayList<>();
+            // Normalize object FQNs to support both English and Russian metadata type names.
+            // For each input FQN, generate all variants (original + English + Russian, lowercased)
+            // so we can match markers regardless of the configuration language.
+            // Using Set for deduplication of variants.
+            final Set<String> finalObjects = new HashSet<>();
+            if (objects != null)
+            {
+                for (String fqn : objects)
+                {
+                    finalObjects.addAll(MetadataTypeUtils.getAllFqnVariants(fqn));
+                }
+            }
             
             // Use filter + limit instead of forEach with early return (which doesn't work)
             final ICheckRepository finalCheckRepo = checkRepository;
@@ -242,16 +257,16 @@ public class GetProjectErrorsTool implements IMcpTool
                         {
                             return false;
                         }
-                        
-                        // Check if any of the FQNs match the object presentation
+
+                        // Lowercase once for all comparisons
+                        String presentationLower = objectPresentation.toLowerCase();
+
+                        // Check if any FQN variant matches the object presentation
+                        // All variants in finalObjects are already lowercased
                         boolean matchesAnyObject = false;
-                        for (String fqn : finalObjects)
+                        for (String fqnVariant : finalObjects)
                         {
-                            // objectPresentation typically contains path like "Document.SalesOrder / Module / Procedure"
-                            // or "Catalog.Products.Attribute.Name"
-                            // We check if it starts with or contains the FQN
-                            if (objectPresentation.toLowerCase().contains(fqn.toLowerCase()) ||
-                                objectPresentation.toLowerCase().startsWith(fqn.toLowerCase()))
+                            if (presentationLower.contains(fqnVariant))
                             {
                                 matchesAnyObject = true;
                                 break;
