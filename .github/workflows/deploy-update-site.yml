@@ -22,55 +22,32 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-          cache: maven
-
-      - name: Cache Tycho P2 repositories
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.m2/repository/.cache/tycho
-            ~/.m2/repository/p2
-          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/pom.xml', '**/*.target') }}
-          restore-keys: |
-            ${{ runner.os }}-tycho-p2-
-
-      - name: Extract version from tag
+      - name: Extract version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # On release event GITHUB_REF_NAME is the tag, e.g. v1.26.0
-          # On workflow_dispatch fallback to pom version
           if [[ "$GITHUB_REF_NAME" == v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION=$(grep -oP '(?<=<version>)[^<]+(?=-SNAPSHOT</version>)' mcp/bom/pom.xml | head -1)
+            # workflow_dispatch: use the latest published release tag
+            VERSION=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName | ltrimstr("v")')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Set version from tag
-        working-directory: mcp
-        run: |
-          mvn org.eclipse.tycho:tycho-versions-plugin:4.0.5:set-version \
-            -DnewVersion=${{ steps.version.outputs.version }} \
-            --batch-mode --no-transfer-progress
-
-      - name: Maven build
-        working-directory: mcp
+      - name: Download release artifact
         env:
-          MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
-        run: mvn clean verify --batch-mode --no-transfer-progress -T 1C
-
-      - name: Prepare update site
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p _site
-          cp -r mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository/* _site/
+          gh release download "v${{ steps.version.outputs.version }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "MCP-EDT.v*.zip" \
+            --output release.zip
+          unzip -q release.zip -d _site/
+
+      - name: Create index.html
+        run: |
           VERSION="${{ steps.version.outputs.version }}"
           cat > _site/index.html <<EOF
           <!DOCTYPE html>
