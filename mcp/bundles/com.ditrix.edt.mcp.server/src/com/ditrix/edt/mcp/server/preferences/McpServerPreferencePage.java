@@ -28,6 +28,7 @@ import org.eclipse.ui.plugin.AbstractUIPlugin;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
+import com.ditrix.edt.mcp.server.UpdateChecker;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 
 /**
@@ -139,8 +140,126 @@ public class McpServerPreferencePage extends FieldEditorPreferencePage implement
             parent);
         addField(tagStyleEditor);
 
+        // Update check interval
+        ComboFieldEditor updateCheckEditor = new ComboFieldEditor(
+            PreferenceConstants.PREF_UPDATE_CHECK_INTERVAL,
+            "Check for updates:",
+            new String[][] {
+                {"On every startup", PreferenceConstants.UPDATE_CHECK_ON_STARTUP},
+                {"Hourly",          PreferenceConstants.UPDATE_CHECK_HOURLY},
+                {"Daily",           PreferenceConstants.UPDATE_CHECK_DAILY},
+                {"Never",           PreferenceConstants.UPDATE_CHECK_NEVER}
+            },
+            parent);
+        addField(updateCheckEditor);
+
+        // "Check now" row
+        createCheckNowRow(parent);
+
         // Server control group
         createServerControlGroup(parent);
+    }
+
+    private void createCheckNowRow(Composite parent)
+    {
+        // Empty label in column 1 to align with combo column 2
+        new Label(parent, SWT.NONE);
+
+        // Composite in column 2: button + result label + "What's new?" button
+        Composite row = new Composite(parent, SWT.NONE);
+        GridLayout rowLayout = new GridLayout(3, false);
+        rowLayout.marginWidth = 0;
+        rowLayout.marginHeight = 0;
+        row.setLayout(rowLayout);
+        row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button checkNowButton = new Button(row, SWT.PUSH);
+        checkNowButton.setText("Check now"); //$NON-NLS-1$
+
+        Label checkResultLabel = new Label(row, SWT.WRAP);
+        checkResultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button whatsNewButton = new Button(row, SWT.PUSH);
+        whatsNewButton.setText("What's new?"); //$NON-NLS-1$
+        GridData whatsNewGd = new GridData(SWT.RIGHT, SWT.CENTER, false, false);
+        whatsNewGd.exclude = true;
+        whatsNewButton.setLayoutData(whatsNewGd);
+        whatsNewButton.setVisible(false);
+        whatsNewButton.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                UpdateChecker checker = UpdateChecker.getInstance();
+                new com.ditrix.edt.mcp.server.ui.ReleaseNotesDialog(
+                    getShell(),
+                    checker.getLatestVersion(),
+                    checker.getReleaseNotes(),
+                    checker.getReleaseUrl()).open();
+            }
+        });
+
+        // Show current state immediately
+        updateCheckResultLabel(checkResultLabel, whatsNewButton);
+
+        checkNowButton.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                checkResultLabel.setText("Checking..."); //$NON-NLS-1$
+                setButtonVisible(whatsNewButton, false);
+                checkResultLabel.getParent().layout(true);
+
+                // Run in background, then update label on UI thread
+                Thread t = new Thread(() -> {
+                    UpdateChecker.getInstance().checkNow();
+                    // Give the check thread a moment to finish (it's also async)
+                    try { Thread.sleep(5_000); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
+                    org.eclipse.swt.widgets.Display display = checkResultLabel.getDisplay();
+                    if (display != null && !display.isDisposed())
+                    {
+                        display.asyncExec(() -> {
+                            if (!checkResultLabel.isDisposed())
+                            {
+                                updateCheckResultLabel(checkResultLabel, whatsNewButton);
+                                checkResultLabel.getParent().layout(true);
+                            }
+                        });
+                    }
+                }, "MCP-CheckNow-UI"); //$NON-NLS-1$
+                t.setDaemon(true);
+                t.start();
+            }
+        });
+    }
+
+    private void updateCheckResultLabel(Label label, Button whatsNewButton)
+    {
+        UpdateChecker checker = UpdateChecker.getInstance();
+        String latest = checker.getLatestVersion();
+        if (latest.isEmpty())
+        {
+            label.setText(""); //$NON-NLS-1$
+            setButtonVisible(whatsNewButton, false);
+        }
+        else if (checker.isUpdateAvailable())
+        {
+            label.setText("New release available: " + latest); //$NON-NLS-1$
+            label.setForeground(label.getDisplay().getSystemColor(SWT.COLOR_DARK_GREEN));
+            setButtonVisible(whatsNewButton, true);
+        }
+        else
+        {
+            label.setText("Up to date (" + McpConstants.PLUGIN_VERSION + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            setButtonVisible(whatsNewButton, false);
+        }
+    }
+
+    private static void setButtonVisible(Button button, boolean visible)
+    {
+        button.setVisible(visible);
+        ((GridData) button.getLayoutData()).exclude = !visible;
     }
 
     private void createServerControlGroup(Composite parent)

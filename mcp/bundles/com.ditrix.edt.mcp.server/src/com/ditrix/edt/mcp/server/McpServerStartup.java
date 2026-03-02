@@ -38,5 +38,8 @@ public class McpServerStartup implements IStartup
                 Activator.logError("Failed to auto-start MCP Server", e);
             }
         }
+
+        // Schedule a background check for a new plugin release (after 60 s delay)
+        UpdateChecker.getInstance().scheduleCheck();
     }
 }

@@ -28,6 +28,7 @@ import org.eclipse.ui.menus.WorkbenchWindowControlContribution;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
+import com.ditrix.edt.mcp.server.UpdateChecker;
 import com.ditrix.edt.mcp.server.UserSignal;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
@@ -300,6 +301,27 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
                 stopServer();
             }
         });
+
+        // Update separator and download item (items[9] and items[10])
+        new MenuItem(popupMenu, SWT.SEPARATOR);
+
+        MenuItem updateItem = new MenuItem(popupMenu, SWT.PUSH);
+        updateItem.setText("No updates available"); //$NON-NLS-1$
+        updateItem.setEnabled(false);
+        updateItem.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                UpdateChecker checker = UpdateChecker.getInstance();
+                ReleaseNotesDialog dialog = new ReleaseNotesDialog(
+                    container.getShell(),
+                    checker.getLatestVersion(),
+                    checker.getReleaseNotes(),
+                    checker.getReleaseUrl());
+                dialog.open();
+            }
+        });
     }
     
     private void sendSignal(UserSignal.SignalType type, String title)
@@ -352,6 +374,8 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         // 6: Start
         // 7: Restart
         // 8: Stop
+        // 9: Separator (update)
+        // 10: Update download item
         MenuItem[] items = popupMenu.getItems();
         if (items.length >= 9)
         {
@@ -367,6 +391,22 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             items[6].setEnabled(!running); // Start
             items[7].setEnabled(running);  // Restart
             items[8].setEnabled(running);  // Stop
+        }
+
+        // Update download item
+        if (items.length >= 11)
+        {
+            boolean updateAvailable = UpdateChecker.getInstance().isUpdateAvailable();
+            String latestVer = UpdateChecker.getInstance().getLatestVersion();
+            items[10].setEnabled(updateAvailable);
+            if (updateAvailable && !latestVer.isEmpty())
+            {
+                items[10].setText("\u26A0 New version " + latestVer + " available \u2014 Download"); //$NON-NLS-1$
+            }
+            else
+            {
+                items[10].setText("No updates available"); //$NON-NLS-1$
+            }
         }
     }
 
@@ -508,7 +548,8 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             }
             else
             {
-                statusLabel.setText("MCP"); //$NON-NLS-1$
+                boolean updateAvail = UpdateChecker.getInstance().isUpdateAvailable();
+                statusLabel.setText(updateAvail ? "MCP New release" : "MCP"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
         
@@ -545,6 +586,14 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         else
         {
             tooltip = "MCP Server: Stopped\nClick to start";
+        }
+
+        // Append update notification to tooltip if available
+        if (UpdateChecker.getInstance().isUpdateAvailable())
+        {
+            String latestVer = UpdateChecker.getInstance().getLatestVersion();
+            tooltip += "\n\u26A0 New version available: " + latestVer //$NON-NLS-1$
+                + "\nClick circle \u2192 download option"; //$NON-NLS-1$
         }
         
         if (circleLabel != null && !circleLabel.isDisposed())

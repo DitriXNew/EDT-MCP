@@ -20,6 +20,7 @@ import org.eclipse.jface.viewers.ILightweightLabelDecorator;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
+import com.ditrix.edt.mcp.server.tags.TagDecorationUtils;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.TagService.ITagChangeListener;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
@@ -96,33 +97,7 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
     }
     
     private String formatTags(Set<Tag> tags) {
-        if (tags.isEmpty()) {
-            return "";
-        }
-        
-        String style = getDecorationStyle();
-        
-        if (PreferenceConstants.TAGS_STYLE_COUNT.equals(style)) {
-            return " [" + tags.size() + " tags]";
-        }
-        
-        if (PreferenceConstants.TAGS_STYLE_FIRST_TAG.equals(style)) {
-            Tag first = tags.iterator().next();
-            return " [" + first.getName() + "]";
-        }
-        
-        // Default: STYLE_SUFFIX - show all tags
-        StringBuilder sb = new StringBuilder(" [");
-        boolean first = true;
-        for (Tag tag : tags) {
-            if (!first) {
-                sb.append(", ");
-            }
-            sb.append(tag.getName());
-            first = false;
-        }
-        sb.append("]");
-        return sb.toString();
+        return TagDecorationUtils.formatTags(tags, getDecorationStyle());
     }
     
     @Override

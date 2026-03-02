@@ -236,7 +236,10 @@ public class Activator extends AbstractUIPlugin
             impl.deactivate();
         }
         groupService = null;
-        
+
+        // Stop update checker scheduler
+        UpdateChecker.getInstance().stopScheduler();
+
         logInfo("EDT MCP Server plugin stopped"); //$NON-NLS-1$
         plugin = null;
         super.stop(context);

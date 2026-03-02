@@ -32,5 +32,9 @@ public class PreferenceInitializer extends AbstractPreferenceInitializer
             PreferenceConstants.DEFAULT_TAGS_SHOW_IN_NAVIGATOR);
         store.setDefault(PreferenceConstants.PREF_TAGS_DECORATION_STYLE, 
             PreferenceConstants.DEFAULT_TAGS_DECORATION_STYLE);
+
+        // Update check interval
+        store.setDefault(PreferenceConstants.PREF_UPDATE_CHECK_INTERVAL,
+            PreferenceConstants.DEFAULT_UPDATE_CHECK_INTERVAL);
     }
 }
