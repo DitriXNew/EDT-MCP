@@ -22,6 +22,7 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Link;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
@@ -165,9 +166,9 @@ public class McpServerPreferencePage extends FieldEditorPreferencePage implement
         // Empty label in column 1 to align with combo column 2
         new Label(parent, SWT.NONE);
 
-        // Composite in column 2: button + result label + "What's new?" button
+        // Composite in column 2: "Check now" button + result link
         Composite row = new Composite(parent, SWT.NONE);
-        GridLayout rowLayout = new GridLayout(3, false);
+        GridLayout rowLayout = new GridLayout(2, false);
         rowLayout.marginWidth = 0;
         rowLayout.marginHeight = 0;
         row.setLayout(rowLayout);
@@ -176,16 +177,10 @@ public class McpServerPreferencePage extends FieldEditorPreferencePage implement
         Button checkNowButton = new Button(row, SWT.PUSH);
         checkNowButton.setText("Check now"); //$NON-NLS-1$
 
-        Label checkResultLabel = new Label(row, SWT.WRAP);
-        checkResultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-
-        Button whatsNewButton = new Button(row, SWT.PUSH);
-        whatsNewButton.setText("What's new?"); //$NON-NLS-1$
-        GridData whatsNewGd = new GridData(SWT.RIGHT, SWT.CENTER, false, false);
-        whatsNewGd.exclude = true;
-        whatsNewButton.setLayoutData(whatsNewGd);
-        whatsNewButton.setVisible(false);
-        whatsNewButton.addSelectionListener(new SelectionAdapter()
+        // Link supports plain text and <a>clickable</a> parts in one widget — no layout issues
+        Link checkResultLink = new Link(row, SWT.NONE);
+        checkResultLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        checkResultLink.addSelectionListener(new SelectionAdapter()
         {
             @Override
             public void widgetSelected(SelectionEvent e)
@@ -200,30 +195,27 @@ public class McpServerPreferencePage extends FieldEditorPreferencePage implement
         });
 
         // Show current state immediately
-        updateCheckResultLabel(checkResultLabel, whatsNewButton);
+        updateCheckResultLink(checkResultLink);
 
         checkNowButton.addSelectionListener(new SelectionAdapter()
         {
             @Override
             public void widgetSelected(SelectionEvent e)
             {
-                checkResultLabel.setText("Checking..."); //$NON-NLS-1$
-                setButtonVisible(whatsNewButton, false);
-                checkResultLabel.getParent().layout(true);
+                checkResultLink.setText("Checking..."); //$NON-NLS-1$
+                checkResultLink.getParent().layout(true, true);
 
-                // Run in background, then update label on UI thread
+                // Run in background (checkNow is synchronous – blocks until done)
                 Thread t = new Thread(() -> {
                     UpdateChecker.getInstance().checkNow();
-                    // Give the check thread a moment to finish (it's also async)
-                    try { Thread.sleep(5_000); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
-                    org.eclipse.swt.widgets.Display display = checkResultLabel.getDisplay();
+                    org.eclipse.swt.widgets.Display display = checkResultLink.getDisplay();
                     if (display != null && !display.isDisposed())
                     {
                         display.asyncExec(() -> {
-                            if (!checkResultLabel.isDisposed())
+                            if (!checkResultLink.isDisposed())
                             {
-                                updateCheckResultLabel(checkResultLabel, whatsNewButton);
-                                checkResultLabel.getParent().layout(true);
+                                updateCheckResultLink(checkResultLink);
+                                checkResultLink.getParent().layout(true, true);
                             }
                         });
                     }
@@ -234,32 +226,23 @@ public class McpServerPreferencePage extends FieldEditorPreferencePage implement
         });
     }
 
-    private void updateCheckResultLabel(Label label, Button whatsNewButton)
+    private void updateCheckResultLink(Link link)
     {
         UpdateChecker checker = UpdateChecker.getInstance();
         String latest = checker.getLatestVersion();
         if (latest.isEmpty())
         {
-            label.setText(""); //$NON-NLS-1$
-            setButtonVisible(whatsNewButton, false);
+            link.setText(""); //$NON-NLS-1$
         }
         else if (checker.isUpdateAvailable())
         {
-            label.setText("New release available: " + latest); //$NON-NLS-1$
-            label.setForeground(label.getDisplay().getSystemColor(SWT.COLOR_DARK_GREEN));
-            setButtonVisible(whatsNewButton, true);
+            // <a> wraps the clickable part; plain text renders normally
+            link.setText("New release available: <a>" + latest + " — What's new?</a>"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         else
         {
-            label.setText("Up to date (" + McpConstants.PLUGIN_VERSION + ")"); //$NON-NLS-1$ //$NON-NLS-2$
-            setButtonVisible(whatsNewButton, false);
+            link.setText("Up to date (" + McpConstants.PLUGIN_VERSION + ")"); //$NON-NLS-1$ //$NON-NLS-2$
         }
-    }
-
-    private static void setButtonVisible(Button button, boolean visible)
-    {
-        button.setVisible(visible);
-        ((GridData) button.getLayoutData()).exclude = !visible;
     }
 
     private void createServerControlGroup(Composite parent)

@@ -93,6 +93,11 @@ public class ReleaseNotesDialog extends TitleAreaDialog
             // Keep the dialog open so the user can still read the notes
             return;
         }
+        if (buttonId == IDialogConstants.CLOSE_ID)
+        {
+            close();
+            return;
+        }
         super.buttonPressed(buttonId);
     }
 

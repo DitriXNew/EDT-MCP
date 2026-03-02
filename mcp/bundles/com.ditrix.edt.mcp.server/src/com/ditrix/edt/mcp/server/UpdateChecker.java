@@ -42,7 +42,7 @@ public final class UpdateChecker
         "https://github.com/DitriXNew/EDT-MCP/releases/latest"; //$NON-NLS-1$
 
     /** Initial delay before the very first check (ms). */
-    private static final long INITIAL_DELAY_MS = 60_000L;
+    private static final long INITIAL_DELAY_MS = 10_000L;
 
     /** HTTP connect/read timeout (ms). */
     private static final int TIMEOUT_MS = 10_000;
@@ -112,14 +112,12 @@ public final class UpdateChecker
     }
 
     /**
-     * Runs the update check immediately in a background thread (no delay).
-     * Can be called from the UI (e.g. a "Check now" button).
+     * Runs the update check synchronously on the calling thread (no delay).
+     * Can be called from a background thread (e.g. from the UI "Check now" button handler).
      */
     public void checkNow()
     {
-        Thread t = new Thread(this::performCheck, "MCP-Update-Checker-Manual"); //$NON-NLS-1$
-        t.setDaemon(true);
-        t.start();
+        performCheck();
     }
 
     /** Cancels any running scheduled checks. */
@@ -169,28 +167,42 @@ public final class UpdateChecker
 
     private void performCheck()
     {
+        Activator.logInfo("EDT MCP Server update check started (current: " + McpConstants.PLUGIN_VERSION + ")"); //$NON-NLS-1$ //$NON-NLS-2$
         try
         {
             String[] info = fetchReleaseInfo();
             if (info == null || info[0] == null || info[0].isEmpty())
             {
+                Activator.logInfo("EDT MCP Server update check: no release info returned from GitHub API"); //$NON-NLS-1$
                 return;
             }
 
-            // Strip leading 'v' / 'V' prefix
-            String remote = (info[0].startsWith("v") || info[0].startsWith("V")) //$NON-NLS-1$ //$NON-NLS-2$
-                ? info[0].substring(1)
-                : info[0];
+            Activator.logInfo("EDT MCP Server update check: GitHub returned tag_name='" + info[0] + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+
+            // Strip leading 'v' / 'V' prefix and any immediately following dot (e.g. "v.1.24.7" → "1.24.7")
+            String remote = info[0];
+            if (remote.startsWith("v") || remote.startsWith("V")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                remote = remote.substring(1);
+            }
+            if (remote.startsWith(".")) //$NON-NLS-1$
+            {
+                remote = remote.substring(1);
+            }
 
             latestVersion.set(remote);
             if (info[1] != null) releaseNotes.set(info[1]);
             if (info[2] != null) releaseUrl.set(info[2]);
 
-            if (isNewer(remote, McpConstants.PLUGIN_VERSION))
+            boolean newer = isNewer(remote, McpConstants.PLUGIN_VERSION);
+            Activator.logInfo("EDT MCP Server update check: remote=" + remote //$NON-NLS-1$
+                + " current=" + McpConstants.PLUGIN_VERSION //$NON-NLS-1$
+                + " isNewer=" + newer); //$NON-NLS-1$
+
+            if (newer)
             {
                 if (!updateAvailable.getAndSet(true))
                 {
-                    // Log only on first detection to avoid spamming the log
                     Activator.logInfo("New EDT MCP Server version available: " + remote //$NON-NLS-1$
                         + " (current: " + McpConstants.PLUGIN_VERSION + ")"); //$NON-NLS-1$ //$NON-NLS-2$
                 }
@@ -205,7 +217,8 @@ public final class UpdateChecker
         catch (Exception e)
         {
             // Network errors are not critical – just log and continue
-            Activator.logInfo("EDT MCP Server update check failed: " + e.getMessage()); //$NON-NLS-1$
+            Activator.logInfo("EDT MCP Server update check failed: " + e.getClass().getSimpleName() //$NON-NLS-1$
+                + ": " + e.getMessage()); //$NON-NLS-1$
         }
     }
 
@@ -228,6 +241,7 @@ public final class UpdateChecker
         int responseCode = connection.getResponseCode();
         if (responseCode != HttpURLConnection.HTTP_OK)
         {
+            Activator.logInfo("EDT MCP Server update check: GitHub API returned HTTP " + responseCode); //$NON-NLS-1$
             return null;
         }
 
