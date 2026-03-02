@@ -163,6 +163,19 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+### Cline - extension for VSCode.
+
+```json
+{
+  "mcpServers": {
+    "EDTMCPServer": {
+      "type": "streamableHttp",
+      "url": "http://localhost:8765/mcp"
+    }
+  }
+}
+```
+
 </details>
 
 ## Available Tools
