@@ -55,13 +55,8 @@ jobs:
           VERSION=$(grep -oP 'Bundle-Version:\s*\K[\d.]+' mcp/bundles/com.ditrix.edt.mcp.server/META-INF/MANIFEST.MF)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Package archive
-        run: |
-          cd mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository
-          zip -r "$GITHUB_WORKSPACE/MCP-EDT.v${{ steps.version.outputs.version }}.zip" .
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MCP-EDT.v${{ steps.version.outputs.version }}
-          path: MCP-EDT.v*.zip
+          path: mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository/

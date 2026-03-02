@@ -1,0 +1,81 @@
+name: Deploy Update Site
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Cache Tycho P2 repositories
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository/.cache/tycho
+            ~/.m2/repository/p2
+          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-tycho-p2-
+
+      - name: Maven build
+        working-directory: mcp
+        env:
+          MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
+        run: mvn clean verify --batch-mode --no-transfer-progress -T 1C
+
+      - name: Prepare update site
+        run: |
+          mkdir -p _site
+          cp -r mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository/* _site/
+          # Create a simple index page
+          VERSION=$(grep -oP 'Bundle-Version:\s*\K[\d.]+' mcp/bundles/com.ditrix.edt.mcp.server/META-INF/MANIFEST.MF)
+          cat > _site/index.html <<EOF
+          <!DOCTYPE html>
+          <html>
+          <head><title>EDT MCP Server Update Site</title></head>
+          <body>
+            <h1>EDT MCP Server Update Site</h1>
+            <p>Current version: <strong>${VERSION}</strong></p>
+            <p>Use this URL in EDT: <strong>Help → Install New Software...</strong></p>
+            <pre>https://ditrixnew.github.io/EDT-MCP/</pre>
+            <p><a href="https://github.com/DitriXNew/EDT-MCP">GitHub Repository</a></p>
+          </body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

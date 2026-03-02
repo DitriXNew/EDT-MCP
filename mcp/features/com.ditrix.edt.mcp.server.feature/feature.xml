@@ -2,10 +2,10 @@
 <feature
     id="com.ditrix.edt.mcp.server.feature"
     label="%featureName"
-    version="1.24.6.qualifier"
+    version="1.24.7.qualifier"
     provider-name="%providerName">
 
-    <description>
+    <description url="https://github.com/DitriXNew/EDT-MCP">
         %description
     </description>
 
@@ -16,6 +16,11 @@
     <license url="%licenseURL">
         %license
     </license>
+
+    <url>
+        <update label="EDT MCP Server Update Site" url="https://ditrixnew.github.io/EDT-MCP/"/>
+        <discovery label="EDT MCP Server Update Site" url="https://ditrixnew.github.io/EDT-MCP/"/>
+    </url>
 
     <plugin
         id="com.ditrix.edt.mcp.server"
