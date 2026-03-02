@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.preferences;
 import java.io.IOException;
 
 import org.eclipse.jface.preference.BooleanFieldEditor;
+import org.eclipse.jface.preference.ComboFieldEditor;
 import org.eclipse.jface.preference.DirectoryFieldEditor;
 import org.eclipse.jface.preference.FieldEditorPreferencePage;
 import org.eclipse.jface.preference.IntegerFieldEditor;
@@ -116,6 +117,27 @@ public class McpServerPreferencePage extends FieldEditorPreferencePage implement
             "When enabled, returns results as plain text instead of embedded resources. " +
             "Enable this if your AI client (e.g., Cursor) doesn't support MCP resources.");
         addField(plainTextModeEditor);
+
+        // === Tag decoration preferences ===
+        
+        // Show tags in navigator
+        BooleanFieldEditor showTagsEditor = new BooleanFieldEditor(
+            PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR,
+            "Show tags in Navigator",
+            parent);
+        addField(showTagsEditor);
+        
+        // Tag decoration style
+        ComboFieldEditor tagStyleEditor = new ComboFieldEditor(
+            PreferenceConstants.PREF_TAGS_DECORATION_STYLE,
+            "Tag decoration style:",
+            new String[][] {
+                {"All tags (suffix)", PreferenceConstants.TAGS_STYLE_SUFFIX},
+                {"First tag only", PreferenceConstants.TAGS_STYLE_FIRST_TAG},
+                {"Tag count", PreferenceConstants.TAGS_STYLE_COUNT}
+            },
+            parent);
+        addField(tagStyleEditor);
 
         // Server control group
         createServerControlGroup(parent);

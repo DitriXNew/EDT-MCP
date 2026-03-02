@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
-import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.tools.impl.GetBookmarksTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool;
@@ -213,16 +212,6 @@ public class McpServer
     }
 
     /**
-     * Registers a custom tool.
-     * 
-     * @param tool the tool to register
-     */
-    public void registerTool(IMcpTool tool)
-    {
-        McpToolRegistry.getInstance().register(tool);
-    }
-
-    /**
      * Stops the MCP server.
      */
     public synchronized void stop()
@@ -297,14 +286,6 @@ public class McpServer
     }
 
     /**
-     * Resets the request counter.
-     */
-    public void resetRequestCount()
-    {
-        requestCount.set(0);
-    }
-
-    /**
      * Returns the currently executing tool name.
      * 
      * @return tool name or null if no tool is executing
@@ -372,16 +353,6 @@ public class McpServer
         UserSignal signal = this.userSignal;
         this.userSignal = null;
         return signal;
-    }
-
-    /**
-     * Checks if a user signal is pending.
-     * 
-     * @return true if a signal is pending
-     */
-    public boolean hasUserSignal()
-    {
-        return userSignal != null;
     }
 
     /**
@@ -479,22 +450,14 @@ public class McpServer
                     }
                 }
 
-                // Validate Origin header for security (DNS rebinding prevention)
-                String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
-                if (origin != null && !isValidOrigin(origin))
+                // Validate Origin and add CORS headers
+                if (!addCorsHeaders(exchange))
                 {
+                    String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
                     Activator.logInfo("Invalid Origin header rejected: " + origin); //$NON-NLS-1$
                     sendResponse(exchange, 403, com.ditrix.edt.mcp.server.protocol.JsonUtils.buildJsonRpcError(
                         McpConstants.ERROR_INVALID_REQUEST, "Invalid Origin", null)); //$NON-NLS-1$
                     return;
-                }
-
-                // Add CORS headers for valid origins
-                if (origin != null)
-                {
-                    exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
-                    exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
-                    exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Accept"); //$NON-NLS-1$ //$NON-NLS-2$
                 }
 
                 // Handle CORS preflight request
@@ -581,20 +544,13 @@ public class McpServer
                 sse.submit(() -> {
                     try
                     {
-                        // Validate Origin
-                        String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
-                        if (origin != null && !isValidOrigin(origin))
+                        // Validate Origin and add CORS headers
+                        if (!addCorsHeaders(exchange))
                         {
                             sendResponse(exchange, 403,
                                 com.ditrix.edt.mcp.server.protocol.JsonUtils.buildJsonRpcError(
                                     McpConstants.ERROR_INVALID_REQUEST, "Invalid Origin", null)); //$NON-NLS-1$
                             return;
-                        }
-                        if (origin != null)
-                        {
-                            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
-                            exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
-                            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Accept"); //$NON-NLS-1$ //$NON-NLS-2$
                         }
                         handleSseStream(exchange);
                     }
@@ -638,21 +594,6 @@ public class McpServer
             }
         }
         
-        /**
-         * Validates Origin header for security.
-         */
-        private boolean isValidOrigin(String origin)
-        {
-            // Allow localhost origins, file:// origins, and "null" (for local file HTML)
-            return origin.startsWith("http://localhost") || //$NON-NLS-1$
-                   origin.startsWith("http://127.0.0.1") || //$NON-NLS-1$
-                   origin.startsWith("https://localhost") || //$NON-NLS-1$
-                   origin.startsWith("https://127.0.0.1") || //$NON-NLS-1$
-                   origin.startsWith("file://") || //$NON-NLS-1$
-                   origin.equals("null") || //$NON-NLS-1$ // Local HTML files send "null" as origin
-                   origin.startsWith("vscode-webview://"); //$NON-NLS-1$
-        }
-
         private void handleMcpRequest(HttpExchange exchange) throws IOException
         {
             // Increment request counter
@@ -1002,6 +943,47 @@ public class McpServer
     }
 
     /**
+     * Validates Origin header for security.
+     * Allows localhost origins, file:// origins, and "null" (for local file HTML).
+     * 
+     * @param origin the Origin header value
+     * @return true if origin is allowed
+     */
+    private static boolean isValidOrigin(String origin)
+    {
+        return origin.startsWith("http://localhost") || //$NON-NLS-1$
+               origin.startsWith("http://127.0.0.1") || //$NON-NLS-1$
+               origin.startsWith("https://localhost") || //$NON-NLS-1$
+               origin.startsWith("https://127.0.0.1") || //$NON-NLS-1$
+               origin.startsWith("file://") || //$NON-NLS-1$
+               origin.equals("null") || //$NON-NLS-1$ // Local HTML files send "null" as origin
+               origin.startsWith("vscode-webview://"); //$NON-NLS-1$
+    }
+
+    /**
+     * Adds CORS headers to the HTTP exchange if Origin is present.
+     * Validates the origin and returns false if it's not allowed.
+     * 
+     * @param exchange the HTTP exchange
+     * @return true if origin is allowed (or absent), false if origin is invalid
+     */
+    private boolean addCorsHeaders(HttpExchange exchange)
+    {
+        String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
+        if (origin != null)
+        {
+            if (!isValidOrigin(origin))
+            {
+                return false;
+            }
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
+            exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
+            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Accept"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return true;
+    }
+
+    /**
      * Server health check handler.
      */
     private class HealthHandler implements HttpHandler
@@ -1010,16 +992,11 @@ public class McpServer
         public void handle(HttpExchange exchange) throws IOException
         {
             // Add CORS headers for health check
-            String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
-            if (origin != null)
-            {
-                exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
-            }
+            addCorsHeaders(exchange);
             
             // Handle OPTIONS preflight
             if ("OPTIONS".equals(exchange.getRequestMethod())) //$NON-NLS-1$
             {
-                exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
                 exchange.sendResponseHeaders(204, -1);
                 exchange.close();
                 return;

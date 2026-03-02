@@ -494,16 +494,6 @@ public class Activator extends AbstractUIPlugin
     }
     
     /**
-     * Convenience method for logging (uses INFO level).
-     * 
-     * @param message the message
-     */
-    public static void log(String message)
-    {
-        logInfo(message);
-    }
-
-    /**
      * Logs a debug message.
      * Only logs if debug mode is enabled (via .options file or preference).
      * 
@@ -543,18 +533,6 @@ public class Activator extends AbstractUIPlugin
         {
             plugin.getLog().log(new Status(IStatus.ERROR, PLUGIN_ID, message, e));
         }
-    }
-
-    /**
-     * Creates an error status.
-     * 
-     * @param message the message
-     * @param e the exception
-     * @return error status
-     */
-    public static IStatus createErrorStatus(String message, Throwable e)
-    {
-        return new Status(IStatus.ERROR, PLUGIN_ID, message, e);
     }
 
     /**

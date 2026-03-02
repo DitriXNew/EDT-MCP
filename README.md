@@ -41,7 +41,11 @@ Go to **Window → Preferences → MCP Server**:
 - **Server Port**: HTTP port (default: 8765)
 - **Check descriptions folder**: Path to check description markdown files
 - **Auto-start**: Start server on EDT launch
+- **Default result limit**: Default number of results returned by tools (default: 100)
+- **Maximum result limit**: Maximum number of results that can be requested (default: 1000)
 - **Plain text mode (Cursor compatibility)**: Returns results as plain text instead of embedded resources (for AI clients that don't support MCP resources)
+- **Show tags in Navigator**: Display tags as decorations in the Navigator tree
+- **Tag decoration style**: How tags are displayed — all tags as suffix, first tag only, or tag count
 
 ![MCP Server Settings](img/Settings.png)
 
@@ -770,6 +774,7 @@ Grouped objects appear inside their group folders in the Navigator tree:
 | Create group | Right-click folder → **New Group...** |
 | Add object to group | Right-click object → **Add to Group...** |
 | Remove from group | Right-click object in group → **Remove from Group** |
+| Copy group name | Select group → **Ctrl+C** |
 | Delete group | Right-click group → **Delete** |
 | Rename group | Right-click group → **Rename...** |
 
@@ -862,7 +867,7 @@ groups:
 <details>
 <summary><strong>1.23.1</strong> - GoToDefinition tool and metadata type utilities</summary>
 
-- **New**: `goto_definition` tool for navigating to symbol definitions
+- **New**: `go_to_definition` tool for navigating to symbol definitions
   - Navigate to procedure/function implementation by name
   - Supports both English and Russian metadata type names
   - Returns file path and line number for quick navigation

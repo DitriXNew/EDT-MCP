@@ -19,36 +19,6 @@ import org.junit.Test;
  */
 public class JsonUtilsTest
 {
-    // --- escapeJson ---
-
-    @Test
-    public void testEscapeJsonNull()
-    {
-        assertEquals("", JsonUtils.escapeJson(null));
-    }
-
-    @Test
-    public void testEscapeJsonEmpty()
-    {
-        assertEquals("", JsonUtils.escapeJson(""));
-    }
-
-    @Test
-    public void testEscapeJsonSpecialChars()
-    {
-        assertEquals("line1\\nline2", JsonUtils.escapeJson("line1\nline2"));
-        assertEquals("tab\\there", JsonUtils.escapeJson("tab\there"));
-        assertEquals("quote\\\"here", JsonUtils.escapeJson("quote\"here"));
-        assertEquals("backslash\\\\here", JsonUtils.escapeJson("backslash\\here"));
-        assertEquals("cr\\rhere", JsonUtils.escapeJson("cr\rhere"));
-    }
-
-    @Test
-    public void testEscapeJsonPlainText()
-    {
-        assertEquals("hello world", JsonUtils.escapeJson("hello world"));
-    }
-
     // --- extractStringArgument ---
 
     @Test

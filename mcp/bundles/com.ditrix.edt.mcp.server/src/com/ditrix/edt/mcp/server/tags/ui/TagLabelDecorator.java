@@ -12,6 +12,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.preference.IPreferenceStore;
+import org.eclipse.jface.util.IPropertyChangeListener;
+import org.eclipse.jface.util.PropertyChangeEvent;
 import org.eclipse.jface.viewers.IDecoration;
 import org.eclipse.jface.viewers.ILabelProviderListener;
 import org.eclipse.jface.viewers.ILightweightLabelDecorator;
@@ -32,7 +34,7 @@ import com.ditrix.edt.mcp.server.tags.model.Tag;
  * <p>Implements debouncing for refresh requests to avoid excessive updates
  * when multiple tag changes occur in quick succession.</p>
  */
-public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChangeListener {
+public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChangeListener, IPropertyChangeListener {
     
     /** Debounce delay in milliseconds */
     private static final long REFRESH_DEBOUNCE_MS = 100;
@@ -51,6 +53,16 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
     public TagLabelDecorator() {
         this.tagService = TagService.getInstance();
         this.tagService.addTagChangeListener(this);
+        Activator.getDefault().getPreferenceStore().addPropertyChangeListener(this);
+    }
+    
+    @Override
+    public void propertyChange(PropertyChangeEvent event) {
+        String prop = event.getProperty();
+        if (PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR.equals(prop)
+                || PreferenceConstants.PREF_TAGS_DECORATION_STYLE.equals(prop)) {
+            scheduleRefresh();
+        }
     }
     
     @Override
@@ -183,5 +195,6 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
     @Override
     public void dispose() {
         tagService.removeTagChangeListener(this);
+        Activator.getDefault().getPreferenceStore().removePropertyChangeListener(this);
     }
 }

@@ -148,6 +148,23 @@ public class Group {
     }
     
     /**
+     * Renames a child object in this group.
+     * Replaces the old FQN with the new FQN in the internal children list.
+     * 
+     * @param oldFqn the current FQN of the object
+     * @param newFqn the new FQN of the object
+     * @return true if renamed, false if the old FQN was not found
+     */
+    public boolean renameChild(String oldFqn, String newFqn) {
+        int index = children.indexOf(oldFqn);
+        if (index >= 0) {
+            children.set(index, newFqn);
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Checks if this group contains an object.
      * 
      * @param objectFqn the FQN to check
