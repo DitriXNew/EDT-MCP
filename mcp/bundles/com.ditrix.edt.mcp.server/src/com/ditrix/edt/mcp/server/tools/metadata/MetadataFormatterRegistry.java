@@ -10,33 +10,24 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 /**
  * Registry for metadata formatters.
- * Uses a single universal formatter that can handle any metadata type
- * via dynamic EMF reflection.
+ * Delegates all formatting to the {@link UniversalMetadataFormatter},
+ * which handles any metadata type via dynamic EMF reflection.
  */
 public class MetadataFormatterRegistry
 {
-    private static final UniversalMetadataFormatter UNIVERSAL_FORMATTER = UniversalMetadataFormatter.getInstance();
-    
-    /**
-     * Gets the universal formatter that can handle any metadata object.
-     * 
-     * @param mdObject The metadata object to format (not used, always returns universal formatter)
-     * @return The universal formatter
-     */
-    public static IMetadataFormatter getFormatter(MdObject mdObject)
+    private MetadataFormatterRegistry()
     {
-        return UNIVERSAL_FORMATTER;
+        // Utility class
     }
     
     /**
-     * Gets the universal formatter.
+     * Returns the universal formatter instance.
      * 
-     * @param typeName The metadata type name (not used, always returns universal formatter)
-     * @return The universal formatter
+     * @return the universal formatter
      */
-    public static IMetadataFormatter getFormatter(String typeName)
+    public static IMetadataFormatter getFormatter()
     {
-        return UNIVERSAL_FORMATTER;
+        return UniversalMetadataFormatter.getInstance();
     }
     
     /**
@@ -49,6 +40,6 @@ public class MetadataFormatterRegistry
      */
     public static String format(MdObject mdObject, boolean full, String language)
     {
-        return UNIVERSAL_FORMATTER.format(mdObject, full, language);
+        return UniversalMetadataFormatter.getInstance().format(mdObject, full, language);
     }
 }

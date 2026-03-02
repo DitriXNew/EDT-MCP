@@ -28,6 +28,18 @@ public final class PreferenceConstants
     
     /** Plain text mode (Cursor compatibility) - returns text instead of embedded resources */
     public static final String PREF_PLAIN_TEXT_MODE = "mcpPlainTextMode"; //$NON-NLS-1$
+
+    /** Update check interval */
+    public static final String PREF_UPDATE_CHECK_INTERVAL = "mcpUpdateCheckInterval"; //$NON-NLS-1$
+
+    /** Update check interval values */
+    public static final String UPDATE_CHECK_ON_STARTUP = "on_startup"; //$NON-NLS-1$
+    public static final String UPDATE_CHECK_HOURLY    = "hourly"; //$NON-NLS-1$
+    public static final String UPDATE_CHECK_DAILY     = "daily"; //$NON-NLS-1$
+    public static final String UPDATE_CHECK_NEVER     = "never"; //$NON-NLS-1$
+
+    /** Default update check interval */
+    public static final String DEFAULT_UPDATE_CHECK_INTERVAL = UPDATE_CHECK_ON_STARTUP;
     
     /** Default port */
     public static final int DEFAULT_PORT = 8765;

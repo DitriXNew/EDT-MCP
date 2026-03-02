@@ -3,6 +3,9 @@
  */
 package com.ditrix.edt.mcp.server.protocol;
 
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.Version;
+
 /**
  * MCP protocol constants.
  * Implements MCP 2025-11-25 specification.
@@ -19,10 +22,24 @@ public final class McpConstants
     public static final String SERVER_NAME = "edt-mcp-server"; //$NON-NLS-1$
     
     /** Plugin author */
-    public static final String AUTHOR = "DitriX"; //$NON-NLS-1$
+    public static final String AUTHOR = "DitriX, Diversus23"; //$NON-NLS-1$
     
-    /** Plugin version - synced with Bundle-Version in MANIFEST.MF */
-    public static final String PLUGIN_VERSION = "1.24.7"; //$NON-NLS-1$
+    /** Plugin version - read from Bundle-Version at runtime, set by tycho-versions-plugin */
+    public static final String PLUGIN_VERSION;
+
+    static
+    {
+        org.osgi.framework.Bundle bundle = FrameworkUtil.getBundle(McpConstants.class);
+        if (bundle != null)
+        {
+            Version v = bundle.getVersion();
+            PLUGIN_VERSION = v.getMajor() + "." + v.getMinor() + "." + v.getMicro(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            PLUGIN_VERSION = "unknown"; //$NON-NLS-1$
+        }
+    }
     
     // JSON-RPC error codes
     /** Parse error */

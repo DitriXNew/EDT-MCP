@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.preferences;
 import java.io.IOException;
 
 import org.eclipse.jface.preference.BooleanFieldEditor;
+import org.eclipse.jface.preference.ComboFieldEditor;
 import org.eclipse.jface.preference.DirectoryFieldEditor;
 import org.eclipse.jface.preference.FieldEditorPreferencePage;
 import org.eclipse.jface.preference.IntegerFieldEditor;
@@ -21,12 +22,14 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Link;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
+import com.ditrix.edt.mcp.server.UpdateChecker;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 
 /**
@@ -117,8 +120,129 @@ public class McpServerPreferencePage extends FieldEditorPreferencePage implement
             "Enable this if your AI client (e.g., Cursor) doesn't support MCP resources.");
         addField(plainTextModeEditor);
 
+        // === Tag decoration preferences ===
+        
+        // Show tags in navigator
+        BooleanFieldEditor showTagsEditor = new BooleanFieldEditor(
+            PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR,
+            "Show tags in Navigator",
+            parent);
+        addField(showTagsEditor);
+        
+        // Tag decoration style
+        ComboFieldEditor tagStyleEditor = new ComboFieldEditor(
+            PreferenceConstants.PREF_TAGS_DECORATION_STYLE,
+            "Tag decoration style:",
+            new String[][] {
+                {"All tags (suffix)", PreferenceConstants.TAGS_STYLE_SUFFIX},
+                {"First tag only", PreferenceConstants.TAGS_STYLE_FIRST_TAG},
+                {"Tag count", PreferenceConstants.TAGS_STYLE_COUNT}
+            },
+            parent);
+        addField(tagStyleEditor);
+
+        // Update check interval
+        ComboFieldEditor updateCheckEditor = new ComboFieldEditor(
+            PreferenceConstants.PREF_UPDATE_CHECK_INTERVAL,
+            "Check for updates:",
+            new String[][] {
+                {"On every startup", PreferenceConstants.UPDATE_CHECK_ON_STARTUP},
+                {"Hourly",          PreferenceConstants.UPDATE_CHECK_HOURLY},
+                {"Daily",           PreferenceConstants.UPDATE_CHECK_DAILY},
+                {"Never",           PreferenceConstants.UPDATE_CHECK_NEVER}
+            },
+            parent);
+        addField(updateCheckEditor);
+
+        // "Check now" row
+        createCheckNowRow(parent);
+
         // Server control group
         createServerControlGroup(parent);
+    }
+
+    private void createCheckNowRow(Composite parent)
+    {
+        // Empty label in column 1 to align with combo column 2
+        new Label(parent, SWT.NONE);
+
+        // Composite in column 2: "Check now" button + result link
+        Composite row = new Composite(parent, SWT.NONE);
+        GridLayout rowLayout = new GridLayout(2, false);
+        rowLayout.marginWidth = 0;
+        rowLayout.marginHeight = 0;
+        row.setLayout(rowLayout);
+        row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button checkNowButton = new Button(row, SWT.PUSH);
+        checkNowButton.setText("Check now"); //$NON-NLS-1$
+
+        // Link supports plain text and <a>clickable</a> parts in one widget — no layout issues
+        Link checkResultLink = new Link(row, SWT.NONE);
+        checkResultLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        checkResultLink.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                UpdateChecker checker = UpdateChecker.getInstance();
+                new com.ditrix.edt.mcp.server.ui.ReleaseNotesDialog(
+                    getShell(),
+                    checker.getLatestVersion(),
+                    checker.getReleaseNotes(),
+                    checker.getReleaseUrl()).open();
+            }
+        });
+
+        // Show current state immediately
+        updateCheckResultLink(checkResultLink);
+
+        checkNowButton.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                checkResultLink.setText("Checking..."); //$NON-NLS-1$
+                checkResultLink.getParent().layout(true, true);
+
+                // Run in background (checkNow is synchronous – blocks until done)
+                Thread t = new Thread(() -> {
+                    UpdateChecker.getInstance().checkNow();
+                    org.eclipse.swt.widgets.Display display = checkResultLink.getDisplay();
+                    if (display != null && !display.isDisposed())
+                    {
+                        display.asyncExec(() -> {
+                            if (!checkResultLink.isDisposed())
+                            {
+                                updateCheckResultLink(checkResultLink);
+                                checkResultLink.getParent().layout(true, true);
+                            }
+                        });
+                    }
+                }, "MCP-CheckNow-UI"); //$NON-NLS-1$
+                t.setDaemon(true);
+                t.start();
+            }
+        });
+    }
+
+    private void updateCheckResultLink(Link link)
+    {
+        UpdateChecker checker = UpdateChecker.getInstance();
+        String latest = checker.getLatestVersion();
+        if (latest.isEmpty())
+        {
+            link.setText(""); //$NON-NLS-1$
+        }
+        else if (checker.isUpdateAvailable())
+        {
+            // <a> wraps the clickable part; plain text renders normally
+            link.setText("New release available: <a>" + latest + " — What's new?</a>"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            link.setText("Up to date (" + McpConstants.PLUGIN_VERSION + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 
     private void createServerControlGroup(Composite parent)

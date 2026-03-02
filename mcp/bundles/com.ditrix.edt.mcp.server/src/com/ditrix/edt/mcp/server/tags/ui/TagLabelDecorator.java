@@ -12,12 +12,15 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.preference.IPreferenceStore;
+import org.eclipse.jface.util.IPropertyChangeListener;
+import org.eclipse.jface.util.PropertyChangeEvent;
 import org.eclipse.jface.viewers.IDecoration;
 import org.eclipse.jface.viewers.ILabelProviderListener;
 import org.eclipse.jface.viewers.ILightweightLabelDecorator;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
+import com.ditrix.edt.mcp.server.tags.TagDecorationUtils;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.TagService.ITagChangeListener;
 import com.ditrix.edt.mcp.server.tags.TagUtils;
@@ -32,7 +35,7 @@ import com.ditrix.edt.mcp.server.tags.model.Tag;
  * <p>Implements debouncing for refresh requests to avoid excessive updates
  * when multiple tag changes occur in quick succession.</p>
  */
-public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChangeListener {
+public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChangeListener, IPropertyChangeListener {
     
     /** Debounce delay in milliseconds */
     private static final long REFRESH_DEBOUNCE_MS = 100;
@@ -51,6 +54,16 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
     public TagLabelDecorator() {
         this.tagService = TagService.getInstance();
         this.tagService.addTagChangeListener(this);
+        Activator.getDefault().getPreferenceStore().addPropertyChangeListener(this);
+    }
+    
+    @Override
+    public void propertyChange(PropertyChangeEvent event) {
+        String prop = event.getProperty();
+        if (PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR.equals(prop)
+                || PreferenceConstants.PREF_TAGS_DECORATION_STYLE.equals(prop)) {
+            scheduleRefresh();
+        }
     }
     
     @Override
@@ -84,33 +97,7 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
     }
     
     private String formatTags(Set<Tag> tags) {
-        if (tags.isEmpty()) {
-            return "";
-        }
-        
-        String style = getDecorationStyle();
-        
-        if (PreferenceConstants.TAGS_STYLE_COUNT.equals(style)) {
-            return " [" + tags.size() + " tags]";
-        }
-        
-        if (PreferenceConstants.TAGS_STYLE_FIRST_TAG.equals(style)) {
-            Tag first = tags.iterator().next();
-            return " [" + first.getName() + "]";
-        }
-        
-        // Default: STYLE_SUFFIX - show all tags
-        StringBuilder sb = new StringBuilder(" [");
-        boolean first = true;
-        for (Tag tag : tags) {
-            if (!first) {
-                sb.append(", ");
-            }
-            sb.append(tag.getName());
-            first = false;
-        }
-        sb.append("]");
-        return sb.toString();
+        return TagDecorationUtils.formatTags(tags, getDecorationStyle());
     }
     
     @Override
@@ -183,5 +170,6 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
     @Override
     public void dispose() {
         tagService.removeTagChangeListener(this);
+        Activator.getDefault().getPreferenceStore().removePropertyChangeListener(this);
     }
 }

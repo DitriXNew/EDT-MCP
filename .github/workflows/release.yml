@@ -32,17 +32,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-tycho-p2-
 
+      - name: Extract version from tag
+        id: version
+        run: |
+          # tag: v1.26.0 → 1.26.0
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set version from tag
+        working-directory: mcp
+        run: |
+          mvn org.eclipse.tycho:tycho-versions-plugin:4.0.5:set-version \
+            -DnewVersion=${{ steps.version.outputs.version }} \
+            --batch-mode --no-transfer-progress
+
       - name: Maven build
         working-directory: mcp
         env:
           MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
         run: mvn clean verify --batch-mode --no-transfer-progress -T 1C
-
-      - name: Extract version
-        id: version
-        run: |
-          VERSION=$(grep -oP 'Bundle-Version:\s*\K[\d.]+' mcp/bundles/com.ditrix.edt.mcp.server/META-INF/MANIFEST.MF)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Package archive
         run: |

@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -18,35 +17,13 @@ import com.google.gson.JsonParser;
 
 /**
  * JSON utility methods for parameter extraction and JSON building.
+ * Uses shared Gson instance from {@link GsonProvider}.
  */
 public final class JsonUtils
 {
-    private static final Gson GSON = new Gson();
-    
     private JsonUtils()
     {
         // Utility class
-    }
-    
-    /**
-     * Escapes special characters for JSON string.
-     * Note: Prefer using Gson for JSON serialization.
-     * This method is kept for cases where direct escaping is needed.
-     * 
-     * @param s input string
-     * @return escaped string
-     */
-    public static String escapeJson(String s)
-    {
-        if (s == null)
-        {
-            return ""; //$NON-NLS-1$
-        }
-        return s.replace("\\", "\\\\") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("\"", "\\\"") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("\n", "\\n") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("\r", "\\r") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("\t", "\\t"); //$NON-NLS-1$ //$NON-NLS-2$
     }
     
     /**
@@ -80,7 +57,7 @@ public final class JsonUtils
             response.addProperty("id", (Number) requestId); //$NON-NLS-1$
         }
         
-        return GSON.toJson(response);
+        return GsonProvider.toJson(response);
     }
     
     /**
@@ -93,7 +70,7 @@ public final class JsonUtils
     {
         JsonObject response = new JsonObject();
         response.addProperty("error", message != null ? message : "Unknown error"); //$NON-NLS-1$ //$NON-NLS-2$
-        return GSON.toJson(response);
+        return GsonProvider.toJson(response);
     }
     
     /**
@@ -113,7 +90,7 @@ public final class JsonUtils
         response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
         response.addProperty("protocol_version", protocolVersion); //$NON-NLS-1$
         response.addProperty("status", "running"); //$NON-NLS-1$ //$NON-NLS-2$
-        return GSON.toJson(response);
+        return GsonProvider.toJson(response);
     }
     
     /**
@@ -127,7 +104,7 @@ public final class JsonUtils
         JsonObject response = new JsonObject();
         response.addProperty("status", "ok"); //$NON-NLS-1$ //$NON-NLS-2$
         response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
-        return GSON.toJson(response);
+        return GsonProvider.toJson(response);
     }
     
     /**

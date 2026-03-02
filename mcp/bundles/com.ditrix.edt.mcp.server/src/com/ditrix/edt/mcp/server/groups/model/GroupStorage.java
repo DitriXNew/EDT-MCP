@@ -273,10 +273,7 @@ public class GroupStorage {
     public boolean renameObject(String oldFqn, String newFqn) {
         boolean renamed = false;
         for (Group group : groups) {
-            List<String> children = group.getChildren();
-            int index = children.indexOf(oldFqn);
-            if (index >= 0) {
-                children.set(index, newFqn);
+            if (group.renameChild(oldFqn, newFqn)) {
                 renamed = true;
             }
         }

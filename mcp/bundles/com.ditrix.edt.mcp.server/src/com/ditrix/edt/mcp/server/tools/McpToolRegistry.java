@@ -54,20 +54,6 @@ public class McpToolRegistry
     }
     
     /**
-     * Unregisters a tool.
-     * 
-     * @param name the tool name
-     */
-    public void unregister(String name)
-    {
-        if (name != null)
-        {
-            tools.remove(name);
-            Activator.logInfo("Unregistered MCP tool: " + name); //$NON-NLS-1$
-        }
-    }
-    
-    /**
      * Returns a tool by name.
      * 
      * @param name the tool name
@@ -86,17 +72,6 @@ public class McpToolRegistry
     public Collection<IMcpTool> getAllTools()
     {
         return Collections.unmodifiableCollection(tools.values());
-    }
-    
-    /**
-     * Checks if a tool is registered.
-     * 
-     * @param name the tool name
-     * @return true if registered
-     */
-    public boolean hasTool(String name)
-    {
-        return tools.containsKey(name);
     }
     
     /**

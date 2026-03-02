@@ -423,6 +423,86 @@ public class GroupModelTest
     }
 
     @Test
+    public void testStorageRenameObject()
+    {
+        Group g = new Group("Server", "CommonModules");
+        g.addChild("CommonModule.OldName");
+        g.addChild("CommonModule.Other");
+        storage.addGroup(g);
+
+        assertTrue(storage.renameObject("CommonModule.OldName", "CommonModule.NewName"));
+        
+        // Verify the rename persisted in the actual group
+        Group found = storage.findGroupForObject("CommonModule.NewName");
+        assertNotNull("Renamed object should be found in group", found);
+        assertEquals("Server", found.getName());
+        
+        // Verify old name is gone
+        assertNull("Old FQN should no longer be in any group",
+            storage.findGroupForObject("CommonModule.OldName"));
+        
+        // Verify other children are untouched
+        assertTrue(found.containsChild("CommonModule.Other"));
+    }
+
+    @Test
+    public void testStorageRenameObjectInMultipleGroups()
+    {
+        Group g1 = new Group("G1", "P");
+        Group g2 = new Group("G2", "P");
+        g1.addChild("Obj.Old");
+        g2.addChild("Obj.Old");
+        storage.addGroup(g1);
+        storage.addGroup(g2);
+
+        assertTrue(storage.renameObject("Obj.Old", "Obj.New"));
+        
+        assertTrue("G1 should contain renamed object", g1.containsChild("Obj.New"));
+        assertTrue("G2 should contain renamed object", g2.containsChild("Obj.New"));
+        assertFalse("Old name should be gone from G1", g1.containsChild("Obj.Old"));
+        assertFalse("Old name should be gone from G2", g2.containsChild("Obj.Old"));
+    }
+
+    // ========== Group.renameChild Tests ==========
+
+    @Test
+    public void testGroupRenameChild()
+    {
+        Group group = new Group("G", "P");
+        group.addChild("CommonModule.OldName");
+        
+        assertTrue(group.renameChild("CommonModule.OldName", "CommonModule.NewName"));
+        assertTrue(group.containsChild("CommonModule.NewName"));
+        assertFalse(group.containsChild("CommonModule.OldName"));
+    }
+
+    @Test
+    public void testGroupRenameChildNotFound()
+    {
+        Group group = new Group("G", "P");
+        group.addChild("Catalog.A");
+        
+        assertFalse(group.renameChild("Missing.Fqn", "New.Fqn"));
+        assertTrue("Existing child should be untouched", group.containsChild("Catalog.A"));
+    }
+
+    @Test
+    public void testGroupRenameChildPreservesOrder()
+    {
+        Group group = new Group("G", "P");
+        group.addChild("First");
+        group.addChild("Second");
+        group.addChild("Third");
+        
+        assertTrue(group.renameChild("Second", "Renamed"));
+        
+        List<String> children = group.getChildren();
+        assertEquals("First", children.get(0));
+        assertEquals("Renamed", children.get(1));
+        assertEquals("Third", children.get(2));
+    }
+
+    @Test
     public void testStorageHasGroupsAtPath()
     {
         storage.addGroup(new Group("G", "CommonModules"));

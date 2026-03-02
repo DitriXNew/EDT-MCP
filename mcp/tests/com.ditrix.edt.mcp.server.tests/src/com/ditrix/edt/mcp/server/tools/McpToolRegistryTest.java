@@ -53,7 +53,7 @@ public class McpToolRegistryTest
     {
         IMcpTool tool = new StubTool("test_tool");
         registry.register(tool);
-        assertTrue(registry.hasTool("test_tool"));
+        assertNotNull(registry.getTool("test_tool"));
         assertEquals(1, registry.getToolCount());
     }
 
@@ -94,34 +94,6 @@ public class McpToolRegistryTest
         registry.register(new StubTool("tool_b"));
         registry.register(new StubTool("tool_c"));
         assertEquals(3, registry.getToolCount());
-    }
-
-    // === Unregister ===
-
-    @Test
-    public void testUnregisterTool()
-    {
-        registry.register(new StubTool("tool_to_remove"));
-        assertTrue(registry.hasTool("tool_to_remove"));
-
-        registry.unregister("tool_to_remove");
-        assertFalse(registry.hasTool("tool_to_remove"));
-        assertEquals(0, registry.getToolCount());
-    }
-
-    @Test
-    public void testUnregisterNonExistentTool()
-    {
-        registry.unregister("nonexistent");
-        assertEquals(0, registry.getToolCount());
-    }
-
-    @Test
-    public void testUnregisterNull()
-    {
-        registry.register(new StubTool("existing"));
-        registry.unregister(null);
-        assertEquals("Null unregister should not affect registry", 1, registry.getToolCount());
     }
 
     // === GetTool ===
@@ -174,21 +146,6 @@ public class McpToolRegistryTest
         tools.add(new StubTool("hacked"));
     }
 
-    // === HasTool ===
-
-    @Test
-    public void testHasToolTrue()
-    {
-        registry.register(new StubTool("present"));
-        assertTrue(registry.hasTool("present"));
-    }
-
-    @Test
-    public void testHasToolFalse()
-    {
-        assertFalse(registry.hasTool("absent"));
-    }
-
     // === GetToolCount ===
 
     @Test
@@ -203,8 +160,8 @@ public class McpToolRegistryTest
         registry.register(new StubTool("a"));
         registry.register(new StubTool("b"));
         assertEquals(2, registry.getToolCount());
-        registry.unregister("a");
-        assertEquals(1, registry.getToolCount());
+        registry.clear();
+        assertEquals(0, registry.getToolCount());
     }
 
     // === Clear ===
@@ -218,7 +175,7 @@ public class McpToolRegistryTest
 
         registry.clear();
         assertEquals(0, registry.getToolCount());
-        assertFalse(registry.hasTool("x"));
+        assertNull(registry.getTool("x"));
     }
 
     // === Stub Tool ===
