@@ -33,12 +33,15 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 3. Select **EDT MCP Server Feature**
 4. Restart EDT
 
-### Windows command line - "one shot" very fast install
-
+<details>
+<summary><strong>Windows command line</strong> - "one shot" very fast install</summary>
+  
+```bash
 "\your\path\to\EDT\components\1c-edt-%VER_EDT%-x86_64\1cedt.exe" -nosplash -application org.eclipse.equinox.p2.director -repository https://ditrixnew.github.io/EDT-MCP -installIU com.ditrix.edt.mcp.server.feature.feature.group -profileProperties org.eclipse.update.reconcile=true
 
 where (for example):
 %VER_EDT% = 2025.2.3+30
+```
 
 ### Installation Result
 
@@ -47,7 +50,9 @@ Once the installation has been completed successfully, we will see the following
 ![MCP Server After Install](img/AfterInstall.png)
 
 After that, EDT will automatically monitor the update site and install available updates when detected.
-As well, we can also manually check via **Help → Check for Updates**
+As well, we can also manually check via **Help → About → Installation Details → Select MCP → Update**
+
+</details>
 
 ### Configuration
 
