@@ -24,6 +24,7 @@ import org.eclipse.core.runtime.Path;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -328,41 +329,43 @@ public class WriteModuleSourceTool implements IMcpTool
             // 10. Write file
             writeFile(file, newLines, hasBom, fileExists);
 
-            // 11. Return success
-            StringBuilder sb = new StringBuilder();
-            sb.append("## Written: ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("**Mode:** ").append(mode); //$NON-NLS-1$
+            // 11. Build frontmatter
+            FrontMatter fm = FrontMatter.create()
+                .put("tool", NAME) //$NON-NLS-1$
+                .put("projectName", projectName) //$NON-NLS-1$
+                .put("modulePath", modulePath) //$NON-NLS-1$
+                .put("mode", mode) //$NON-NLS-1$
+                .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("linesAfter", newLines.size()) //$NON-NLS-1$
+                .put("syntaxCheck", skipSyntaxCheck ? "skipped" : "passed"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
+            if (fileExists)
+            {
+                fm.put("linesBefore", totalOriginal); //$NON-NLS-1$
+            }
+            else
+            {
+                fm.put("newFile", true); //$NON-NLS-1$
+            }
+
+            // Mode-specific line info
             switch (mode)
             {
                 case MODE_INSERT_BEFORE:
-                    sb.append(" (before line ").append(line).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
-                    break;
+                    // fall through — both modes use the same 'line' parameter
                 case MODE_INSERT_AFTER:
-                    sb.append(" (after line ").append(line).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
+                    fm.put("line", line); //$NON-NLS-1$
                     break;
                 case MODE_REPLACE_LINES:
-                    sb.append(" (lines ").append(lineFrom).append("-").append(lineTo).append(")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    fm.put("lineFrom", lineFrom); //$NON-NLS-1$
+                    fm.put("lineTo", lineTo); //$NON-NLS-1$
                     break;
                 default:
                     break;
             }
-            sb.append("\n"); //$NON-NLS-1$
 
-            if (fileExists)
-            {
-                sb.append("**Lines before:** ").append(totalOriginal); //$NON-NLS-1$
-                sb.append(" | **Lines after:** ").append(newLines.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else
-            {
-                sb.append("**New file created** | **Lines:** ").append(newLines.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-
-            sb.append("**Syntax check:** ").append(skipSyntaxCheck ? "skipped" : "passed").append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append("**Status:** File written successfully\n"); //$NON-NLS-1$
-
-            return sb.toString();
+            // 12. Return success
+            return fm.wrapContent("File written successfully"); //$NON-NLS-1$
         }
         catch (Exception e)
         {
