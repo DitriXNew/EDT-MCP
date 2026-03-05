@@ -30,7 +30,7 @@ public final class FrontMatter
 {
     /** Pattern matching YAML special characters that require quoting. */
     private static final Pattern YAML_SPECIAL =
-        Pattern.compile("[:\\#\\[\\]\\{\\},&*?|>@`!%'\"]"); //$NON-NLS-1$
+        Pattern.compile("[:\\#\\[\\]\\{\\},&*?|>@`!%'\"\\\\]"); //$NON-NLS-1$
 
     /** Pattern matching strings that look like numbers and should be quoted to stay as strings. */
     private static final Pattern NUMERIC_PATTERN =
