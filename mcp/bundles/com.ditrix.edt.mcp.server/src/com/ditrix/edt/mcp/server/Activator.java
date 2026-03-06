@@ -19,6 +19,7 @@ import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
+import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
@@ -54,6 +55,7 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<BmAwareResourceSetProvider, BmAwareResourceSetProvider> resourceSetProviderTracker;
     private ServiceTracker<IApplicationManager, IApplicationManager> applicationManagerTracker;
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
+    private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
     
     /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
     private IGroupService groupService;
@@ -109,6 +111,9 @@ public class Activator extends AbstractUIPlugin
         
         navigatorStateProviderTracker = new ServiceTracker<>(context, INavigatorContentProviderStateProvider.class, null);
         navigatorStateProviderTracker.open();
+        
+        mdRefactoringServiceTracker = new ServiceTracker<>(context, IMdRefactoringService.class, null);
+        mdRefactoringServiceTracker.open();
         
         // Create group service directly (not via OSGi DS to avoid circular references)
         groupService = new com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl();
@@ -201,6 +206,11 @@ public class Activator extends AbstractUIPlugin
         {
             navigatorStateProviderTracker.close();
             navigatorStateProviderTracker = null;
+        }
+        if (mdRefactoringServiceTracker != null)
+        {
+            mdRefactoringServiceTracker.close();
+            mdRefactoringServiceTracker = null;
         }
         
         // Dispose UI components only in non-headless mode
@@ -437,6 +447,20 @@ public class Activator extends AbstractUIPlugin
             return null;
         }
         return navigatorStateProviderTracker.getService();
+    }
+    
+    /**
+     * Returns the IMdRefactoringService for metadata rename/delete refactoring.
+     * 
+     * @return refactoring service or null if not available
+     */
+    public IMdRefactoringService getMdRefactoringService()
+    {
+        if (mdRefactoringServiceTracker == null)
+        {
+            return null;
+        }
+        return mdRefactoringServiceTracker.getService();
     }
     
     /**
