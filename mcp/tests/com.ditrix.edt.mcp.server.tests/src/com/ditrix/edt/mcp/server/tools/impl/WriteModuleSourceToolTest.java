@@ -21,10 +21,10 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * Tests cover: tool metadata, parameter validation, mode validation,
  * path traversal protection, .bsl extension check, modulePath resolution
  * from objectName + moduleType (including CommonForm/CommonCommand special cases),
- * and result file name generation.
+ * searchReplace oldSource validation, and result file name generation.
  * <p>
- * Note: tests that require Eclipse workspace (actual file I/O) are not included
- * as they need a running Eclipse runtime. Those are covered by E2E tests.
+ * Note: tests that require Eclipse workspace (actual file I/O, searchReplace content matching)
+ * are not included as they need a running Eclipse runtime. Those are covered by E2E tests.
  */
 public class WriteModuleSourceToolTest
 {
@@ -64,14 +64,24 @@ public class WriteModuleSourceToolTest
         assertTrue(schema.contains("\"objectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"moduleType\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"source\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"oldSource\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"mode\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"line\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"lineFrom\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"lineTo\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"formName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"commandName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"skipSyntaxCheck\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"required\":[\"projectName\",\"source\"]")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInputSchemaDoesNotContainLineParams()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        String schema = tool.getInputSchema();
+
+        // Line-based params should not be present
+        assertFalse(schema.contains("\"line\"")); //$NON-NLS-1$
+        assertFalse(schema.contains("\"lineFrom\"")); //$NON-NLS-1$
+        assertFalse(schema.contains("\"lineTo\"")); //$NON-NLS-1$
     }
 
     // ==================== Result file name ====================
@@ -142,6 +152,7 @@ public class WriteModuleSourceToolTest
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("oldSource", "old"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("either modulePath or objectName is required")); //$NON-NLS-1$
@@ -186,6 +197,71 @@ public class WriteModuleSourceToolTest
         assertTrue(result.contains("deleteAll")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testExecuteOldLineModes()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        String[] removedModes = { "insertBefore", "insertAfter", "replaceLines" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        for (String mode : removedModes)
+        {
+            Map<String, String> params = new HashMap<>();
+            params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("mode", mode); //$NON-NLS-1$
+
+            String result = tool.execute(params);
+            assertTrue("mode '" + mode + "' should be rejected", //$NON-NLS-1$ //$NON-NLS-2$
+                result.contains("invalid mode")); //$NON-NLS-1$
+        }
+    }
+
+    // ==================== searchReplace: oldSource validation ====================
+
+    @Test
+    public void testSearchReplaceMissingOldSource()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "searchReplace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("oldSource is required for searchReplace")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSearchReplaceEmptyOldSource()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "searchReplace"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("oldSource", ""); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("oldSource is required for searchReplace")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDefaultModeIsSearchReplace()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        // No mode specified — defaults to searchReplace, which requires oldSource
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("oldSource is required for searchReplace")); //$NON-NLS-1$
+    }
+
     // ==================== Path traversal protection ====================
 
     @Test
@@ -196,6 +272,7 @@ public class WriteModuleSourceToolTest
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("modulePath", "../../etc/passwd.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("must not contain '..'")); //$NON-NLS-1$
@@ -211,6 +288,7 @@ public class WriteModuleSourceToolTest
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("modulePath", "Configuration/Configuration.mdo"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("only .bsl module files")); //$NON-NLS-1$
@@ -226,6 +304,7 @@ public class WriteModuleSourceToolTest
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "NoDot"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("must be in format 'Type.Name'")); //$NON-NLS-1$
@@ -239,6 +318,7 @@ public class WriteModuleSourceToolTest
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "UnknownType.Name"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("unknown metadata type")); //$NON-NLS-1$
@@ -253,6 +333,7 @@ public class WriteModuleSourceToolTest
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "UnknownModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("unknown moduleType")); //$NON-NLS-1$
@@ -269,6 +350,7 @@ public class WriteModuleSourceToolTest
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "FormModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("formName is required")); //$NON-NLS-1$
@@ -283,6 +365,7 @@ public class WriteModuleSourceToolTest
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "CommonForm.MyForm"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "FormModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         // Should NOT contain "formName is required" — CommonForm is a special case
@@ -303,6 +386,7 @@ public class WriteModuleSourceToolTest
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "CommandModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("commandName is required")); //$NON-NLS-1$
@@ -317,6 +401,7 @@ public class WriteModuleSourceToolTest
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "CommonCommand.MyCommand"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "CommandModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         // Should NOT contain "commandName is required" — CommonCommand is a special case
@@ -338,6 +423,7 @@ public class WriteModuleSourceToolTest
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         // Passes resolveModulePath (defaults to ObjectModule), reaches workspace
@@ -352,6 +438,7 @@ public class WriteModuleSourceToolTest
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "CommonModule.MyModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         // CommonModule defaults to moduleType=Module, resolves to CommonModules/MyModule/Module.bsl
@@ -367,6 +454,7 @@ public class WriteModuleSourceToolTest
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", //$NON-NLS-1$
             "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u041C\u043E\u0439\u0414\u043E\u043A"); //$NON-NLS-1$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         // Russian "Документ.МойДок" resolves to Document, reaches workspace
@@ -382,6 +470,7 @@ public class WriteModuleSourceToolTest
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "ManagerModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$
@@ -396,6 +485,7 @@ public class WriteModuleSourceToolTest
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("objectName", "InformationRegister.Prices"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "RecordSetModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$
@@ -411,6 +501,7 @@ public class WriteModuleSourceToolTest
         params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "FormModule"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("formName", "ItemForm"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$
@@ -426,6 +517,7 @@ public class WriteModuleSourceToolTest
         params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("moduleType", "CommandModule"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("commandName", "FillByTemplate"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$
@@ -441,6 +533,7 @@ public class WriteModuleSourceToolTest
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         // modulePath valid, passes all checks, reaches workspace validation
@@ -451,35 +544,78 @@ public class WriteModuleSourceToolTest
     public void testValidModesReachProjectValidation()
     {
         WriteModuleSourceTool tool = new WriteModuleSourceTool();
-        String[] validModes = { "replace", "append", "insertBefore", "insertAfter", "replaceLines" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
-        for (String mode : validModes)
+        // replace mode
         {
             Map<String, String> params = new HashMap<>();
             params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
             params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
             params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
-            params.put("mode", mode); //$NON-NLS-1$
+            params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
             String result = tool.execute(params);
-            // All valid modes pass mode validation, reach project lookup
-            assertTrue("mode '" + mode + "' should pass validation", //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("mode 'replace' should pass validation", //$NON-NLS-1$
+                result.contains("Project not found")); //$NON-NLS-1$
+        }
+
+        // append mode
+        {
+            Map<String, String> params = new HashMap<>();
+            params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("mode", "append"); //$NON-NLS-1$ //$NON-NLS-2$
+
+            String result = tool.execute(params);
+            assertTrue("mode 'append' should pass validation", //$NON-NLS-1$
+                result.contains("Project not found")); //$NON-NLS-1$
+        }
+
+        // searchReplace mode (with oldSource)
+        {
+            Map<String, String> params = new HashMap<>();
+            params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("oldSource", "old code"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("mode", "searchReplace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+            String result = tool.execute(params);
+            assertTrue("mode 'searchReplace' should pass validation", //$NON-NLS-1$
                 result.contains("Project not found")); //$NON-NLS-1$
         }
     }
 
     @Test
-    public void testDefaultModeIsReplace()
+    public void testSearchReplaceNotRequiredForReplaceMode()
     {
         WriteModuleSourceTool tool = new WriteModuleSourceTool();
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
-        // No mode specified — should default to replace
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+        // No oldSource — should be fine for replace mode
 
         String result = tool.execute(params);
-        // Passes mode validation (defaults to replace), reaches workspace
+        // Should reach project validation, NOT complain about oldSource
+        assertFalse(result.contains("oldSource is required")); //$NON-NLS-1$
+        assertTrue(result.contains("Project not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSearchReplaceNotRequiredForAppendMode()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "append"); //$NON-NLS-1$ //$NON-NLS-2$
+        // No oldSource — should be fine for append mode
+
+        String result = tool.execute(params);
+        assertFalse(result.contains("oldSource is required")); //$NON-NLS-1$
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$
     }
 }

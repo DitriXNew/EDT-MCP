@@ -29,7 +29,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
  * Tool to write BSL source code to 1C metadata object modules.
- * Supports modes: replace, append, insertBefore, insertAfter, replaceLines.
+ * Supports modes: searchReplace (content-based, default), replace (full file), append.
  * Optionally validates BSL syntax (balanced block keywords) before writing.
  * Can resolve module path from objectName + moduleType.
  */
@@ -39,9 +39,7 @@ public class WriteModuleSourceTool implements IMcpTool
 
     private static final String MODE_REPLACE = "replace"; //$NON-NLS-1$
     private static final String MODE_APPEND = "append"; //$NON-NLS-1$
-    private static final String MODE_INSERT_BEFORE = "insertBefore"; //$NON-NLS-1$
-    private static final String MODE_INSERT_AFTER = "insertAfter"; //$NON-NLS-1$
-    private static final String MODE_REPLACE_LINES = "replaceLines"; //$NON-NLS-1$
+    private static final String MODE_SEARCH_REPLACE = "searchReplace"; //$NON-NLS-1$
 
     /** Maximum source length to prevent accidental huge writes */
     private static final int MAX_SOURCE_LENGTH = 500_000;
@@ -59,9 +57,8 @@ public class WriteModuleSourceTool implements IMcpTool
     public String getDescription()
     {
         return "Write BSL source code to 1C metadata object modules. " + //$NON-NLS-1$
-            "Modes: replace (replace all, default), append (add to end), " + //$NON-NLS-1$
-            "insertBefore/insertAfter (insert before/after line), " + //$NON-NLS-1$
-            "replaceLines (replace line range from lineFrom to lineTo). " + //$NON-NLS-1$
+            "Modes: searchReplace (find oldSource and replace with source, default), " + //$NON-NLS-1$
+            "replace (replace entire file), append (add to end). " + //$NON-NLS-1$
             "Specify modulePath or objectName + moduleType. " + //$NON-NLS-1$
             "Automatically checks BSL syntax (balanced Procedure/EndProcedure, " + //$NON-NLS-1$
             "Function/EndFunction, If/EndIf, etc.) before writing — " + //$NON-NLS-1$
@@ -90,18 +87,15 @@ public class WriteModuleSourceTool implements IMcpTool
             .stringProperty("source", //$NON-NLS-1$
                 "BSL source code to write (required). " + //$NON-NLS-1$
                 "For replace: complete module content. " + //$NON-NLS-1$
-                "For append/insert: code to add.", true) //$NON-NLS-1$
+                "For searchReplace: new code replacing oldSource. " + //$NON-NLS-1$
+                "For append: code to add.", true) //$NON-NLS-1$
+            .stringProperty("oldSource", //$NON-NLS-1$
+                "Existing code to find and replace (required for searchReplace mode). " + //$NON-NLS-1$
+                "Must match exactly one location in the file. " + //$NON-NLS-1$
+                "Proves that you have read the current file content.") //$NON-NLS-1$
             .stringProperty("mode", //$NON-NLS-1$
-                "Write mode: 'replace' (replace entire file, default), " + //$NON-NLS-1$
-                "'append' (add to end), 'insertBefore' (insert before line), " + //$NON-NLS-1$
-                "'insertAfter' (insert after line), " + //$NON-NLS-1$
-                "'replaceLines' (replace lines from lineFrom to lineTo).") //$NON-NLS-1$
-            .integerProperty("line", //$NON-NLS-1$
-                "Line number (1-based) for insertBefore/insertAfter modes.") //$NON-NLS-1$
-            .integerProperty("lineFrom", //$NON-NLS-1$
-                "Start line (1-based, inclusive) for replaceLines mode.") //$NON-NLS-1$
-            .integerProperty("lineTo", //$NON-NLS-1$
-                "End line (1-based, inclusive) for replaceLines mode.") //$NON-NLS-1$
+                "Write mode: 'searchReplace' (find oldSource and replace with source, default), " + //$NON-NLS-1$
+                "'replace' (replace entire file), 'append' (add to end).") //$NON-NLS-1$
             .stringProperty("formName", //$NON-NLS-1$
                 "Form name, required when moduleType=FormModule " + //$NON-NLS-1$
                 "(e.g. 'ItemForm').") //$NON-NLS-1$
@@ -143,10 +137,8 @@ public class WriteModuleSourceTool implements IMcpTool
         String objectName = JsonUtils.extractStringArgument(params, "objectName"); //$NON-NLS-1$
         String moduleType = JsonUtils.extractStringArgument(params, "moduleType"); //$NON-NLS-1$
         String source = JsonUtils.extractStringArgument(params, "source"); //$NON-NLS-1$
+        String oldSource = JsonUtils.extractStringArgument(params, "oldSource"); //$NON-NLS-1$
         String mode = JsonUtils.extractStringArgument(params, "mode"); //$NON-NLS-1$
-        int line = JsonUtils.extractIntArgument(params, "line", -1); //$NON-NLS-1$
-        int lineFrom = JsonUtils.extractIntArgument(params, "lineFrom", -1); //$NON-NLS-1$
-        int lineTo = JsonUtils.extractIntArgument(params, "lineTo", -1); //$NON-NLS-1$
         String formName = JsonUtils.extractStringArgument(params, "formName"); //$NON-NLS-1$
         String commandName = JsonUtils.extractStringArgument(params, "commandName"); //$NON-NLS-1$
         boolean skipSyntaxCheck = JsonUtils.extractBooleanArgument(params, "skipSyntaxCheck", false); //$NON-NLS-1$
@@ -168,16 +160,24 @@ public class WriteModuleSourceTool implements IMcpTool
         // Default mode
         if (mode == null || mode.isEmpty())
         {
-            mode = MODE_REPLACE;
+            mode = MODE_SEARCH_REPLACE;
         }
 
         // Validate mode
         if (!MODE_REPLACE.equals(mode) && !MODE_APPEND.equals(mode)
-            && !MODE_INSERT_BEFORE.equals(mode) && !MODE_INSERT_AFTER.equals(mode)
-            && !MODE_REPLACE_LINES.equals(mode))
+            && !MODE_SEARCH_REPLACE.equals(mode))
         {
             return "Error: invalid mode '" + mode + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
-                "Allowed: replace, append, insertBefore, insertAfter, replaceLines"; //$NON-NLS-1$
+                "Allowed: searchReplace, replace, append"; //$NON-NLS-1$
+        }
+
+        // Validate oldSource for searchReplace mode
+        if (MODE_SEARCH_REPLACE.equals(mode))
+        {
+            if (oldSource == null || oldSource.isEmpty())
+            {
+                return "Error: oldSource is required for searchReplace mode"; //$NON-NLS-1$
+            }
         }
 
         // 3. Resolve modulePath
@@ -241,74 +241,65 @@ public class WriteModuleSourceTool implements IMcpTool
             else
             {
                 originalLines = new ArrayList<>();
-                // New BSL files should have BOM
-                hasBom = modulePath.endsWith(".bsl"); //$NON-NLS-1$
+                hasBom = true; // New BSL files should have BOM
             }
 
-            // 7. Split source into lines
-            List<String> sourceLines = splitSourceLines(source);
-
-            // 8. Compute new content based on mode
+            // 7. Compute new content based on mode
             List<String> newLines;
             int totalOriginal = originalLines.size();
 
             switch (mode)
             {
                 case MODE_REPLACE:
-                    newLines = new ArrayList<>(sourceLines);
+                    newLines = splitSourceLines(source);
                     break;
 
                 case MODE_APPEND:
                     newLines = new ArrayList<>(originalLines);
-                    newLines.addAll(sourceLines);
+                    newLines.addAll(splitSourceLines(source));
                     break;
 
-                case MODE_INSERT_BEFORE:
-                    if (line < 1 || line > totalOriginal + 1)
-                    {
-                        return "Error: line must be between 1 and " + (totalOriginal + 1) //$NON-NLS-1$
-                            + " for insertBefore (file has " + totalOriginal + " lines)"; //$NON-NLS-1$ //$NON-NLS-2$
-                    }
-                    newLines = new ArrayList<>(originalLines.subList(0, line - 1));
-                    newLines.addAll(sourceLines);
-                    newLines.addAll(originalLines.subList(line - 1, totalOriginal));
-                    break;
+                case MODE_SEARCH_REPLACE:
+                {
+                    // Normalize oldSource
+                    oldSource = oldSource.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-                case MODE_INSERT_AFTER:
-                    if (line < 1 || line > totalOriginal)
-                    {
-                        return "Error: line must be between 1 and " + totalOriginal //$NON-NLS-1$
-                            + " for insertAfter (file has " + totalOriginal + " lines)"; //$NON-NLS-1$ //$NON-NLS-2$
-                    }
-                    newLines = new ArrayList<>(originalLines.subList(0, line));
-                    newLines.addAll(sourceLines);
-                    newLines.addAll(originalLines.subList(line, totalOriginal));
-                    break;
+                    // Join original lines into single string for content-based search
+                    String currentContent = String.join("\n", originalLines); //$NON-NLS-1$
 
-                case MODE_REPLACE_LINES:
-                    if (lineFrom < 1)
+                    // Find oldSource in current content
+                    int idx = currentContent.indexOf(oldSource);
+                    if (idx < 0)
                     {
-                        return "Error: lineFrom is required for replaceLines mode (1-based)"; //$NON-NLS-1$
+                        return "Error: oldSource not found in current file content. " + //$NON-NLS-1$
+                            "The file may have changed since last read, or the oldSource text " + //$NON-NLS-1$
+                            "does not match exactly. Please read the file again with read_module_source."; //$NON-NLS-1$
                     }
-                    if (lineTo < lineFrom)
+
+                    // Check for multiple occurrences
+                    int secondIdx = currentContent.indexOf(oldSource, idx + 1);
+                    if (secondIdx >= 0)
                     {
-                        return "Error: lineTo must be >= lineFrom"; //$NON-NLS-1$
+                        return "Error: oldSource found multiple times in the file (" + //$NON-NLS-1$
+                            countOccurrences(currentContent, oldSource) +
+                            " occurrences). Provide a larger, more specific oldSource fragment " + //$NON-NLS-1$
+                            "that matches exactly one location."; //$NON-NLS-1$
                     }
-                    if (lineTo > totalOriginal)
-                    {
-                        return "Error: lineTo (" + lineTo + ") exceeds file length (" //$NON-NLS-1$ //$NON-NLS-2$
-                            + totalOriginal + " lines)"; //$NON-NLS-1$
-                    }
-                    newLines = new ArrayList<>(originalLines.subList(0, lineFrom - 1));
-                    newLines.addAll(sourceLines);
-                    newLines.addAll(originalLines.subList(lineTo, totalOriginal));
+
+                    // Perform replacement
+                    String newContent = currentContent.substring(0, idx)
+                        + source
+                        + currentContent.substring(idx + oldSource.length());
+
+                    newLines = splitSourceLines(newContent);
                     break;
+                }
 
                 default:
                     return "Error: unsupported mode: " + mode; //$NON-NLS-1$
             }
 
-            // 9. BSL syntax check
+            // 8. BSL syntax check
             if (!skipSyntaxCheck)
             {
                 BslSyntaxChecker.CheckResult checkResult = BslSyntaxChecker.check(newLines);
@@ -326,10 +317,10 @@ public class WriteModuleSourceTool implements IMcpTool
                 }
             }
 
-            // 10. Write file
+            // 9. Write file
             writeFile(file, newLines, hasBom, fileExists);
 
-            // 11. Build frontmatter
+            // 10. Build frontmatter
             FrontMatter fm = FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
                 .put("projectName", projectName) //$NON-NLS-1$
@@ -348,29 +339,28 @@ public class WriteModuleSourceTool implements IMcpTool
                 fm.put("newFile", true); //$NON-NLS-1$
             }
 
-            // Mode-specific line info
-            switch (mode)
-            {
-                case MODE_INSERT_BEFORE:
-                    // fall through — both modes use the same 'line' parameter
-                case MODE_INSERT_AFTER:
-                    fm.put("line", line); //$NON-NLS-1$
-                    break;
-                case MODE_REPLACE_LINES:
-                    fm.put("lineFrom", lineFrom); //$NON-NLS-1$
-                    fm.put("lineTo", lineTo); //$NON-NLS-1$
-                    break;
-                default:
-                    break;
-            }
-
-            // 12. Return success
+            // 11. Return success
             return fm.wrapContent("File written successfully"); //$NON-NLS-1$
         }
         catch (Exception e)
         {
             return "Error writing file: " + e.getMessage(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Counts the number of occurrences of a substring in a string.
+     */
+    private int countOccurrences(String text, String search)
+    {
+        int count = 0;
+        int idx = 0;
+        while ((idx = text.indexOf(search, idx)) >= 0)
+        {
+            count++;
+            idx++;
+        }
+        return count;
     }
 
     /**

@@ -206,7 +206,7 @@ Add to `claude_desktop_config.json`:
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
 | `read_module_source` | Read BSL module source code with line numbers (full file or line range) |
-| `write_module_source` | Write BSL source code to metadata object modules (replace, append, insert, replace lines) with syntax check |
+| `write_module_source` | Write BSL source code to metadata object modules (searchReplace, replace, append) with syntax check |
 | `read_method_source` | Read a specific procedure/function from a BSL module by name |
 | `search_in_code` | Full-text/regex search across BSL modules with outputMode: full/count/files |
 | `get_method_call_hierarchy` | Find method callers or callees via semantic BSL analysis |
@@ -477,7 +477,7 @@ Add to `claude_desktop_config.json`:
 
 #### Write Module Source Tool
 
-**`write_module_source`** - Write BSL source code to 1C metadata object modules. Modes: replace (replace all, default), append (add to end), insertBefore/insertAfter (insert before/after line), replaceLines (replace line range). Specify modulePath or objectName + moduleType. Automatically checks BSL syntax before writing.
+**`write_module_source`** - Write BSL source code to 1C metadata object modules. Modes: searchReplace (content-based find and replace, default), replace (replace entire file), append (add to end). Specify modulePath or objectName + moduleType. Automatically checks BSL syntax before writing.
 
 **Parameters:**
 | Parameter | Required | Description |
@@ -486,19 +486,20 @@ Add to `claude_desktop_config.json`:
 | `modulePath` | No* | Path from `src/` folder (e.g. `Documents/MyDoc/ObjectModule.bsl`). Alternative to objectName + moduleType |
 | `objectName` | No* | Full object name (e.g. `Document.MyDoc`, `CommonModule.MyModule`). Supports Russian names |
 | `moduleType` | No | Module type: `ObjectModule` (default), `ManagerModule`, `FormModule`, `CommandModule`, `RecordSetModule` |
-| `source` | Yes | BSL source code to write |
-| `mode` | No | Write mode: `replace` (default), `append`, `insertBefore`, `insertAfter`, `replaceLines` |
-| `line` | No | Line number (1-based) for `insertBefore`/`insertAfter` modes |
-| `lineFrom` | No | Start line (1-based, inclusive) for `replaceLines` mode |
-| `lineTo` | No | End line (1-based, inclusive) for `replaceLines` mode |
+| `source` | Yes | BSL source code to write. For `searchReplace`: new code replacing `oldSource`. For `replace`: complete module content. For `append`: code to add |
+| `oldSource` | No** | Existing code to find and replace (required for `searchReplace` mode). Must match exactly one location in the file. Serves as proof that you have read the current file content |
+| `mode` | No | Write mode: `searchReplace` (default), `replace`, `append` |
 | `formName` | No | Form name, required when `moduleType=FormModule` |
 | `commandName` | No | Command name, required when `moduleType=CommandModule` |
 | `skipSyntaxCheck` | No | Skip BSL syntax validation (default: `false`). Checks balanced `Procedure/EndProcedure`, `Function/EndFunction`, `If/EndIf`, `While/EndDo`, `For/EndDo`, `Try/EndTry` |
 
 *One of `modulePath` or `objectName` is required.
 
+**Required for `searchReplace` mode.
+
 **Notes:**
 
+- **Content-based editing**: `searchReplace` mode finds `oldSource` in the file and replaces it with `source`. If `oldSource` is not found or matches multiple locations, the operation fails safely. This eliminates line-number drift issues when making multiple edits
 - Creates new module file if it does not exist (only in `replace` mode)
 - Preserves UTF-8 BOM encoding
 - Syntax check validates the complete resulting file, not just the inserted fragment
@@ -877,7 +878,9 @@ groups:
 <summary><strong>1.25.3</strong> - Write module source tool with BSL syntax check</summary>
 
 - **New**: `write_module_source` tool — write BSL source code to metadata object modules
-  - 5 write modes: `replace` (full file), `append` (add to end), `insertBefore`/`insertAfter` (insert at line), `replaceLines` (replace line range)
+  - Content-based editing: `searchReplace` mode (default) — find `oldSource` and replace with `source`, safe against line-number drift
+  - Additional modes: `replace` (full file), `append` (add to end)
+  - `searchReplace` fails safely if `oldSource` not found or matches multiple locations — proves the AI has read the current file
   - Resolve module path from `objectName` + `moduleType` (e.g. `Document.MyDoc` + `ObjectModule`) — supports Russian metadata type names
   - Supports `formName` and `commandName` parameters for form/command modules
   - Creates new module files if they do not exist (in `replace` mode)
