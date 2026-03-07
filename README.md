@@ -21,6 +21,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
 - 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection
+- ✏️ **Metadata Refactoring** - Rename/delete metadata objects with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
 
 ## Installation
 
@@ -221,7 +222,10 @@ Add to `claude_desktop_config.json`:
 | `get_platform_documentation` | Get platform type documentation (methods, properties, constructors) |
 | `get_metadata_objects` | Get list of metadata objects from 1C configuration |
 | `get_metadata_details` | Get detailed properties of metadata objects (attributes, tabular sections, etc.) |
-| `find_references` | Find all references to a metadata object (in metadata, BSL code, forms, roles, etc.) |
+| `find_references` | Find all references to a metadata object (in metadata, BSL code, forms, roles, etc.) — top-level objects only |
+| `rename_metadata_object` | Rename a metadata object or attribute with full refactoring: cascading updates in BSL code, forms, and metadata. Preview + confirm workflow |
+| `delete_metadata_object` | Delete a metadata object or attribute with reference cleanup. Preview + confirm workflow |
+| `add_metadata_attribute` | Add a new attribute to a metadata object (Catalog, Document, Register, etc.) |
 | `get_tags` | Get list of all tags defined in the project with descriptions and object counts |
 | `get_objects_by_tags` | Get metadata objects filtered by tags with tag descriptions and object FQNs |
 | `get_applications` | Get list of applications (infobases) for a project with update state |
@@ -384,6 +388,59 @@ Add to `claude_desktop_config.json`:
 - **Roles** - Objects with role permissions
 - **Subsystems** - Subsystem content
 - **BSL code** - References in BSL modules with line numbers
+
+> **Note:** `find_references` supports top-level metadata objects only (e.g. `Catalog.DataAreas`, `CommonModule.Saas`). Passing a sub-object FQN such as `Catalog.DataAreas.Attribute.DataAreaStatus` returns a descriptive error indicating that sub-objects are not supported. Use `rename_metadata_object` or `delete_metadata_object` to work with attributes and nested objects.
+
+### Metadata Refactoring Tools
+
+#### Rename Metadata Object Tool
+
+**`rename_metadata_object`** - Rename a metadata object or attribute with full refactoring support. All references in BSL code, forms, and metadata are updated automatically.
+
+**Workflow:**
+1. Call without `confirm` to preview all change points
+2. Review change point indices and optionally skip some with `disableIndices`
+3. Call with `confirm=true` to apply
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `objectFqn` | Yes | FQN of the object to rename. Top-level: `Catalog.Products`. Nested: `Document.SalesOrder.Attribute.Amount` |
+| `newName` | Yes | New name for the object |
+| `confirm` | No | `true` to execute the rename. Default `false` = preview only |
+| `disableIndices` | No | Comma-separated indices of optional change points to skip (e.g. `'2,3,5'`) |
+| `maxResults` | No | Max change points to show in preview (default: 20, `0` = no limit) |
+
+**Supported child types in FQN:** `Attribute`, `TabularSection`, `Dimension`, `Resource`
+
+#### Delete Metadata Object Tool
+
+**`delete_metadata_object`** - Delete a metadata object or attribute. References in BSL code, forms, and other metadata are cleaned up automatically.
+
+**Workflow:**
+1. Call without `confirm` to preview affected references and problems
+2. Call with `confirm=true` to apply
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `objectFqn` | Yes | FQN of the object to delete (e.g. `Catalog.Products`, `Document.SalesOrder.Attribute.Amount`) |
+| `confirm` | No | `true` to execute the deletion. Default `false` = preview only |
+
+#### Add Metadata Attribute Tool
+
+**`add_metadata_attribute`** - Add a new attribute to a metadata object via BM write transaction. The attribute is created with default properties.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `parentFqn` | Yes | FQN of the parent object (e.g. `Catalog.Products`, `Document.SalesOrder`) |
+| `attributeName` | Yes | Name for the new attribute |
+
+**Supported parent types:** `Catalog`, `Document`, `ExchangePlan`, `ChartOfCharacteristicTypes`, `ChartOfAccounts`, `ChartOfCalculationTypes`, `BusinessProcess`, `Task`, `DataProcessor`, `Report`, `InformationRegister`, `AccumulationRegister`, `AccountingRegister`
 
 ### Tag Management Tools
 

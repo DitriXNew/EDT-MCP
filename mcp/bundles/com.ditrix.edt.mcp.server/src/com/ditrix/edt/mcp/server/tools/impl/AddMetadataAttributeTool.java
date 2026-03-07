@@ -238,7 +238,7 @@ public class AddMetadataAttributeTool implements IMcpTool
         {
             Activator.logError("Error adding attribute", e); //$NON-NLS-1$
             String msg = e.getMessage();
-            if (e.getCause() != null)
+            if (e.getCause() != null && e.getCause().getMessage() != null)
             {
                 msg = e.getCause().getMessage();
             }

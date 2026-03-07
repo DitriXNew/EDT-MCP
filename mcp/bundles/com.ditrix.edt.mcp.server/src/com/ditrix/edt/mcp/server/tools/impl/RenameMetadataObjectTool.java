@@ -129,9 +129,8 @@ public class RenameMetadataObjectTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
         String newName = JsonUtils.extractStringArgument(params, "newName"); //$NON-NLS-1$
-        String confirmStr = JsonUtils.extractStringArgument(params, "confirm"); //$NON-NLS-1$
+        boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         String disableIndicesStr = JsonUtils.extractStringArgument(params, "disableIndices"); //$NON-NLS-1$
-        boolean confirm = "true".equalsIgnoreCase(confirmStr); //$NON-NLS-1$
         final int maxResults = Math.max(0, JsonUtils.extractIntArgument(params, "maxResults", 20)); //$NON-NLS-1$
 
         // Parse disable indices
@@ -1541,7 +1540,7 @@ public class RenameMetadataObjectTool implements IMcpTool
                             applyDisableToChange(nativeChange, disableIndices, indexCounter);
                         }
                         // If all leaf changes under this native item are disabled, uncheck the item itself
-                        if (nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
+                        if (nativeChange != null && nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
                         {
                             nativeItem.setChecked(false);
                         }

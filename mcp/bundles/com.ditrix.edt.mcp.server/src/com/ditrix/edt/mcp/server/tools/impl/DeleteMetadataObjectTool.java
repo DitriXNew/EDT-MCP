@@ -91,8 +91,7 @@ public class DeleteMetadataObjectTool implements IMcpTool
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
-        String confirmStr = JsonUtils.extractStringArgument(params, "confirm"); //$NON-NLS-1$
-        boolean confirm = "true".equalsIgnoreCase(confirmStr); //$NON-NLS-1$
+        boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
 
         if (projectName == null || projectName.isEmpty())
         {
@@ -271,9 +270,12 @@ public class DeleteMetadataObjectTool implements IMcpTool
     }
 
     /**
-     * Resolves a metadata object from FQN.
-     * Delegates to the utility in RenameMetadataObjectTool logic,
-     * supporting both top-level and nested objects.
+     * Resolves a metadata object from its fully qualified name (FQN).
+     * Uses {@link MetadataTypeUtils#findObject(Configuration, String, String)}
+     * to locate the top-level object, then traverses nested metadata objects
+     * via {@link #findChild(MdObject, String, String)} to resolve deeper paths.
+     * Supports both top-level (e.g. 'Catalog.Products') and nested objects
+     * (e.g. 'Document.SalesOrder.Attribute.Amount').
      */
     private MdObject resolveObject(Configuration config, String fqn)
     {
