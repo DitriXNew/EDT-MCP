@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
+import com.ditrix.edt.mcp.server.tools.impl.WriteModuleSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetModuleStructureTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
@@ -201,6 +202,7 @@ public class McpServer
 
         // BSL code analysis tools
         registry.register(new ReadModuleSourceTool());
+        registry.register(new WriteModuleSourceTool());
         registry.register(new GetModuleStructureTool());
         registry.register(new ListModulesTool());
         registry.register(new SearchInCodeTool());
