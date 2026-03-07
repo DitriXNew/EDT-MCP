@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
@@ -61,6 +62,16 @@ public final class BslModuleUtils
     /** Regex for function keyword check */
     public static final Pattern FUNC_KEYWORD_PATTERN = Pattern.compile(
         "^\\s*(?:Функция|Function)\\s", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Regex for region start (#Область / #Region) */
+    public static final Pattern REGION_START_PATTERN = Pattern.compile(
+        "^\\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\\s+(\\S+)", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Regex for region end (#КонецОбласти / #EndRegion) */
+    public static final Pattern REGION_END_PATTERN = Pattern.compile(
+        "^\\s*#(?:\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438|EndRegion)", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
@@ -477,5 +488,60 @@ public final class BslModuleUtils
             }
         }
         return paramsBuilder.length() > 0 ? paramsBuilder.toString() : "-"; //$NON-NLS-1$
+    }
+
+    /**
+     * Finds the innermost region name containing the given line.
+     * Parses the file lines for #Область/#Region and #КонецОбласти/#EndRegion directives.
+     *
+     * @param allLines all file lines (0-indexed list)
+     * @param targetLine 1-based line number
+     * @return region name or null if line is not inside any region
+     */
+    public static String findRegionForLine(List<String> allLines, int targetLine)
+    {
+        if (allLines == null || targetLine < 1)
+        {
+            return null;
+        }
+
+        List<String> regionStack = new ArrayList<>();
+
+        for (int i = 0; i < allLines.size(); i++)
+        {
+            int lineNum = i + 1;
+            String line = allLines.get(i);
+
+            Matcher startMatcher = REGION_START_PATTERN.matcher(line);
+            if (startMatcher.find())
+            {
+                regionStack.add(startMatcher.group(1));
+                if (lineNum >= targetLine)
+                {
+                    return regionStack.get(regionStack.size() - 1);
+                }
+                continue;
+            }
+
+            if (REGION_END_PATTERN.matcher(line).find())
+            {
+                if (lineNum >= targetLine && !regionStack.isEmpty())
+                {
+                    return regionStack.get(regionStack.size() - 1);
+                }
+                if (!regionStack.isEmpty())
+                {
+                    regionStack.remove(regionStack.size() - 1);
+                }
+                continue;
+            }
+
+            if (lineNum >= targetLine)
+            {
+                return regionStack.isEmpty() ? null : regionStack.get(regionStack.size() - 1);
+            }
+        }
+
+        return null;
     }
 }

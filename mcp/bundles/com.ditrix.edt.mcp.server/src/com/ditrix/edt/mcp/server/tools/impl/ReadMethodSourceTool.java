@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 
 /**
  * Tool to read a specific procedure/function from a BSL module.
@@ -45,8 +46,7 @@ public class ReadMethodSourceTool implements IMcpTool
     public String getDescription()
     {
         return "Read a specific procedure/function from a BSL module by name. " + //$NON-NLS-1$
-               "Returns the method source code with line numbers and signature. " + //$NON-NLS-1$
-               "If method not found, returns list of all available methods."; //$NON-NLS-1$
+               "Returns source code with metadata. Lists available methods if not found."; //$NON-NLS-1$
     }
 
     @Override
@@ -54,11 +54,11 @@ public class ReadMethodSourceTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
-                "EDT project name (required)", true) //$NON-NLS-1$
+                "EDT project name", true) //$NON-NLS-1$
             .stringProperty("modulePath", //$NON-NLS-1$
-                "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
+                "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl'", true) //$NON-NLS-1$
             .stringProperty("methodName", //$NON-NLS-1$
-                "Name of the procedure/function to read (case-insensitive, required)", true) //$NON-NLS-1$
+                "Procedure/function name (case-insensitive)", true) //$NON-NLS-1$
             .build();
     }
 
@@ -166,7 +166,7 @@ public class ReadMethodSourceTool implements IMcpTool
         {
             Activator.logWarning("readMethodViaEmf: failed to read file, using getText(): " + e.getMessage()); //$NON-NLS-1$
             // Fallback: use getText() from EMF node (may include doc-comment)
-            return readMethodFromEmfText(method, modulePath, startLine, endLine);
+            return readMethodFromEmfText(method, projectName, modulePath, startLine, endLine);
         }
 
         // Include doc-comment block preceding the method keyword
@@ -175,28 +175,37 @@ public class ReadMethodSourceTool implements IMcpTool
         // Clamp range to file boundaries
         int from = Math.max(1, docStartLine);
         int to = Math.min(allLines.size(), endLine);
-        int lineCount = to - from + 1;
 
         // Build signature info
         String typeStr = method instanceof Function ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
-        String signature = BslModuleUtils.buildSignature(method);
+
+        // Find containing region
+        String region = BslModuleUtils.findRegionForLine(allLines, startLine);
+
+        FrontMatter fm = FrontMatter.create()
+            .put("projectName", projectName) //$NON-NLS-1$
+            .put("module", modulePath) //$NON-NLS-1$
+            .put("method", method.getName()) //$NON-NLS-1$
+            .put("type", typeStr) //$NON-NLS-1$
+            .put("export", method.isExport()) //$NON-NLS-1$
+            .put("startLine", from) //$NON-NLS-1$
+            .put("endLine", to) //$NON-NLS-1$
+            .put("totalLines", allLines.size()); //$NON-NLS-1$
+
+        if (region != null)
+        {
+            fm.put("region", region); //$NON-NLS-1$
+        }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("## Method: ").append(method.getName()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Module:** ").append(modulePath).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Type:** ").append(typeStr).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Lines:** ").append(from).append(" - ").append(to) //$NON-NLS-1$ //$NON-NLS-2$
-          .append(" (").append(lineCount).append(" lines)\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Signature:** ").append(signature).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
         sb.append("```bsl\n"); //$NON-NLS-1$
         for (int i = from - 1; i < to; i++)
         {
-            sb.append(String.format("%d: %s\n", i + 1, allLines.get(i))); //$NON-NLS-1$
+            sb.append(allLines.get(i)).append('\n');
         }
         sb.append("```\n"); //$NON-NLS-1$
 
-        return sb.toString();
+        return fm.wrapContent(sb.toString());
     }
 
     /**
@@ -272,23 +281,63 @@ public class ReadMethodSourceTool implements IMcpTool
             int docStart = findDocCommentStart(allLines, methodStart + 1) - 1; // convert to 0-indexed
             methodStart = docStart;
 
-            // Build output
-            int lineCount = methodEnd - methodStart + 1;
-            StringBuilder sb = new StringBuilder();
-            sb.append("## Method: ").append(methodName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("**Module:** ").append(modulePath).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("**Lines:** ").append(methodStart + 1).append(" - ").append(methodEnd + 1) //$NON-NLS-1$ //$NON-NLS-2$
-              .append(" (").append(lineCount).append(" lines)\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("*Note: read via text fallback (EMF model was not available)*\n\n"); //$NON-NLS-1$
+            // Detect function/procedure keyword on the original method start line
+            boolean isFunction = false;
+            for (int i = methodStart; i <= methodEnd; i++)
+            {
+                if (BslModuleUtils.METHOD_START_PATTERN.matcher(allLines.get(i)).find())
+                {
+                    isFunction = BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher(allLines.get(i)).find();
+                    break;
+                }
+            }
+            String typeStr = isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
 
+            // Detect export flag
+            boolean isExport = false;
+            for (int i = methodStart; i <= methodEnd; i++)
+            {
+                Matcher startMatcher = BslModuleUtils.METHOD_START_PATTERN.matcher(allLines.get(i));
+                if (startMatcher.find())
+                {
+                    String afterMethod = allLines.get(i).substring(startMatcher.end());
+                    int closeParen = afterMethod.indexOf(')');
+                    if (closeParen >= 0)
+                    {
+                        String afterParen = afterMethod.substring(closeParen + 1);
+                        isExport = afterParen.matches("(?i)\\s*(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*"); //$NON-NLS-1$
+                    }
+                    break;
+                }
+            }
+
+            // Find containing region
+            String region = BslModuleUtils.findRegionForLine(allLines, methodStart + 1);
+
+            FrontMatter fm = FrontMatter.create()
+                .put("projectName", projectName) //$NON-NLS-1$
+                .put("module", modulePath) //$NON-NLS-1$
+                .put("method", methodName) //$NON-NLS-1$
+                .put("type", typeStr) //$NON-NLS-1$
+                .put("export", isExport) //$NON-NLS-1$
+                .put("startLine", methodStart + 1) //$NON-NLS-1$
+                .put("endLine", methodEnd + 1) //$NON-NLS-1$
+                .put("totalLines", allLines.size()); //$NON-NLS-1$
+
+            if (region != null)
+            {
+                fm.put("region", region); //$NON-NLS-1$
+            }
+
+            StringBuilder sb = new StringBuilder();
             sb.append("```bsl\n"); //$NON-NLS-1$
             for (int i = methodStart; i <= methodEnd; i++)
             {
-                sb.append(String.format("%d: %s\n", i + 1, allLines.get(i))); //$NON-NLS-1$
+                sb.append(allLines.get(i)).append('\n');
             }
             sb.append("```\n"); //$NON-NLS-1$
 
-            return sb.toString();
+            return fm.wrapContent(sb.toString());
         }
         catch (Exception e)
         {
@@ -302,35 +351,34 @@ public class ReadMethodSourceTool implements IMcpTool
      * Fallback: format method source from EMF getText() when file reading fails.
      * Note: getText() may include doc-comments, so line numbers may be inaccurate.
      */
-    private String readMethodFromEmfText(Method method, String modulePath, int startLine, int endLine)
+    private String readMethodFromEmfText(Method method, String projectName, String modulePath,
+        int startLine, int endLine)
     {
         String sourceText = BslModuleUtils.getSourceText(method);
-        int lineCount = endLine - startLine + 1;
-
         String typeStr = method instanceof Function ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
-        String signature = BslModuleUtils.buildSignature(method);
+
+        FrontMatter fm = FrontMatter.create()
+            .put("projectName", projectName) //$NON-NLS-1$
+            .put("module", modulePath) //$NON-NLS-1$
+            .put("method", method.getName()) //$NON-NLS-1$
+            .put("type", typeStr) //$NON-NLS-1$
+            .put("export", method.isExport()) //$NON-NLS-1$
+            .put("startLine", startLine) //$NON-NLS-1$
+            .put("endLine", endLine); //$NON-NLS-1$
 
         StringBuilder sb = new StringBuilder();
-        sb.append("## Method: ").append(method.getName()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Module:** ").append(modulePath).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Type:** ").append(typeStr).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Lines:** ").append(startLine).append(" - ").append(endLine) //$NON-NLS-1$ //$NON-NLS-2$
-          .append(" (").append(lineCount).append(" lines)\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Signature:** ").append(signature).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("*Note: read via EMF getText(), line numbers may include doc-comment offset*\n\n"); //$NON-NLS-1$
-
         if (sourceText != null)
         {
             sb.append("```bsl\n"); //$NON-NLS-1$
-            String[] lines = sourceText.split("\n", -1); //$NON-NLS-1$
-            for (int i = 0; i < lines.length; i++)
+            sb.append(sourceText);
+            if (!sourceText.endsWith("\n")) //$NON-NLS-1$
             {
-                sb.append(String.format("%d: %s\n", startLine + i, lines[i])); //$NON-NLS-1$
+                sb.append('\n');
             }
             sb.append("```\n"); //$NON-NLS-1$
         }
 
-        return sb.toString();
+        return fm.wrapContent(sb.toString());
     }
 
     /**

@@ -52,6 +52,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 
 import io.github.furstenheim.CopyDown;
@@ -80,19 +81,17 @@ public class GetSymbolInfoTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get type and hover information about a symbol at a specific position in a BSL module. " + //$NON-NLS-1$
-               "Returns inferred types, signatures, and documentation — the same info that EDT shows on mouse hover. " + //$NON-NLS-1$
-               "Useful for understanding variable types in dynamically-typed BSL code."; //$NON-NLS-1$
+        return "Get type/hover info about a symbol at a position in a BSL module. " + //$NON-NLS-1$
+               "Returns inferred types, signatures, and documentation."; //$NON-NLS-1$
     }
 
     @Override
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("projectName", "EDT project name", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("filePath", //$NON-NLS-1$
-                "Path to BSL file relative to project's src folder " + //$NON-NLS-1$
-                "(e.g. 'CommonModules/MyModule/Module.bsl')", true) //$NON-NLS-1$
+                "BSL file path from src/, e.g. 'CommonModules/MyModule/Module.bsl'", true) //$NON-NLS-1$
             .integerProperty("line", "Line number (1-based)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("column", "Column number (1-based)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -213,11 +212,28 @@ public class GetSymbolInfoTool implements IMcpTool
             String emfResult = getSymbolInfoViaEmf(project, filePath, line, column);
             if (emfResult != null)
             {
-                return emfResult;
+                result = emfResult;
             }
         }
 
-        return result != null ? result : "Error: Could not get symbol info"; //$NON-NLS-1$
+        if (result == null)
+        {
+            return "Error: Could not get symbol info"; //$NON-NLS-1$
+        }
+
+        // Wrap result with frontmatter (skip for error messages)
+        if (result.startsWith("Error:")) //$NON-NLS-1$
+        {
+            return result;
+        }
+
+        FrontMatter fm = FrontMatter.create()
+            .put("projectName", projectName) //$NON-NLS-1$
+            .put("module", filePath) //$NON-NLS-1$
+            .put("line", line) //$NON-NLS-1$
+            .put("column", column); //$NON-NLS-1$
+
+        return fm.wrapContent(result);
     }
 
     /**
@@ -295,17 +311,11 @@ public class GetSymbolInfoTool implements IMcpTool
                 return "No symbol at this position."; //$NON-NLS-1$
             }
 
-            StringBuilder sb = new StringBuilder();
-            sb.append("## Symbol Info at ").append(filePath).append(":") //$NON-NLS-1$ //$NON-NLS-2$
-              .append(line).append(":").append(column).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
             // === Level 1: Try hover ===
             String hoverResult = tryGetHoverInfo(sourceViewer, offset);
             if (hoverResult != null && !hoverResult.isEmpty())
             {
-                sb.append(hoverResult).append("\n\n"); //$NON-NLS-1$
-                sb.append("*Source: editor hover*\n"); //$NON-NLS-1$
-                return sb.toString();
+                return hoverResult;
             }
 
             // === Level 2: EObject analysis ===
@@ -327,15 +337,12 @@ public class GetSymbolInfoTool implements IMcpTool
 
                 if (eobjectResult != null && !eobjectResult.isEmpty())
                 {
-                    sb.append(eobjectResult).append("\n\n"); //$NON-NLS-1$
-                    sb.append("*Source: eobject analysis*\n"); //$NON-NLS-1$
-                    return sb.toString();
+                    return eobjectResult;
                 }
             }
 
             // Nothing found at this position
-            sb.append("No symbol found at this position.\n"); //$NON-NLS-1$
-            return sb.toString();
+            return "No symbol found at this position.\n"; //$NON-NLS-1$
         }
         finally
         {
@@ -872,22 +879,15 @@ public class GetSymbolInfoTool implements IMcpTool
 
             EObject semanticElement = NodeModelUtils.findActualSemanticObjectFor(leafNode);
 
-            StringBuilder sb = new StringBuilder();
-            sb.append("## Symbol Info at ").append(filePath).append(":") //$NON-NLS-1$ //$NON-NLS-2$
-              .append(line).append(":").append(column).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
             if (semanticElement != null)
             {
-                sb.append(buildEObjectInfo(semanticElement));
-            }
-            else
-            {
-                sb.append("| Property | Value |\n"); //$NON-NLS-1$
-                sb.append("|----------|-------|\n"); //$NON-NLS-1$
-                sb.append("| **Token** | `").append(leafNode.getText()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                return buildEObjectInfo(semanticElement);
             }
 
-            sb.append("\n*Source: emf fallback*\n"); //$NON-NLS-1$
+            StringBuilder sb = new StringBuilder();
+            sb.append("| Property | Value |\n"); //$NON-NLS-1$
+            sb.append("|----------|-------|\n"); //$NON-NLS-1$
+            sb.append("| **Token** | `").append(leafNode.getText()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
             return sb.toString();
         }
         catch (Exception e)

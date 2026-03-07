@@ -29,6 +29,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -52,14 +53,10 @@ public class GoToDefinitionTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Navigate to the definition of a symbol. " + //$NON-NLS-1$
-               "Resolves method calls like 'CommonModuleName.MethodName' to the actual definition " + //$NON-NLS-1$
-               "with source code, signature, and location. " + //$NON-NLS-1$
-               "Also resolves metadata object FQNs like 'Catalog.Products'. " + //$NON-NLS-1$
-               "Supports both English and Russian metadata type names " + //$NON-NLS-1$
-               "(e.g., '\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u041F\u0440\u0438\u0445\u043E\u0434\u043D\u0430\u044F\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430\u044F', " + //$NON-NLS-1$ // Документ.ПриходнаяНакладная
-               "'\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.\u041D\u043E\u043C\u0435\u043D\u043A\u043B\u0430\u0442\u0443\u0440\u0430'). " + //$NON-NLS-1$ // Справочник.Номенклатура
-               "This is the inverse of find_references: instead of finding usages, it finds where a symbol is defined."; //$NON-NLS-1$
+        return "Go to definition of a symbol. " + //$NON-NLS-1$
+               "Resolves 'ModuleName.MethodName' to source code and location. " + //$NON-NLS-1$
+               "Also resolves metadata FQNs like 'Catalog.Products'. " + //$NON-NLS-1$
+               "Supports Russian type names."; //$NON-NLS-1$
     }
 
     @Override
@@ -67,18 +64,14 @@ public class GoToDefinitionTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
-                "EDT project name (required)", true) //$NON-NLS-1$
+                "EDT project name", true) //$NON-NLS-1$
             .stringProperty("symbol", //$NON-NLS-1$
-                "Symbol to find definition for (required). Formats:\n" + //$NON-NLS-1$
-                "- 'ModuleName.MethodName' \u2014 method in a common module (e.g. 'Common.SubjectString')\n" + //$NON-NLS-1$
-                "- 'MethodName' \u2014 method in the context module (requires modulePath)\n" + //$NON-NLS-1$
-                "- 'Catalog.Products' \u2014 metadata object FQN\n" + //$NON-NLS-1$
-                "- '\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u041F\u0440\u0438\u0445\u043E\u0434\u043D\u0430\u044F\u041D\u0430\u043A\u043B\u0430\u0434\u043D\u0430\u044F' \u2014 Russian metadata type names are also supported", true) //$NON-NLS-1$
+                "Formats: 'ModuleName.MethodName', 'MethodName' (needs modulePath), " + //$NON-NLS-1$
+                "'Catalog.Products' (metadata FQN). Russian type names supported.", true) //$NON-NLS-1$
             .stringProperty("modulePath", //$NON-NLS-1$
-                "Context module path from src/ folder (e.g. 'Documents/SalesOrder/ObjectModule.bsl'). " + //$NON-NLS-1$
-                "Required when symbol is an unqualified method name.") //$NON-NLS-1$
+                "Module path from src/. Required for unqualified method names.") //$NON-NLS-1$
             .booleanProperty("includeSource", //$NON-NLS-1$
-                "Include method source code in the response (default: true)") //$NON-NLS-1$
+                "Include source code (default: true)") //$NON-NLS-1$
             .build();
     }
 
@@ -162,12 +155,12 @@ public class GoToDefinitionTool implements IMcpTool
         if (parts.length == 2)
         {
             // Two-part symbol: "ModuleName.MethodName" or "Catalog.Products"
-            return resolveTwoPartSymbol(project, parts[0], parts[1], includeSource);
+            return resolveTwoPartSymbol(project, projectName, parts[0], parts[1], includeSource);
         }
         else
         {
             // Single-part symbol: "MethodName" — needs modulePath context
-            return resolveSinglePartSymbol(project, symbol, modulePath, includeSource);
+            return resolveSinglePartSymbol(project, projectName, symbol, modulePath, includeSource);
         }
     }
 
@@ -178,8 +171,8 @@ public class GoToDefinitionTool implements IMcpTool
      * 1. Try as CommonModule method (most common case for AI)
      * 2. Try as metadata object FQN (Catalog.Products, Document.SalesOrder, etc.)
      */
-    private String resolveTwoPartSymbol(IProject project, String firstPart, String secondPart,
-                                         boolean includeSource)
+    private String resolveTwoPartSymbol(IProject project, String projectName, String firstPart,
+                                         String secondPart, boolean includeSource)
     {
         // Get configuration
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
@@ -199,14 +192,15 @@ public class GoToDefinitionTool implements IMcpTool
         if (commonModule != null)
         {
             String cmModulePath = "CommonModules/" + commonModule.getName() + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
-            return resolveMethodInModule(project, cmModulePath, secondPart, includeSource, commonModule.getName());
+            return resolveMethodInModule(project, projectName, cmModulePath, secondPart,
+                includeSource, commonModule.getName());
         }
 
         // 2. Try as metadata object FQN: firstPart = type, secondPart = name
         MdObject mdObject = findMdObjectByFqn(config, firstPart, secondPart);
         if (mdObject != null)
         {
-            return formatMetadataDefinition(project, config, mdObject, firstPart, secondPart);
+            return formatMetadataDefinition(project, projectName, config, mdObject, firstPart, secondPart);
         }
 
         // 3. Nothing found — provide suggestions
@@ -216,8 +210,8 @@ public class GoToDefinitionTool implements IMcpTool
     /**
      * Resolves a single-part symbol (method name) within the context module.
      */
-    private String resolveSinglePartSymbol(IProject project, String methodName, String modulePath,
-                                            boolean includeSource)
+    private String resolveSinglePartSymbol(IProject project, String projectName, String methodName,
+                                            String modulePath, boolean includeSource)
     {
         if (modulePath == null || modulePath.isEmpty())
         {
@@ -226,7 +220,7 @@ public class GoToDefinitionTool implements IMcpTool
                    "or use qualified name 'ModuleName.MethodName'."; //$NON-NLS-1$
         }
 
-        return resolveMethodInModule(project, modulePath, methodName, includeSource, null);
+        return resolveMethodInModule(project, projectName, modulePath, methodName, includeSource, null);
     }
 
     // ========== Method resolution ==========
@@ -235,15 +229,16 @@ public class GoToDefinitionTool implements IMcpTool
      * Resolves a method definition within a specific BSL module.
      * Returns full definition info including source code.
      */
-    private String resolveMethodInModule(IProject project, String modulePath, String methodName,
-                                          boolean includeSource, String qualifiedPrefix)
+    private String resolveMethodInModule(IProject project, String projectName, String modulePath,
+                                          String methodName, boolean includeSource, String qualifiedPrefix)
     {
         // Load module via EMF
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
         {
             // EMF not available — try text-based fallback
-            return resolveMethodViaText(project, modulePath, methodName, includeSource, qualifiedPrefix);
+            return resolveMethodViaText(project, projectName, modulePath, methodName,
+                includeSource, qualifiedPrefix);
         }
 
         Method method = BslModuleUtils.findMethod(module, methodName);
@@ -252,63 +247,78 @@ public class GoToDefinitionTool implements IMcpTool
             return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
         }
 
-        return formatMethodDefinition(project, modulePath, method, includeSource, qualifiedPrefix);
+        return formatMethodDefinition(project, projectName, modulePath, method, includeSource, qualifiedPrefix);
     }
 
     /**
      * Formats method definition result with optional source code.
      */
-    private String formatMethodDefinition(IProject project, String modulePath, Method method,
-                                           boolean includeSource, String qualifiedPrefix)
+    private String formatMethodDefinition(IProject project, String projectName, String modulePath,
+                                           Method method, boolean includeSource, String qualifiedPrefix)
     {
         int startLine = BslModuleUtils.getStartLine(method);
         int endLine = BslModuleUtils.getEndLine(method);
         String typeStr = method instanceof Function ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
-        String signature = BslModuleUtils.buildSignature(method);
 
-        // Build display name
-        String displayName = qualifiedPrefix != null
-            ? qualifiedPrefix + "." + method.getName() //$NON-NLS-1$
-            : method.getName();
+        // Read source from file
+        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+        List<String> allLines = null;
+        try
+        {
+            allLines = BslModuleUtils.readFileLines(file);
+        }
+        catch (Exception e)
+        {
+            Activator.logWarning("Failed to read file for source: " + e.getMessage()); //$NON-NLS-1$
+        }
+
+        // Include doc-comment block above the method
+        int from = startLine;
+        int to = endLine;
+        if (allLines != null)
+        {
+            int docStart = findDocCommentStart(allLines, startLine);
+            from = Math.max(1, docStart);
+            to = Math.min(allLines.size(), endLine);
+        }
+
+        // Find containing region
+        String region = allLines != null ? BslModuleUtils.findRegionForLine(allLines, startLine) : null;
+
+        // Build frontmatter
+        FrontMatter fm = FrontMatter.create()
+            .put("projectName", projectName) //$NON-NLS-1$
+            .put("module", modulePath) //$NON-NLS-1$
+            .put("method", method.getName()) //$NON-NLS-1$
+            .put("type", typeStr) //$NON-NLS-1$
+            .put("export", method.isExport()) //$NON-NLS-1$
+            .put("startLine", from) //$NON-NLS-1$
+            .put("endLine", to); //$NON-NLS-1$
+
+        if (allLines != null)
+        {
+            fm.put("totalLines", allLines.size()); //$NON-NLS-1$
+        }
+
+        if (region != null)
+        {
+            fm.put("region", region); //$NON-NLS-1$
+        }
+
+        if (qualifiedPrefix != null)
+        {
+            fm.put("qualifiedName", qualifiedPrefix + "." + method.getName()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("## Definition: ").append(displayName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Type:** ").append(typeStr); //$NON-NLS-1$
-        if (method.isExport())
-        {
-            sb.append(" (Export)"); //$NON-NLS-1$
-        }
-        sb.append("\n"); //$NON-NLS-1$
-        sb.append("**Module:** ").append(modulePath).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Lines:** ").append(startLine).append(" - ").append(endLine).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        sb.append("**Signature:** `").append(signature).append("`\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
         if (includeSource)
         {
-            // Read source from file (includes doc-comments)
-            IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
-            List<String> allLines = null;
-            try
-            {
-                allLines = BslModuleUtils.readFileLines(file);
-            }
-            catch (Exception e)
-            {
-                Activator.logWarning("Failed to read file for source: " + e.getMessage()); //$NON-NLS-1$
-            }
-
             if (allLines != null)
             {
-                // Include doc-comment block above the method
-                int docStart = findDocCommentStart(allLines, startLine);
-                int from = Math.max(1, docStart);
-                int to = Math.min(allLines.size(), endLine);
-
-                sb.append("\n### Source\n\n"); //$NON-NLS-1$
                 sb.append("```bsl\n"); //$NON-NLS-1$
                 for (int i = from - 1; i < to; i++)
                 {
-                    sb.append(String.format("%d: %s\n", i + 1, allLines.get(i))); //$NON-NLS-1$
+                    sb.append(allLines.get(i)).append('\n');
                 }
                 sb.append("```\n"); //$NON-NLS-1$
             }
@@ -318,27 +328,26 @@ public class GoToDefinitionTool implements IMcpTool
                 String sourceText = BslModuleUtils.getSourceText(method);
                 if (sourceText != null)
                 {
-                    sb.append("\n### Source\n\n"); //$NON-NLS-1$
                     sb.append("```bsl\n"); //$NON-NLS-1$
-                    String[] lines = sourceText.split("\n", -1); //$NON-NLS-1$
-                    for (int i = 0; i < lines.length; i++)
+                    sb.append(sourceText);
+                    if (!sourceText.endsWith("\n")) //$NON-NLS-1$
                     {
-                        sb.append(String.format("%d: %s\n", startLine + i, lines[i])); //$NON-NLS-1$
+                        sb.append('\n');
                     }
                     sb.append("```\n"); //$NON-NLS-1$
                 }
             }
         }
 
-        return sb.toString();
+        return fm.wrapContent(sb.toString());
     }
 
     /**
      * Fallback: resolves method definition via text-based parsing.
      * Used when EMF model is not available.
      */
-    private String resolveMethodViaText(IProject project, String modulePath, String methodName,
-                                         boolean includeSource, String qualifiedPrefix)
+    private String resolveMethodViaText(IProject project, String projectName, String modulePath,
+                                         String methodName, boolean includeSource, String qualifiedPrefix)
     {
         IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
         if (!file.exists())
@@ -404,30 +413,42 @@ public class GoToDefinitionTool implements IMcpTool
             int docStart = findDocCommentStart(allLines, methodStart + 1) - 1;
             methodStart = docStart;
 
-            String displayName = qualifiedPrefix != null
-                ? qualifiedPrefix + "." + matchedName //$NON-NLS-1$
-                : matchedName;
             String typeStr = isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
 
-            StringBuilder sb = new StringBuilder();
-            sb.append("## Definition: ").append(displayName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("**Type:** ").append(typeStr).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("**Module:** ").append(modulePath).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("**Lines:** ").append(methodStart + 1).append(" - ").append(methodEnd + 1).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append("*Note: resolved via text fallback (EMF model was not available)*\n"); //$NON-NLS-1$
+            // Find containing region
+            String region = BslModuleUtils.findRegionForLine(allLines, methodStart + 1);
 
+            FrontMatter fm = FrontMatter.create()
+                .put("projectName", projectName) //$NON-NLS-1$
+                .put("module", modulePath) //$NON-NLS-1$
+                .put("method", matchedName) //$NON-NLS-1$
+                .put("type", typeStr) //$NON-NLS-1$
+                .put("startLine", methodStart + 1) //$NON-NLS-1$
+                .put("endLine", methodEnd + 1) //$NON-NLS-1$
+                .put("totalLines", allLines.size()); //$NON-NLS-1$
+
+            if (region != null)
+            {
+                fm.put("region", region); //$NON-NLS-1$
+            }
+
+            if (qualifiedPrefix != null)
+            {
+                fm.put("qualifiedName", qualifiedPrefix + "." + matchedName); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+
+            StringBuilder sb = new StringBuilder();
             if (includeSource)
             {
-                sb.append("\n### Source\n\n"); //$NON-NLS-1$
                 sb.append("```bsl\n"); //$NON-NLS-1$
                 for (int i = methodStart; i <= methodEnd; i++)
                 {
-                    sb.append(String.format("%d: %s\n", i + 1, allLines.get(i))); //$NON-NLS-1$
+                    sb.append(allLines.get(i)).append('\n');
                 }
                 sb.append("```\n"); //$NON-NLS-1$
             }
 
-            return sb.toString();
+            return fm.wrapContent(sb.toString());
         }
         catch (Exception e)
         {
@@ -472,16 +493,18 @@ public class GoToDefinitionTool implements IMcpTool
      * Formats a metadata object definition result.
      * Includes the object type, available modules, and module paths.
      */
-    private String formatMetadataDefinition(IProject project, Configuration config,
+    private String formatMetadataDefinition(IProject project, String projectName, Configuration config,
                                              MdObject mdObject, String typeName, String objectName)
     {
-        String fqn = typeName + "." + objectName; //$NON-NLS-1$
         String collectionFolder = getCollectionFolder(typeName);
 
+        FrontMatter fm = FrontMatter.create()
+            .put("projectName", projectName) //$NON-NLS-1$
+            .put("kind", "MetadataObject") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("type", typeName) //$NON-NLS-1$
+            .put("name", mdObject.getName()); //$NON-NLS-1$
+
         StringBuilder sb = new StringBuilder();
-        sb.append("## Definition: ").append(fqn).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Type:** Metadata Object (").append(typeName).append(")\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("**Name:** ").append(mdObject.getName()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
         // List available BSL modules for this object
         if (collectionFolder != null)
@@ -491,7 +514,7 @@ public class GoToDefinitionTool implements IMcpTool
 
             if (!modules.isEmpty())
             {
-                sb.append("\n### Available Modules\n\n"); //$NON-NLS-1$
+                sb.append("### Available Modules\n\n"); //$NON-NLS-1$
                 for (String modPath : modules)
                 {
                     sb.append("- ").append(modPath).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -499,14 +522,14 @@ public class GoToDefinitionTool implements IMcpTool
             }
             else
             {
-                sb.append("\nNo BSL modules found for this object.\n"); //$NON-NLS-1$
+                sb.append("No BSL modules found for this object.\n"); //$NON-NLS-1$
             }
         }
 
         sb.append("\n*Use `get_metadata_details` for full object properties, " + //$NON-NLS-1$
                   "or `read_module_source`/`read_method_source` to read specific modules.*\n"); //$NON-NLS-1$
 
-        return sb.toString();
+        return fm.wrapContent(sb.toString());
     }
 
     /**
