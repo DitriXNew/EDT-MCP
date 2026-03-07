@@ -207,6 +207,16 @@ public class FindReferencesTool implements IMcpTool
         MdObject targetObject = findMdObjectByFqn(config, objectFqn);
         if (targetObject == null)
         {
+            // Check if the user passed a sub-object FQN (more than one dot after the type prefix)
+            String[] dotParts = objectFqn.split("\\."); //$NON-NLS-1$
+            if (dotParts.length > 2)
+            {
+                return "Error: Object not found: " + objectFqn + ".\n" //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Note: find_references only supports top-level metadata objects " //$NON-NLS-1$
+                    + "(e.g. 'Catalog.DataAreas', 'Document.SalesOrder', 'CommonModule.Saas'). " //$NON-NLS-1$
+                    + "Sub-objects such as attributes, forms, commands and tabular sections " //$NON-NLS-1$
+                    + "are not supported (e.g. 'Catalog.DataAreas.Attribute.DataAreaStatus' is invalid)."; //$NON-NLS-1$
+            }
             return "Error: Object not found: " + objectFqn; //$NON-NLS-1$
         }
         
