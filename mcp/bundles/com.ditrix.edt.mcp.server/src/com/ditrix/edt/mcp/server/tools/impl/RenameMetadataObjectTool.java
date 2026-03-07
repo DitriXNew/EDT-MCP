@@ -8,23 +8,41 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
+import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.dt.bsl.model.Method;
+import com._1c.g5.v8.dt.bsl.model.Module;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.ltk.core.refactoring.Change;
 import org.eclipse.ltk.core.refactoring.CompositeChange;
+import org.eclipse.ltk.core.refactoring.participants.CheckConditionsContext;
+import org.eclipse.text.edits.TextEdit;
 
+import com._1c.g5.v8.dt.refactoring.core.ltk.BmObjectTextContentCompositeChange;
+import com._1c.g5.v8.dt.refactoring.core.ltk.BmObjectTextContentChange;
 import com._1c.g5.v8.dt.refactoring.core.CleanReferenceProblem;
 import com._1c.g5.v8.dt.refactoring.core.INativeChangeRefactoringItem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
@@ -83,6 +101,8 @@ public class RenameMetadataObjectTool implements IMcpTool
             .stringProperty("disableIndices", //$NON-NLS-1$
                 "Comma-separated indices of change points to SKIP (from the preview list). " + //$NON-NLS-1$
                 "Only optional changes can be disabled. Example: '2,3,5'") //$NON-NLS-1$
+            .integerProperty("maxResults", //$NON-NLS-1$
+                "Max number of change points to show in preview (default 20). 0 = no limit.") //$NON-NLS-1$
             .build();
     }
 
@@ -112,6 +132,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         String confirmStr = JsonUtils.extractStringArgument(params, "confirm"); //$NON-NLS-1$
         String disableIndicesStr = JsonUtils.extractStringArgument(params, "disableIndices"); //$NON-NLS-1$
         boolean confirm = "true".equalsIgnoreCase(confirmStr); //$NON-NLS-1$
+        final int maxResults = Math.max(0, JsonUtils.extractIntArgument(params, "maxResults", 20)); //$NON-NLS-1$
 
         // Parse disable indices
         java.util.Set<Integer> disableIndices = new java.util.HashSet<>();
@@ -153,7 +174,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         display.syncExec(() -> {
             try
             {
-                resultRef.set(executeInternal(projectName, objectFqn, newName, confirm, finalDisableIndices));
+                resultRef.set(executeInternal(projectName, objectFqn, newName, confirm, finalDisableIndices, maxResults));
             }
             catch (Exception e)
             {
@@ -166,7 +187,7 @@ public class RenameMetadataObjectTool implements IMcpTool
     }
 
     private String executeInternal(String projectName, String objectFqn, String newName,
-        boolean confirm, java.util.Set<Integer> disableIndices)
+        boolean confirm, java.util.Set<Integer> disableIndices, int maxResults)
     {
         // Get project
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
@@ -215,7 +236,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         if (!confirm)
         {
             // Preview mode - collect all items and problems
-            return buildPreview(objectFqn, newName, refactorings);
+            return buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults);
         }
         else
         {
@@ -225,12 +246,16 @@ public class RenameMetadataObjectTool implements IMcpTool
     }
 
     /**
-     * Builds the preview response: markdown with YAML frontmatter and a table of all change points.
-     * Each change has: index, type (rename/bslRef), file (for bsl), description, enabled state.
-     * The AI reviews this list and can specify disableIndices when confirming.
+     * Builds the preview response: markdown with YAML frontmatter, change points table with line
+     * numbers, and code context snippets (±3 lines + containing method name).
      */
-    private String buildPreview(String objectFqn, String newName, Collection<IRefactoring> refactorings)
+    private String buildPreview(IProject project, String objectFqn, String newName, MdObject targetObject,
+        Collection<IRefactoring> refactorings, int maxResults)
     {
+        Map<String, ExactMatchInfo> exactMatches = buildExactMatchInfo(project, targetObject, newName);
+        List<ChangePoint> edtBslPreviewChanges = buildEdtBslPreviewChanges(project, targetObject, newName, exactMatches);
+        String oldName = targetObject.getName();
+
         // Phase 1: collect all changes and problems
         List<ChangePoint> allChanges = new ArrayList<>();
         List<String> allProblems = new ArrayList<>();
@@ -250,13 +275,14 @@ public class RenameMetadataObjectTool implements IMcpTool
                         Change nativeChange = nativeItem.getNativeChange();
                         if (nativeChange != null)
                         {
-                            collectFlatChanges(nativeChange, null, allChanges, indexCounter, title, item.isOptional());
+                            collectFlatChanges(nativeChange, null, null, exactMatches, allChanges, indexCounter, title,
+                                item.isOptional(), oldName);
                         }
                     }
                     else
                     {
                         allChanges.add(new ChangePoint(
-                            indexCounter[0]++, "rename", null, //$NON-NLS-1$
+                            indexCounter[0]++, "rename", null, null, //$NON-NLS-1$
                             item.getName(), item.isOptional(), item.isChecked(), title));
                     }
                 }
@@ -281,7 +307,7 @@ public class RenameMetadataObjectTool implements IMcpTool
                             org.eclipse.emf.ecore.EStructuralFeature feat = crp.getReference();
                             if (feat != null)
                             {
-                                pb.append(" → ").append(feat.getName()); //$NON-NLS-1$
+                                pb.append(" \u2192 ").append(feat.getName()); //$NON-NLS-1$
                             }
                         }
                         org.eclipse.emf.ecore.EObject obj = problem.getObject();
@@ -296,7 +322,10 @@ public class RenameMetadataObjectTool implements IMcpTool
             }
         }
 
+        applyEdtBslPreviewData(allChanges, edtBslPreviewChanges);
+
         long enabledCount = allChanges.stream().filter(c -> c.enabled).count();
+        int shown = (maxResults > 0) ? Math.min(allChanges.size(), maxResults) : allChanges.size();
 
         // Phase 2: build markdown with YAML frontmatter
         StringBuilder sb = new StringBuilder();
@@ -307,34 +336,81 @@ public class RenameMetadataObjectTool implements IMcpTool
         sb.append("totalChanges: ").append(allChanges.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("enabledChanges: ").append(enabledCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("problems: ").append(allProblems.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("debugExactMatches: ").append(exactMatches.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("---\n\n"); //$NON-NLS-1$
 
         sb.append("# Refactoring Preview: Rename `").append(objectFqn) //$NON-NLS-1$
-          .append("` → `").append(newName).append("`\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+          .append("` \u2192 `").append(newName).append("`\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
         sb.append("**Total change points:** ").append(allChanges.size()) //$NON-NLS-1$
           .append(" | **Enabled by default:** ").append(enabledCount).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        // Change points table
-        sb.append("## Change Points\n\n"); //$NON-NLS-1$
-        sb.append("| # | Type | Default | Skippable | File | Description |\n"); //$NON-NLS-1$
-        sb.append("|---|------|---------|-----------|------|-------------|\n"); //$NON-NLS-1$
-        for (ChangePoint cp : allChanges)
+        if (allChanges.size() > shown)
         {
-            String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$ // ✅ ❌
-            String optionalMark = cp.optional ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
-            String file = cp.file != null ? escapeMarkdownCell(cp.file) : "\u2014"; //$NON-NLS-1$ // —
-            String desc = cp.description != null ? escapeMarkdownCell(cp.description) : ""; //$NON-NLS-1$
-            sb.append("| ").append(cp.index) //$NON-NLS-1$
-              .append(" | ").append(cp.type) //$NON-NLS-1$
-              .append(" | ").append(enabledMark) //$NON-NLS-1$
-              .append(" | ").append(optionalMark) //$NON-NLS-1$
-              .append(" | ").append(file) //$NON-NLS-1$
-              .append(" | ").append(desc) //$NON-NLS-1$
-              .append(" |\n"); //$NON-NLS-1$
+            sb.append("_Showing ").append(shown).append(" of ").append(allChanges.size()) //$NON-NLS-1$ //$NON-NLS-2$
+              .append(" changes. Pass `maxResults=").append(allChanges.size()) //$NON-NLS-1$
+              .append("` to see all._\n\n"); //$NON-NLS-1$
         }
 
+        // Change points table
+        sb.append("## Change Points\n\n"); //$NON-NLS-1$
+                sb.append("| # | Type | Description | Line | Col | Default | Skippable | Project | FQN |\n"); //$NON-NLS-1$
+                sb.append("|---|------|-------------|------|-----|---------|-----------|---------|-----|\n"); //$NON-NLS-1$
+        for (int i = 0; i < shown; i++)
+        {
+            ChangePoint cp = allChanges.get(i);
+            String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$
+            String optionalMark = cp.optional ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
+            String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : "\u2014"; //$NON-NLS-1$
+            String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : "\u2014"; //$NON-NLS-1$
+            String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : "\u2014"; //$NON-NLS-1$
+                        String column = cp.columnNumber > 0 ? String.valueOf(cp.columnNumber) : "\u2014"; //$NON-NLS-1$
+            String description = cp.description != null ? escapeMarkdownCell(cp.description) : "\u2014"; //$NON-NLS-1$
+            sb.append("| ").append(cp.index) //$NON-NLS-1$
+              .append(" | ").append(cp.type) //$NON-NLS-1$
+              .append(" | ").append(description) //$NON-NLS-1$
+              .append(" | ").append(line) //$NON-NLS-1$
+                            .append(" | ").append(column) //$NON-NLS-1$
+              .append(" | ").append(enabledMark) //$NON-NLS-1$
+              .append(" | ").append(optionalMark) //$NON-NLS-1$
+              .append(" | ").append(projectCell) //$NON-NLS-1$
+              .append(" | ").append(fqnCell) //$NON-NLS-1$
+              .append(" |\n"); //$NON-NLS-1$
+        }
+        if (allChanges.size() > shown)
+        {
+                        sb.append("| ... | | | | | | | | _").append(allChanges.size() - shown) //$NON-NLS-1$
+              .append(" more_ |\n"); //$NON-NLS-1$
+        }
         sb.append("\n"); //$NON-NLS-1$
+
+        // Code context section
+        boolean hasContext = false;
+        for (int i = 0; i < shown; i++)
+        {
+            if (allChanges.get(i).codeContext != null)
+            {
+                hasContext = true;
+                break;
+            }
+        }
+        if (hasContext)
+        {
+            sb.append("## Code Context\n\n"); //$NON-NLS-1$
+            for (int i = 0; i < shown; i++)
+            {
+                ChangePoint cp = allChanges.get(i);
+                if (cp.codeContext == null)
+                    continue;
+                sb.append("### #").append(cp.index); //$NON-NLS-1$
+                if (cp.methodName != null)
+                    sb.append(" \u2014 `").append(escapeMarkdownCell(cp.methodName)).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (cp.fqn != null && cp.lineNumber > 0)
+                    sb.append(" \u00b7 ").append(escapeMarkdownCell(cp.fqn)) //$NON-NLS-1$
+                      .append(":").append(cp.lineNumber); //$NON-NLS-1$
+                sb.append("\n```bsl\n").append(cp.codeContext).append("```\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
 
         // Problems section
         if (!allProblems.isEmpty())
@@ -358,20 +434,62 @@ public class RenameMetadataObjectTool implements IMcpTool
     {
         final int index;
         final String type;
-        final String file;
+        final String fqn;
+        final String project;
         final String description;
         final boolean optional;
         final boolean enabled;
+        final int lineNumber;
+        final int columnNumber;
+        final String codeContext;
+        final String methodName;
 
-        ChangePoint(int index, String type, String file, String description,
+        ChangePoint(int index, String type, String fqn, String project, String description,
             boolean optional, boolean enabled, String ignored)
+        {
+            this(index, type, fqn, project, description, optional, enabled, ignored, -1, -1, null, null);
+        }
+
+        ChangePoint(int index, String type, String fqn, String project, String description,
+            boolean optional, boolean enabled, String ignored,
+            int lineNumber, int columnNumber, String codeContext, String methodName)
         {
             this.index = index;
             this.type = type;
-            this.file = file;
+            this.fqn = fqn;
+            this.project = project;
             this.description = description;
             this.optional = optional;
             this.enabled = enabled;
+            this.lineNumber = lineNumber;
+            this.columnNumber = columnNumber;
+            this.codeContext = codeContext;
+            this.methodName = methodName;
+        }
+    }
+
+    private static class ExactMatchInfo
+    {
+        final String filePath;
+        final int matchOffset;
+        final int lineNumber;
+        final int columnNumber;
+        final String codeContext;
+        final String methodName;
+        final String fqn;
+        final String project;
+
+        ExactMatchInfo(String filePath, int matchOffset, int lineNumber, int columnNumber, String codeContext,
+            String methodName, String fqn, String project)
+        {
+            this.filePath = filePath;
+            this.matchOffset = matchOffset;
+            this.lineNumber = lineNumber;
+            this.columnNumber = columnNumber;
+            this.codeContext = codeContext;
+            this.methodName = methodName;
+            this.fqn = fqn;
+            this.project = project;
         }
     }
 
@@ -383,34 +501,1023 @@ public class RenameMetadataObjectTool implements IMcpTool
 
     /**
      * Recursively collects leaf changes from LTK change tree into a flat list with global indices.
-     * Top-level CompositeChange names become the "file" field for their leaves.
+     * Extracts line number and code context (±3 lines + containing method) for TextChange leaves.
      */
-    private void collectFlatChanges(Change change, String currentFile,
-        List<ChangePoint> result, int[] indexCounter, String refactoringTitle, boolean optional)
+    private void collectFlatChanges(Change change, String currentFqn, String currentProject,
+        Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
+        String refactoringTitle, boolean optional, String oldName)
     {
+        if (change instanceof BmObjectTextContentCompositeChange<?> bmComposite)
+        {
+            currentProject = bmComposite.getProjectName();
+            Object modifiedElement = bmComposite.getModifiedElement();
+            if (modifiedElement instanceof IBmObject bmObj)
+            {
+                currentFqn = bmObj.bmGetFqn();
+            }
+        }
         if (change instanceof CompositeChange composite)
         {
             Change[] children = composite.getChildren();
             if (children != null && children.length > 0)
             {
-                // Use this composite's name as the file context if it's meaningful
-                String name = composite.getName();
-                String fileContext = (name != null && !name.isEmpty()) ? name : currentFile;
                 for (Change child : children)
                 {
-                    collectFlatChanges(child, fileContext, result, indexCounter, refactoringTitle, optional);
+                    collectFlatChanges(child, currentFqn, currentProject, exactMatches, result, indexCounter,
+                        refactoringTitle, optional, oldName);
                 }
             }
-            // Skip empty composites
         }
         else
         {
-            // Leaf change
+            boolean hasExactMatches = exactMatches != null && !exactMatches.isEmpty();
+            boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
+            boolean isFullTextSearchChange = isFullTextSearchSourceFileChange(change);
+            boolean addedFallbackChange = false;
+            int lineNumber = -1;
+            int columnNumber = -1;
+            String codeContext = null;
+            String methodName = null;
+            String fqn = currentFqn;
+            String project = currentProject;
+            List<ExactMatchInfo> exactMatchInfos = findExactMatchInfos(change, exactMatches);
+            logPreviewMapping(change, fqn, project, exactMatchInfos.size());
+            if (!exactMatchInfos.isEmpty())
+            {
+                for (ExactMatchInfo exactMatch : exactMatchInfos)
+                {
+                    String exactFqn = exactMatch.fqn != null ? exactMatch.fqn : fqn;
+                    String exactProject = exactMatch.project != null ? exactMatch.project : project;
+                    result.add(new ChangePoint(
+                        indexCounter[0]++, "bslRef", exactFqn, exactProject, //$NON-NLS-1$
+                        change.getName(), optional, change.isEnabled(), refactoringTitle,
+                        exactMatch.lineNumber, exactMatch.columnNumber, exactMatch.codeContext, exactMatch.methodName));
+                }
+                return;
+            }
+            else if (change instanceof BmObjectTextContentChange<?> bmChange)
+            {
+                try
+                {
+                    project = bmChange.getProjectName();
+                    Object modifiedElement = bmChange.getModifiedElement();
+                    EObject bmObj = modifiedElement instanceof EObject ? (EObject) modifiedElement : null;
+                    if (modifiedElement instanceof IBmObject ibm)
+                    {
+                        fqn = ibm.bmGetFqn();
+                    }
+                    String content = bmChange.getCurrentContent(new NullProgressMonitor());
+                    TextEdit edit = bmChange.getEdit();
+                    if (content != null && !content.isEmpty() && edit != null)
+                    {
+                        List<TextEdit> leafEdits = getLeafEdits(edit);
+                        if (!leafEdits.isEmpty())
+                        {
+                            for (TextEdit leafEdit : leafEdits)
+                            {
+                                int matchedLineNumber = computeLineNumber(content, leafEdit.getOffset());
+                                int matchedColumnNumber = computeColumnNumber(content, leafEdit.getOffset());
+                                String matchedCodeContext = extractContext(content, matchedLineNumber);
+                                String matchedMethodName = null;
+                                if (bmObj instanceof Module module)
+                                {
+                                    matchedMethodName = findContainingMethodAst(module, matchedLineNumber);
+                                }
+                                if (matchedMethodName == null)
+                                {
+                                    matchedMethodName = findContainingMethodText(content, matchedLineNumber);
+                                }
+                                result.add(new ChangePoint(
+                                    indexCounter[0]++, "bslRef", fqn, project, //$NON-NLS-1$
+                                    change.getName(), optional, change.isEnabled(), refactoringTitle,
+                                    matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
+                            }
+                            addedFallbackChange = true;
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    Activator.logError("Error extracting BSL change location", e); //$NON-NLS-1$
+                }
+            }
+            else
+            {
+                try
+                {
+                    IFile file = getIFile(change);
+                    if (file != null)
+                    {
+                        project = file.getProject().getName();
+                        String resolvedFqn = getBslFqn(file);
+                        if (resolvedFqn != null && !resolvedFqn.isEmpty())
+                        {
+                            fqn = resolvedFqn;
+                        }
+                        String content = BslModuleUtils.readFileText(file);
+                        TextEdit edit = getChangeEdit(change);
+                        if (content != null && !content.isEmpty() && edit != null)
+                        {
+                            List<TextEdit> leafEdits = getLeafEdits(edit);
+                            if (!leafEdits.isEmpty())
+                            {
+                                Module module = BslModuleUtils.loadModule(file.getProject(), BslModuleUtils.extractModulePath(file.getFullPath().toString()));
+                                for (TextEdit leafEdit : leafEdits)
+                                {
+                                    int matchedLineNumber = computeLineNumber(content, leafEdit.getOffset());
+                                    int matchedColumnNumber = computeColumnNumber(content, leafEdit.getOffset());
+                                    String matchedCodeContext = extractContext(content, matchedLineNumber);
+                                    String matchedMethodName = null;
+                                    if (module != null)
+                                    {
+                                        matchedMethodName = findContainingMethodAst(module, matchedLineNumber);
+                                    }
+                                    if (matchedMethodName == null)
+                                    {
+                                        matchedMethodName = findContainingMethodText(content, matchedLineNumber);
+                                    }
+                                    result.add(new ChangePoint(
+                                        indexCounter[0]++, "bslRef", fqn, project, //$NON-NLS-1$
+                                        change.getName(), optional, change.isEnabled(), refactoringTitle,
+                                        matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
+                                }
+                                addedFallbackChange = true;
+                            }
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    Activator.logError("Error extracting source file change location", e); //$NON-NLS-1$
+                }
+            }
+
+            if (addedFallbackChange)
+            {
+                return;
+            }
+
+            if (hasExactMatches && isBslReferenceChange && isFullTextSearchChange)
+            {
+                return;
+            }
+
             result.add(new ChangePoint(
-                indexCounter[0]++, "bslRef", currentFile, //$NON-NLS-1$
-                change.getName(), optional, change.isEnabled(), refactoringTitle));
+                indexCounter[0]++, "bslRef", fqn, project, //$NON-NLS-1$
+                change.getName(), optional, change.isEnabled(), refactoringTitle,
+                lineNumber, columnNumber, codeContext, methodName));
         }
     }
+
+    private Map<String, ExactMatchInfo> buildExactMatchInfo(IProject project, MdObject targetObject, String newName)
+    {
+        try
+        {
+            Object bslInjector = getBslInjector();
+            Object renameProvider = invokeMethod(bslInjector, "getInstance", new Class<?>[] {Class.class}, //$NON-NLS-1$
+                getClassOrThrow("com._1c.g5.v8.dt.bsl.bm.ui.refactoring.BslBmRenameRefactoringProvider")); //$NON-NLS-1$
+            Object renameContext = createRenameElementContext(targetObject);
+            Object refactoring = invokeMethod(renameProvider, "getRenameRefactoring", new Class<?>[] { //$NON-NLS-1$
+                getClassOrThrow("org.eclipse.xtext.ui.refactoring.ui.IRenameElementContext")}, renameContext); //$NON-NLS-1$
+            Object processor = refactoring != null ? invokeNoArg(refactoring, "getProcessor") : null; //$NON-NLS-1$
+            if (processor == null)
+            {
+                processor = invokeMethod(renameProvider, "getRenameProcessor", new Class<?>[] { //$NON-NLS-1$
+                getClassOrThrow("org.eclipse.xtext.ui.refactoring.ui.IRenameElementContext")}, renameContext); //$NON-NLS-1$
+            }
+            if (processor == null)
+            {
+                Activator.logWarning("rename_metadata_object: exact match pipeline got null rename processor"); //$NON-NLS-1$
+                return Map.of();
+            }
+
+            Change normalChange = createRenameChange(refactoring, processor, newName);
+            NullProgressMonitor progressMonitor = new NullProgressMonitor();
+
+            String oldName = (String) invokeMethod(processor, "getOriginalName", new Class<?>[0]); //$NON-NLS-1$
+            EObject contextElement = (EObject) invokeMethod(processor, "getContextElement", new Class<?>[0]); //$NON-NLS-1$
+            if (normalChange == null || oldName == null || contextElement == null)
+            {
+                Activator.logWarning("rename_metadata_object: exact match pipeline missing base state: " //$NON-NLS-1$
+                    + "normalChange=" + (normalChange != null) + ", oldName=" + oldName //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", contextElement=" + (contextElement != null)); //$NON-NLS-1$
+                return Map.of();
+            }
+
+            Object supplier = invokeMethod(bslInjector, "getInstance", new Class<?>[] {Class.class}, //$NON-NLS-1$
+                getClassOrThrow("com._1c.g5.v8.dt.bsl.bm.ui.refactoring.BslTextSearchRefactoringSupplier")); //$NON-NLS-1$
+
+            Object searchInjector = getSearchCoreInjector();
+            Object factory = invokeMethod(searchInjector, "getInstance", new Class<?>[] {Class.class}, //$NON-NLS-1$
+                getClassOrThrow("com._1c.g5.v8.dt.search.core.refactoring.TextSearchRefactoringParticipantFactory")); //$NON-NLS-1$
+            Object participant = invokeMethod(factory, "create", new Class<?>[] {String.class, EObject.class, //$NON-NLS-1$
+                getClassOrThrow("com._1c.g5.v8.dt.search.core.refactoring.ITextSearchRefactoringSupplier")}, //$NON-NLS-1$
+                oldName, contextElement, supplier);
+
+            Object collector = getClassOrThrow("com._1c.g5.v8.dt.search.core.refactoring.TextSearchRefactoringResultCollector") //$NON-NLS-1$
+                .getConstructor(String.class)
+                .newInstance(oldName);
+            Object searchScopeSettings = getClassOrThrow("com._1c.g5.v8.dt.search.core.TextSearchScopeSettings") //$NON-NLS-1$
+                .getConstructor()
+                .newInstance();
+            Object modules = getEnumConstant("com._1c.g5.v8.dt.search.core.SearchIn", "MODULES"); //$NON-NLS-1$ //$NON-NLS-2$
+            Object dcs = getEnumConstant("com._1c.g5.v8.dt.search.core.SearchIn", "DCS"); //$NON-NLS-1$ //$NON-NLS-2$
+            Object dynamicListQuery = getEnumConstant("com._1c.g5.v8.dt.search.core.SearchIn", "DYNAMIC_LIST_QUERY"); //$NON-NLS-1$ //$NON-NLS-2$
+            invokeMethod(searchScopeSettings, "addSearchIn", new Class<?>[] {modules.getClass().arrayType()}, //$NON-NLS-1$
+                (Object) arrayOf(modules.getClass(), modules, dcs, dynamicListQuery));
+            @SuppressWarnings("unchecked")
+            Collection<IProject> projects = (Collection<IProject>) invokeMethod(participant, "getProjects", //$NON-NLS-1$
+                new Class<?>[] {IProject.class}, project);
+            invokeMethod(searchScopeSettings, "addProjects", new Class<?>[] {Collection.class}, projects); //$NON-NLS-1$
+
+            Object textSearchIndexProvider = getFieldValue(participant, "textSearchIndexProvider"); //$NON-NLS-1$
+            Object managerRegistry = getFieldValue(participant, "managerRegistry"); //$NON-NLS-1$
+            Object hostResourceManager = getFieldValue(participant, "hostResourceManager"); //$NON-NLS-1$
+
+            @SuppressWarnings("unchecked")
+            Collection<String> searchStrings = (Collection<String>) invokeMethod(supplier, "getSearchStrings", //$NON-NLS-1$
+                new Class<?>[] {EObject.class, String.class}, contextElement, oldName);
+            Class<?> textSearcherClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.TextSearcher"); //$NON-NLS-1$
+            Class<?> searchScopeClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.TextSearchScopeSettings"); //$NON-NLS-1$
+            Class<?> collectorClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.ISearchResultCollector"); //$NON-NLS-1$
+            Class<?> indexProviderClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.text.ITextSearchIndexProvider"); //$NON-NLS-1$
+            Class<?> propertyRegistryClass = getClassOrThrow("com._1c.g5.v8.dt.md.IExternalPropertyManagerRegistry"); //$NON-NLS-1$
+            Class<?> hostResourceManagerClass = getClassOrThrow("com._1c.g5.v8.dt.core.platform.management.IDtHostResourceManager"); //$NON-NLS-1$
+            for (String searchString : searchStrings)
+            {
+                Object searcher = textSearcherClass.getConstructor(String.class, boolean.class, searchScopeClass,
+                    collectorClass, getClassOrThrow("com._1c.g5.v8.dt.core.platform.IBmModelManager"), //$NON-NLS-1$
+                    indexProviderClass, propertyRegistryClass, hostResourceManagerClass)
+                    .newInstance(searchString, false, searchScopeSettings, collector,
+                        Activator.getDefault().getBmModelManager(), textSearchIndexProvider, managerRegistry,
+                        hostResourceManager);
+                invokeMethod(searcher, "search", //$NON-NLS-1$
+                    new Class<?>[] {getClassOrThrow("org.eclipse.core.runtime.IProgressMonitor")}, progressMonitor); //$NON-NLS-1$
+            }
+
+            Collection<?> matches = (Collection<?>) invokeMethod(supplier, "getMatches", //$NON-NLS-1$
+                new Class<?>[] {Change.class, getClassOrThrow("com._1c.g5.v8.dt.search.core.SimpleSearchResultCollector")}, //$NON-NLS-1$
+                normalChange, collector);
+            Map<String, ExactMatchInfo> exactMatchMap = toExactMatchMap(matches);
+            return exactMatchMap;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error collecting exact rename matches", e); //$NON-NLS-1$
+            return Map.of();
+        }
+    }
+
+    private List<ChangePoint> buildEdtBslPreviewChanges(IProject project, MdObject targetObject, String newName,
+        Map<String, ExactMatchInfo> exactMatches)
+    {
+        try
+        {
+            Object bslInjector = getBslInjector();
+            Object renameProvider = invokeMethod(bslInjector, "getInstance", new Class<?>[] {Class.class}, //$NON-NLS-1$
+                getClassOrThrow("com._1c.g5.v8.dt.bsl.bm.ui.refactoring.BslBmRenameRefactoringProvider")); //$NON-NLS-1$
+            Object renameContext = createRenameElementContext(targetObject);
+            Object refactoring = invokeMethod(renameProvider, "getRenameRefactoring", new Class<?>[] { //$NON-NLS-1$
+                getClassOrThrow("org.eclipse.xtext.ui.refactoring.ui.IRenameElementContext")}, renameContext); //$NON-NLS-1$
+            if (refactoring == null)
+            {
+                return List.of();
+            }
+            Object processor = invokeNoArg(refactoring, "getProcessor"); //$NON-NLS-1$
+            if (processor == null)
+            {
+                return List.of();
+            }
+
+            Change edtChange = createRenameChange(refactoring, processor, newName);
+            if (edtChange == null)
+            {
+                return List.of();
+            }
+
+            List<ChangePoint> edtChanges = new ArrayList<>();
+            int[] indexCounter = {0};
+            collectFlatChanges(edtChange, null, null, exactMatches, edtChanges, indexCounter, "edt-preview", false, //$NON-NLS-1$
+                targetObject.getName());
+            return edtChanges;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error building EDT BSL preview changes", e); //$NON-NLS-1$
+            return List.of();
+        }
+    }
+
+    private Change createRenameChange(Object refactoring, Object processor, String newName) throws Exception
+    {
+        invokeMethod(processor, "setNewName", new Class<?>[] {String.class}, newName); //$NON-NLS-1$
+        NullProgressMonitor progressMonitor = new NullProgressMonitor();
+        Class<?> monitorClass = getClassOrThrow("org.eclipse.core.runtime.IProgressMonitor"); //$NON-NLS-1$
+
+        if (refactoring != null)
+        {
+            invokeMethod(refactoring, "checkInitialConditions", new Class<?>[] {monitorClass}, progressMonitor); //$NON-NLS-1$
+            invokeMethod(refactoring, "checkFinalConditions", new Class<?>[] {monitorClass}, progressMonitor); //$NON-NLS-1$
+            return (Change) invokeMethod(refactoring, "createChange", new Class<?>[] {monitorClass}, progressMonitor); //$NON-NLS-1$
+        }
+
+        invokeMethod(processor, "checkInitialConditions", new Class<?>[] {monitorClass}, progressMonitor); //$NON-NLS-1$
+        invokeMethod(processor, "checkFinalConditions", new Class<?>[] {monitorClass, CheckConditionsContext.class}, //$NON-NLS-1$
+            progressMonitor, new CheckConditionsContext());
+        return (Change) invokeMethod(processor, "createChange", new Class<?>[] {monitorClass}, progressMonitor); //$NON-NLS-1$
+    }
+
+    private void applyEdtBslPreviewData(List<ChangePoint> allChanges, List<ChangePoint> edtBslPreviewChanges)
+    {
+        if (allChanges == null || edtBslPreviewChanges == null || edtBslPreviewChanges.isEmpty())
+        {
+            return;
+        }
+
+        List<Integer> bslIndices = new ArrayList<>();
+        for (int i = 0; i < allChanges.size(); i++)
+        {
+            if ("bslRef".equals(allChanges.get(i).type)) //$NON-NLS-1$
+            {
+                bslIndices.add(Integer.valueOf(i));
+            }
+        }
+        if (bslIndices.size() != edtBslPreviewChanges.size())
+        {
+            return;
+        }
+
+        for (int i = 0; i < bslIndices.size(); i++)
+        {
+            int changeIndex = bslIndices.get(i).intValue();
+            ChangePoint original = allChanges.get(changeIndex);
+            ChangePoint edt = edtBslPreviewChanges.get(i);
+            allChanges.set(changeIndex, new ChangePoint(
+                original.index, original.type,
+                edt.fqn != null ? edt.fqn : original.fqn,
+                edt.project != null ? edt.project : original.project,
+                original.description,
+                original.optional,
+                original.enabled,
+                null,
+                edt.lineNumber,
+                edt.columnNumber,
+                edt.codeContext,
+                edt.methodName));
+        }
+    }
+
+    private Map<String, ExactMatchInfo> toExactMatchMap(Collection<?> matches)
+    {
+        Map<String, ExactMatchInfo> result = new HashMap<>();
+        for (Object match : matches)
+        {
+            if (isInstanceOf(match, "com._1c.g5.v8.dt.search.core.text.TextSearchFileMatch")) //$NON-NLS-1$
+            {
+                ExactMatchInfo info = createFileExactMatchInfo(match);
+                if (info != null)
+                {
+                    IFile file = (IFile) invokeNoArg(match, "getFile"); //$NON-NLS-1$
+                    int fileOffset = ((Number) invokeNoArg(match, "getFileOffset")).intValue(); //$NON-NLS-1$
+                    int textLength = ((Number) invokeNoArg(match, "getTextLength")).intValue(); //$NON-NLS-1$
+                    result.put(getFileMatchKey(file, fileOffset, textLength), info);
+                }
+            }
+            else if (isInstanceOf(match, "com._1c.g5.v8.dt.search.core.text.TextSearchModelMatch")) //$NON-NLS-1$
+            {
+                ExactMatchInfo info = createModelExactMatchInfo(match);
+                if (info != null)
+                {
+                    long objectId = ((Number) invokeNoArg(match, "getObjectId")).longValue(); //$NON-NLS-1$
+                    EStructuralFeature feature = (EStructuralFeature) invokeNoArg(match, "getFeature"); //$NON-NLS-1$
+                    int textOffset = ((Number) invokeNoArg(match, "getTextOffset")).intValue(); //$NON-NLS-1$
+                    int textLength = ((Number) invokeNoArg(match, "getTextLength")).intValue(); //$NON-NLS-1$
+                    result.put(getModelMatchKey(objectId, feature, textOffset, textLength), info);
+                }
+            }
+        }
+        return result;
+    }
+
+    private ExactMatchInfo createFileExactMatchInfo(Object match)
+    {
+        try
+        {
+            IFile file = (IFile) invokeNoArg(match, "getFile"); //$NON-NLS-1$
+            if (file == null)
+            {
+                return null;
+            }
+            int lineNumber = ((Number) invokeNoArg(match, "getLineNumber")).intValue(); //$NON-NLS-1$
+            String fqn = getBslFqn(file);
+            String project = file.getProject().getName();
+            String content = BslModuleUtils.readFileText(file);
+            int fileOffset = ((Number) invokeNoArg(match, "getFileOffset")).intValue(); //$NON-NLS-1$
+            int columnNumber = computeColumnNumber(content, fileOffset);
+            String codeContext = extractContext(content, lineNumber);
+            String methodName = null;
+            Module module = BslModuleUtils.loadModule(file.getProject(), BslModuleUtils.extractModulePath(file.getFullPath().toString()));
+            if (module != null)
+            {
+                methodName = findContainingMethodAst(module, lineNumber);
+            }
+            if (methodName == null)
+            {
+                methodName = findContainingMethodText(content, lineNumber);
+            }
+            return new ExactMatchInfo(file.getFullPath().toString(), fileOffset, lineNumber, columnNumber,
+                codeContext, methodName, fqn, project);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
+    private ExactMatchInfo createModelExactMatchInfo(Object match)
+    {
+        try
+        {
+            Object optional = invokeNoArg(match, "resolveMatchObject"); //$NON-NLS-1$
+            boolean present = Boolean.TRUE.equals(invokeNoArg(optional, "isPresent")); //$NON-NLS-1$
+            if (!present)
+            {
+                return null;
+            }
+            Object resolved = invokeNoArg(optional, "get"); //$NON-NLS-1$
+            if (!(resolved instanceof EObject object))
+            {
+                return null;
+            }
+            EStructuralFeature feature = (EStructuralFeature) invokeNoArg(match, "getFeature"); //$NON-NLS-1$
+            String content = getFeatureText(object, feature);
+            if (content == null)
+            {
+                return null;
+            }
+            int textOffset = ((Number) invokeNoArg(match, "getTextOffset")).intValue(); //$NON-NLS-1$
+            int lineNumber = computeLineNumber(content, textOffset);
+            int columnNumber = computeColumnNumber(content, textOffset);
+            String project = object instanceof IBmObject bmObject ? bmObject.bmGetEngine().getId() : null;
+            String fqn = object instanceof IBmObject bmObject ? bmObject.bmGetTopObject().bmGetFqn() : null;
+            return new ExactMatchInfo(null, textOffset, lineNumber, columnNumber, extractContext(content, lineNumber),
+                null, fqn, project);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
+    private List<ExactMatchInfo> findExactMatchInfos(Change change, Map<String, ExactMatchInfo> exactMatches)
+    {
+        if (exactMatches == null || exactMatches.isEmpty())
+        {
+            return List.of();
+        }
+        Map<String, ExactMatchInfo> matches = new LinkedHashMap<>();
+        if (change instanceof BmObjectTextContentChange<?> bmChange)
+        {
+            Object modifiedElement = bmChange.getModifiedElement();
+            if (modifiedElement instanceof IBmObject bmObject)
+            {
+                EStructuralFeature feature = getBmChangeFeature(bmChange);
+                if (feature != null)
+                {
+                    for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
+                    {
+                        ExactMatchInfo info = exactMatches.get(getModelMatchKey(bmObject.bmGetId(), feature,
+                            leafEdit.getOffset(), leafEdit.getLength()));
+                        if (info != null)
+                        {
+                            matches.put(getExactMatchIdentity(info), info);
+                        }
+                    }
+                }
+
+                String projectName = bmChange.getProjectName();
+                String objectFqn = bmObject.bmGetFqn();
+                for (ExactMatchInfo info : exactMatches.values())
+                {
+                    if (info == null || info.filePath == null)
+                    {
+                        continue;
+                    }
+                    if (!Objects.equals(info.project, projectName) || !Objects.equals(info.fqn, objectFqn))
+                    {
+                        continue;
+                    }
+                    for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
+                    {
+                        if (containsOffset(leafEdit, info.matchOffset))
+                        {
+                            matches.put(getExactMatchIdentity(info), info);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        IFile file = getIFile(change);
+        TextEdit edit = getChangeEdit(change);
+        if (file != null && edit != null)
+        {
+            for (ExactMatchInfo info : exactMatches.values())
+            {
+                if (info == null || info.filePath == null || !info.filePath.equals(file.getFullPath().toString()))
+                {
+                    continue;
+                }
+                for (TextEdit leafEdit : getLeafEdits(edit))
+                {
+                    if (containsOffset(leafEdit, info.matchOffset))
+                    {
+                        matches.put(getExactMatchIdentity(info), info);
+                        break;
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(matches.values());
+    }
+
+    private void logPreviewMapping(Change change, String fqn, String project, int exactMatchesCount)
+    {
+        if (change == null)
+        {
+            return;
+        }
+        try
+        {
+            if (!isCustomSourceFileChange(change) || exactMatchesCount != 0)
+            {
+                return;
+            }
+            int leafEditsCount = 0;
+            StringBuilder offsets = new StringBuilder();
+            TextEdit edit = getChangeEdit(change);
+            if (edit != null)
+            {
+                List<TextEdit> leafEdits = getLeafEdits(edit);
+                leafEditsCount = leafEdits.size();
+                for (TextEdit leafEdit : leafEdits)
+                {
+                    if (offsets.length() > 0)
+                    {
+                        offsets.append(';');
+                    }
+                    offsets.append(leafEdit.getOffset()).append(',').append(leafEdit.getLength());
+                }
+            }
+            IFile file = getIFile(change);
+            String filePath = file != null ? file.getFullPath().toString() : null;
+            Activator.logInfo("rename_metadata_object: preview mapping custom changeType=" + change.getClass().getSimpleName() //$NON-NLS-1$
+                + ", exactMatches=" + exactMatchesCount //$NON-NLS-1$
+                + ", leafEdits=" + leafEditsCount //$NON-NLS-1$
+                + ", offsets=" + offsets //$NON-NLS-1$
+                + ", project=" + project //$NON-NLS-1$
+                + ", fqn=" + fqn //$NON-NLS-1$
+                + ", file=" + filePath //$NON-NLS-1$
+                + ", name=" + change.getName()); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error logging preview mapping diagnostics", e); //$NON-NLS-1$
+        }
+    }
+
+    private static String getExactMatchIdentity(ExactMatchInfo info)
+    {
+        return info.project + "|" + info.fqn + "|" + info.matchOffset; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static boolean isCustomSourceFileChange(Change change)
+    {
+        return isInstanceOf(change, "com._1c.g5.v8.dt.lcore.refactoring.CustomSourceFileChange") //$NON-NLS-1$
+            && !isFullTextSearchSourceFileChange(change);
+    }
+
+    private static boolean containsOffset(TextEdit edit, int offset)
+    {
+        if (edit == null || edit.getOffset() < 0)
+        {
+            return false;
+        }
+        int start = edit.getOffset();
+        int end = edit.getLength() > 0 ? start + edit.getLength() : start + 1;
+        return offset >= start && offset < end;
+    }
+
+    private static String getFileMatchKey(IFile file, int offset, int length)
+    {
+        return file.getFullPath().toString() + "[" + offset + "," + length + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    private static String getModelMatchKey(long objectId, EStructuralFeature feature, int offset, int length)
+    {
+        return "(" + objectId + "," + feature.getFeatureID() + ")[" + offset + "," + length + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    private static List<TextEdit> getLeafEdits(TextEdit edit)
+    {
+        List<TextEdit> result = new ArrayList<>();
+        collectLeafEdits(edit, result);
+        return result;
+    }
+
+    private static void collectLeafEdits(TextEdit edit, List<TextEdit> result)
+    {
+        if (edit == null)
+        {
+            return;
+        }
+        TextEdit[] children = edit.getChildren();
+        if (children == null || children.length == 0)
+        {
+            if (edit.getOffset() >= 0 && edit.getLength() >= 0)
+            {
+                result.add(edit);
+            }
+            return;
+        }
+        for (TextEdit child : children)
+        {
+            collectLeafEdits(child, result);
+        }
+    }
+
+    private static EStructuralFeature getBmChangeFeature(BmObjectTextContentChange<?> change)
+    {
+        Object feature = getFieldValue(change, "feature"); //$NON-NLS-1$
+        return feature instanceof EStructuralFeature structuralFeature ? structuralFeature : null;
+    }
+
+    private static String getFeatureText(EObject object, EStructuralFeature feature)
+    {
+        Object value = object.eGet(feature);
+        return value instanceof String text ? text : null;
+    }
+
+    private static Object getFieldValue(Object target, String fieldName)
+    {
+        if (target == null)
+        {
+            return null;
+        }
+        Class<?> type = target.getClass();
+        while (type != null)
+        {
+            try
+            {
+                java.lang.reflect.Field field = type.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                return field.get(target);
+            }
+            catch (Exception e)
+            {
+                type = type.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    private static Object invokeMethod(Object target, String methodName, Class<?>[] parameterTypes, Object... args)
+        throws Exception
+    {
+        java.lang.reflect.Method method = findMethod(target.getClass(), methodName, parameterTypes);
+        if (!method.canAccess(target))
+        {
+            method.setAccessible(true);
+        }
+        return method.invoke(target, args);
+    }
+
+    private static Class<?> getClassOrThrow(String className) throws ClassNotFoundException
+    {
+        try
+        {
+            return Class.forName(className);
+        }
+        catch (ClassNotFoundException e)
+        {
+            Bundle bundle = getOwningBundle(className);
+            if (bundle != null)
+            {
+                return bundle.loadClass(className);
+            }
+            Activator.logWarning("rename_metadata_object: no owning bundle mapping for class " + className); //$NON-NLS-1$
+            throw e;
+        }
+    }
+
+    private static Bundle getOwningBundle(String className)
+    {
+        String bundleId = null;
+        if (className.startsWith("com._1c.g5.v8.dt.bsl.ui.")) //$NON-NLS-1$
+        {
+            bundleId = "com._1c.g5.v8.dt.bsl.ui"; //$NON-NLS-1$
+        }
+        else if (className.startsWith("com._1c.g5.v8.dt.bsl.bm.ui.")) //$NON-NLS-1$
+        {
+            bundleId = "com._1c.g5.v8.dt.bsl.bm.ui"; //$NON-NLS-1$
+        }
+        else if (className.startsWith("com._1c.g5.v8.dt.search.core.")) //$NON-NLS-1$
+        {
+            bundleId = "com._1c.g5.v8.dt.search.core"; //$NON-NLS-1$
+        }
+        else if (className.startsWith("com._1c.g5.v8.dt.internal.search.core.")) //$NON-NLS-1$
+        {
+            bundleId = "com._1c.g5.v8.dt.search.core"; //$NON-NLS-1$
+        }
+        else if (className.startsWith("com._1c.g5.v8.dt.core.platform.management.")) //$NON-NLS-1$
+        {
+            bundleId = "com._1c.g5.v8.dt.core"; //$NON-NLS-1$
+        }
+        if (bundleId == null)
+        {
+            return null;
+        }
+        Bundle bundle = Platform.getBundle(bundleId);
+        if (bundle == null)
+        {
+            Activator.logWarning("rename_metadata_object: Platform.getBundle returned null for " + bundleId); //$NON-NLS-1$
+        }
+        return bundle;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static Object getEnumConstant(String className, String constantName) throws ClassNotFoundException
+    {
+        Class enumClass = getClassOrThrow(className);
+        return Enum.valueOf(enumClass, constantName);
+    }
+
+    private static Object arrayOf(Class<?> componentType, Object... values)
+    {
+        Object array = java.lang.reflect.Array.newInstance(componentType, values.length);
+        for (int i = 0; i < values.length; i++)
+        {
+            java.lang.reflect.Array.set(array, i, values[i]);
+        }
+        return array;
+    }
+
+    private static boolean isInstanceOf(Object value, String className)
+    {
+        try
+        {
+            return getClassOrThrow(className).isInstance(value);
+        }
+        catch (ClassNotFoundException e)
+        {
+            return false;
+        }
+    }
+
+    private static Object getBslInjector() throws Exception
+    {
+        Class<?> activatorClass = getClassOrThrow("com._1c.g5.v8.dt.bsl.ui.internal.BslActivator"); //$NON-NLS-1$
+        Object activator = activatorClass.getMethod("getInstance").invoke(null); //$NON-NLS-1$
+        return activatorClass.getMethod("getInjector", String.class).invoke(activator, //$NON-NLS-1$
+            "com._1c.g5.v8.dt.bsl.Bsl"); //$NON-NLS-1$
+    }
+
+    private static Object getSearchCoreInjector() throws Exception
+    {
+        Class<?> pluginClass = getClassOrThrow("com._1c.g5.v8.dt.internal.search.core.SearchCorePlugin"); //$NON-NLS-1$
+        Object plugin = pluginClass.getMethod("getDefault").invoke(null); //$NON-NLS-1$
+        return pluginClass.getMethod("getInjector").invoke(plugin); //$NON-NLS-1$
+    }
+
+    private static Object createRenameElementContext(MdObject targetObject) throws Exception
+    {
+        Class<?> contextClass = getClassOrThrow(
+            "com._1c.g5.v8.dt.bsl.bm.ui.refactoring.ConfigurationObjectRenameElementContext"); //$NON-NLS-1$
+        java.lang.reflect.Constructor<?> constructor = contextClass.getDeclaredConstructor(
+            getClassOrThrow("org.eclipse.emf.common.util.URI"), //$NON-NLS-1$
+            getClassOrThrow("org.eclipse.emf.ecore.EClass"), //$NON-NLS-1$
+            getClassOrThrow("com._1c.g5.v8.bm.core.IBmObject")); //$NON-NLS-1$
+        constructor.setAccessible(true);
+        return constructor.newInstance(EcoreUtil.getURI(targetObject), targetObject.eClass(), targetObject);
+    }
+
+    private static IFile getIFile(Change change)
+    {
+        Object modifiedElement = invokeNoArg(change, "getModifiedElement"); //$NON-NLS-1$
+        IFile file = getIFileFromModifiedElement(modifiedElement);
+        if (file != null)
+        {
+            return file;
+        }
+        Object affected = invokeNoArg(change, "getAffectedObjects"); //$NON-NLS-1$
+        Object[] affectedObjects = affected instanceof Object[] ? (Object[]) affected : null;
+        if (affectedObjects != null && affectedObjects.length == 1 && affectedObjects[0] instanceof IFile affectedFile)
+        {
+            return affectedFile;
+        }
+        return null;
+    }
+
+    private static IFile getIFileFromModifiedElement(Object modifiedElement)
+    {
+        if (modifiedElement == null)
+        {
+            return null;
+        }
+        Object fileObject = invokeNoArg(modifiedElement, "getFile"); //$NON-NLS-1$
+        return fileObject instanceof IFile file ? file : null;
+    }
+
+    private static TextEdit getChangeEdit(Change change)
+    {
+        Object edit = invokeNoArg(change, "getEdit"); //$NON-NLS-1$
+        return edit instanceof TextEdit textEdit ? textEdit : null;
+    }
+
+    private static Object invokeNoArg(Object target, String methodName)
+    {
+        try
+        {
+            java.lang.reflect.Method method = findMethod(target.getClass(), methodName, new Class<?>[0]);
+            if (!method.canAccess(target))
+            {
+                method.setAccessible(true);
+            }
+            return method.invoke(target);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
+    private static java.lang.reflect.Method findMethod(Class<?> type, String methodName, Class<?>[] parameterTypes)
+        throws NoSuchMethodException
+    {
+        Class<?> current = type;
+        while (current != null)
+        {
+            try
+            {
+                return current.getDeclaredMethod(methodName, parameterTypes);
+            }
+            catch (NoSuchMethodException e)
+            {
+                current = current.getSuperclass();
+            }
+        }
+        for (Class<?> iface : type.getInterfaces())
+        {
+            try
+            {
+                return iface.getMethod(methodName, parameterTypes);
+            }
+            catch (NoSuchMethodException e)
+            {
+                // try next interface
+            }
+        }
+        return type.getMethod(methodName, parameterTypes);
+    }
+
+    private static String getBslFqn(IFile file)
+    {
+        return fallbackBslFqn(file);
+    }
+
+    private static boolean isBslReferenceChange(Change change, String currentFqn)
+    {
+        if (currentFqn != null && !currentFqn.isBlank())
+        {
+            return true;
+        }
+        if (change instanceof BmObjectTextContentChange<?>)
+        {
+            return true;
+        }
+        IFile file = getIFile(change);
+        return file != null && getBslFqn(file) != null;
+    }
+
+    private static boolean isFullTextSearchSourceFileChange(Change change)
+    {
+        return isInstanceOf(change, "com._1c.g5.v8.dt.lcore.refactoring.FullTextSearchSourceFileChange"); //$NON-NLS-1$
+    }
+
+    private static String fallbackBslFqn(IFile file)
+    {
+        IPath path = file.getProjectRelativePath();
+        if (path == null || path.segmentCount() < 4 || !"src".equals(path.segment(0))) //$NON-NLS-1$
+        {
+            return null;
+        }
+        String topLevelFolder = path.segment(1);
+        String objectName = path.segment(2);
+        String topLevelType = switch (topLevelFolder)
+        {
+        case "CommonModules" -> "CommonModule"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "Catalogs" -> "Catalog"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "Documents" -> "Document"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "Enums" -> "Enum"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "Reports" -> "Report"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "DataProcessors" -> "DataProcessor"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "CommonForms" -> "CommonForm"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "CommonCommands" -> "CommonCommand"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "HTTPServices" -> "HTTPService"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "WebServices" -> "WebService"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "WSReferences" -> "WSReference"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "InformationRegisters" -> "InformationRegister"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "AccumulationRegisters" -> "AccumulationRegister"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "AccountingRegisters" -> "AccountingRegister"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "CalculationRegisters" -> "CalculationRegister"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "BusinessProcesses" -> "BusinessProcess"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "Tasks" -> "Task"; //$NON-NLS-1$ //$NON-NLS-2$
+        default -> null;
+        };
+        return topLevelType != null ? topLevelType + "." + objectName : null; //$NON-NLS-1$
+    }
+
+    private static int computeLineNumber(String content, int offset)
+    {
+        int line = 1;
+        for (int i = 0; i < offset && i < content.length(); i++)
+        {
+            if (content.charAt(i) == '\n')
+                line++;
+        }
+        return line;
+    }
+
+    private static int computeColumnNumber(String content, int offset)
+    {
+        int normalizedOffset = Math.max(0, Math.min(offset, content.length()));
+        int lastLineBreak = Math.max(content.lastIndexOf('\n', normalizedOffset - 1),
+            content.lastIndexOf('\r', normalizedOffset - 1));
+        return normalizedOffset - lastLineBreak;
+    }
+
+    private static String extractContext(String content, int lineNumber)
+    {
+        String[] lines = content.split("\n", -1); //$NON-NLS-1$
+        if (lineNumber < 1 || lineNumber > lines.length)
+            return null;
+        int lineIdx = lineNumber - 1;
+        int startIdx = Math.max(0, lineIdx - 3);
+        int endIdx = Math.min(lines.length - 1, lineIdx + 3);
+        StringBuilder sb = new StringBuilder();
+        for (int i = startIdx; i <= endIdx; i++)
+        {
+            String prefix = (i == lineIdx) ? ">>>" : "   "; //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(String.format("%4d: %s %s\n", i + 1, prefix, //$NON-NLS-1$
+                lines[i].replace("\r", ""))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.toString();
+    }
+
+    /** Uses BSL AST (via BslModuleUtils + Xtext NodeModel) to find the method containing the given line. */
+    private static String findContainingMethodAst(Module module, int lineNumber)
+    {
+        for (Method method : module.allMethods())
+        {
+            int startLine = BslModuleUtils.getStartLine(method);
+            int endLine = BslModuleUtils.getEndLine(method);
+            if (startLine > 0 && lineNumber >= startLine && lineNumber <= endLine)
+            {
+                return BslModuleUtils.buildSignature(method);
+            }
+        }
+        return null;
+    }
+
+    /** Fallback: regex-based method search using BslModuleUtils patterns. */
+    private static String findContainingMethodText(String content, int lineNumber)
+    {
+        String[] lines = content.split("\n", -1); //$NON-NLS-1$
+        if (lineNumber < 1 || lineNumber > lines.length)
+            return null;
+        int lineIdx = lineNumber - 1;
+        for (int i = lineIdx - 1; i >= 0; i--)
+        {
+            String trimmed = lines[i].trim().replace("\r", ""); //$NON-NLS-1$ //$NON-NLS-2$
+            if (BslModuleUtils.METHOD_START_PATTERN.matcher(trimmed).find())
+            {
+                StringBuilder method = new StringBuilder();
+                int k = i - 1;
+                while (k >= 0 && lines[k].trim().startsWith("&")) //$NON-NLS-1$
+                {
+                    method.insert(0, lines[k].trim() + " "); //$NON-NLS-1$
+                    k--;
+                }
+                method.append(trimmed);
+                return method.toString();
+            }
+            if (BslModuleUtils.METHOD_END_PATTERN.matcher(trimmed).find())
+                break;
+        }
+        return null;
+    }
+
+
 
     private String performRename(String objectFqn, String newName,
         Collection<IRefactoring> refactorings, java.util.Set<Integer> disableIndices)

@@ -50,17 +50,17 @@ public final class BslModuleUtils
 
     /** Regex for BSL method start (Russian and English). Group 1 = method name, group 2 = params text after '(' */
     public static final Pattern METHOD_START_PATTERN = Pattern.compile(
-        "^\\s*(?:\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Procedure|Function)\\s+(\\S+?)\\s*\\((.*)$", //$NON-NLS-1$
+        "^\\s*(?:Процедура|Функция|Procedure|Function)\\s+(\\S+?)\\s*\\((.*)$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Regex for BSL method end (Russian and English) */
     public static final Pattern METHOD_END_PATTERN = Pattern.compile(
-        "^\\s*(?:\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b|\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438|EndProcedure|EndFunction)", //$NON-NLS-1$
+        "^\\s*(?:КонецПроцедуры|КонецФункции|EndProcedure|EndFunction)", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Regex for function keyword check */
     public static final Pattern FUNC_KEYWORD_PATTERN = Pattern.compile(
-        "^\\s*(?:\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Function)\\s", //$NON-NLS-1$
+        "^\\s*(?:Функция|Function)\\s", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
@@ -236,6 +236,72 @@ public final class BslModuleUtils
             }
         }
         return lines;
+    }
+
+    /**
+     * Reads full text from an IFile preserving original line separators.
+     * Needed when mapping TextEdit offsets to lines because EDT offsets are
+     * based on raw file content rather than normalized LF-only text.
+     *
+     * @param file the IFile to read
+     * @return full file text
+     * @throws Exception if reading fails
+     */
+    public static String readFileText(IFile file) throws Exception
+    {
+        InputStream rawIs;
+        try
+        {
+            rawIs = file.getContents();
+        }
+        catch (Exception e)
+        {
+            java.io.File fsFile = file.getLocation() != null
+                ? file.getLocation().toFile() : null;
+            if (fsFile == null || !fsFile.exists())
+            {
+                throw e;
+            }
+            rawIs = new FileInputStream(fsFile);
+        }
+
+        try (InputStream input = new BufferedInputStream(rawIs))
+        {
+            input.mark(3);
+            byte[] bom = new byte[3];
+            int bomRead = input.read(bom);
+            boolean isUtf8Bom = bomRead == 3
+                && (bom[0] & 0xFF) == 0xEF
+                && (bom[1] & 0xFF) == 0xBB
+                && (bom[2] & 0xFF) == 0xBF;
+            if (!isUtf8Bom)
+            {
+                input.reset();
+            }
+            String charset = "UTF-8"; //$NON-NLS-1$
+            if (!isUtf8Bom)
+            {
+                try
+                {
+                    charset = file.getCharset();
+                }
+                catch (Exception ce)
+                {
+                    charset = "UTF-8"; //$NON-NLS-1$
+                }
+            }
+            try (InputStreamReader reader = new InputStreamReader(input, charset))
+            {
+                StringBuilder content = new StringBuilder();
+                char[] buffer = new char[4096];
+                int read;
+                while ((read = reader.read(buffer)) != -1)
+                {
+                    content.append(buffer, 0, read);
+                }
+                return content.toString();
+            }
+        }
     }
 
     /**

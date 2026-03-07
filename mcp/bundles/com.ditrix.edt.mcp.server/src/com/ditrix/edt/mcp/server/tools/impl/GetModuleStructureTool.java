@@ -10,8 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -94,30 +92,6 @@ public class GetModuleStructureTool implements IMcpTool
         return "module-structure.md"; //$NON-NLS-1$
     }
 
-    /** Regex for pragma annotation */
-    private static final Pattern PRAGMA_PATTERN = Pattern.compile(
-        "^\\s*&(\\S+)", Pattern.UNICODE_CASE); //$NON-NLS-1$
-
-    /** Regex for region start */
-    private static final Pattern REGION_START = Pattern.compile(
-        "^\\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\\s+(\\S+)", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Regex for region end */
-    private static final Pattern REGION_END_PATTERN = Pattern.compile(
-        "^\\s*#(?:\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438|EndRegion)", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Regex for Export keyword */
-    private static final Pattern EXPORT_PATTERN = Pattern.compile(
-        "(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*$", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Regex for Var/Перем declaration */
-    private static final Pattern VAR_PATTERN = Pattern.compile(
-        "^\\s*(?:\u041f\u0435\u0440\u0435\u043c|Var)\\s+(.+?)\\s*;", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
     @Override
     public String execute(Map<String, String> params)
     {
@@ -158,8 +132,8 @@ public class GetModuleStructureTool implements IMcpTool
             return result;
         }
 
-        // Fallback: text-based structure parsing
-        return getStructureViaText(projectName, modulePath, includeVariables);
+        return "Error: BSL model is not available for '" + modulePath + "'\n" + //$NON-NLS-1$ //$NON-NLS-2$
+               "Make sure project '" + projectName + "' is open and fully indexed in EDT."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private String getStructureInternal(String projectName, String modulePath,
@@ -174,28 +148,11 @@ public class GetModuleStructureTool implements IMcpTool
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
         {
-            return null; // Signal to try text fallback
+            return "Error: BSL model is not available for '" + modulePath + "'\n" + //$NON-NLS-1$ //$NON-NLS-2$
+                   "Make sure project '" + projectName + "' is open and fully indexed in EDT."; //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        // Collect regions from text (EMF RegionPreprocessor nodes return incorrect endLine)
-        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
-        List<RegionInfo> regions;
-        if (file.exists())
-        {
-            try
-            {
-                regions = collectRegionsFromText(file);
-            }
-            catch (Exception e)
-            {
-                Activator.logWarning("Failed to parse regions from text, falling back to EMF: " + e.getMessage()); //$NON-NLS-1$
-                regions = collectRegions(module);
-            }
-        }
-        else
-        {
-            regions = collectRegions(module);
-        }
+        List<RegionInfo> regions = collectRegions(module);
 
         // Collect methods
         List<MethodInfo> methods = collectMethods(module, regions, includeComments);
@@ -263,230 +220,6 @@ public class GetModuleStructureTool implements IMcpTool
         return sb.toString();
     }
 
-    /**
-     * Text-based fallback: parses module structure using regex when EMF model is not available.
-     */
-    private String getStructureViaText(String projectName, String modulePath, boolean includeVariables)
-    {
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
-        {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
-        }
-
-        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
-        if (!file.exists())
-        {
-            return "Error: File not found: src/" + modulePath; //$NON-NLS-1$
-        }
-
-        try
-        {
-            List<String> lines = BslModuleUtils.readFileLines(file);
-            int totalLines = lines.size();
-
-            List<RegionInfo> regions = new ArrayList<>();
-            List<MethodInfo> methods = new ArrayList<>();
-            List<VariableInfo> textVariables = new ArrayList<>();
-            List<RegionInfo> regionStack = new ArrayList<>();
-            String pendingPragma = null;
-            boolean insideMethod = false;
-
-            for (int i = 0; i < lines.size(); i++)
-            {
-                String line = lines.get(i);
-
-                // Check for pragma (before method declaration)
-                Matcher pragmaMatcher = PRAGMA_PATTERN.matcher(line);
-                if (pragmaMatcher.find())
-                {
-                    pendingPragma = (pendingPragma != null ? pendingPragma + ", " : "") + "&" + pragmaMatcher.group(1); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    continue;
-                }
-
-                // Check for region start
-                Matcher regionStartMatcher = REGION_START.matcher(line);
-                if (regionStartMatcher.find())
-                {
-                    RegionInfo region = new RegionInfo();
-                    region.name = regionStartMatcher.group(1);
-                    region.startLine = i + 1;
-                    regionStack.add(region);
-                    pendingPragma = null;
-                    continue;
-                }
-
-                // Check for region end
-                if (REGION_END_PATTERN.matcher(line).find())
-                {
-                    if (!regionStack.isEmpty())
-                    {
-                        RegionInfo region = regionStack.remove(regionStack.size() - 1);
-                        region.endLine = i + 1;
-                        regions.add(region);
-                    }
-                    pendingPragma = null;
-                    continue;
-                }
-
-                // Check for module-level Var declarations (only outside methods)
-                if (includeVariables && !insideMethod)
-                {
-                    Matcher varMatcher = VAR_PATTERN.matcher(line);
-                    if (varMatcher.find())
-                    {
-                        String varList = varMatcher.group(1);
-                        boolean lineExport = EXPORT_PATTERN.matcher(varList).find();
-                        if (lineExport)
-                        {
-                            varList = varList.replaceAll("(?i)\\s*(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*$", "").trim(); //$NON-NLS-1$ //$NON-NLS-2$
-                        }
-                        for (String varName : varList.split(",")) //$NON-NLS-1$
-                        {
-                            String trimmed = varName.trim();
-                            if (!trimmed.isEmpty())
-                            {
-                                VariableInfo vi = new VariableInfo();
-                                vi.name = trimmed;
-                                vi.isExport = lineExport;
-                                vi.line = i + 1;
-                                vi.region = findContainingRegion(vi.line, regionStack, regions);
-                                textVariables.add(vi);
-                            }
-                        }
-                        pendingPragma = null;
-                        continue;
-                    }
-                }
-
-                // Check for method start
-                Matcher methodMatcher = BslModuleUtils.METHOD_START_PATTERN.matcher(line);
-                if (methodMatcher.find())
-                {
-                    insideMethod = true;
-                    MethodInfo info = new MethodInfo();
-                    info.name = methodMatcher.group(1);
-                    info.isFunction = BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher(line).find();
-                    info.startLine = i + 1;
-                    info.executionContext = pendingPragma;
-                    pendingPragma = null;
-
-                    // Extract parameters from declaration (may span multiple lines)
-                    String declLine = methodMatcher.group(2);
-                    // Check if declaration closes on this line
-                    int parenDepth = 1;
-                    StringBuilder paramsBuf = new StringBuilder(declLine);
-                    for (int j = 0; j < declLine.length(); j++)
-                    {
-                        if (declLine.charAt(j) == '(') parenDepth++;
-                        if (declLine.charAt(j) == ')') parenDepth--;
-                    }
-                    // Multi-line parameters
-                    int nextLine = i + 1;
-                    while (parenDepth > 0 && nextLine < lines.size())
-                    {
-                        String cont = lines.get(nextLine);
-                        paramsBuf.append(cont);
-                        for (int j = 0; j < cont.length(); j++)
-                        {
-                            if (cont.charAt(j) == '(') parenDepth++;
-                            if (cont.charAt(j) == ')') parenDepth--;
-                        }
-                        nextLine++;
-                    }
-
-                    // Extract params text and export flag
-                    String fullDecl = paramsBuf.toString();
-                    int closeParen = fullDecl.indexOf(')');
-                    if (closeParen >= 0)
-                    {
-                        String paramsText = fullDecl.substring(0, closeParen).trim();
-                        info.paramsString = paramsText.isEmpty() ? "-" : paramsText; //$NON-NLS-1$
-                        String afterParams = fullDecl.substring(closeParen + 1);
-                        info.isExport = EXPORT_PATTERN.matcher(afterParams).find();
-                    }
-                    else
-                    {
-                        info.paramsString = "-"; //$NON-NLS-1$
-                    }
-
-                    // Find method end
-                    for (int j = i + 1; j < lines.size(); j++)
-                    {
-                        if (BslModuleUtils.METHOD_END_PATTERN.matcher(lines.get(j)).find())
-                        {
-                            info.endLine = j + 1;
-                            break;
-                        }
-                    }
-                    if (info.endLine == 0)
-                    {
-                        info.endLine = totalLines;
-                    }
-
-                    // Find containing region
-                    info.region = findContainingRegion(info.startLine, regionStack, regions);
-
-                    methods.add(info);
-                }
-                else
-                {
-                    // Reset pragma if line is not a pragma and not a method start
-                    if (!line.trim().isEmpty())
-                    {
-                        pendingPragma = null;
-                    }
-                }
-            }
-
-            // Format output (same format as EMF)
-            int procCount = 0;
-            int funcCount = 0;
-            for (MethodInfo m : methods)
-            {
-                if (m.isFunction) funcCount++;
-                else procCount++;
-            }
-
-            StringBuilder sb = new StringBuilder();
-            sb.append("## Module Structure: ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("**Total:** ").append(procCount).append(" procedures, ") //$NON-NLS-1$ //$NON-NLS-2$
-              .append(funcCount).append(" functions | **Lines:** ").append(totalLines).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("*Note: parsed via text fallback (EMF model was not available)*\n\n"); //$NON-NLS-1$
-
-            if (!regions.isEmpty())
-            {
-                sb.append("### Regions\n\n"); //$NON-NLS-1$
-                for (RegionInfo region : regions)
-                {
-                    sb.append("- ").append(region.name) //$NON-NLS-1$
-                      .append(" (line ").append(region.startLine) //$NON-NLS-1$
-                      .append("-").append(region.endLine).append(")\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                sb.append("\n"); //$NON-NLS-1$
-            }
-
-            // Variables section (text fallback)
-            if (includeVariables && !textVariables.isEmpty())
-            {
-                appendVariablesTable(sb, textVariables);
-            }
-
-            if (methods.isEmpty())
-            {
-                sb.append("No methods found in this module.\n"); //$NON-NLS-1$
-                return sb.toString();
-            }
-
-            appendMethodsTable(sb, methods);
-
-            return sb.toString();
-        }
-        catch (Exception e)
-        {
-            return "Error reading file: " + e.getMessage(); //$NON-NLS-1$
-        }
-    }
 
     /**
      * Appends a markdown methods table to the StringBuilder.
@@ -537,31 +270,13 @@ public class GetModuleStructureTool implements IMcpTool
     }
 
     /**
-     * Finds the innermost region containing the given line.
-     * Checks open (stack) regions first, then closed regions by narrowest range.
-     *
-     * @param line the line number to check
-     * @param openRegions still-open regions (from text parsing stack), may be null
-     * @param closedRegions fully closed regions with start/end lines
-     * @return region name or null
+     * Finds the innermost region (narrowest line range) containing the given line.
      */
-    private String findContainingRegion(int line, List<RegionInfo> openRegions, List<RegionInfo> closedRegions)
+    private String findContainingRegion(int line, List<RegionInfo> regions)
     {
-        // Find innermost region from open (active) regions — last one on the stack is innermost
-        if (openRegions != null)
-        {
-            for (int i = openRegions.size() - 1; i >= 0; i--)
-            {
-                if (line >= openRegions.get(i).startLine)
-                {
-                    return openRegions.get(i).name;
-                }
-            }
-        }
-        // Find innermost region from closed regions (narrowest range)
         String bestRegion = null;
         int bestRange = Integer.MAX_VALUE;
-        for (RegionInfo region : closedRegions)
+        for (RegionInfo region : regions)
         {
             if (line >= region.startLine && line <= region.endLine)
             {
@@ -575,55 +290,11 @@ public class GetModuleStructureTool implements IMcpTool
         }
         return bestRegion;
     }
-
     // ========== Data collection ==========
 
-    /**
-     * Collects regions from file text using regex (reliable for all cases).
-     */
-    private List<RegionInfo> collectRegionsFromText(IFile file) throws Exception
-    {
-        List<String> lines = BslModuleUtils.readFileLines(file);
-        List<RegionInfo> regions = new ArrayList<>();
-        List<RegionInfo> regionStack = new ArrayList<>();
-
-        for (int i = 0; i < lines.size(); i++)
-        {
-            String line = lines.get(i);
-
-            Matcher regionStartMatcher = REGION_START.matcher(line);
-            if (regionStartMatcher.find())
-            {
-                RegionInfo region = new RegionInfo();
-                region.name = regionStartMatcher.group(1);
-                region.startLine = i + 1;
-                regionStack.add(region);
-                continue;
-            }
-
-            if (REGION_END_PATTERN.matcher(line).find())
-            {
-                if (!regionStack.isEmpty())
-                {
-                    RegionInfo region = regionStack.remove(regionStack.size() - 1);
-                    region.endLine = i + 1;
-                    regions.add(region);
-                }
-            }
-        }
-
-        // Close any unclosed regions at EOF
-        for (RegionInfo region : regionStack)
-        {
-            region.endLine = lines.size();
-            regions.add(region);
-        }
-
-        return regions;
-    }
 
     /**
-     * Collects regions from EMF model (fallback, may have inaccurate endLine).
+     * Collects regions from the BSL AST model.
      */
     private List<RegionInfo> collectRegions(Module module)
     {
@@ -631,18 +302,16 @@ public class GetModuleStructureTool implements IMcpTool
 
         try
         {
-            // Walk all contents looking for RegionPreprocessor nodes
-            for (var iter = module.eAllContents(); iter.hasNext(); )
+            for (var iter = module.eAllContents(); iter.hasNext();)
             {
                 EObject obj = iter.next();
-                if (obj instanceof RegionPreprocessor)
+                if (obj instanceof RegionPreprocessor region)
                 {
-                    RegionPreprocessor region = (RegionPreprocessor) obj;
                     RegionInfo info = new RegionInfo();
                     info.name = region.getName();
                     info.startLine = BslModuleUtils.getStartLine(region);
-                    info.endLine = BslModuleUtils.getEndLine(region);
-                    if (info.name != null && !info.name.isEmpty())
+                    info.endLine = computeRegionEndLine(region, info.startLine);
+                    if (info.name != null && !info.name.isEmpty() && info.startLine > 0)
                     {
                         regions.add(info);
                     }
@@ -657,6 +326,20 @@ public class GetModuleStructureTool implements IMcpTool
         return regions;
     }
 
+    /** Computes region end line by scanning all contained EObjects for the maximum end line. */
+    private int computeRegionEndLine(RegionPreprocessor region, int startLine)
+    {
+        int endLine = startLine;
+        for (var iter = region.eAllContents(); iter.hasNext();)
+        {
+            int childEnd = BslModuleUtils.getEndLine(iter.next());
+            if (childEnd > endLine)
+            {
+                endLine = childEnd;
+            }
+        }
+        return endLine > startLine ? endLine + 1 : startLine + 1; // +1 for #EndRegion line
+    }
     private List<MethodInfo> collectMethods(Module module, List<RegionInfo> regions,
         boolean includeComments)
     {
@@ -707,7 +390,7 @@ public class GetModuleStructureTool implements IMcpTool
                 info.executionContext = collectPragmas(method);
 
                 // Find containing region (innermost)
-                info.region = findContainingRegion(info.startLine, null, regions);
+                info.region = findContainingRegion(info.startLine, regions);
 
                 // Collect doc-comment if requested
                 if (includeComments && sourceLines != null)
@@ -809,7 +492,7 @@ public class GetModuleStructureTool implements IMcpTool
                         info.name = var.getName();
                         info.isExport = var.isExport();
                         info.line = BslModuleUtils.getStartLine(var);
-                        info.region = findContainingRegion(info.line, null, regions);
+                        info.region = findContainingRegion(info.line, regions);
                         variables.add(info);
                     }
                 }
