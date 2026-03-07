@@ -337,10 +337,3 @@ com.e1c.v8codestyle.md.check.DbObjectMaxNumberLengthCheck
 bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: Primitive Types](https://1c-dn.com/library/primitive_types/)
-- [Number Type Specification](https://1c-dn.com/library/number_type/)
-- [Database Optimization](https://1c-dn.com/library/optimization/)

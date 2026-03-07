@@ -73,5 +73,4 @@ Verifies the assignment of the `InteractiveDeleteMarkedPredefinedData` right in 
 
 ## 📚 References
 
-- [Predefined data](https://1c-dn.com/library/predefined_items/)
 - [Role-based access restriction](https://its.1c.ru/db/v8std/content/689/hdoc)

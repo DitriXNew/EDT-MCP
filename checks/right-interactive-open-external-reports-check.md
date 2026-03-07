@@ -69,7 +69,3 @@ Verifies the assignment of the `InteractiveOpenExtReports` right in roles. Simil
 - **Check class**: `com.e1c.v8codestyle.right.check.RightInteractiveOpenExternalReports`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [External Reports Security](https://its.1c.ru/db/metod8dev/content/5785/hdoc)
-- [System Rights](https://1c-dn.com/library/system_rights/)

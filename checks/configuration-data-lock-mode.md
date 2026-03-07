@@ -255,5 +255,4 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 
 ## 📚 References
 
-- [1C:Enterprise Data Locking](https://1c-dn.com/library/data_locking/)
 - [Managed Locks Best Practices](https://its.1c.ru/)

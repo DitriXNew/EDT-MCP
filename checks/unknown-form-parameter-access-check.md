@@ -338,6 +338,4 @@ Form Parameters:
 
 ## 📚 References
 
-- [1C Documentation: Form Parameters](https://1c-dn.com/library/form_parameters/)
-- [Opening Forms with Parameters](https://1c-dn.com/library/opening_forms/)
 - [Optional Form Parameter Access Check](optional-form-parameter-access-check.md)

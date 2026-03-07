@@ -75,4 +75,3 @@ Verifies the assignment of the `Delete` right in roles. The right to directly de
 ## 📚 References
 
 - [Role-based access restriction](https://its.1c.ru/db/v8std/content/689/hdoc)
-- [Deletion mark mechanism](https://1c-dn.com/library/deletion_mark/)

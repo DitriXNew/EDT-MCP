@@ -332,4 +332,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 - [Module Undefined Function Check](module-undefined-function-check.md)
 - [Module Undefined Method Check](module-undefined-method-check.md)
 - [BSL Variable Naming](bsl-variable-name-invalid.md)
-- [1C Variables](https://1c-dn.com/library/variables/)

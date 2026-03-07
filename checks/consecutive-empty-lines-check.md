@@ -378,5 +378,4 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [1C Coding Standards](https://its.1c.ru/db/v8std)
-- [Code Formatting Guidelines](https://1c-dn.com/library/code_formatting/)
 - [Module Structure Standards](https://its.1c.ru/db/v8std/content/455/hdoc)

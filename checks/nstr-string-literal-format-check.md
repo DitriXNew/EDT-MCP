@@ -297,6 +297,4 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 ## 📚 References
 
-- [1C Documentation: NStr Function](https://1c-dn.com/library/nstr/)
-- [1C Localization Guide](https://1c-dn.com/library/localization/)
 - [ISO 639-1 Language Codes](https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes)

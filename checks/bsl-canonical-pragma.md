@@ -263,4 +263,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/CanonicalPragm
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Code Conventions](https://its.1c.ru/db/v8std)
-- [1C:Enterprise Platform - Method Annotations](https://1c-dn.com/library/method_annotations/)

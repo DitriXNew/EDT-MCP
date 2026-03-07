@@ -326,6 +326,4 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 
 ## 📚 References
 
-- [1C Documentation: Type Descriptions](https://1c-dn.com/library/type_description/)
-- [Query Optimization](https://1c-dn.com/library/query_optimization/)
 - [Db Object Ref Non Ref Types Check](db-object-ref-non-ref-types-check.md)

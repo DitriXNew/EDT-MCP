@@ -366,6 +366,4 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 
 ## 📚 References
 
-- [1C Documentation: Metadata Properties](https://1c-dn.com/library/metadata_properties/)
-- [Localization Guidelines](https://1c-dn.com/library/localization/)
 - [UI Standards](https://its.1c.ru/db/v8std)

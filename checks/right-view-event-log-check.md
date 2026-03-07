@@ -78,7 +78,3 @@ Verifies the assignment of the `ViewEventLog` right in roles. The event log cont
 - **Check class**: `com.e1c.v8codestyle.right.check.RightViewEventLog`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [Event Log](https://1c-dn.com/library/event_log/)
-- [System Rights](https://1c-dn.com/library/system_rights/)

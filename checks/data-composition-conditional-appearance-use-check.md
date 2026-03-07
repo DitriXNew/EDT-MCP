@@ -246,10 +246,3 @@ com.e1c.v8codestyle.form.check.DataCompositionConditionalAppearanceUseCheck
 bundles/com.e1c.v8codestyle.form/src/com/e1c/v8codestyle/form/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: Conditional Appearance](https://1c-dn.com/library/conditional_appearance/)
-- [Form Performance Optimization](https://1c-dn.com/library/form_optimization/)
-- [Data Composition System](https://1c-dn.com/library/data_composition/)

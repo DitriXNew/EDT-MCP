@@ -337,10 +337,3 @@ com.e1c.v8codestyle.md.check.MdStandardAttributeSynonymEmpty
 bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: Standard Attributes](https://1c-dn.com/library/standard_attributes/)
-- [Subordinate Catalogs](https://1c-dn.com/library/subordinate_catalogs/)
-- [Hierarchical Catalogs](https://1c-dn.com/library/hierarchical_catalogs/)

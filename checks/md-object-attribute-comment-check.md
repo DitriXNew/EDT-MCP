@@ -338,6 +338,4 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 
 ## 📚 References
 
-- [1C Documentation: String Type](https://1c-dn.com/library/string_type/)
-- [Attribute Properties](https://1c-dn.com/library/attribute_properties/)
 - [Md Object Attribute Comment Not Exist Check](md-object-attribute-comment-not-exist-check.md)

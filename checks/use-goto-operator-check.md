@@ -332,4 +332,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 - [Not Support Goto Operator Web Check](not-support-goto-operator-web-check.md)
 - [Structured Programming](https://en.wikipedia.org/wiki/Structured_programming)
-- [1C Control Flow](https://1c-dn.com/library/control_flow/)

@@ -286,9 +286,3 @@ com.e1c.v8codestyle.bsl.check.EventHandlerBooleanParamCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C:Enterprise Event Handling](https://1c-dn.com/library/event_handling/)
-- [Form Events Reference](https://1c-dn.com/library/form_events/)

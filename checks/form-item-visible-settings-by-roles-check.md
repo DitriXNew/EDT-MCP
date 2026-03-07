@@ -341,7 +341,4 @@ bundles/com.e1c.v8codestyle.form/src/com/e1c/v8codestyle/form/check/
 
 ## 📚 References
 
-- [1C Documentation: Form Items Visibility](https://1c-dn.com/library/form_items/)
-- [Access Rights Management](https://1c-dn.com/library/access_rights/)
-- [Functional Options](https://1c-dn.com/library/functional_options/)
 - [Is In Role Check](is-in-role-check.md)

@@ -61,4 +61,3 @@ Query.Text = "SELECT
 ## 📚 References
 
 - [1C:Enterprise Development Standards](https://its.1c.ru/db/v8std)
-- [Query Language - Data Types](https://1c-dn.com/library/query_language/)

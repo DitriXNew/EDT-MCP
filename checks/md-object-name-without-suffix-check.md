@@ -347,6 +347,4 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 
 ## 📚 References
 
-- [1C BSP Naming Conventions](https://its.1c.ru/db/bsp)
-- [CommonModule Compilation](https://1c-dn.com/library/common_modules/)
 - [1C Naming Standards](https://its.1c.ru/db/v8std/content/485/hdoc)

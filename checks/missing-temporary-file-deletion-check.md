@@ -346,9 +346,3 @@ com.e1c.v8codestyle.bsl.check.MissingTemporaryFileDeletionCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C:Enterprise File Operations](https://1c-dn.com/library/file_operations/)
-- [Temporary Files Best Practices](https://1c-dn.com/library/temp_files/)

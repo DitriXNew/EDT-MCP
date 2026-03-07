@@ -80,4 +80,3 @@ Verifies the assignment of the `InteractiveDelete` right in roles. This right al
 ## 📚 References
 
 - [Role-based access restriction](https://its.1c.ru/db/v8std/content/689/hdoc)
-- [User Rights](https://1c-dn.com/library/user_rights/)

@@ -336,5 +336,5 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 ## 📚 References
 
 - [1C Naming Conventions](https://its.1c.ru/db/v8std/content/485/hdoc)
-- [Database Identifier Limits](https://docs.microsoft.com/sql/relational-databases/databases/database-identifiers)
+- [Database Identifier Limits](https://learn.microsoft.com/en-us/sql/relational-databases/databases/database-identifiers?view=sql-server-ver17)
 - [Code Style Guidelines](https://its.1c.ru/db/v8std)

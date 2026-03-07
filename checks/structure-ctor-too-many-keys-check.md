@@ -270,4 +270,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [Method Too Many Parameters Check](method-too-many-params-check.md)
-- [1C Structure Best Practices](https://1c-dn.com/library/structures/)

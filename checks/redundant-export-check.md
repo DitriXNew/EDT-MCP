@@ -326,4 +326,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 - [Module Unused Method Check](module-unused-method-check.md)
 - [Export Procedure Missing Comment Check](export-procedure-missing-comment.md)
-- [1C Module Structure](https://1c-dn.com/library/modules/)

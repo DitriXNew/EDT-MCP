@@ -325,5 +325,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [NotifyDescription To Server Procedure Check](notify-description-to-server-procedure-check.md)
-- [1C Security Best Practices](https://1c-dn.com/library/security/)
-- [Safe Mode Documentation](https://1c-dn.com/library/safe_mode/)

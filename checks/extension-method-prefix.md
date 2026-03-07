@@ -296,4 +296,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Standard 640](https://its.1c.ru/db/v8std/content/640/hdoc)
-- [Extension Development Guidelines](https://1c-dn.com/library/extensions/)

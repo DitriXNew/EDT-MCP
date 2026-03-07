@@ -69,7 +69,3 @@ Verifies the assignment of the `StartAutomation` (OLE Automation) right in roles
 - **Check class**: `com.e1c.v8codestyle.right.check.RightStartAutomation`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [OLE Automation](https://1c-dn.com/library/ole_automation/)
-- [System Rights](https://1c-dn.com/library/system_rights/)

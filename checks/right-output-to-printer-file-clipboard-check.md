@@ -78,7 +78,3 @@ Verifies the assignment of the `OutputToPrinterFileClipboard` right in roles. Th
 - **Check class**: `com.e1c.v8codestyle.right.check.RightOutputToPrinterFileClipboard`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [System Rights](https://1c-dn.com/library/system_rights/)
-- [Data Protection](https://its.1c.ru/db/metod8dev/content/5785/hdoc)

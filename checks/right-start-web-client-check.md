@@ -95,7 +95,3 @@ Verifies the assignment of the `StartWebClient` right in roles. Web client provi
 - **Check class**: `com.e1c.v8codestyle.right.check.RightStartWebClient`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [Web Client](https://1c-dn.com/library/web_client/)
-- [System Rights](https://1c-dn.com/library/system_rights/)

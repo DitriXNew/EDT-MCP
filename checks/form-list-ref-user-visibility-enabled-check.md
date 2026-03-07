@@ -317,7 +317,5 @@ bundles/com.e1c.v8codestyle.form/src/com/e1c/v8codestyle/form/check/
 
 ## 📚 References
 
-- [1C Documentation: Form Item Properties](https://1c-dn.com/library/form_items/)
-- [Dynamic List Configuration](https://1c-dn.com/library/dynamic_lists/)
 - [Form List Field Ref Not Added Check](form-list-field-ref-not-added-check.md)
 - [Form List Ref Use Always Flag Disabled Check](form-list-ref-use-always-flag-disabled-check.md)

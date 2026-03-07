@@ -288,9 +288,3 @@ com.e1c.v8codestyle.bsl.check.InvocationFormEventHandlerCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C:Enterprise Form Events](https://1c-dn.com/library/form_events/)
-- [Event Handler Best Practices](https://1c-dn.com/library/event_handling/)

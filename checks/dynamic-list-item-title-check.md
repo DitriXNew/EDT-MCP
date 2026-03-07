@@ -322,6 +322,4 @@ bundles/com.e1c.v8codestyle.form/src/com/e1c/v8codestyle/form/check/
 
 ## 📚 References
 
-- [1C Documentation: Dynamic Lists](https://1c-dn.com/library/dynamic_lists/)
-- [Form Item Properties](https://1c-dn.com/library/form_items/)
 - [Localization with NStr](nstr-string-literal-format-check.md)

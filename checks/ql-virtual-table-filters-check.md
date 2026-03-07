@@ -91,8 +91,3 @@ Query.Text = "SELECT
 - **Check class**: `com.e1c.v8codestyle.ql.check.VirtualTableFiltersCheck`
 - **Plugin**: `com.e1c.v8codestyle.ql`
 
-## 📚 References
-
-- [Accessing virtual table](https://support.1ci.com/hc/en-us/articles/360011121039-Accessing-virtual-table)
-- [Using filters in queries with virtual tables](https://1c-dn.com/library/using_filters_in_queries_with_virtual_tables/)
-- [Virtual table parameters](https://1c-dn.com/library/tutorials/practical_developer_guide_virtual_table_parameters3/)

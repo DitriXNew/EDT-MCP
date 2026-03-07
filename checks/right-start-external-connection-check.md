@@ -78,7 +78,3 @@ Verifies the assignment of the `StartExternalConnection` right in roles. This ri
 - **Check class**: `com.e1c.v8codestyle.right.check.RightStartExternalConnection`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [External Connection](https://1c-dn.com/library/external_connection/)
-- [System Rights](https://1c-dn.com/library/system_rights/)

@@ -249,5 +249,4 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 ## 📚 References
 
-- [Data Composition System Documentation](https://1c-dn.com/library/data_composition_system/)
 - [Conditional Appearance in Reports](https://its.1c.ru/)

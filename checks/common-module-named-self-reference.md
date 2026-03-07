@@ -204,9 +204,3 @@ com.e1c.v8codestyle.bsl.check.CommonModuleNamedSelfReference
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C:Enterprise Coding Best Practices](https://1c-dn.com/library/best_practices/)
-- [Common Module Development](https://1c-dn.com/library/common_modules/)

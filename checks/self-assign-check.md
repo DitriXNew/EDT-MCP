@@ -242,4 +242,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [Module Unused Local Variable Check](module-unused-local-variable-check.md)
-- [Code Quality Best Practices](https://1c-dn.com/library/clean_code/)

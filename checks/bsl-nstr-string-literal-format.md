@@ -370,4 +370,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/NstrStringLite
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Localization](https://its.1c.ru/db/v8std)
-- [1C:Enterprise Platform - NStr Function](https://1c-dn.com/library/nstr_function/)

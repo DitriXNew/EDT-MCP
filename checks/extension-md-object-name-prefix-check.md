@@ -338,6 +338,4 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 
 ## 📚 References
 
-- [1C Documentation: Configuration Extensions](https://1c-dn.com/library/extensions/)
-- [Extension Development Guidelines](https://1c-dn.com/library/extension_development/)
 - [Naming Conventions](https://its.1c.ru/db/v8std/content/485/hdoc)

@@ -364,6 +364,4 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 
 ## 📚 References
 
-- [1C Documentation: Composite Types](https://1c-dn.com/library/composite_types/)
-- [Query Optimization](https://1c-dn.com/library/query_optimization/)
 - [Db Object Any Ref Type Check](db-object-any-ref-type-check.md)

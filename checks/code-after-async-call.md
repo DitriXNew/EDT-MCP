@@ -194,9 +194,3 @@ com.e1c.v8codestyle.bsl.check.CodeAfterAsyncCallCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/CodeAfterAsyncCallCheck.java
 ```
 
----
-
-## 📚 References
-
-- [1C:Enterprise Asynchronous Programming](https://1c-dn.com/library/asynchronous_programming/)
-- [NotifyDescription Documentation](https://1c-dn.com/library/notifydescription/)

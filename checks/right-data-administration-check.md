@@ -69,7 +69,3 @@ Verifies the assignment of the `DataAdministration` right in roles. This right a
 - **Check class**: `com.e1c.v8codestyle.right.check.RightDataAdministration`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [System Rights](https://1c-dn.com/library/system_rights/)
-- [Data Administration](https://1c-dn.com/library/data_administration/)

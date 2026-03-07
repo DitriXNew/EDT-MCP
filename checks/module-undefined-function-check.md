@@ -255,4 +255,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 - [Module Undefined Method Check](module-undefined-method-check.md)
 - [Module Undefined Variable Check](module-undefined-variable-check.md)
-- [1C Function Calls](https://1c-dn.com/library/functions/)

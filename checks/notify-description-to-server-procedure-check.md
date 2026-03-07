@@ -310,10 +310,3 @@ com.e1c.v8codestyle.bsl.check.NotifyDescriptionToServerProcedureCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: NotifyDescription](https://1c-dn.com/library/notifydescription/)
-- [Async Operations in 1C](https://1c-dn.com/library/asynchronous_model/)
-- [Client-Server Interaction](https://1c-dn.com/library/client_server_interaction/)

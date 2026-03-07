@@ -80,7 +80,3 @@ Query.Text = "SELECT
 - **Check class**: `com.e1c.v8codestyle.ql.check.ConstantsInBinaryOperationCheck`
 - **Plugin**: `com.e1c.v8codestyle.ql`
 
-## 📚 References
-
-- [Effective query conditions](https://support.1ci.com/hc/en-us/articles/360011121019-Effective-query-conditions)
-- [Specifics of using LIKE operator in queries](https://support.1ci.com/hc/en-us/articles/360011001500-Specifics-of-using-LIKE-operator-in-queries)

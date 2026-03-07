@@ -275,4 +275,3 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/commonmodule/check/
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Standard 469](https://its.1c.ru/db/v8std/content/469/hdoc)
-- [Server Call Caching](https://1c-dn.com/library/common_modules/)

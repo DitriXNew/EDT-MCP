@@ -85,6 +85,3 @@ DataLock.Lock();
 - **Check class**: `com.e1c.v8codestyle.ql.check.UsingForUpdateCheck`
 - **Plugin**: `com.e1c.v8codestyle.ql`
 
-## 📚 References
-
-- [Using managed lock mode](https://support.1ci.com/hc/en-us/articles/360011002120-Using-managed-lock-mode)

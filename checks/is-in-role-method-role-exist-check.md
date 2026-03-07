@@ -217,4 +217,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [IsInRole Check](is-in-role-check.md) - Related check about using AccessRight
-- [1C:Enterprise Roles Documentation](https://1c-dn.com/library/roles/)

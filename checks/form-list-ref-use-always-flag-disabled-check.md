@@ -349,6 +349,5 @@ bundles/com.e1c.v8codestyle.form/src/com/e1c/v8codestyle/form/check/
 
 ## 📚 References
 
-- [1C Documentation: Dynamic Lists](https://1c-dn.com/library/dynamic_lists/)
 - [Form List Field Ref Not Added Check](form-list-field-ref-not-added-check.md)
 - [Form List Ref User Visibility Enabled Check](form-list-ref-user-visibility-enabled-check.md)

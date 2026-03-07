@@ -294,5 +294,4 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [Use Goto Operator Check](use-goto-operator-check.md)
-- [1C Web Client Limitations](https://1c-dn.com/library/web_client/)
 - [Structured Programming](https://en.wikipedia.org/wiki/Structured_programming)

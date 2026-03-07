@@ -336,4 +336,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 - [Module Structure Variables in Region Check](module-structure-variables-in-region-check.md)
 - [Module Structure Method in Region Check](module-structure-method-in-region-check.md)
-- [1C Module Structure](https://1c-dn.com/library/module_structure/)

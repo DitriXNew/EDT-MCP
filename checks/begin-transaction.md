@@ -270,4 +270,3 @@ The check recognizes both English and Russian method names:
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Exception Handling in Transactions](https://its.1c.ru/db/v8std#content:783:hdoc)
-- [1C:Enterprise Platform Documentation - Transactions](https://1c-dn.com/library/transactions/)

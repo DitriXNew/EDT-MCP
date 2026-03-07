@@ -351,6 +351,4 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 ## 📚 References
 
-- [1C Documentation: Form Parameters](https://1c-dn.com/library/form_parameters/)
-- [Opening Forms](https://1c-dn.com/library/opening_forms/)
 - [Unknown Form Parameter Access Check](unknown-form-parameter-access-check.md)

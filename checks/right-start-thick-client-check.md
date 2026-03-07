@@ -82,7 +82,3 @@ Verifies the assignment of the `StartThickClient` right in roles. Thick client h
 - **Check class**: `com.e1c.v8codestyle.right.check.RightStartThickClient`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [Client Types](https://1c-dn.com/library/client_types/)
-- [System Rights](https://1c-dn.com/library/system_rights/)

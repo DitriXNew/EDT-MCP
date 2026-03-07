@@ -300,6 +300,4 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/ChangeAndValid
 
 ## 📚 References
 
-- [1C:Enterprise Extension Development Guide](https://1c-dn.com/library/extensions/)
 - [1C:Enterprise Platform - Extension Annotations](https://its.1c.ru/db/v8std)
-- [Method Interception in Extensions](https://1c-dn.com/library/method_interception/)

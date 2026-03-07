@@ -369,10 +369,3 @@ com.e1c.v8codestyle.bsl.check.FormDataToValueCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: FormDataToValue](https://1c-dn.com/library/formdatatovalue/)
-- [1C Documentation: ValueToFormData](https://1c-dn.com/library/valuetoformdata/)
-- [Form Data Architecture](https://1c-dn.com/library/managed_forms/)

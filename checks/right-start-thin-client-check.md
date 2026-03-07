@@ -91,7 +91,3 @@ Verifies the assignment of the `StartThinClient` right in roles. Thin client is 
 - **Check class**: `com.e1c.v8codestyle.right.check.RightStartThinClient`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [Client Types](https://1c-dn.com/library/client_types/)
-- [System Rights](https://1c-dn.com/library/system_rights/)

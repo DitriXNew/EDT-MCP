@@ -69,7 +69,3 @@ Verifies the assignment of the `AllFunctionsMode` right in roles. This right pro
 - **Check class**: `com.e1c.v8codestyle.right.check.RightAllFunctionsMode`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [System Rights](https://1c-dn.com/library/system_rights/)
-- [All Functions Mode](https://1c-dn.com/library/all_functions_mode/)

@@ -360,6 +360,5 @@ bundles/com.e1c.v8codestyle.form/src/com/e1c/v8codestyle/form/check/
 
 ## 📚 References
 
-- [1C Documentation: Dynamic Lists](https://1c-dn.com/library/dynamic_lists/)
 - [Form List Ref Use Always Flag Disabled Check](form-list-ref-use-always-flag-disabled-check.md)
 - [Form List Ref User Visibility Enabled Check](form-list-ref-user-visibility-enabled-check.md)

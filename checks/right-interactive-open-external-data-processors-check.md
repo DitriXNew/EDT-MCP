@@ -69,7 +69,3 @@ Verifies the assignment of the `InteractiveOpenExtDataProcessors` right in roles
 - **Check class**: `com.e1c.v8codestyle.right.check.RightInteractiveOpenExternalDataProcessors`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [External Data Processors Security](https://its.1c.ru/db/metod8dev/content/5785/hdoc)
-- [System Rights](https://1c-dn.com/library/system_rights/)

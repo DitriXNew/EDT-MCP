@@ -390,5 +390,4 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 ## 📚 References
 
 - [1C Standards: Standard Attributes](https://its.1c.ru/db/v8std)
-- [BSP Guidelines](https://1c-dn.com/library/bsp/)
 - [Md Object Attribute Comment Check](md-object-attribute-comment-check.md)

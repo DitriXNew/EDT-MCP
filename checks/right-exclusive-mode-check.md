@@ -69,7 +69,3 @@ Verifies the assignment of the `ExclusiveMode` right in roles. This right allows
 - **Check class**: `com.e1c.v8codestyle.right.check.RightExclusiveMode`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [System Rights](https://1c-dn.com/library/system_rights/)
-- [Exclusive Mode](https://1c-dn.com/library/exclusive_mode/)

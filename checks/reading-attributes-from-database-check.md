@@ -304,4 +304,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 - [Query in Loop Check](query-in-loop-check.md)
 - [1C Performance Best Practices](https://its.1c.ru/db/v8std)
-- [Database Access Optimization](https://1c-dn.com/library/performance/)

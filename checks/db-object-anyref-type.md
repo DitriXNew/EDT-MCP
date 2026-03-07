@@ -270,4 +270,3 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Standard 728](https://its.1c.ru/db/v8std/content/728/hdoc)
-- [Attribute Types Best Practices](https://1c-dn.com/library/)

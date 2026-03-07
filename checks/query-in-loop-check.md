@@ -11,7 +11,7 @@
 | **Type** | `PERFORMANCE` |
 | **Complexity** | `NORMAL` |
 | **Default State** | Enabled |
-| **1C Standard** | [735](https://its.1c.ru/db/v8std/content/735/hdoc) |
+| **1C Standard** | 735 |
 
 ---
 
@@ -313,10 +313,3 @@ com.e1c.v8codestyle.bsl.check.QueryInLoopCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C:Enterprise Performance Standards - 735](https://its.1c.ru/db/v8std/content/735/hdoc)
-- [Query Optimization](https://1c-dn.com/library/query_optimization/)
-- [Database Performance](https://1c-dn.com/library/performance/)

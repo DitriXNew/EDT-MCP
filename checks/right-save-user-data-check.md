@@ -79,7 +79,3 @@ Verifies the assignment of the `SaveUserData` right in roles. This right allows 
 - **Check class**: `com.e1c.v8codestyle.right.check.RightSaveUserData`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [System Rights](https://1c-dn.com/library/system_rights/)
-- [User Settings](https://1c-dn.com/library/user_settings/)

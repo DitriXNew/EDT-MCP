@@ -236,4 +236,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/CommonModuleMi
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Standard 455](https://its.1c.ru/db/v8std/content/455/hdoc)
-- [1C Platform - Common Modules](https://1c-dn.com/library/common_modules/)

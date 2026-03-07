@@ -342,4 +342,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 - [Module Structure Event Form Regions Check](module-structure-event-form-regions-check.md)
 - [Module Structure Method in Region Check](module-structure-method-in-region-check.md)
-- [1C Object Module Events](https://1c-dn.com/library/object_modules/)

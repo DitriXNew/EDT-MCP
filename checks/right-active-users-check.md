@@ -71,5 +71,4 @@ Checks assignment of `ActiveUsers` (Active users) right in roles. This right all
 
 ## 📚 References
 
-- [System Rights](https://1c-dn.com/library/system_rights/)
 - [Role-based access restriction](https://its.1c.ru/db/v8std/content/689/hdoc)

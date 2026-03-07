@@ -307,4 +307,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Standard 773](https://its.1c.ru/db/v8std/content/773/hdoc)
-- [Data Exchange Development Guide](https://1c-dn.com/library/data_exchange/)

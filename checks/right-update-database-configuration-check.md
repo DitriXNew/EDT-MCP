@@ -78,7 +78,3 @@ Verifies the assignment of the `UpdateDatabaseConfiguration` right in roles. Thi
 - **Check class**: `com.e1c.v8codestyle.right.check.RightUpdateDatabaseConfiguration`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [Configuration Update](https://1c-dn.com/library/configuration_update/)
-- [System Rights](https://1c-dn.com/library/system_rights/)

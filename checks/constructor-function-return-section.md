@@ -272,4 +272,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [1C:Enterprise Documentation Standard - Standard 453](https://its.1c.ru/db/v8std/content/453/hdoc)
-- [Function Documentation Best Practices](https://1c-dn.com/library/documentation/)

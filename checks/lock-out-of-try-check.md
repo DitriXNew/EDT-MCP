@@ -326,4 +326,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 - [Begin Transaction Check](begin-transaction.md) - Related transaction handling
 - [Commit Transaction Check](commit-transaction.md) - Transaction commit patterns
-- [1C:Enterprise Data Locks](https://1c-dn.com/library/data_locks/)

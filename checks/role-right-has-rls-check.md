@@ -81,5 +81,4 @@ Checks presence of RLS (Row Level Security - record level restrictions) for righ
 
 ## 📚 References
 
-- [Row Level Security (RLS)](https://1c-dn.com/library/row_level_security/)
 - [Access restriction at record level](https://its.1c.ru/db/v8std/content/689/hdoc)

@@ -104,7 +104,3 @@ Query.Text = "SELECT
 - **Check class**: `com.e1c.v8codestyle.ql.check.JoinToSubQuery`
 - **Plugin**: `com.e1c.v8codestyle.ql`
 
-## 📚 References
-
-- [Using temporary tables](https://kb.1ci.com/1C_Enterprise_Platform/Guides/Developer_Guides/1C_Enterprise_Development_Standards/Data_processing/Optimizing_queries/Using_temporary_tables/)
-- [Query Optimization](https://1c-dn.com/library/query_optimization/)

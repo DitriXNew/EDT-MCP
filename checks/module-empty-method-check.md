@@ -286,9 +286,3 @@ com.e1c.v8codestyle.bsl.check.ModuleEmptyMethodCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [Dead Code Elimination](https://1c-dn.com/library/clean_code/)
-- [Code Quality Best Practices](https://1c-dn.com/library/code_quality/)

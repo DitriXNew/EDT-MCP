@@ -283,4 +283,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Standard 499](https://its.1c.ru/db/v8std/content/499/hdoc)
-- [Exception Handling Best Practices](https://1c-dn.com/library/exception_handling/)

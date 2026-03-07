@@ -347,10 +347,3 @@ com.e1c.v8codestyle.bsl.check.FormModulePragmaCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: Compilation Directives](https://1c-dn.com/library/compilation_directives/)
-- [Client-Server Interaction](https://1c-dn.com/library/client_server_interaction/)
-- [Form Module Structure](https://1c-dn.com/library/form_modules/)

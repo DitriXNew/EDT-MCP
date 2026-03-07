@@ -329,5 +329,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Standard 748](https://its.1c.ru/db/v8std/content/748/hdoc)
-- [Form Development Best Practices](https://1c-dn.com/library/forms/)
-- [Client-Server Architecture](https://1c-dn.com/library/client_server/)

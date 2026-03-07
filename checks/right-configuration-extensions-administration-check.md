@@ -69,7 +69,3 @@ Verifies the assignment of the `ConfigurationExtensionsAdministration` right in 
 - **Check class**: `com.e1c.v8codestyle.right.check.RightConfigurationExtensionsAdministration`
 - **Plugin**: `com.e1c.v8codestyle.right`
 
-## 📚 References
-
-- [Configuration Extensions](https://1c-dn.com/library/configuration_extensions/)
-- [System Rights](https://1c-dn.com/library/system_rights/)

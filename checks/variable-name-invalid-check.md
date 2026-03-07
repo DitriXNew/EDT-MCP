@@ -334,5 +334,4 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [1C Naming Conventions](https://its.1c.ru/db/v8std/content/647/hdoc)
-- [Variable Naming Standards](https://1c-dn.com/library/naming_conventions/)
 - [Code Style Guidelines](https://its.1c.ru/db/v8std)

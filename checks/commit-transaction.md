@@ -312,4 +312,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/CommitTransact
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Transaction Handling](https://its.1c.ru/db/v8std#content:783:hdoc)
-- [1C Platform Documentation - Transactions](https://1c-dn.com/library/transactions/)

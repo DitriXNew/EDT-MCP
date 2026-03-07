@@ -227,5 +227,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [New Font Check](new-font-check.md) - Similar check for fonts
-- [1C Style Elements](https://1c-dn.com/library/styles/)
-- [UI Design Guidelines](https://1c-dn.com/library/ui_guidelines/)

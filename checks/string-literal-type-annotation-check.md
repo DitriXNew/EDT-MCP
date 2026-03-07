@@ -355,10 +355,3 @@ com.e1c.v8codestyle.bsl.check.StringLiteralTypeAnnotationCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: Type Function](https://1c-dn.com/library/type/)
-- [1C Documentation: TypeOf Function](https://1c-dn.com/library/typeof/)
-- [1C Documentation: TypeDescription](https://1c-dn.com/library/typedescription/)

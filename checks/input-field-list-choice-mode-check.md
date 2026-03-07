@@ -354,10 +354,3 @@ com.e1c.v8codestyle.form.check.InputFieldListChoiceMode
 bundles/com.e1c.v8codestyle.form/src/com/e1c/v8codestyle/form/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: Form Input Fields](https://1c-dn.com/library/form_items/)
-- [Choice Lists](https://1c-dn.com/library/choice_lists/)
-- [Form Item Properties](https://1c-dn.com/library/form_item_properties/)

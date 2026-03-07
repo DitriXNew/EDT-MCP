@@ -249,9 +249,3 @@ com.e1c.v8codestyle.bsl.check.FormSelfReferenceOutdatedCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C:Enterprise Form Development](https://1c-dn.com/library/forms/)
-- [Managed Form Object Model](https://1c-dn.com/library/managed_forms/)

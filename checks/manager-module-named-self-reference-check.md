@@ -246,4 +246,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ## 📚 References
 
 - [Common Module Self-Reference Check](common-module-named-self-reference.md)
-- [1C:Enterprise Manager Modules](https://1c-dn.com/library/manager_modules/)

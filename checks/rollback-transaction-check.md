@@ -363,4 +363,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 - [1C:Enterprise Development Standards - Standard 783](https://its.1c.ru/db/v8std/content/783/hdoc)
 - [Begin Transaction Check](begin-transaction.md)
 - [Commit Transaction Check](commit-transaction.md)
-- [Transaction Handling](https://1c-dn.com/library/transactions/)

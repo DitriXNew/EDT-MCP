@@ -292,4 +292,3 @@ bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 
 - [Module Unused Method Check](module-unused-method-check.md)
 - [Module Empty Method Check](module-empty-method-check.md)
-- [Code Quality Best Practices](https://1c-dn.com/library/clean_code/)

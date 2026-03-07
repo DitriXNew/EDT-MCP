@@ -306,7 +306,5 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/check/
 
 ## 📚 References
 
-- [1C SecureStorage](https://1c-dn.com/library/secure_storage/)
 - [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
-- [1C Authentication](https://1c-dn.com/library/authentication/)
 - [Information Security Standards](https://its.1c.ru/db/v8std)

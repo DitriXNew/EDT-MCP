@@ -318,10 +318,3 @@ com.e1c.v8codestyle.bsl.check.UseNonRecommendedMethodsCheck
 bundles/com.e1c.v8codestyle.bsl/src/com/e1c/v8codestyle/bsl/check/
 ```
 
----
-
-## 📚 References
-
-- [1C Documentation: Deprecated Methods](https://1c-dn.com/library/deprecated_methods/)
-- [Async Programming Model](https://1c-dn.com/library/asynchronous_model/)
-- [Platform 8.3 Changes](https://1c-dn.com/library/platform_changes/)

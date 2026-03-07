@@ -82,7 +82,3 @@ Query.Text = "SELECT
 - **Check class**: `com.e1c.v8codestyle.ql.check.LikeExpressionWithFieldCheck`
 - **Plugin**: `com.e1c.v8codestyle.ql`
 
-## 📚 References
-
-- [Appendix 8. Features of operating with different DBMS](https://support.1ci.com/hc/en-us/articles/6347699838098-8-3-IBM-Db2)
-- [Specifics of using LIKE operator in queries](https://support.1ci.com/hc/en-us/articles/360011001500-Specifics-of-using-LIKE-operator-in-queries)
