@@ -814,6 +814,16 @@ public final class EditorScreenshotHelper
                     }
                 }
 
+                // Check the CROPPED control area for content — the full shell is never
+                // uniform (toolbars/menus), but the WYSIWYG area may still be blank if
+                // the 1C native renderer hasn't drawn yet.
+                if (isImageDataUniform(imageData))
+                {
+                    Activator.logWarning("PrintWindow: cropped control area is uniform (blank) — renderer not ready, falling through to Robot"); //$NON-NLS-1$
+                    return null;
+                }
+
+                Activator.logWarning("PrintWindow: captured non-uniform control area " + cropW + "x" + cropH); //$NON-NLS-1$
                 return imageData;
             }
             finally
