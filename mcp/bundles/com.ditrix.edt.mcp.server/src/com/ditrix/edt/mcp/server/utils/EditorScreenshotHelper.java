@@ -598,19 +598,23 @@ public final class EditorScreenshotHelper
             org.eclipse.swt.widgets.Shell shell = control.getShell();
             Display display = control.getDisplay();
 
-            // Minimize then restore to guarantee EDT is the foreground window.
-            // SetForegroundWindow() is restricted on modern Windows for background processes
-            // and may only flash the taskbar. ShowWindow(SW_RESTORE) reliably brings the window
-            // to front regardless of focus-stealing rules.
-            if (!shell.getMinimized())
+            // Bring EDT to the foreground before capture.
+            // Strategy depends on whether EDT is currently minimized:
+            //
+            // NOT minimized: form is already rendered — just forceActive() and capture.
+            //   Forcing minimize+restore would interrupt the 1C native renderer (separate MMF
+            //   process) and cause it to re-draw from scratch, taking several seconds.
+            //
+            // Minimized: restore then forceActive(). The renderer has been drawing in the
+            //   background, so it is ready immediately after the window appears.
+            boolean wasMinimized = shell.getMinimized();
+            if (wasMinimized)
             {
-                shell.setMinimized(true);
-                pumpEvents(display, 300);
+                shell.setMinimized(false);
             }
-            shell.setMinimized(false);
             shell.forceActive();
-            // Pump events so EDT can process WM_ACTIVATE / WM_PAINT before first capture attempt
-            pumpEvents(display, 1500);
+            // Allow EDT to process WM_ACTIVATE / WM_PAINT
+            pumpEvents(display, wasMinimized ? 1500 : 500);
 
             // Control's absolute screen position and logical bounds
             org.eclipse.swt.graphics.Point controlOrigin = control.toDisplay(0, 0);
