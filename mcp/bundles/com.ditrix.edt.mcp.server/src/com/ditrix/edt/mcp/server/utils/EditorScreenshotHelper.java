@@ -500,18 +500,22 @@ public final class EditorScreenshotHelper
     {
         try
         {
-            // Bring EDT to front before screen capture — Robot captures raw screen pixels
             org.eclipse.swt.widgets.Shell shell = control.getShell();
-            if (shell.getMinimized())
-            {
-                shell.setMinimized(false);
-            }
-            shell.forceActive(); // always bring EDT on top, otherwise Robot captures whatever is in front
-
             Display display = control.getDisplay();
-            processEvents(display);
-            sleep(2000);
-            processEvents(display);
+
+            // Minimize then restore to guarantee EDT is the foreground window.
+            // SetForegroundWindow() is restricted on modern Windows for background processes
+            // and may only flash the taskbar. ShowWindow(SW_RESTORE) reliably brings the window
+            // to front regardless of focus-stealing rules.
+            if (!shell.getMinimized())
+            {
+                shell.setMinimized(true);
+                pumpEvents(display, 300);
+            }
+            shell.setMinimized(false);
+            shell.forceActive();
+            // Pump events continuously so EDT can process WM_ACTIVATE / WM_PAINT
+            pumpEvents(display, 2000);
 
             // Get absolute screen coordinates of the control
             org.eclipse.swt.graphics.Point screenPos = control.toDisplay(0, 0);
@@ -541,7 +545,7 @@ public final class EditorScreenshotHelper
             // Sanity check — if Robot captured all-white (EDT still not on top), fall through
             if (isImageDataUniform(data))
             {
-                Activator.logWarning("Robot captured uniform image — EDT may not be on top yet"); //$NON-NLS-1$
+                Activator.logWarning("Robot captured uniform image — EDT not on top after restore"); //$NON-NLS-1$
                 return null;
             }
 
@@ -551,6 +555,21 @@ public final class EditorScreenshotHelper
         {
             Activator.logWarning("Robot capture failed: " + e.getMessage()); //$NON-NLS-1$
             return null;
+        }
+    }
+
+    /**
+     * Pumps SWT events for the given duration (ms), sleeping 50 ms between iterations.
+     * Used instead of a flat {@code sleep()} so EDT can process window messages
+     * (WM_ACTIVATE, WM_PAINT, etc.) while waiting.
+     */
+    private static void pumpEvents(Display display, int totalMillis)
+    {
+        long deadline = System.currentTimeMillis() + totalMillis;
+        while (System.currentTimeMillis() < deadline)
+        {
+            processEvents(display);
+            sleep(50);
         }
     }
 
