@@ -452,7 +452,7 @@ public final class EditorScreenshotHelper
                 }
 
                 // Read all shell pixels
-                byte[] bmi = buildBitmapInfoHeader(shellW, -shellH, (short)32);
+                byte[] bmi = Win32BitmapUtils.buildBitmapInfoHeader(shellW, -shellH, (short)32);
                 byte[] pixels = new byte[shellW * shellH * 4];
                 int scanLines = (int)mGetDIBits.invoke(null, memDC, hBitmap, 0, shellH, pixels, bmi, 0);
                 if (scanLines <= 0)
@@ -513,31 +513,6 @@ public final class EditorScreenshotHelper
         }
     }
 
-    /**
-     * Builds a BITMAPINFOHEADER byte array (40 bytes, little-endian) for use with GetDIBits.
-     *
-     * @param width     bitmap width
-     * @param height    bitmap height (negative = top-down DIB)
-     * @param bitCount  bits per pixel (e.g. 32)
-     * @return 40-byte BITMAPINFOHEADER
-     */
-    static byte[] buildBitmapInfoHeader(int width, int height, short bitCount)
-    {
-        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(40)
-            .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        buf.putInt(40);        // biSize
-        buf.putInt(width);     // biWidth
-        buf.putInt(height);    // biHeight (negative = top-down)
-        buf.putShort((short)1); // biPlanes
-        buf.putShort(bitCount); // biBitCount
-        buf.putInt(0);         // biCompression = BI_RGB
-        buf.putInt(0);         // biSizeImage
-        buf.putInt(0);         // biXPelsPerMeter
-        buf.putInt(0);         // biYPelsPerMeter
-        buf.putInt(0);         // biClrUsed
-        buf.putInt(0);         // biClrImportant
-        return buf.array();
-    }
 
     /**
      * Refreshes the WYSIWYG viewer and waits for it to complete.
