@@ -609,8 +609,8 @@ public final class EditorScreenshotHelper
             }
             shell.setMinimized(false);
             shell.forceActive();
-            // Pump events continuously so EDT can process WM_ACTIVATE / WM_PAINT
-            pumpEvents(display, 2000);
+            // Pump events so EDT can process WM_ACTIVATE / WM_PAINT before first capture attempt
+            pumpEvents(display, 1500);
 
             // Control's absolute screen position and logical bounds
             org.eclipse.swt.graphics.Point controlOrigin = control.toDisplay(0, 0);
@@ -649,29 +649,41 @@ public final class EditorScreenshotHelper
             }
 
             java.awt.Robot robot = new java.awt.Robot();
-            java.awt.image.BufferedImage img = robot.createScreenCapture(
-                new java.awt.Rectangle(x, y, w, h));
 
-            // Convert BufferedImage → SWT ImageData
-            PaletteData palette = new PaletteData(0xFF0000, 0x00FF00, 0x0000FF);
-            ImageData data = new ImageData(w, h, 24, palette);
-            for (int row = 0; row < h; row++)
+            // Retry loop: the 1C native renderer may not have finished drawing immediately.
+            // After each uniform (white/blank) capture, wait 1 more second and retry.
+            for (int attempt = 1; attempt <= 4; attempt++)
             {
-                for (int col = 0; col < w; col++)
+                java.awt.image.BufferedImage img = robot.createScreenCapture(
+                    new java.awt.Rectangle(x, y, w, h));
+
+                // Convert BufferedImage → SWT ImageData
+                PaletteData palette = new PaletteData(0xFF0000, 0x00FF00, 0x0000FF);
+                ImageData data = new ImageData(w, h, 24, palette);
+                for (int row = 0; row < h; row++)
                 {
-                    int rgb = img.getRGB(col, row);
-                    data.setPixel(col, row, rgb & 0x00FFFFFF);
+                    for (int col = 0; col < w; col++)
+                    {
+                        int rgb = img.getRGB(col, row);
+                        data.setPixel(col, row, rgb & 0x00FFFFFF);
+                    }
+                }
+
+                if (!isImageDataUniform(data))
+                {
+                    Activator.logWarning("Robot captured non-uniform image on attempt " + attempt); //$NON-NLS-1$
+                    return data;
+                }
+
+                Activator.logWarning("Robot attempt " + attempt + ": uniform image — renderer not ready, waiting 1s..."); //$NON-NLS-1$
+                if (attempt < 4)
+                {
+                    pumpEvents(display, 1000);
                 }
             }
 
-            // Sanity check — if Robot captured all-white (EDT still not on top), fall through
-            if (isImageDataUniform(data))
-            {
-                Activator.logWarning("Robot captured uniform image — EDT not on top after restore"); //$NON-NLS-1$
-                return null;
-            }
-
-            return data;
+            Activator.logWarning("Robot: all attempts returned uniform image — giving up"); //$NON-NLS-1$
+            return null;
         }
         catch (Exception e)
         {
