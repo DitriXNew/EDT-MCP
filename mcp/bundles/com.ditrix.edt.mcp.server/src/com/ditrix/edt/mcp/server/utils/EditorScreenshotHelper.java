@@ -521,7 +521,7 @@ public final class EditorScreenshotHelper
      * @param bitCount  bits per pixel (e.g. 32)
      * @return 40-byte BITMAPINFOHEADER
      */
-    private static byte[] buildBitmapInfoHeader(int width, int height, short bitCount)
+    static byte[] buildBitmapInfoHeader(int width, int height, short bitCount)
     {
         java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(40)
             .order(java.nio.ByteOrder.LITTLE_ENDIAN);
