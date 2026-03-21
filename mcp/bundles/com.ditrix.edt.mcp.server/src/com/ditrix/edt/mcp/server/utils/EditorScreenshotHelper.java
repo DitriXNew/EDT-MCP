@@ -189,14 +189,18 @@ public final class EditorScreenshotHelper
 
         try
         {
-            // Close existing editor so we apply current render mode
+            // Reuse existing editor if already open — avoid flickering from close/reopen
+            IEditorPart editorPart;
             IEditorPart existingEditor = page.findEditor(new FileEditorInput(formFile));
             if (existingEditor != null)
             {
-                page.closeEditor(existingEditor, false);
+                page.activate(existingEditor);
+                editorPart = existingEditor;
             }
-
-            IEditorPart editorPart = IDE.openEditor(page, formFile, FORM_EDITOR_ID, true);
+            else
+            {
+                editorPart = IDE.openEditor(page, formFile, FORM_EDITOR_ID, true);
+            }
             if (editorPart == null)
             {
                 return ToolResult.error("Could not open form editor for: " + formPath).toJson(); //$NON-NLS-1$
@@ -337,9 +341,13 @@ public final class EditorScreenshotHelper
             Method method = representation.getClass().getDeclaredMethod(FORM_IMAGE_METHOD);
             method.setAccessible(true);
             ImageData data = (ImageData)method.invoke(representation);
-            if (data != null && data.width > 0 && data.height > 0)
+            if (data != null && data.width > 0 && data.height > 0 && !isImageDataUniform(data))
             {
                 return data;
+            }
+            if (data != null)
+            {
+                Activator.logWarning("getFormImageData returned uniform image — buffered render not ready, falling through"); //$NON-NLS-1$
             }
         }
         catch (NoSuchMethodException e)
@@ -351,8 +359,11 @@ public final class EditorScreenshotHelper
     }
 
     /**
-     * Fallback capture method. Tries {@code PrintWindow(PW_RENDERFULLCONTENT)} first — works even when
-     * EDT is minimized or occluded and captures Direct3D content. Falls back to {@code Control.print()}.
+     * Fallback capture method. Tries several strategies in order:
+     * 1. {@code PrintWindow(PW_RENDERFULLCONTENT)} — Direct3D/DWM, works minimized/occluded
+     * 2. {@code PrintWindow(PW_CLIENTONLY)} — GDI client area
+     * 3. {@code java.awt.Robot.createScreenCapture()} — screen grab (EDT must be visible)
+     * 4. {@code Control.print()} — SWT GDI fallback (usually black for 1C native forms)
      *
      * @param wysiwygViewer the WYSIWYG viewer instance
      * @return image data, or {@code null} if the control is not available or has invalid bounds
@@ -371,14 +382,21 @@ public final class EditorScreenshotHelper
             return null;
         }
 
-        // Primary: PrintWindow — works for minimized/occluded windows and Direct3D surfaces
+        // 1. PrintWindow(PW_RENDERFULLCONTENT) — DWM path, best for Direct3D
         ImageData printWindowData = captureViaPrintWindow(control, bounds);
         if (printWindowData != null)
         {
             return printWindowData;
         }
 
-        // Fallback: SWT Control.print() via GDI (fails for D3D, requires visible window)
+        // 2. java.awt.Robot screen capture — EDT must be visible, brings it to front first
+        ImageData robotData = captureViaRobot(control, bounds);
+        if (robotData != null)
+        {
+            return robotData;
+        }
+
+        // 3. SWT Control.print() via GDI (last resort — black for D3D native forms)
         control.update();
         Image image = new Image(control.getDisplay(), bounds.width, bounds.height);
         GC gc = new GC(image);
@@ -393,6 +411,144 @@ public final class EditorScreenshotHelper
         {
             gc.dispose();
             image.dispose();
+        }
+    }
+
+    /**
+     * Returns true when an SWT ImageData has no visible non-white content.
+     * Counts opaque non-white pixels (alpha > 10, any channel < 230).
+     * Handles RGBA images where transparent pixels have black RGB (alpha=0, rgb=0x000000).
+     */
+    private static boolean isImageDataUniform(ImageData data)
+    {
+        if (data == null || data.width <= 0 || data.height <= 0) return true;
+        int total = data.width * data.height;
+        int step = Math.max(1, total / 1000);
+        int nonBlank = 0;
+        for (int i = 0; i < total; i += step)
+        {
+            int x = i % data.width;
+            int y = i / data.width;
+
+            // Skip transparent pixels — they appear white when composited
+            if (data.alphaData != null)
+            {
+                int alphaIdx = y * data.width + x;
+                if (alphaIdx < data.alphaData.length && (data.alphaData[alphaIdx] & 0xFF) < 10)
+                {
+                    continue;
+                }
+            }
+
+            // Extract RGB using palette (works for both direct and indexed palettes)
+            int pixel = data.getPixel(x, y);
+            int r, g, b;
+            if (data.palette.isDirect)
+            {
+                r = (data.palette.redMask & pixel) >>> (-data.palette.redShift);
+                g = (data.palette.greenMask & pixel) >>> (-data.palette.greenShift);
+                b = (data.palette.blueMask & pixel) >>> (-data.palette.blueShift);
+            }
+            else
+            {
+                org.eclipse.swt.graphics.RGB rgb = data.palette.getRGB(pixel);
+                r = rgb.red; g = rgb.green; b = rgb.blue;
+            }
+
+            // Visible non-white pixel = actual form content
+            if (r < 230 || g < 230 || b < 230)
+            {
+                nonBlank++;
+                if (nonBlank > 10) // need more than 10 non-white pixels to be "real content"
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Returns true when a raw BGRA pixel array is visually uniform (all one color).
+     * Used to detect that the 1C native renderer hasn't drawn yet.
+     */
+    private static boolean isPixelArrayUniform(byte[] pixels, int w, int h)
+    {
+        if (pixels == null || pixels.length < 4) return true;
+        int b0 = pixels[0] & 0xFF;
+        int g0 = pixels[1] & 0xFF;
+        int r0 = pixels[2] & 0xFF;
+        int total = w * h;
+        int step = Math.max(1, total / 500); // sample ~500 pixels
+        for (int i = 0; i < total; i += step)
+        {
+            int idx = i * 4;
+            if (Math.abs((pixels[idx] & 0xFF) - b0) > 8
+                || Math.abs((pixels[idx + 1] & 0xFF) - g0) > 8
+                || Math.abs((pixels[idx + 2] & 0xFF) - r0) > 8)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Captures the control area using {@code java.awt.Robot.createScreenCapture()}.
+     * Brings EDT to front before capture. Only works when EDT is not minimized.
+     * Must be called on the SWT UI thread.
+     *
+     * @param control the SWT control to capture
+     * @param bounds  the control bounds
+     * @return image data, or {@code null} on failure
+     */
+    private static ImageData captureViaRobot(Control control, Rectangle bounds)
+    {
+        try
+        {
+            // Bring EDT to front only if minimized — avoid stealing focus unnecessarily
+            org.eclipse.swt.widgets.Shell shell = control.getShell();
+            if (shell.getMinimized())
+            {
+                shell.setMinimized(false);
+                shell.forceActive();
+            }
+
+            Display display = control.getDisplay();
+            processEvents(display);
+            sleep(2000);
+            processEvents(display);
+
+            // Get absolute screen coordinates of the control
+            org.eclipse.swt.graphics.Point screenPos = control.toDisplay(0, 0);
+            int x = screenPos.x;
+            int y = screenPos.y;
+            int w = bounds.width;
+            int h = bounds.height;
+
+            Activator.logWarning("Robot capture: x=" + x + " y=" + y + " w=" + w + " h=" + h); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+            java.awt.Robot robot = new java.awt.Robot();
+            java.awt.image.BufferedImage img = robot.createScreenCapture(
+                new java.awt.Rectangle(x, y, w, h));
+
+            // Convert BufferedImage → SWT ImageData
+            PaletteData palette = new PaletteData(0xFF0000, 0x00FF00, 0x0000FF);
+            ImageData data = new ImageData(w, h, 24, palette);
+            for (int row = 0; row < h; row++)
+            {
+                for (int col = 0; col < w; col++)
+                {
+                    int rgb = img.getRGB(col, row);
+                    data.setPixel(col, row, rgb & 0x00FFFFFF);
+                }
+            }
+            return data;
+        }
+        catch (Exception e)
+        {
+            Activator.logWarning("Robot capture failed: " + e.getMessage()); //$NON-NLS-1$
+            return null;
         }
     }
 
@@ -458,6 +614,14 @@ public final class EditorScreenshotHelper
                 if (scanLines <= 0)
                 {
                     Activator.logWarning("GetDIBits returned 0 scan lines"); //$NON-NLS-1$
+                    return null;
+                }
+
+                // If captured image is uniform (all white or all black), the native renderer
+                // hasn't drawn yet — return null so Robot fallback can try after a longer wait.
+                if (isPixelArrayUniform(pixels, shellW, shellH))
+                {
+                    Activator.logWarning("PrintWindow captured uniform image — renderer not ready yet, falling through"); //$NON-NLS-1$
                     return null;
                 }
 
