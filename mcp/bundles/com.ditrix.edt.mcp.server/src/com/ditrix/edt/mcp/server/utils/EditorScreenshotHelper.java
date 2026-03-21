@@ -499,12 +499,16 @@ public final class EditorScreenshotHelper
     }
 
     /**
-     * Returns the actual pixel size of the form content inside the WYSIWYG ScrolledComposite,
-     * or {@code null} if unavailable.
+     * Returns the actual pixel size of the rendered form content, or {@code null} if unavailable.
+     * <p>
+     * Strategy 1: {@code HippoLayForm.getResWidth()/getResHeight()} — the layout engine's computed
+     *   pixel dimensions of the form. Most accurate source.
+     * Strategy 2: {@code ScrolledComposite.getMinWidth()/getMinHeight()} — the minimum scrollable
+     *   content size set by the WYSIWYG representation.
      * <p>
      * The WYSIWYG control area is often larger than the form itself — the area beyond the form
-     * is filled with the dark editor background. Using the ScrolledComposite content size lets
-     * us crop to just the rendered form content.
+     * is filled with the dark editor background. Using the form's own dimensions lets us crop
+     * to just the rendered content.
      */
     private static Rectangle getFormContentBounds(Object wysiwygViewer)
     {
@@ -516,33 +520,60 @@ public final class EditorScreenshotHelper
                 return null;
             }
 
-            // scrolledComposite is a private field on FormWysiwygRepresentation
+            // Strategy 1: HippoLayForm.getResWidth() / getResHeight()
+            // These are the layout engine's resolved pixel dimensions — most accurate.
+            try
+            {
+                Method getHippoLayForm = representation.getClass().getMethod("getHippoLayForm"); //$NON-NLS-1$
+                Object hippoLayForm = getHippoLayForm.invoke(representation);
+                if (hippoLayForm != null)
+                {
+                    Method getResWidth = hippoLayForm.getClass().getMethod("getResWidth"); //$NON-NLS-1$
+                    Method getResHeight = hippoLayForm.getClass().getMethod("getResHeight"); //$NON-NLS-1$
+                    int resW = (Integer)getResWidth.invoke(hippoLayForm);
+                    int resH = (Integer)getResHeight.invoke(hippoLayForm);
+                    if (resW > 0 && resH > 0)
+                    {
+                        Activator.logWarning("Form content size from HippoLayForm.getResWidth/Height: " + resW + "x" + resH); //$NON-NLS-1$
+                        return new Rectangle(0, 0, resW, resH);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Activator.logWarning("HippoLayForm.getResWidth/Height failed: " + e.getMessage()); //$NON-NLS-1$
+            }
+
+            // Strategy 2: ScrolledComposite.getMinWidth() / getMinHeight()
+            // These are set by the representation to match the form's rendered size.
             Object scObj = ReflectionUtils.getFieldValue(representation, "scrolledComposite"); //$NON-NLS-1$
-            if (!(scObj instanceof ScrolledComposite))
+            if (scObj instanceof ScrolledComposite)
             {
-                return null;
+                ScrolledComposite sc = (ScrolledComposite)scObj;
+                if (!sc.isDisposed())
+                {
+                    int minW = sc.getMinWidth();
+                    int minH = sc.getMinHeight();
+                    if (minW > 0 && minH > 0)
+                    {
+                        Activator.logWarning("Form content size from ScrolledComposite.getMinWidth/Height: " + minW + "x" + minH); //$NON-NLS-1$
+                        return new Rectangle(0, 0, minW, minH);
+                    }
+                    // Fallback: content size
+                    Control content = sc.getContent();
+                    if (content != null && !content.isDisposed())
+                    {
+                        org.eclipse.swt.graphics.Point size = content.getSize();
+                        if (size.x > 0 && size.y > 0)
+                        {
+                            Activator.logWarning("Form content size from ScrolledComposite.getContent.getSize: " + size.x + "x" + size.y); //$NON-NLS-1$
+                            return new Rectangle(0, 0, size.x, size.y);
+                        }
+                    }
+                }
             }
 
-            ScrolledComposite sc = (ScrolledComposite)scObj;
-            if (sc.isDisposed())
-            {
-                return null;
-            }
-
-            Control content = sc.getContent();
-            if (content == null || content.isDisposed())
-            {
-                return null;
-            }
-
-            org.eclipse.swt.graphics.Point size = content.getSize();
-            if (size.x <= 0 || size.y <= 0)
-            {
-                return null;
-            }
-
-            Activator.logWarning("Form content size from ScrolledComposite: " + size.x + "x" + size.y); //$NON-NLS-1$
-            return new Rectangle(0, 0, size.x, size.y);
+            return null;
         }
         catch (Exception e)
         {
