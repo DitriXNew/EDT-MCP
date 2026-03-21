@@ -103,47 +103,34 @@ public final class EditorScreenshotHelper
      * {@code getFormImageData()} returns valid image data.
      * Should be called before opening a form editor.
      */
+    /**
+     * Previously tried to switch the native renderer to buffered mode at runtime.
+     * This caused WYSIWYG flickering and is no longer needed — screenshots now use
+     * {@code captureControlImageData()} which falls back to Robot screen capture.
+     * Kept as a no-op for API compatibility with {@link com.ditrix.edt.mcp.server.tools.impl.GetFormScreenshotTool}.
+     */
     public static void ensureBufferedNativeRenderMode()
     {
-        final String nativeRenderServiceClass = "com._1c.g5.v8.dt.form.layout.service.NativeRenderService"; //$NON-NLS-1$
-        final String bufferedFlagField = "NATIVE_FORM_BUFFERED_LAYOUT_RENDER"; //$NON-NLS-1$
-        final String propertyName = "nativeFormBufferedLayoutRender"; //$NON-NLS-1$
+        // No-op: switching render mode at runtime causes WYSIWYG flickering.
+        // extractFormImageData() now checks isBufferedRenderActive() and returns null
+        // when in screen mode, so we fall through to captureControlImageData() / Robot.
+    }
 
+    /**
+     * Returns true when the 1C native form renderer is in buffered (off-screen) mode,
+     * meaning {@code getFormImageData()} will return valid image data.
+     */
+    private static boolean isBufferedRenderActive()
+    {
         try
         {
-            System.setProperty(propertyName, "true"); //$NON-NLS-1$
-
-            Class<?> serviceClass = Class.forName(nativeRenderServiceClass);
-            Method isNativeRenderMethod = serviceClass.getMethod("isNativeRender"); //$NON-NLS-1$
-            Method isBufferedRenderMethod = serviceClass.getMethod("isBufferedRender"); //$NON-NLS-1$
-
-            boolean nativeRender = (Boolean)isNativeRenderMethod.invoke(null);
-            boolean bufferedBefore = (Boolean)isBufferedRenderMethod.invoke(null);
-
-            if (nativeRender && !bufferedBefore)
-            {
-                try
-                {
-                    Field bufferedField = serviceClass.getDeclaredField(bufferedFlagField);
-                    bufferedField.setAccessible(true);
-                    bufferedField.setBoolean(null, true);
-                }
-                catch (Exception e)
-                {
-                    ReflectionUtils.forceStaticFinalBoolean(serviceClass, bufferedFlagField, true);
-                }
-            }
-
-            boolean bufferedAfter = (Boolean)isBufferedRenderMethod.invoke(null);
-            if (!bufferedAfter)
-            {
-                Activator.logWarning("Buffered native render is still disabled. " + //$NON-NLS-1$
-                    "Restart EDT with VM option: -DnativeFormBufferedLayoutRender=true"); //$NON-NLS-1$
-            }
+            Class<?> serviceClass = Class.forName("com._1c.g5.v8.dt.form.layout.service.NativeRenderService"); //$NON-NLS-1$
+            Method isBufferedRender = serviceClass.getMethod("isBufferedRender"); //$NON-NLS-1$
+            return (Boolean)isBufferedRender.invoke(null);
         }
         catch (Exception e)
         {
-            Activator.logWarning("Failed to ensure buffered native render mode: " + e.getMessage()); //$NON-NLS-1$
+            return false;
         }
     }
 
@@ -307,6 +294,13 @@ public final class EditorScreenshotHelper
      */
     public static ImageData extractFormImageData(Object wysiwygViewer) throws Exception
     {
+        // getFormImageData() only returns valid data in buffered render mode.
+        // In screen mode it returns a stale/empty image — skip it entirely.
+        if (!isBufferedRenderActive())
+        {
+            return null;
+        }
+
         Object representation = ReflectionUtils.getFieldValue(wysiwygViewer, WYSIWYG_REPRESENTATION_FIELD);
         if (representation == null)
         {
