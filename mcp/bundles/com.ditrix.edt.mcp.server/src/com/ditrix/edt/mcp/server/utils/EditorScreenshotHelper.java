@@ -17,6 +17,7 @@ import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
+import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
@@ -350,7 +351,8 @@ public final class EditorScreenshotHelper
     }
 
     /**
-     * Fallback capture method: captures the WYSIWYG control image via {@code Control.print()}.
+     * Fallback capture method. Tries {@code PrintWindow(PW_RENDERFULLCONTENT)} first — works even when
+     * EDT is minimized or occluded and captures Direct3D content. Falls back to {@code Control.print()}.
      *
      * @param wysiwygViewer the WYSIWYG viewer instance
      * @return image data, or {@code null} if the control is not available or has invalid bounds
@@ -369,8 +371,15 @@ public final class EditorScreenshotHelper
             return null;
         }
 
-        control.update();
+        // Primary: PrintWindow — works for minimized/occluded windows and Direct3D surfaces
+        ImageData printWindowData = captureViaPrintWindow(control, bounds);
+        if (printWindowData != null)
+        {
+            return printWindowData;
+        }
 
+        // Fallback: SWT Control.print() via GDI (fails for D3D, requires visible window)
+        control.update();
         Image image = new Image(control.getDisplay(), bounds.width, bounds.height);
         GC gc = new GC(image);
         try
@@ -385,6 +394,149 @@ public final class EditorScreenshotHelper
             gc.dispose();
             image.dispose();
         }
+    }
+
+    /**
+     * Captures a control using Win32 {@code PrintWindow(PW_RENDERFULLCONTENT)} via reflection.
+     * {@code PW_RENDERFULLCONTENT} only works on top-level windows, so we capture the EDT shell
+     * and crop to the control's screen bounds.
+     * Works for Direct3D surfaces and minimized/occluded windows (Windows 8.1+).
+     * Uses reflection so the plugin compiles on all platforms; returns null on non-Windows.
+     *
+     * @param control the SWT control to capture
+     * @param bounds  the control bounds (width/height)
+     * @return image data, or {@code null} on failure or non-Windows platform
+     */
+    private static ImageData captureViaPrintWindow(Control control, Rectangle bounds)
+    {
+        final int PW_RENDERFULLCONTENT = 2;
+
+        try
+        {
+            // Load SWT Win32 OS class — only available on Windows
+            Class<?> osClass = Class.forName("org.eclipse.swt.internal.win32.OS"); //$NON-NLS-1$
+
+            java.lang.reflect.Method mGetDC = osClass.getMethod("GetDC", long.class); //$NON-NLS-1$
+            java.lang.reflect.Method mCreateCompatibleDC = osClass.getMethod("CreateCompatibleDC", long.class); //$NON-NLS-1$
+            java.lang.reflect.Method mCreateCompatibleBitmap = osClass.getMethod("CreateCompatibleBitmap", long.class, int.class, int.class); //$NON-NLS-1$
+            java.lang.reflect.Method mSelectObject = osClass.getMethod("SelectObject", long.class, long.class); //$NON-NLS-1$
+            java.lang.reflect.Method mPrintWindow = osClass.getMethod("PrintWindow", long.class, long.class, int.class); //$NON-NLS-1$
+            java.lang.reflect.Method mGetDIBits = osClass.getMethod("GetDIBits", long.class, long.class, int.class, int.class, byte[].class, byte[].class, int.class); //$NON-NLS-1$
+            java.lang.reflect.Method mReleaseDC = osClass.getMethod("ReleaseDC", long.class, long.class); //$NON-NLS-1$
+            java.lang.reflect.Method mDeleteDC = osClass.getMethod("DeleteDC", long.class); //$NON-NLS-1$
+            java.lang.reflect.Method mDeleteObject = osClass.getMethod("DeleteObject", long.class); //$NON-NLS-1$
+
+            // PW_RENDERFULLCONTENT only works on top-level windows.
+            // Get EDT shell HWND and capture it, then crop to control area.
+            org.eclipse.swt.widgets.Shell shell = control.getShell();
+            java.lang.reflect.Field handleField = shell.getClass().getField("handle"); //$NON-NLS-1$
+            long shellHwnd = handleField.getLong(shell);
+
+            // Shell screen bounds
+            Rectangle shellBounds = shell.getBounds();
+            int shellW = shellBounds.width;
+            int shellH = shellBounds.height;
+
+            long screenDC = (long)mGetDC.invoke(null, 0L);
+            long memDC = (long)mCreateCompatibleDC.invoke(null, screenDC);
+            long hBitmap = (long)mCreateCompatibleBitmap.invoke(null, screenDC, shellW, shellH);
+            long oldBitmap = (long)mSelectObject.invoke(null, memDC, hBitmap);
+
+            try
+            {
+                boolean ok = (boolean)mPrintWindow.invoke(null, shellHwnd, memDC, PW_RENDERFULLCONTENT);
+                if (!ok)
+                {
+                    Activator.logWarning("PrintWindow returned false for shell HWND " + shellHwnd); //$NON-NLS-1$
+                    return null;
+                }
+
+                // Read all shell pixels
+                byte[] bmi = buildBitmapInfoHeader(shellW, -shellH, (short)32);
+                byte[] pixels = new byte[shellW * shellH * 4];
+                int scanLines = (int)mGetDIBits.invoke(null, memDC, hBitmap, 0, shellH, pixels, bmi, 0);
+                if (scanLines <= 0)
+                {
+                    Activator.logWarning("GetDIBits returned 0 scan lines"); //$NON-NLS-1$
+                    return null;
+                }
+
+                // Compute control position relative to shell (screen coords)
+                org.eclipse.swt.graphics.Point controlOrigin = control.toDisplay(0, 0);
+                int offsetX = controlOrigin.x - shellBounds.x;
+                int offsetY = controlOrigin.y - shellBounds.y;
+                int cropW = bounds.width;
+                int cropH = bounds.height;
+
+                // Crop to control area
+                PaletteData palette = new PaletteData(0xFF0000, 0x00FF00, 0x0000FF);
+                ImageData imageData = new ImageData(cropW, cropH, 24, palette);
+                imageData.alphaData = new byte[cropW * cropH];
+
+                for (int y = 0; y < cropH; y++)
+                {
+                    int srcY = offsetY + y;
+                    if (srcY < 0 || srcY >= shellH) continue;
+                    for (int x = 0; x < cropW; x++)
+                    {
+                        int srcX = offsetX + x;
+                        if (srcX < 0 || srcX >= shellW) continue;
+                        int idx = (srcY * shellW + srcX) * 4;
+                        int b = pixels[idx] & 0xFF;
+                        int g = pixels[idx + 1] & 0xFF;
+                        int r = pixels[idx + 2] & 0xFF;
+                        int a = pixels[idx + 3] & 0xFF;
+                        imageData.setPixel(x, y, (r << 16) | (g << 8) | b);
+                        imageData.alphaData[y * cropW + x] = (byte)a;
+                    }
+                }
+
+                return imageData;
+            }
+            finally
+            {
+                mSelectObject.invoke(null, memDC, oldBitmap);
+                mDeleteObject.invoke(null, hBitmap);
+                mDeleteDC.invoke(null, memDC);
+                mReleaseDC.invoke(null, 0L, screenDC);
+            }
+        }
+        catch (ClassNotFoundException e)
+        {
+            // Not on Windows — expected
+            return null;
+        }
+        catch (Exception e)
+        {
+            Activator.logWarning("captureViaPrintWindow failed: " + e.getMessage()); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Builds a BITMAPINFOHEADER byte array (40 bytes, little-endian) for use with GetDIBits.
+     *
+     * @param width     bitmap width
+     * @param height    bitmap height (negative = top-down DIB)
+     * @param bitCount  bits per pixel (e.g. 32)
+     * @return 40-byte BITMAPINFOHEADER
+     */
+    private static byte[] buildBitmapInfoHeader(int width, int height, short bitCount)
+    {
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(40)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        buf.putInt(40);        // biSize
+        buf.putInt(width);     // biWidth
+        buf.putInt(height);    // biHeight (negative = top-down)
+        buf.putShort((short)1); // biPlanes
+        buf.putShort(bitCount); // biBitCount
+        buf.putInt(0);         // biCompression = BI_RGB
+        buf.putInt(0);         // biSizeImage
+        buf.putInt(0);         // biXPelsPerMeter
+        buf.putInt(0);         // biYPelsPerMeter
+        buf.putInt(0);         // biClrUsed
+        buf.putInt(0);         // biClrImportant
+        return buf.array();
     }
 
     /**
