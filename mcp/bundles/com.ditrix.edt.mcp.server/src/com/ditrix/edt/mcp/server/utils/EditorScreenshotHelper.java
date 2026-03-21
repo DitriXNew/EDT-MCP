@@ -19,6 +19,7 @@ import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorPart;
@@ -376,6 +377,16 @@ public final class EditorScreenshotHelper
             return null;
         }
 
+        // Narrow bounds to the actual form content area (excludes the dark editor background
+        // that fills the WYSIWYG control beyond the form's own dimensions).
+        Rectangle contentBounds = getFormContentBounds(wysiwygViewer);
+        if (contentBounds != null)
+        {
+            bounds = new Rectangle(bounds.x, bounds.y,
+                Math.min(bounds.width, contentBounds.width),
+                Math.min(bounds.height, contentBounds.height));
+        }
+
         // 1. PrintWindow(PW_RENDERFULLCONTENT) — DWM path, best for Direct3D
         ImageData printWindowData = captureViaPrintWindow(control, bounds);
         if (printWindowData != null)
@@ -485,6 +496,59 @@ public final class EditorScreenshotHelper
             }
         }
         return true;
+    }
+
+    /**
+     * Returns the actual pixel size of the form content inside the WYSIWYG ScrolledComposite,
+     * or {@code null} if unavailable.
+     * <p>
+     * The WYSIWYG control area is often larger than the form itself — the area beyond the form
+     * is filled with the dark editor background. Using the ScrolledComposite content size lets
+     * us crop to just the rendered form content.
+     */
+    private static Rectangle getFormContentBounds(Object wysiwygViewer)
+    {
+        try
+        {
+            Object representation = ReflectionUtils.getFieldValue(wysiwygViewer, WYSIWYG_REPRESENTATION_FIELD);
+            if (representation == null)
+            {
+                return null;
+            }
+
+            // scrolledComposite is a private field on FormWysiwygRepresentation
+            Object scObj = ReflectionUtils.getFieldValue(representation, "scrolledComposite"); //$NON-NLS-1$
+            if (!(scObj instanceof ScrolledComposite))
+            {
+                return null;
+            }
+
+            ScrolledComposite sc = (ScrolledComposite)scObj;
+            if (sc.isDisposed())
+            {
+                return null;
+            }
+
+            Control content = sc.getContent();
+            if (content == null || content.isDisposed())
+            {
+                return null;
+            }
+
+            org.eclipse.swt.graphics.Point size = content.getSize();
+            if (size.x <= 0 || size.y <= 0)
+            {
+                return null;
+            }
+
+            Activator.logWarning("Form content size from ScrolledComposite: " + size.x + "x" + size.y); //$NON-NLS-1$
+            return new Rectangle(0, 0, size.x, size.y);
+        }
+        catch (Exception e)
+        {
+            Activator.logWarning("getFormContentBounds failed: " + e.getMessage()); //$NON-NLS-1$
+            return null;
+        }
     }
 
     /**
