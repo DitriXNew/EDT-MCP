@@ -500,13 +500,13 @@ public final class EditorScreenshotHelper
     {
         try
         {
-            // Bring EDT to front only if minimized — avoid stealing focus unnecessarily
+            // Bring EDT to front before screen capture — Robot captures raw screen pixels
             org.eclipse.swt.widgets.Shell shell = control.getShell();
             if (shell.getMinimized())
             {
                 shell.setMinimized(false);
-                shell.forceActive();
             }
+            shell.forceActive(); // always bring EDT on top, otherwise Robot captures whatever is in front
 
             Display display = control.getDisplay();
             processEvents(display);
@@ -537,6 +537,14 @@ public final class EditorScreenshotHelper
                     data.setPixel(col, row, rgb & 0x00FFFFFF);
                 }
             }
+
+            // Sanity check — if Robot captured all-white (EDT still not on top), fall through
+            if (isImageDataUniform(data))
+            {
+                Activator.logWarning("Robot captured uniform image — EDT may not be on top yet"); //$NON-NLS-1$
+                return null;
+            }
+
             return data;
         }
         catch (Exception e)
