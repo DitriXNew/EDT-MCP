@@ -517,14 +517,41 @@ public final class EditorScreenshotHelper
             // Pump events continuously so EDT can process WM_ACTIVATE / WM_PAINT
             pumpEvents(display, 2000);
 
-            // Get absolute screen coordinates of the control
-            org.eclipse.swt.graphics.Point screenPos = control.toDisplay(0, 0);
-            int x = screenPos.x;
-            int y = screenPos.y;
-            int w = bounds.width;
-            int h = bounds.height;
+            // Control's absolute screen position and logical bounds
+            org.eclipse.swt.graphics.Point controlOrigin = control.toDisplay(0, 0);
+            int controlX = controlOrigin.x;
+            int controlY = controlOrigin.y;
+            int controlW = bounds.width;
+            int controlH = bounds.height;
 
-            Activator.logWarning("Robot capture: x=" + x + " y=" + y + " w=" + w + " h=" + h); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            // Shell's absolute screen position (EDT main window)
+            Rectangle shellBounds = shell.getBounds();
+            int shellX = shellBounds.x;
+            int shellY = shellBounds.y;
+            int shellW = shellBounds.width;
+            int shellH = shellBounds.height;
+
+            // Intersect: only capture the portion of the control that is visible inside the shell.
+            // After minimize+restore EDT may have a smaller window than the control's logical bounds,
+            // so capturing the full control area would include desktop/other windows (appearing white).
+            int captureX = Math.max(controlX, shellX);
+            int captureY = Math.max(controlY, shellY);
+            int captureX2 = Math.min(controlX + controlW, shellX + shellW);
+            int captureY2 = Math.min(controlY + controlH, shellY + shellH);
+            int x = captureX;
+            int y = captureY;
+            int w = captureX2 - captureX;
+            int h = captureY2 - captureY;
+
+            Activator.logWarning("Robot capture: control=(" + controlX + "," + controlY + "," + controlW + "x" + controlH //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ") shell=(" + shellX + "," + shellY + "," + shellW + "x" + shellH //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ") capture=(" + x + "," + y + "," + w + "x" + h + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+            if (w <= 0 || h <= 0)
+            {
+                Activator.logWarning("Robot: control not visible within shell bounds — skipping"); //$NON-NLS-1$
+                return null;
+            }
 
             java.awt.Robot robot = new java.awt.Robot();
             java.awt.image.BufferedImage img = robot.createScreenCapture(
