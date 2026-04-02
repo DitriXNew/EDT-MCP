@@ -49,9 +49,7 @@
           <artifactId>target-platform-configuration</artifactId>
           <version>${tycho.version}</version>
           <configuration>
-            <resolver>p2</resolver>
             <executionEnvironment>JavaSE-17</executionEnvironment>
-            <includePackedArtifacts>false</includePackedArtifacts>
             <target>
               <artifact>
                 <groupId>com.ditrix.edt.mcp</groupId>
