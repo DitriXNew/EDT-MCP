@@ -55,6 +55,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ReadMethodSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool;
 import com.ditrix.edt.mcp.server.tools.impl.ValidateQueryTool;
 import com.ditrix.edt.mcp.server.tools.impl.RenameMetadataObjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.AddMetadataAttributeTool;
 import com.sun.net.httpserver.HttpExchange;
@@ -199,6 +200,7 @@ public class McpServer
         registry.register(new GetApplicationsTool());
         registry.register(new UpdateDatabaseTool());
         registry.register(new DebugLaunchTool());
+        registry.register(new RunYaxunitTestsTool());
 
         // BSL code analysis tools
         registry.register(new ReadModuleSourceTool());
