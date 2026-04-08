@@ -47,9 +47,6 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
-
 /**
  * Tool to run YAXUnit tests for a 1C:Enterprise project.
  * Launches the application with RunUnitTests startup parameter,
@@ -148,7 +145,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * 3. If no active launch but fresh junit.xml exists in stable dir → return cached result
      * 4. Otherwise → start new launch, poll up to {@code timeout}s, return result or "Pending"
      *
-     * The temp directory is NEVER deleted in finally — Claude can call the tool again to fetch
+     * The temp directory is NEVER deleted in finally — the caller can invoke the tool again to fetch
      * the result. Old runs are cleaned up automatically before starting a new launch.
      */
     private String runTests(String projectName, String applicationId,
@@ -188,6 +185,8 @@ public class RunYaxunitTestsTool implements IMcpTool
             catch (ApplicationException e)
             {
                 Activator.logError("Error checking application", e); //$NON-NLS-1$
+                return "**Error:** Failed to validate application: " + applicationId //$NON-NLS-1$
+                        + " (" + e.getMessage() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
             }
 
             // 2. Compute stable run key and report dir
@@ -257,17 +256,35 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return buildNoConfigError(launchManager, configType, projectName, applicationId);
             }
 
-            // 7. Create working copy with RunUnitTests startup parameter
-            ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
-            String startupOption = "RunUnitTests=" + paramsFile.toString().replace('\\', '/'); //$NON-NLS-1$
-            workingCopy.setAttribute(STARTUP_OPTION_ATTR, startupOption);
+            // 7. Atomically reuse an existing active launch for the same runKey, or create exactly
+            //    one new launch. The synchronized block prevents a race where two concurrent calls
+            //    with identical arguments would each start their own 1C instance.
+            ILaunch launch;
+            synchronized (ACTIVE_LAUNCHES)
+            {
+                ILaunch concurrent = ACTIVE_LAUNCHES.get(runKey);
+                if (concurrent != null && !concurrent.isTerminated())
+                {
+                    Activator.logInfo("Reusing active YAXUnit launch for runKey=" + runKey); //$NON-NLS-1$
+                    launch = concurrent;
+                }
+                else
+                {
+                    if (concurrent != null)
+                    {
+                        ACTIVE_LAUNCHES.remove(runKey);
+                    }
+                    ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
+                    String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
+                    workingCopy.setAttribute(STARTUP_OPTION_ATTR, startupOption);
 
-            Activator.logInfo("Launching YAXUnit tests: config=" + matchingConfig.getName() + //$NON-NLS-1$
-                    ", startup=" + startupOption); //$NON-NLS-1$
+                    Activator.logInfo("Launching YAXUnit tests: config=" + matchingConfig.getName() + //$NON-NLS-1$
+                            ", startup=" + startupOption); //$NON-NLS-1$
 
-            // 8. Launch in RUN mode and register
-            ILaunch launch = workingCopy.launch(ILaunchManager.RUN_MODE, new NullProgressMonitor());
-            ACTIVE_LAUNCHES.put(runKey, launch);
+                    launch = workingCopy.launch(ILaunchManager.RUN_MODE, new NullProgressMonitor());
+                    ACTIVE_LAUNCHES.put(runKey, launch);
+                }
+            }
 
             // 9. Poll for completion up to `timeout` seconds
             String pollResult = pollLaunch(launch, reportDir, timeout, runKey);
@@ -576,8 +593,16 @@ public class RunYaxunitTestsTool implements IMcpTool
         try
         {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            // Disable external entities for security
+            // Harden XML parsing against XXE/SSRF and entity-expansion attacks.
+            factory.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true);
             factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true); //$NON-NLS-1$
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false); //$NON-NLS-1$
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false); //$NON-NLS-1$
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false); //$NON-NLS-1$
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
+            factory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_DTD, ""); //$NON-NLS-1$
+            factory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_SCHEMA, ""); //$NON-NLS-1$
             DocumentBuilder builder = factory.newDocumentBuilder();
             Document doc = builder.parse(junitXml);
             doc.getDocumentElement().normalize();
@@ -782,12 +807,21 @@ public class RunYaxunitTestsTool implements IMcpTool
         {
             return;
         }
-        try
+        // Use try-with-resources to release the file-system handle held by Files.walk's stream.
+        // On Windows, leaving it open can prevent subsequent deletions of the same path.
+        try (java.util.stream.Stream<Path> stream = Files.walk(tempDir))
         {
-            Files.walk(tempDir)
-                .sorted(Comparator.reverseOrder())
-                .map(Path::toFile)
-                .forEach(File::delete);
+            stream.sorted(Comparator.reverseOrder())
+                .forEach(p -> {
+                    try
+                    {
+                        Files.delete(p);
+                    }
+                    catch (IOException ex)
+                    {
+                        Activator.logError("Failed to delete " + p, ex); //$NON-NLS-1$
+                    }
+                });
         }
         catch (IOException e)
         {
