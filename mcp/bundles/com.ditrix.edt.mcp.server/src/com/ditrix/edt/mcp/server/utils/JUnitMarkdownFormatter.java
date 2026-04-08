@@ -36,7 +36,7 @@ public final class JUnitMarkdownFormatter
         sb.append("| Passed | ").append(results.getPassed()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("| Failed | ").append(results.getFailures()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("| Errors | ").append(results.getErrors()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("| Skipped| ").append(results.getSkipped()).append(" |\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("| Skipped | ").append(results.getSkipped()).append(" |\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
         sb.append(results.isPassed() ? "**Result: PASSED**\n" : "**Result: FAILED**\n"); //$NON-NLS-1$ //$NON-NLS-2$
 

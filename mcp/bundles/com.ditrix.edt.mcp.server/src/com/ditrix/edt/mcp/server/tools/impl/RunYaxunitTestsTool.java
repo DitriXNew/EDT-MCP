@@ -119,6 +119,10 @@ public class RunYaxunitTestsTool implements IMcpTool
         String modules = JsonUtils.extractStringArgument(params, "modules"); //$NON-NLS-1$
         String tests = JsonUtils.extractStringArgument(params, "tests"); //$NON-NLS-1$
         int timeout = JsonUtils.extractIntArgument(params, "timeout", DEFAULT_TIMEOUT); //$NON-NLS-1$
+        if (timeout < 1)
+        {
+            timeout = 1;
+        }
 
         if (projectName == null || projectName.isEmpty())
         {
@@ -363,16 +367,22 @@ public class RunYaxunitTestsTool implements IMcpTool
             String markdown = JUnitMarkdownFormatter.format(results);
 
             Path reportFile = junitXml.toPath().resolveSibling("report.md"); //$NON-NLS-1$
+            boolean reportWritten = false;
             try
             {
                 Files.write(reportFile, markdown.getBytes(StandardCharsets.UTF_8));
+                reportWritten = Files.exists(reportFile);
             }
             catch (IOException io)
             {
                 Activator.logError("Failed to write Markdown report to " + reportFile, io); //$NON-NLS-1$
             }
 
-            return markdown + "\n---\n*Full report saved to:* `" + reportFile + "`\n"; //$NON-NLS-1$ //$NON-NLS-2$
+            if (reportWritten)
+            {
+                return markdown + "\n---\n*Full report saved to:* `" + reportFile + "`\n"; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return markdown;
         }
         catch (Exception e)
         {
@@ -467,11 +477,37 @@ public class RunYaxunitTestsTool implements IMcpTool
     private Path stableReportDir(String runKey)
     {
         String safeKey = runKey.replaceAll("[^a-zA-Z0-9_.-]", "_"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (safeKey.length() > 80)
+        // Always preserve a unique hash suffix so different runs can never collide into the same dir.
+        String uniqueSuffix = sha1Full(runKey);
+        int maxSafeKeyLength = Math.max(0, 80 - uniqueSuffix.length() - 1);
+        if (safeKey.length() > maxSafeKeyLength)
         {
-            safeKey = safeKey.substring(0, 80);
+            safeKey = safeKey.substring(0, maxSafeKeyLength);
         }
-        return Paths.get(System.getProperty("java.io.tmpdir"), "edt-mcp-yaxunit", safeKey); //$NON-NLS-1$ //$NON-NLS-2$
+        String dirName = safeKey.isEmpty() ? uniqueSuffix : safeKey + "_" + uniqueSuffix; //$NON-NLS-1$
+        return Paths.get(System.getProperty("java.io.tmpdir"), "edt-mcp-yaxunit", dirName); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Computes a full hex SHA-1 hash for values that must remain unique after truncation.
+     */
+    private String sha1Full(String input)
+    {
+        try
+        {
+            MessageDigest md = MessageDigest.getInstance("SHA-1"); //$NON-NLS-1$
+            byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : digest)
+            {
+                hex.append(String.format("%02x", b)); //$NON-NLS-1$
+            }
+            return hex.toString();
+        }
+        catch (Exception e)
+        {
+            return Integer.toHexString(input.hashCode());
+        }
     }
 
     /**
