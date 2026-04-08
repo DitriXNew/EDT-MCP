@@ -61,6 +61,10 @@ import com.ditrix.edt.mcp.server.tools.impl.RemoveBreakpointTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListBreakpointsTool;
 import com.ditrix.edt.mcp.server.tools.impl.WaitForBreakTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetVariablesTool;
+import com.ditrix.edt.mcp.server.tools.impl.StepTool;
+import com.ditrix.edt.mcp.server.tools.impl.ResumeTool;
+import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
+import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.AddMetadataAttributeTool;
 import com.sun.net.httpserver.HttpExchange;
@@ -213,6 +217,10 @@ public class McpServer
         registry.register(new ListBreakpointsTool());
         registry.register(new WaitForBreakTool());
         registry.register(new GetVariablesTool());
+        registry.register(new StepTool());
+        registry.register(new ResumeTool());
+        registry.register(new EvaluateExpressionTool());
+        registry.register(new DebugYaxunitTestsTool());
 
         // BSL code analysis tools
         registry.register(new ReadModuleSourceTool());

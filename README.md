@@ -237,6 +237,15 @@ Add to `claude_desktop_config.json`:
 | `update_database` | Update database (infobase) with full or incremental update mode |
 | `debug_launch` | Launch application in debug mode (auto-updates database before launch) |
 | `run_yaxunit_tests` | Run YAXUnit tests for a project: launches 1C with `RunUnitTests`, parses JUnit XML, returns Markdown report |
+| `debug_yaxunit_tests` | Launch YAXUnit tests in DEBUG mode so breakpoints fire (autonomous LLM debug cycle) |
+| `set_breakpoint` | Set a 1C BSL line breakpoint (accepts EDT module path or absolute path) |
+| `remove_breakpoint` | Remove a breakpoint by id or by project+module+line |
+| `list_breakpoints` | List active line breakpoints, optionally filtered by project |
+| `wait_for_break` | Block until a debug suspend (e.g. breakpoint hit) on the given application |
+| `get_variables` | Read variables from a stack frame of a suspended thread (lazy expand for nested) |
+| `step` | Step over / into / out of a suspended thread, returns the new snapshot |
+| `resume` | Resume a suspended thread (or all threads of a debug target) |
+| `evaluate_expression` | Evaluate a BSL expression in the context of a suspended frame |
 | `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
@@ -535,6 +544,27 @@ Add to `claude_desktop_config.json`:
 - Requires a launch configuration in EDT for the project/application and the YAXUnit extension installed in the infobase.
 - The launch is **not** terminated when the polling window expires — call the tool again with identical arguments to keep waiting and fetch the result once 1C closes.
 - Reports are stored under `%TEMP%/edt-mcp-yaxunit/<sanitized-key>_<sha1>/` (`junit.xml` + `report.md` + `xUnitParams.json`). The directory name is derived from `projectName:applicationId:filterHash` — sanitized and suffixed with a SHA-1 hash to avoid collisions. A fresh `junit.xml` (younger than 5 minutes) is reused without restarting 1C.
+
+#### Debug Inspection Tools
+
+A family of MCP tools that lets the LLM set breakpoints, inspect runtime state and walk the BSL stack while a 1C application is running under the EDT debugger. Combined with `debug_yaxunit_tests`, this gives a fully autonomous debugging cycle: the LLM writes a YAXUnit test, sets a breakpoint inside the suspect code, launches the test in DEBUG mode, waits for the breakpoint to fire, inspects variables, evaluates expressions, steps through the code, and resumes — all without a human clicking inside EDT.
+
+**End-to-end LLM debug cycle:**
+
+1. `set_breakpoint` — set a line breakpoint on the suspect module/line.
+2. `debug_yaxunit_tests` — launch YAXUnit (filtered to a single test) in DEBUG mode.
+3. `wait_for_break` — block until the breakpoint fires; returns a snapshot with `threadId`, frames and stable `frameRef`s.
+4. `get_variables` — read variables of the top frame (or any frame); pass `expandPath` to drill into nested Структуры/Массивы.
+5. `evaluate_expression` — run an arbitrary BSL expression in the suspended frame to test a hypothesis.
+6. `step` — step over / into / out and re-snapshot.
+7. `resume` — let the test finish.
+
+**Notes:**
+- `set_breakpoint` accepts either an EDT module path (`CommonModules/Foo/Module.bsl`) or an absolute filesystem path; auto-detected.
+- `wait_for_break` does **not** terminate the launch on timeout — call it again to keep waiting.
+- `frameRef` and `threadId` are reissued on every SUSPEND event. After `resume`/`step` the previous ids become stale (the tool returns a clear error).
+- `evaluate_expression` runs arbitrary BSL inside the running 1C process. Use it deliberately.
+- The actual 1C BSL breakpoint class is loaded via reflection at runtime — if the EDT version exposes it under a different name, `Activator.logError` will surface the failure and the breakpoint falls back to a marker shim.
 
 ### BSL Code Analysis Tools
 
