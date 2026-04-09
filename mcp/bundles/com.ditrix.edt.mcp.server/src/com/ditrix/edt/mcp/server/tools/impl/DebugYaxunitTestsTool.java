@@ -186,35 +186,19 @@ public class DebugYaxunitTestsTool implements IMcpTool
             Activator.logInfo("Launching YAXUnit tests in DEBUG mode: config=" + matchingConfig.getName() //$NON-NLS-1$
                 + ", startup=" + startupOption); //$NON-NLS-1$
 
-            // DebugUITools.launch must be called from the UI thread.
+            // Launch the working copy directly so our ATTR_STARTUP_OPTION mutation
+            // actually takes effect (DebugUITools.launch on a working copy can
+            // re-resolve to the saved config and silently drop our changes).
             final ILaunchConfigurationWorkingCopy launchCopy = workingCopy;
             final AtomicReference<String> launchError = new AtomicReference<>();
-            Display display = Display.getDefault();
-            if (display != null && !display.isDisposed())
+            try
             {
-                display.syncExec(() -> {
-                    try
-                    {
-                        DebugUITools.launch(launchCopy, ILaunchManager.DEBUG_MODE);
-                    }
-                    catch (Exception ex)
-                    {
-                        Activator.logError("Failed to launch YAXUnit in debug mode", ex); //$NON-NLS-1$
-                        launchError.set(ex.getMessage());
-                    }
-                });
+                launchCopy.launch(ILaunchManager.DEBUG_MODE, new org.eclipse.core.runtime.NullProgressMonitor());
             }
-            else
+            catch (Exception ex)
             {
-                try
-                {
-                    launchCopy.launch(ILaunchManager.DEBUG_MODE, null);
-                }
-                catch (Exception ex)
-                {
-                    Activator.logError("Failed to launch YAXUnit in debug mode (no UI)", ex); //$NON-NLS-1$
-                    launchError.set(ex.getMessage());
-                }
+                Activator.logError("Failed to launch YAXUnit in debug mode", ex); //$NON-NLS-1$
+                launchError.set(ex.getMessage());
             }
 
             if (launchError.get() != null)

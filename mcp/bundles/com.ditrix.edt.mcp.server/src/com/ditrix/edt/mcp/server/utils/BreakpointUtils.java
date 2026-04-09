@@ -16,10 +16,12 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.IBreakpointManager;
 import org.eclipse.debug.core.model.IBreakpoint;
 import org.eclipse.debug.core.model.ILineBreakpoint;
+import org.osgi.framework.Bundle;
 
 import com.ditrix.edt.mcp.server.Activator;
 
@@ -48,8 +50,18 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class BreakpointUtils
 {
+    /**
+     * Bundle that owns the BSL breakpoint class. We load classes via
+     * {@link Bundle#loadClass(String)} to bypass OSGi {@code Import-Package}
+     * restrictions on the {@code internal.*} package.
+     */
+    private static final String BSL_DEBUG_CORE_BUNDLE = "com._1c.g5.v8.dt.debug.core"; //$NON-NLS-1$
+
     /** Candidate fully-qualified class names for the BSL line breakpoint. */
     private static final String[] BSL_BREAKPOINT_CLASSES = {
+        // Real class as of EDT 2025.2 / 2026.1 — found in com._1c.g5.v8.dt.debug.core/plugin.xml
+        "com._1c.g5.v8.dt.internal.debug.core.model.breakpoints.BslLineBreakpoint", //$NON-NLS-1$
+        // Historical fallbacks
         "com._1c.g5.v8.dt.debug.core.model.BslLineBreakpoint", //$NON-NLS-1$
         "com._1c.g5.v8.dt.debug.bsl.model.BslLineBreakpoint", //$NON-NLS-1$
         "com._1c.g5.v8.dt.debug.core.BslLineBreakpoint" //$NON-NLS-1$
@@ -152,32 +164,47 @@ public final class BreakpointUtils
 
         IBreakpointManager bpManager = DebugPlugin.getDefault().getBreakpointManager();
 
-        // Strategy 1: reflectively instantiate EDT-specific BslLineBreakpoint
-        for (String className : BSL_BREAKPOINT_CLASSES)
+        // Strategy 1: load EDT-specific BslLineBreakpoint via the owning bundle's
+        // class loader. The class lives in an `internal.*` package that OSGi will
+        // not export through Import-Package, so a plain Class.forName() from this
+        // bundle would fail with ClassNotFoundException — but Bundle.loadClass()
+        // bypasses the export restriction and returns the class directly.
+        Bundle debugCoreBundle = Platform.getBundle(BSL_DEBUG_CORE_BUNDLE);
+        if (debugCoreBundle != null)
         {
-            try
+            for (String className : BSL_BREAKPOINT_CLASSES)
             {
-                Class<?> cls = Class.forName(className);
-                Constructor<?> ctor = findConstructor(cls);
-                if (ctor != null)
+                try
                 {
-                    Object instance = ctor.newInstance(file, lineNumber);
-                    if (instance instanceof IBreakpoint)
+                    Class<?> cls = debugCoreBundle.loadClass(className);
+                    Constructor<?> ctor = findConstructor(cls);
+                    if (ctor != null)
                     {
-                        IBreakpoint bp = (IBreakpoint) instance;
-                        bpManager.addBreakpoint(bp);
-                        return bp;
+                        Object instance = ctor.newInstance(file, lineNumber);
+                        if (instance instanceof IBreakpoint)
+                        {
+                            IBreakpoint bp = (IBreakpoint) instance;
+                            // EDT's constructor creates the marker but does not register
+                            // with the breakpoint manager — do it explicitly.
+                            bpManager.addBreakpoint(bp);
+                            return bp;
+                        }
                     }
                 }
+                catch (ClassNotFoundException cnf)
+                {
+                    // try next class name
+                }
+                catch (Exception ex)
+                {
+                    Activator.logError("Failed to instantiate " + className, ex); //$NON-NLS-1$
+                }
             }
-            catch (ClassNotFoundException cnf)
-            {
-                // try next
-            }
-            catch (Exception ex)
-            {
-                Activator.logError("Failed to instantiate " + className, ex); //$NON-NLS-1$
-            }
+        }
+        else
+        {
+            Activator.logError("Bundle " + BSL_DEBUG_CORE_BUNDLE //$NON-NLS-1$
+                    + " not found — falling back to marker", new IllegalStateException("bundle missing")); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         // Strategy 2: create marker of EDT type and wrap as generic ILineBreakpoint via DebugPlugin

@@ -105,6 +105,10 @@ public class ResumeTool implements IMcpTool
     private static long parseLong(String s)
     {
         if (s == null || s.isEmpty()) return -1L;
-        try { return Long.parseLong(s.trim()); } catch (NumberFormatException nfe) { return -1L; }
+        try {
+            double d = Double.parseDouble(s.trim());
+            if (d != Math.floor(d) || d < Long.MIN_VALUE || d > Long.MAX_VALUE) return -1L;
+            return (long) d;
+        } catch (NumberFormatException nfe) { return -1L; }
     }
 }
