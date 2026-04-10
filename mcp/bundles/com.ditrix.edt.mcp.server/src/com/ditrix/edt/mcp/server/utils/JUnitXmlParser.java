@@ -62,11 +62,16 @@ public final class JUnitXmlParser
         {
             Element suite = (Element) suiteNodes.item(i);
 
-            results.addToTotals(
-                    getIntAttr(suite, "tests", 0), //$NON-NLS-1$
-                    getIntAttr(suite, "failures", 0), //$NON-NLS-1$
-                    getIntAttr(suite, "errors", 0), //$NON-NLS-1$
-                    getIntAttr(suite, "skipped", 0)); //$NON-NLS-1$
+            int attrTests = getIntAttr(suite, "tests", 0); //$NON-NLS-1$
+            int attrFailures = getIntAttr(suite, "failures", 0); //$NON-NLS-1$
+            int attrErrors = getIntAttr(suite, "errors", 0); //$NON-NLS-1$
+            int attrSkipped = getIntAttr(suite, "skipped", 0); //$NON-NLS-1$
+
+            // Count failures/errors/skipped from actual child nodes as a fallback
+            // in case the producer omits or misreports the testsuite attributes.
+            int nodeFailures = 0;
+            int nodeErrors = 0;
+            int nodeSkipped = 0;
 
             NodeList caseNodes = suite.getElementsByTagName("testcase"); //$NON-NLS-1$
             for (int j = 0; j < caseNodes.getLength(); j++)
@@ -81,6 +86,7 @@ public final class JUnitXmlParser
                 NodeList failureNodes = testCase.getElementsByTagName("failure"); //$NON-NLS-1$
                 if (failureNodes.getLength() > 0)
                 {
+                    nodeFailures++;
                     Element failure = (Element) failureNodes.item(0);
                     results.addFailure(new JUnitTestResults.TestCase(fullName,
                             failure.getAttribute("message"), //$NON-NLS-1$
@@ -90,6 +96,7 @@ public final class JUnitXmlParser
                 NodeList errorNodes = testCase.getElementsByTagName("error"); //$NON-NLS-1$
                 if (errorNodes.getLength() > 0)
                 {
+                    nodeErrors++;
                     Element error = (Element) errorNodes.item(0);
                     results.addError(new JUnitTestResults.TestCase(fullName,
                             error.getAttribute("message"), //$NON-NLS-1$
@@ -99,12 +106,21 @@ public final class JUnitXmlParser
                 NodeList skippedNodes = testCase.getElementsByTagName("skipped"); //$NON-NLS-1$
                 if (skippedNodes.getLength() > 0)
                 {
+                    nodeSkipped++;
                     Element skip = (Element) skippedNodes.item(0);
                     results.addSkipped(new JUnitTestResults.TestCase(fullName,
                             skip.getAttribute("message"), //$NON-NLS-1$
                             null));
                 }
             }
+
+            // Use the higher of attribute count vs node count to handle producers
+            // that omit or misreport testsuite attributes.
+            int finalTests = Math.max(attrTests, caseNodes.getLength());
+            int finalFailures = Math.max(attrFailures, nodeFailures);
+            int finalErrors = Math.max(attrErrors, nodeErrors);
+            int finalSkipped = Math.max(attrSkipped, nodeSkipped);
+            results.addToTotals(finalTests, finalFailures, finalErrors, finalSkipped);
         }
 
         // Standalone testcases without a wrapping testsuite — count them only.

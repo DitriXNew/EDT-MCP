@@ -534,7 +534,7 @@ Add to `claude_desktop_config.json`:
 **Notes:**
 - Requires a launch configuration in EDT for the project/application and the YAXUnit extension installed in the infobase.
 - The launch is **not** terminated when the polling window expires — call the tool again with identical arguments to keep waiting and fetch the result once 1C closes.
-- Reports are stored under `%TEMP%/edt-mcp-yaxunit/<runKey>/` (`junit.xml` + `report.md` + `xUnitParams.json`). A fresh `junit.xml` (younger than 5 minutes) is reused without restarting 1C.
+- Reports are stored under `%TEMP%/edt-mcp-yaxunit/<sanitized-key>_<sha1>/` (`junit.xml` + `report.md` + `xUnitParams.json`). The directory name is derived from `projectName:applicationId:filterHash` — sanitized and suffixed with a SHA-1 hash to avoid collisions. A fresh `junit.xml` (younger than 5 minutes) is reused without restarting 1C.
 
 ### BSL Code Analysis Tools
 

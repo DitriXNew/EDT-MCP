@@ -224,7 +224,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                 {
                     return pollResult;
                 }
-                return buildPendingMessage(reportDir, runKey);
+                return buildPendingMessage(reportDir);
             }
 
             // No active launch — return fresh cached result if available.
@@ -234,16 +234,6 @@ public class RunYaxunitTestsTool implements IMcpTool
                 Activator.logInfo("Returning cached YAXUnit results from " + cached); //$NON-NLS-1$
                 return readResults(cached);
             }
-
-            // Prepare a clean report dir and write the params file.
-            cleanupTempDir(reportDir);
-            Files.createDirectories(reportDir);
-            Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
-            String paramsJson = buildParamsJson(reportDir.resolve("junit.xml").toString(), //$NON-NLS-1$
-                    extensions, modules, tests);
-            Files.write(paramsFile, paramsJson.getBytes(StandardCharsets.UTF_8));
-
-            Activator.logInfo("YAXUnit params written to: " + paramsFile); //$NON-NLS-1$
 
             ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
             if (launchManager == null)
@@ -268,8 +258,8 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
 
             // Atomically reuse an existing active launch for the same runKey, or create exactly
-            // one new launch. The synchronized block prevents a race where two concurrent calls
-            // with identical arguments would each start their own 1C instance.
+            // one new launch. Cleanup + params write is inside the critical section so a concurrent
+            // call cannot overwrite the params while the first is starting.
             ILaunch launch;
             synchronized (ACTIVE_LAUNCHES)
             {
@@ -285,6 +275,16 @@ public class RunYaxunitTestsTool implements IMcpTool
                     {
                         ACTIVE_LAUNCHES.remove(runKey);
                     }
+
+                    // Prepare a clean report dir and write the params file inside the lock.
+                    cleanupTempDir(reportDir);
+                    Files.createDirectories(reportDir);
+                    Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
+                    String paramsJson = buildParamsJson(reportDir.resolve("junit.xml").toString(), //$NON-NLS-1$
+                            extensions, modules, tests);
+                    Files.write(paramsFile, paramsJson.getBytes(StandardCharsets.UTF_8));
+                    Activator.logInfo("YAXUnit params written to: " + paramsFile); //$NON-NLS-1$
+
                     ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
                     String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
                     workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
@@ -304,7 +304,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
 
             // Polling window expired — return Pending without terminating the launch.
-            return buildPendingMessage(reportDir, runKey);
+            return buildPendingMessage(reportDir);
         }
         catch (CoreException e)
         {
@@ -463,7 +463,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * Builds a Pending message that instructs the caller to invoke the tool again with
      * identical arguments to fetch the result.
      */
-    private String buildPendingMessage(Path reportDir, String runKey)
+    private String buildPendingMessage(Path reportDir)
     {
         return "**Pending:** YAXUnit tests are still running.\n\n" //$NON-NLS-1$
                 + "Report directory: `" + reportDir + "`\n\n" //$NON-NLS-1$ //$NON-NLS-2$
