@@ -48,6 +48,8 @@ public final class DebugSessionRegistry
     private final Map<Long, IStackFrame> framesById = new ConcurrentHashMap<>();
     /** stable threadId → owning applicationId (for cleanup). */
     private final Map<Long, String> threadAppId = new ConcurrentHashMap<>();
+    /** stable frameRef → owning applicationId (for cleanup). */
+    private final Map<Long, String> frameAppId = new ConcurrentHashMap<>();
 
     private DebugSessionRegistry()
     {
@@ -170,17 +172,14 @@ public final class DebugSessionRegistry
             }
             return false;
         });
-        // frames don't track app id, but we drop frames whose thread is gone
-        framesById.entrySet().removeIf(entry -> {
-            try
+        // drop frames owned by this application
+        frameAppId.entrySet().removeIf(entry -> {
+            if (appId.equals(entry.getValue()))
             {
-                return entry.getValue().getThread() == null
-                    || entry.getValue().getThread().isTerminated();
-            }
-            catch (Exception ex)
-            {
+                framesById.remove(entry.getKey());
                 return true;
             }
+            return false;
         });
         notifyAll();
     }
@@ -217,11 +216,37 @@ public final class DebugSessionRegistry
     }
 
     /** Registers an IStackFrame and returns a stable id for later lookup. */
-    public long registerFrame(IStackFrame frame)
+    public synchronized long registerFrame(IStackFrame frame)
     {
         long id = idGenerator.getAndIncrement();
         framesById.put(id, frame);
+        // Track owning appId so onResumeOrTerminate can clean up deterministically
+        try
+        {
+            String appId = findApplicationIdFor(frame.getThread());
+            if (appId != null)
+            {
+                frameAppId.put(id, appId);
+            }
+        }
+        catch (Exception ex)
+        {
+            // best effort
+        }
         return id;
+    }
+
+    /**
+     * Clears the snapshot for the given applicationId without touching thread/frame
+     * caches. Used by StepTool to prevent waitForSuspend from returning the stale
+     * pre-step snapshot.
+     */
+    public synchronized void clearSnapshot(String appId)
+    {
+        if (appId != null)
+        {
+            snapshots.remove(appId);
+        }
     }
 
     public IThread getThread(long threadId)
@@ -332,6 +357,7 @@ public final class DebugSessionRegistry
         threadsById.clear();
         framesById.clear();
         threadAppId.clear();
+        frameAppId.clear();
         notifyAll();
     }
 }

@@ -59,12 +59,7 @@ public class RemoveBreakpointTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String idStr = params.get("breakpointId"); //$NON-NLS-1$
-        long breakpointId = -1L;
-        if (idStr != null && !idStr.isEmpty())
-        {
-            try { breakpointId = Long.parseLong(idStr.trim()); } catch (NumberFormatException nfe) { /* leave -1 */ }
-        }
+        long breakpointId = JsonUtils.extractLongArgument(params, "breakpointId", -1L); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String module = JsonUtils.extractStringArgument(params, "module"); //$NON-NLS-1$
         int lineNumber = JsonUtils.extractIntArgument(params, "lineNumber", -1); //$NON-NLS-1$

@@ -27,6 +27,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.VariableSerializer;
 
 /**
  * Evaluates a BSL expression in the context of a suspended stack frame.
@@ -74,7 +75,7 @@ public class EvaluateExpressionTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        long frameRef = parseLong(params.get("frameRef")); //$NON-NLS-1$
+        long frameRef = JsonUtils.extractLongArgument(params, "frameRef", -1L); //$NON-NLS-1$
         String expression = JsonUtils.extractStringArgument(params, "expression"); //$NON-NLS-1$
 
         if (frameRef <= 0)
@@ -149,10 +150,19 @@ public class EvaluateExpressionTool implements IMcpTool
             {
                 return ToolResult.error("Failed to read value: " + de.getMessage()).toJson(); //$NON-NLS-1$
             }
-            return ToolResult.success()
-                .put("value", stringValue) //$NON-NLS-1$
-                .put("type", type) //$NON-NLS-1$
-                .toJson();
+            ToolResult res = ToolResult.success()
+                .put("type", type); //$NON-NLS-1$
+            if (stringValue != null && stringValue.length() > VariableSerializer.MAX_VALUE_LENGTH)
+            {
+                res.put("value", stringValue.substring(0, VariableSerializer.MAX_VALUE_LENGTH)); //$NON-NLS-1$
+                res.put("truncated", true); //$NON-NLS-1$
+                res.put("fullLength", stringValue.length()); //$NON-NLS-1$
+            }
+            else
+            {
+                res.put("value", stringValue); //$NON-NLS-1$
+            }
+            return res.toJson();
         }
         catch (InterruptedException e)
         {
@@ -166,13 +176,4 @@ public class EvaluateExpressionTool implements IMcpTool
         }
     }
 
-    private static long parseLong(String s)
-    {
-        if (s == null || s.isEmpty()) return -1L;
-        try {
-            double d = Double.parseDouble(s.trim());
-            if (d != Math.floor(d) || d < Long.MIN_VALUE || d > Long.MAX_VALUE) return -1L;
-            return (long) d;
-        } catch (NumberFormatException nfe) { return -1L; }
-    }
 }

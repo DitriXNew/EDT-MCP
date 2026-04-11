@@ -60,7 +60,7 @@ public class StepTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        long threadId = parseLong(params.get("threadId")); //$NON-NLS-1$
+        long threadId = JsonUtils.extractLongArgument(params, "threadId", -1L); //$NON-NLS-1$
         String kind = JsonUtils.extractStringArgument(params, "kind"); //$NON-NLS-1$
         int timeout = JsonUtils.extractIntArgument(params, "timeout", DEFAULT_TIMEOUT); //$NON-NLS-1$
         if (timeout < 1) timeout = 1;
@@ -94,6 +94,10 @@ public class StepTool implements IMcpTool
 
         try
         {
+            // Clear the current snapshot so waitForSuspend only catches the new
+            // SUSPEND event after the step, not the stale pre-step snapshot.
+            registry.clearSnapshot(appId);
+
             switch (kind.toLowerCase())
             {
                 case "over": //$NON-NLS-1$
@@ -145,13 +149,4 @@ public class StepTool implements IMcpTool
         }
     }
 
-    private static long parseLong(String s)
-    {
-        if (s == null || s.isEmpty()) return -1L;
-        try {
-            double d = Double.parseDouble(s.trim());
-            if (d != Math.floor(d) || d < Long.MIN_VALUE || d > Long.MAX_VALUE) return -1L;
-            return (long) d;
-        } catch (NumberFormatException nfe) { return -1L; }
-    }
 }

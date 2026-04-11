@@ -226,7 +226,10 @@ public final class BreakpointUtils
                     return bp;
                 }
                 // No registered breakpoint type — keep the marker but report a degraded result.
-                return new MarkerOnlyBreakpoint(marker);
+                MarkerOnlyBreakpoint fallback = new MarkerOnlyBreakpoint(marker);
+                bpManager.addBreakpoint(fallback);
+                fallback.registered = true;
+                return fallback;
             }
             catch (Exception ex)
             {
@@ -240,7 +243,10 @@ public final class BreakpointUtils
         attrs.put(IMarker.LINE_NUMBER, Integer.valueOf(lineNumber));
         attrs.put(IBreakpoint.ENABLED, Boolean.TRUE);
         marker.setAttributes(attrs);
-        return new MarkerOnlyBreakpoint(marker);
+        MarkerOnlyBreakpoint fallback = new MarkerOnlyBreakpoint(marker);
+        bpManager.addBreakpoint(fallback);
+        fallback.registered = true;
+        return fallback;
     }
 
     /**
@@ -313,11 +319,9 @@ public final class BreakpointUtils
         private final IMarker marker;
         private boolean registered;
 
-        MarkerOnlyBreakpoint(IMarker marker) throws Exception
+        MarkerOnlyBreakpoint(IMarker marker)
         {
             this.marker = marker;
-            DebugPlugin.getDefault().getBreakpointManager().addBreakpoint(this);
-            this.registered = true;
         }
 
         @Override
@@ -403,6 +407,21 @@ public final class BreakpointUtils
         public Object getAdapter(Class adapter)
         {
             return null;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return marker == null ? 0 : Long.hashCode(marker.getId());
+        }
+
+        @Override
+        public boolean equals(Object obj)
+        {
+            if (this == obj) return true;
+            if (!(obj instanceof MarkerOnlyBreakpoint)) return false;
+            MarkerOnlyBreakpoint other = (MarkerOnlyBreakpoint) obj;
+            return marker != null && other.marker != null && marker.getId() == other.marker.getId();
         }
     }
 }

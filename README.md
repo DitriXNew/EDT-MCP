@@ -246,6 +246,9 @@ Add to `claude_desktop_config.json`:
 | `step` | Step over / into / out of a suspended thread, returns the new snapshot |
 | `resume` | Resume a suspended thread (or all threads of a debug target) |
 | `evaluate_expression` | Evaluate a BSL expression in the context of a suspended frame |
+| `debug_status` | Report active debug launches: mode, suspend state, thread count, top frame |
+| `start_profiling` | Toggle performance measurement (замер производительности) on the active debug target |
+| `get_profiling_results` | Get profiling results: per-module, per-line call counts, timing and coverage |
 | `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |

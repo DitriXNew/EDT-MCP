@@ -67,6 +67,8 @@ public class DebugStatusTool implements IMcpTool
     {
         String filterAppId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
 
+        DebugSessionRegistry.get().ensureListenerRegistered();
+
         try
         {
             DebugPlugin debugPlugin = DebugPlugin.getDefault();

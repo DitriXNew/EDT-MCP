@@ -60,7 +60,12 @@ public class ListBreakpointsTool implements IMcpTool
     {
         String projectFilter = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
 
-        IBreakpointManager bpManager = DebugPlugin.getDefault().getBreakpointManager();
+        DebugPlugin debugPlugin = DebugPlugin.getDefault();
+        if (debugPlugin == null)
+        {
+            return ToolResult.error("DebugPlugin not available").toJson(); //$NON-NLS-1$
+        }
+        IBreakpointManager bpManager = debugPlugin.getBreakpointManager();
         List<Map<String, Object>> out = new ArrayList<>();
 
         for (IBreakpoint bp : bpManager.getBreakpoints())

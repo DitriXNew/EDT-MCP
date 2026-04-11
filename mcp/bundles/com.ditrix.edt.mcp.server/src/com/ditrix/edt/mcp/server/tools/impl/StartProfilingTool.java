@@ -8,8 +8,6 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.lang.reflect.Method;
 import java.util.Map;
-import java.util.UUID;
-
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchManager;
@@ -97,7 +95,13 @@ public class StartProfilingTool implements IMcpTool
                 return ToolResult.error("Debug core bundle not found").toJson(); //$NON-NLS-1$
             }
 
-            Class<?> profileTargetClass = debugBundle.loadClass(
+            Bundle profilingBundle = Platform.getBundle(PROFILING_CORE_BUNDLE);
+            if (profilingBundle == null)
+            {
+                return ToolResult.error("Profiling core bundle not found").toJson(); //$NON-NLS-1$
+            }
+
+            Class<?> profileTargetClass = profilingBundle.loadClass(
                 "com._1c.g5.v8.dt.profiling.core.IProfileTarget"); //$NON-NLS-1$
 
             // Try to adapt the debug target to IProfileTarget
@@ -124,11 +128,6 @@ public class StartProfilingTool implements IMcpTool
             if (wiringBundle == null)
             {
                 return ToolResult.error("Wiring bundle not found").toJson(); //$NON-NLS-1$
-            }
-            Bundle profilingBundle = Platform.getBundle(PROFILING_CORE_BUNDLE);
-            if (profilingBundle == null)
-            {
-                return ToolResult.error("Profiling core bundle not found").toJson(); //$NON-NLS-1$
             }
 
             Class<?> serviceAccessClass = wiringBundle.loadClass("com._1c.g5.wiring.ServiceAccess"); //$NON-NLS-1$

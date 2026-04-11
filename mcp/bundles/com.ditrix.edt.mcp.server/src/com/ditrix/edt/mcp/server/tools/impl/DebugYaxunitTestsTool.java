@@ -12,11 +12,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
-
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.debug.core.DebugPlugin;
@@ -24,8 +23,6 @@ import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.eclipse.debug.core.ILaunchManager;
-import org.eclipse.debug.ui.DebugUITools;
-import org.eclipse.swt.widgets.Display;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
@@ -61,6 +58,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 public class DebugYaxunitTestsTool implements IMcpTool
 {
     public static final String NAME = "debug_yaxunit_tests"; //$NON-NLS-1$
+    private static final AtomicLong LAUNCH_COUNTER = new AtomicLong(0);
 
     @Override
     public String getName()
@@ -169,7 +167,8 @@ public class DebugYaxunitTestsTool implements IMcpTool
             // Prepare a unique report dir + xUnitParams.json (uses native path separators
             // because YAXUnit constructs file:// URIs and breaks on forward slashes on Windows).
             Path reportDir = Paths.get(System.getProperty("java.io.tmpdir"), //$NON-NLS-1$
-                "edt-mcp-yaxunit-debug", projectName + "-" + System.currentTimeMillis()); //$NON-NLS-1$ //$NON-NLS-2$
+                "edt-mcp-yaxunit-debug", projectName + "-" + System.currentTimeMillis() //$NON-NLS-1$ //$NON-NLS-2$
+                    + "-" + LAUNCH_COUNTER.getAndIncrement()); //$NON-NLS-1$
             Files.createDirectories(reportDir);
             Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
             Path junitFile = reportDir.resolve("junit.xml"); //$NON-NLS-1$
@@ -189,21 +188,14 @@ public class DebugYaxunitTestsTool implements IMcpTool
             // Launch the working copy directly so our ATTR_STARTUP_OPTION mutation
             // actually takes effect (DebugUITools.launch on a working copy can
             // re-resolve to the saved config and silently drop our changes).
-            final ILaunchConfigurationWorkingCopy launchCopy = workingCopy;
-            final AtomicReference<String> launchError = new AtomicReference<>();
             try
             {
-                launchCopy.launch(ILaunchManager.DEBUG_MODE, new org.eclipse.core.runtime.NullProgressMonitor());
+                workingCopy.launch(ILaunchManager.DEBUG_MODE, new org.eclipse.core.runtime.NullProgressMonitor());
             }
             catch (Exception ex)
             {
                 Activator.logError("Failed to launch YAXUnit in debug mode", ex); //$NON-NLS-1$
-                launchError.set(ex.getMessage());
-            }
-
-            if (launchError.get() != null)
-            {
-                return ToolResult.error("Launch failed: " + launchError.get()).toJson(); //$NON-NLS-1$
+                return ToolResult.error("Launch failed: " + ex.getMessage()).toJson(); //$NON-NLS-1$
             }
 
             return ToolResult.success()
@@ -229,11 +221,26 @@ public class DebugYaxunitTestsTool implements IMcpTool
         p.put("reportFormat", "jUnit"); //$NON-NLS-1$ //$NON-NLS-2$
         p.put("closeAfterTests", true); //$NON-NLS-1$
         Map<String, Object> filter = new LinkedHashMap<>();
-        boolean has = false;
-        if (extensions != null && !extensions.isEmpty()) { filter.put("extensions", split(extensions)); has = true; } //$NON-NLS-1$
-        if (modules != null && !modules.isEmpty()) { filter.put("modules", split(modules)); has = true; } //$NON-NLS-1$
-        if (tests != null && !tests.isEmpty()) { filter.put("tests", split(tests)); has = true; } //$NON-NLS-1$
-        if (has) p.put("filter", filter); //$NON-NLS-1$
+        boolean hasFilter = false;
+        if (extensions != null && !extensions.isEmpty())
+        {
+            filter.put("extensions", split(extensions)); //$NON-NLS-1$
+            hasFilter = true;
+        }
+        if (modules != null && !modules.isEmpty())
+        {
+            filter.put("modules", split(modules)); //$NON-NLS-1$
+            hasFilter = true;
+        }
+        if (tests != null && !tests.isEmpty())
+        {
+            filter.put("tests", split(tests)); //$NON-NLS-1$
+            hasFilter = true;
+        }
+        if (hasFilter)
+        {
+            p.put("filter", filter); //$NON-NLS-1$
+        }
         return GsonProvider.toJson(p);
     }
 

@@ -69,8 +69,8 @@ public class GetVariablesTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        long frameRef = parseLong(params.get("frameRef")); //$NON-NLS-1$
-        long threadId = parseLong(params.get("threadId")); //$NON-NLS-1$
+        long frameRef = JsonUtils.extractLongArgument(params, "frameRef", -1L); //$NON-NLS-1$
+        long threadId = JsonUtils.extractLongArgument(params, "threadId", -1L); //$NON-NLS-1$
         int frameIndex = JsonUtils.extractIntArgument(params, "frameIndex", 0); //$NON-NLS-1$
         String expandPath = JsonUtils.extractStringArgument(params, "expandPath"); //$NON-NLS-1$
 
@@ -133,13 +133,4 @@ public class GetVariablesTool implements IMcpTool
         }
     }
 
-    private static long parseLong(String s)
-    {
-        if (s == null || s.isEmpty()) return -1L;
-        try {
-            double d = Double.parseDouble(s.trim());
-            if (d != Math.floor(d) || d < Long.MIN_VALUE || d > Long.MAX_VALUE) return -1L;
-            return (long) d;
-        } catch (NumberFormatException nfe) { return -1L; }
-    }
 }

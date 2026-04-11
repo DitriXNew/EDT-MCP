@@ -221,6 +221,43 @@ public final class JsonUtils
     }
     
     /**
+     * Extracts a long argument from params map.
+     * Handles JSON number strings like "42.0" by parsing via double first.
+     *
+     * @param params the params map
+     * @param argumentName the argument name to extract
+     * @param defaultValue the default value if not found or invalid
+     * @return long value or default
+     */
+    public static long extractLongArgument(Map<String, String> params, String argumentName, long defaultValue)
+    {
+        if (params == null || argumentName == null)
+        {
+            return defaultValue;
+        }
+
+        String value = params.get(argumentName);
+        if (value == null || value.isEmpty())
+        {
+            return defaultValue;
+        }
+
+        try
+        {
+            double d = Double.parseDouble(value.trim());
+            if (d != Math.floor(d) || d < Long.MIN_VALUE || d > Long.MAX_VALUE)
+            {
+                return defaultValue;
+            }
+            return (long) d;
+        }
+        catch (NumberFormatException e)
+        {
+            return defaultValue;
+        }
+    }
+
+    /**
      * Extracts an integer argument from params map.
      * 
      * @param params the params map

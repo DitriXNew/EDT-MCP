@@ -57,7 +57,7 @@ public class ResumeTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        long threadId = parseLong(params.get("threadId")); //$NON-NLS-1$
+        long threadId = JsonUtils.extractLongArgument(params, "threadId", -1L); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
 
         DebugSessionRegistry registry = DebugSessionRegistry.get();
@@ -102,13 +102,4 @@ public class ResumeTool implements IMcpTool
         }
     }
 
-    private static long parseLong(String s)
-    {
-        if (s == null || s.isEmpty()) return -1L;
-        try {
-            double d = Double.parseDouble(s.trim());
-            if (d != Math.floor(d) || d < Long.MIN_VALUE || d > Long.MAX_VALUE) return -1L;
-            return (long) d;
-        } catch (NumberFormatException nfe) { return -1L; }
-    }
 }
