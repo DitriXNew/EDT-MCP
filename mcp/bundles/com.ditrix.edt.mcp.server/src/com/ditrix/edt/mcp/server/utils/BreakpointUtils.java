@@ -403,9 +403,8 @@ public final class BreakpointUtils
             return marker.getAttribute(IMarker.CHAR_END, -1);
         }
 
-        @SuppressWarnings("rawtypes")
         @Override
-        public Object getAdapter(Class adapter)
+        public <T> T getAdapter(Class<T> adapter)
         {
             return null;
         }

@@ -9,9 +9,6 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.lang.reflect.Method;
 import java.util.Map;
 import org.eclipse.core.runtime.Platform;
-import org.eclipse.debug.core.ILaunch;
-import org.eclipse.debug.core.ILaunchManager;
-import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.osgi.framework.Bundle;
 

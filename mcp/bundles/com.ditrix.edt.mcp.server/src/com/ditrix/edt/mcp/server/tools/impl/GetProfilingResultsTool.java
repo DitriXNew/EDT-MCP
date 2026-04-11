@@ -69,7 +69,6 @@ public class GetProfilingResultsTool implements IMcpTool
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public String execute(Map<String, String> params)
     {
         String moduleFilter = JsonUtils.extractStringArgument(params, "moduleFilter"); //$NON-NLS-1$

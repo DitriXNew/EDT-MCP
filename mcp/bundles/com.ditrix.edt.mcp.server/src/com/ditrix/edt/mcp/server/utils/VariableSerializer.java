@@ -142,12 +142,11 @@ public final class VariableSerializer
             hasChildren = false;
         }
         dto.put("hasChildren", hasChildren); //$NON-NLS-1$
-        if (hasChildren && registry != null)
+        if (hasChildren)
         {
-            // Frame-id slot is reused as a generic variable id slot — child IVariables
-            // are accessible via stored frame-context, but for simple expansion the
-            // caller passes name path back, so an opaque ref is informational only.
-            dto.put("ref", "var:" + name); //$NON-NLS-1$ //$NON-NLS-2$
+            // Hint for the caller: pass this name as expandPath (or append it
+            // to the current expandPath with a dot separator) to drill in.
+            dto.put("expandHint", name); //$NON-NLS-1$
         }
         return dto;
     }
