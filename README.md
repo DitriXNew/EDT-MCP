@@ -236,6 +236,7 @@ Add to `claude_desktop_config.json`:
 | `get_applications` | Get list of applications (infobases) for a project with update state |
 | `update_database` | Update database (infobase) with full or incremental update mode |
 | `debug_launch` | Launch application in debug mode (auto-updates database before launch) |
+| `run_yaxunit_tests` | Run YAXUnit tests for a project: launches 1C with `RunUnitTests`, parses JUnit XML, returns Markdown report |
 | `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
@@ -515,6 +516,25 @@ Add to `claude_desktop_config.json`:
 - Requires a launch configuration to be created in EDT first (Run → Run Configurations...)
 - If no configuration exists, returns list of available configurations
 - `updateBeforeLaunch=true` skips update if database is already up to date
+
+#### Run YAXUnit Tests Tool
+
+**`run_yaxunit_tests`** - Run YAXUnit tests for a 1C:Enterprise project. Launches the application with the `RunUnitTests` startup parameter, polls until the launch terminates, parses the JUnit XML report and returns a Markdown summary. The full Markdown report is also written to `report.md` next to `junit.xml` so it can be read directly from disk.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `applicationId` | Yes | Application ID from `get_applications` |
+| `extensions` | No | Comma-separated extension names to filter tests by extension |
+| `modules` | No | Comma-separated common-module names to run (e.g. `OM_tmrlGlovoCatalog`) |
+| `tests` | No | Comma-separated test names in `Module.Method` format |
+| `timeout` | No | Polling window in seconds (default: 60). On expiry returns **Pending**; call again to keep waiting |
+
+**Notes:**
+- Requires a launch configuration in EDT for the project/application and the YAXUnit extension installed in the infobase.
+- The launch is **not** terminated when the polling window expires — call the tool again with identical arguments to keep waiting and fetch the result once 1C closes.
+- Reports are stored under `%TEMP%/edt-mcp-yaxunit/<sanitized-key>_<sha1>/` (`junit.xml` + `report.md` + `xUnitParams.json`). The directory name is derived from `projectName:applicationId:filterHash` — sanitized and suffixed with a SHA-1 hash to avoid collisions. A fresh `junit.xml` (younger than 5 minutes) is reused without restarting 1C.
 
 ### BSL Code Analysis Tools
 

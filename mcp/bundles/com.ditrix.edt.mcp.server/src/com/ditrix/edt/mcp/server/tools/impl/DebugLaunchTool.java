@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -45,13 +46,6 @@ import com.google.gson.JsonObject;
 public class DebugLaunchTool implements IMcpTool
 {
     public static final String NAME = "debug_launch"; //$NON-NLS-1$
-    
-    /** 1C:EDT launch configuration type ID */
-    private static final String LAUNCH_CONFIG_TYPE_ID = "com._1c.g5.v8.dt.launching.core.RuntimeClient"; //$NON-NLS-1$
-    
-    /** Launch configuration attributes */
-    private static final String ATTR_PROJECT_NAME = "com._1c.g5.v8.dt.debug.core.ATTR_PROJECT_NAME"; //$NON-NLS-1$
-    private static final String ATTR_APPLICATION_ID = "com._1c.g5.v8.dt.debug.core.ATTR_APPLICATION_ID"; //$NON-NLS-1$
     
     @Override
     public String getName()
@@ -222,76 +216,31 @@ public class DebugLaunchTool implements IMcpTool
             }
             
             // Get launch configuration type
-            ILaunchConfigurationType configType = launchManager.getLaunchConfigurationType(LAUNCH_CONFIG_TYPE_ID);
+            ILaunchConfigurationType configType = launchManager
+                    .getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID);
             if (configType == null)
             {
-                return ToolResult.error("Launch configuration type not found: " + LAUNCH_CONFIG_TYPE_ID).toJson(); //$NON-NLS-1$
+                return ToolResult.error("Launch configuration type not found: " //$NON-NLS-1$
+                        + LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID).toJson();
             }
-            
-            // Find matching launch configurations
-            ILaunchConfiguration[] allConfigs = launchManager.getLaunchConfigurations(configType);
-            ILaunchConfiguration matchingConfig = null;
-            
-            for (ILaunchConfiguration config : allConfigs)
-            {
-                try
-                {
-                    String configProject = config.getAttribute(ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-                    String configAppId = config.getAttribute(ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
-                    
-                    if (projectName.equals(configProject) && applicationId.equals(configAppId))
-                    {
-                        matchingConfig = config;
-                        break;
-                    }
-                }
-                catch (CoreException e)
-                {
-                    Activator.logError("Error reading launch configuration: " + config.getName(), e); //$NON-NLS-1$
-                }
-            }
-            
-            if (matchingConfig == null)
-            {
-                // No exact match - try to find any config for this project
-                for (ILaunchConfiguration config : allConfigs)
-                {
-                    try
-                    {
-                        String configProject = config.getAttribute(ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-                        if (projectName.equals(configProject))
-                        {
-                            matchingConfig = config;
-                            break;
-                        }
-                    }
-                    catch (CoreException e)
-                    {
-                        // Skip this config
-                    }
-                }
-            }
-            
+
+            // Find matching launch configuration via the shared helper.
+            ILaunchConfiguration matchingConfig = LaunchConfigUtils.findLaunchConfig(
+                    launchManager, configType, projectName, applicationId);
+
             if (matchingConfig == null)
             {
                 // Return list of available configurations for debugging
                 JsonArray availableConfigs = new JsonArray();
-                for (ILaunchConfiguration config : allConfigs)
+                for (ILaunchConfiguration config : LaunchConfigUtils.getAllRuntimeClientConfigs(launchManager, configType))
                 {
-                    try
-                    {
-                        JsonObject configObj = new JsonObject();
-                        configObj.addProperty("name", config.getName()); //$NON-NLS-1$
-                        configObj.addProperty("project", config.getAttribute(ATTR_PROJECT_NAME, "")); //$NON-NLS-1$ //$NON-NLS-2$
-                        configObj.addProperty("applicationId", config.getAttribute(ATTR_APPLICATION_ID, "")); //$NON-NLS-1$ //$NON-NLS-2$
-                        availableConfigs.add(configObj);
-                    }
-                    catch (CoreException e)
-                    {
-                        // Skip
-                    }
+                    JsonObject configObj = new JsonObject();
+                    configObj.addProperty("name", config.getName()); //$NON-NLS-1$
+                    configObj.addProperty("project", LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_PROJECT_NAME, "")); //$NON-NLS-1$ //$NON-NLS-2$
+                    configObj.addProperty("applicationId", LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_APPLICATION_ID, "")); //$NON-NLS-1$ //$NON-NLS-2$
+                    availableConfigs.add(configObj);
                 }
-                
+
                 ToolResult errorResult = ToolResult.error("No launch configuration found for project '" + projectName + //$NON-NLS-1$
                         "' and application '" + applicationName + "' (" + applicationId + "). " + //$NON-NLS-1$ //$NON-NLS-2$
                         "Create a launch configuration in EDT first."); //$NON-NLS-1$
@@ -358,11 +307,6 @@ public class DebugLaunchTool implements IMcpTool
                 return ToolResult.error("Failed to launch debug session" + //$NON-NLS-1$
                         (launchError[0] != null ? ": " + launchError[0] : "")).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
             }
-        }
-        catch (CoreException e)
-        {
-            Activator.logError("Error launching debug for application: " + applicationId, e); //$NON-NLS-1$
-            return ToolResult.error("Launch failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
         catch (Exception e)
         {
