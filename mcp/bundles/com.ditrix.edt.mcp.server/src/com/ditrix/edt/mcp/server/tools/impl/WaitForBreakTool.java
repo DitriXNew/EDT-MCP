@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IThread;
 
@@ -80,6 +81,11 @@ public class WaitForBreakTool implements IMcpTool
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         registry.ensureListenerRegistered();
 
+        // Proactively scan live targets for threads already suspended before the
+        // listener was registered (e.g. manual breakpoint hit in EDT, or suspend
+        // that happened between debug_launch and this call).
+        scanForAlreadySuspended(registry, applicationId);
+
         try
         {
             DebugSessionRegistry.SuspendSnapshot snapshot =
@@ -102,6 +108,40 @@ public class WaitForBreakTool implements IMcpTool
         {
             Activator.logError("Error in wait_for_break", e); //$NON-NLS-1$
             return ToolResult.error("Error: " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Scans the active debug target for threads that are already suspended but
+     * were missed by the registry listener (e.g. suspend happened before the
+     * listener was installed). If a suspended thread is found and the registry
+     * has no snapshot for this appId, injects a synthetic snapshot.
+     */
+    private static void scanForAlreadySuspended(DebugSessionRegistry registry, String applicationId)
+    {
+        try
+        {
+            if (registry.hasSnapshot(applicationId))
+            {
+                return; // already tracked
+            }
+            IDebugTarget target = DebugSessionRegistry.findActiveTarget(applicationId);
+            if (target == null || target.isTerminated())
+            {
+                return;
+            }
+            for (IThread thread : target.getThreads())
+            {
+                if (thread.isSuspended())
+                {
+                    registry.injectSuspend(applicationId, thread);
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // best effort — fall through to normal wait
         }
     }
 

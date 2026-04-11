@@ -74,8 +74,9 @@ public final class BreakpointUtils
         "com._1c.g5.v8.dt.debug.bsl.bslLineBreakpointMarker" //$NON-NLS-1$
     };
 
-    /** Eclipse-generic line breakpoint marker — minimal fallback. */
-    private static final String GENERIC_LINE_MARKER = "org.eclipse.debug.core.lineBreakpointMarker"; //$NON-NLS-1$
+    /** Eclipse-generic line breakpoint marker — minimal fallback.
+     *  Value matches {@code IBreakpoint.LINE_BREAKPOINT_MARKER}. */
+    private static final String GENERIC_LINE_MARKER = "org.eclipse.debug.core.lineBreakpoint"; //$NON-NLS-1$
 
     /** BSL debug model identifier (best effort — verified at runtime). */
     private static final String BSL_MODEL_ID = "com._1c.g5.v8.dt.debug"; //$NON-NLS-1$

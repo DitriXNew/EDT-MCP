@@ -148,9 +148,10 @@ public class StartProfilingTool implements IMcpTool
             Activator.logInfo("Profiling toggled via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
 
             return ToolResult.success()
-                .put("profiling", true) //$NON-NLS-1$
+                .put("toggled", true) //$NON-NLS-1$
                 .put("applicationId", applicationId) //$NON-NLS-1$
-                .put("message", "Profiling toggled. Run your test, then call get_profiling_results.") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("message", "Profiling toggled (on↔off). This is a toggle — calling again " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "will switch profiling off. Run your test, then call get_profiling_results.") //$NON-NLS-1$
                 .toJson();
         }
         catch (Exception e)

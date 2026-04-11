@@ -236,6 +236,31 @@ public final class DebugSessionRegistry
         return id;
     }
 
+    /** Returns true if the registry already holds a suspend snapshot for the given appId. */
+    public boolean hasSnapshot(String appId)
+    {
+        return appId != null && snapshots.containsKey(appId);
+    }
+
+    /**
+     * Injects a synthetic suspend snapshot for a thread that was already suspended
+     * before the listener was installed. This allows wait_for_break to pick it up
+     * without requiring a new SUSPEND event.
+     */
+    public synchronized void injectSuspend(String appId, IThread thread)
+    {
+        if (appId == null || thread == null || snapshots.containsKey(appId))
+        {
+            return;
+        }
+        long threadId = idGenerator.getAndIncrement();
+        threadsById.put(threadId, thread);
+        threadAppId.put(threadId, appId);
+        SuspendSnapshot snapshot = new SuspendSnapshot(threadId, thread);
+        snapshots.put(appId, snapshot);
+        notifyAll();
+    }
+
     /**
      * Clears the snapshot for the given applicationId without touching thread/frame
      * caches. Used by StepTool to prevent waitForSuspend from returning the stale
