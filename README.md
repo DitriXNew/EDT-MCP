@@ -207,6 +207,18 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+### Antigravity
+
+```json
+{
+    "mcpServers": {
+        "EDTMCPServer": {
+            "serverUrl": "http://localhost:8765/mcp"
+        }
+    }
+}
+```
+
 </details>
 
 ## Available Tools
