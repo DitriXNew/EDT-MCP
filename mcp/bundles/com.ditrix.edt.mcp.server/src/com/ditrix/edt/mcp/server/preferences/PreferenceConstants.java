@@ -81,7 +81,15 @@ public final class PreferenceConstants
     
     /** Default decoration style */
     public static final String DEFAULT_TAGS_DECORATION_STYLE = TAGS_STYLE_SUFFIX;
-    
+
+    // === Tool enablement preferences ===
+
+    /** Comma-separated list of disabled tool names */
+    public static final String PREF_DISABLED_TOOLS = "mcpDisabledTools"; //$NON-NLS-1$
+
+    /** Default: all tools enabled (empty string = no disabled tools) */
+    public static final String DEFAULT_DISABLED_TOOLS = ""; //$NON-NLS-1$
+
     private PreferenceConstants()
     {
         // Utility class

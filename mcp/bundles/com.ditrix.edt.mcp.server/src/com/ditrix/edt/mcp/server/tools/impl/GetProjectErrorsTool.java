@@ -23,6 +23,7 @@ import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -92,9 +93,11 @@ public class GetProjectErrorsTool implements IMcpTool
         // Parse objects filter
         List<String> objects = parseObjectsList(objectsJson);
         
-        int defaultLimit = Activator.getDefault().getDefaultLimit();
+        int globalDefaultLimit = Activator.getDefault().getDefaultLimit();
         int maxLimit = Activator.getDefault().getMaxLimit();
-        
+        int defaultLimit = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "limit", globalDefaultLimit); //$NON-NLS-1$
+
         int limit = defaultLimit;
         if (limitStr != null && !limitStr.isEmpty())
         {

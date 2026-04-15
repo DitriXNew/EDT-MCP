@@ -36,6 +36,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.Task;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -139,7 +140,9 @@ public class GetMetadataObjectsTool implements IMcpTool
         }
         // Note: language will be resolved from configuration default if null/empty
         
-        int limit = 100;
+        int configuredLimit = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
+        int limit = configuredLimit;
         if (limitStr != null && !limitStr.isEmpty())
         {
             try

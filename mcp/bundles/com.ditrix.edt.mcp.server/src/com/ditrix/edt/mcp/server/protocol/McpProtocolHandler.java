@@ -148,6 +148,13 @@ public class McpProtocolHandler
         {
             return buildErrorResponse(McpConstants.ERROR_METHOD_NOT_FOUND, "Tool not found: " + toolName, requestId); //$NON-NLS-1$
         }
+
+        // Check if tool is enabled
+        if (!toolRegistry.isToolEnabled(toolName))
+        {
+            return buildErrorResponse(McpConstants.ERROR_METHOD_NOT_FOUND,
+                "Tool is disabled: " + toolName + ". Enable it in EDT Preferences > MCP Server > Tools.", requestId); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         
         Activator.logInfo("Processing tools/call: " + tool.getName()); //$NON-NLS-1$
         
@@ -328,7 +335,7 @@ public class McpProtocolHandler
     {
         ToolsListResult result = new ToolsListResult();
         
-        for (IMcpTool tool : toolRegistry.getAllTools())
+        for (IMcpTool tool : toolRegistry.getEnabledTools())
         {
             // Parse inputSchema from JSON string to JsonElement
             JsonElement schema = JsonParser.parseString(tool.getInputSchema());

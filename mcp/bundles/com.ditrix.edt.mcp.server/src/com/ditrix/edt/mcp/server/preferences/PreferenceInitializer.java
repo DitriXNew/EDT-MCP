@@ -36,5 +36,12 @@ public class PreferenceInitializer extends AbstractPreferenceInitializer
         // Update check interval
         store.setDefault(PreferenceConstants.PREF_UPDATE_CHECK_INTERVAL,
             PreferenceConstants.DEFAULT_UPDATE_CHECK_INTERVAL);
+
+        // Tool enablement
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+
+        // Per-tool parameter defaults
+        ToolParameterSettings.getInstance().initializeDefaults(store);
     }
 }

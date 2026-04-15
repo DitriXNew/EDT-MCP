@@ -19,6 +19,7 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -67,9 +68,11 @@ public class GetTasksTool implements IMcpTool
         String priority = JsonUtils.extractStringArgument(params, "priority"); //$NON-NLS-1$
         String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
         
-        int defaultLimit = Activator.getDefault().getDefaultLimit();
+        int globalDefaultLimit = Activator.getDefault().getDefaultLimit();
         int maxLimit = Activator.getDefault().getMaxLimit();
-        
+        int defaultLimit = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "limit", globalDefaultLimit); //$NON-NLS-1$
+
         int limit = defaultLimit;
         if (limitStr != null && !limitStr.isEmpty())
         {

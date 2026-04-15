@@ -22,6 +22,7 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -122,8 +123,12 @@ public class SearchInCodeTool implements IMcpTool
         String query = JsonUtils.extractStringArgument(params, "query"); //$NON-NLS-1$
         boolean caseSensitive = JsonUtils.extractBooleanArgument(params, "caseSensitive", false); //$NON-NLS-1$
         boolean isRegex = JsonUtils.extractBooleanArgument(params, "isRegex", false); //$NON-NLS-1$
-        int maxResults = JsonUtils.extractIntArgument(params, "maxResults", DEFAULT_MAX_RESULTS); //$NON-NLS-1$
-        int contextLines = JsonUtils.extractIntArgument(params, "contextLines", DEFAULT_CONTEXT_LINES); //$NON-NLS-1$
+        int configuredMaxResults = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "maxResults", DEFAULT_MAX_RESULTS); //$NON-NLS-1$
+        int configuredContextLines = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "contextLines", DEFAULT_CONTEXT_LINES); //$NON-NLS-1$
+        int maxResults = JsonUtils.extractIntArgument(params, "maxResults", configuredMaxResults); //$NON-NLS-1$
+        int contextLines = JsonUtils.extractIntArgument(params, "contextLines", configuredContextLines); //$NON-NLS-1$
         String fileMask = JsonUtils.extractStringArgument(params, "fileMask"); //$NON-NLS-1$
         String metadataType = JsonUtils.extractStringArgument(params, "metadataType"); //$NON-NLS-1$
         String outputMode = JsonUtils.extractStringArgument(params, "outputMode"); //$NON-NLS-1$
