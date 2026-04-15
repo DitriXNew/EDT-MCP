@@ -297,9 +297,11 @@ public class ToolSettingsTab
                 pendingValues.put(key, param.getDefaultValue());
             }
         }
-        // Refresh UI if a tool is selected
+        // Refresh UI if a tool is selected. Clear current spinner tracking first
+        // so stale UI values are not saved back into pendingValues.
         if (selectedTool != null)
         {
+            currentSpinners.clear();
             showParamsForTool(selectedTool);
         }
     }
