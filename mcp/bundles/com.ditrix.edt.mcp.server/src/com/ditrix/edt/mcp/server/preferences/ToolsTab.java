@@ -6,7 +6,9 @@
 
 package com.ditrix.edt.mcp.server.preferences;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.eclipse.jface.resource.ImageDescriptor;
@@ -50,8 +52,11 @@ public class ToolsTab
     /** Local copy of disabled tools for editing (committed on performOk) */
     private final Set<String> disabledTools;
 
-    /** Flag to avoid recursion when updating check states */
+    /** Flag to avoid recursion when updating check states (SWT is single-threaded) */
     private boolean updatingChecks = false;
+
+    /** Track created images for disposal */
+    private final List<org.eclipse.swt.graphics.Image> managedImages = new ArrayList<>();
 
     public ToolsTab(Composite parent)
     {
@@ -124,7 +129,9 @@ public class ToolsTab
             Activator.PLUGIN_ID, "icons/check_all.png"); //$NON-NLS-1$
         if (checkAllIcon != null)
         {
-            checkAllButton.setImage(checkAllIcon.createImage());
+            org.eclipse.swt.graphics.Image img = checkAllIcon.createImage();
+            checkAllButton.setImage(img);
+            managedImages.add(img);
         }
         else
         {
@@ -149,7 +156,9 @@ public class ToolsTab
             Activator.PLUGIN_ID, "icons/uncheck_all.png"); //$NON-NLS-1$
         if (uncheckAllIcon != null)
         {
-            uncheckAllButton.setImage(uncheckAllIcon.createImage());
+            org.eclipse.swt.graphics.Image img = uncheckAllIcon.createImage();
+            uncheckAllButton.setImage(img);
+            managedImages.add(img);
         }
         else
         {
@@ -386,6 +395,21 @@ public class ToolsTab
         return !disabledTools.equals(ToolSettingsService.getInstance().getDisabledTools());
     }
 
+    /**
+     * Disposes all managed SWT images. Must be called when the tab is disposed.
+     */
+    public void dispose()
+    {
+        for (org.eclipse.swt.graphics.Image image : managedImages)
+        {
+            if (image != null && !image.isDisposed())
+            {
+                image.dispose();
+            }
+        }
+        managedImages.clear();
+    }
+
     // === Tree content provider ===
 
     private static class ToolTreeContentProvider implements ITreeContentProvider
@@ -432,7 +456,6 @@ public class ToolsTab
     private static class ToolTreeLabelProvider extends LabelProvider
     {
         private Image groupImage;
-        private Image toolImage;
 
         @Override
         public String getText(Object element)
@@ -479,11 +502,6 @@ public class ToolsTab
             {
                 groupImage.dispose();
                 groupImage = null;
-            }
-            if (toolImage != null)
-            {
-                toolImage.dispose();
-                toolImage = null;
             }
             super.dispose();
         }

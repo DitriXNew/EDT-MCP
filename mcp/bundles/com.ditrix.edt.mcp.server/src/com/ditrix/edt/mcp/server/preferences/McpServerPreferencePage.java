@@ -123,4 +123,18 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
         toolSettingsTab.performDefaults();
         super.performDefaults();
     }
+
+    @Override
+    public void dispose()
+    {
+        if (generalTab != null)
+        {
+            generalTab.dispose();
+        }
+        if (toolsTab != null)
+        {
+            toolsTab.dispose();
+        }
+        super.dispose();
+    }
 }

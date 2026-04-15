@@ -7,7 +7,10 @@
 package com.ditrix.edt.mcp.server.preferences;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
+import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.swt.SWT;
@@ -53,6 +56,9 @@ public class GeneralTab
     private Button startButton;
     private Button stopButton;
     private Button restartButton;
+
+    /** Track created images for disposal */
+    private final List<org.eclipse.swt.graphics.Image> managedImages = new ArrayList<>();
 
     private static final String[][] TAG_STYLES = {
         {"All tags (suffix)", PreferenceConstants.TAGS_STYLE_SUFFIX}, //$NON-NLS-1$
@@ -338,10 +344,7 @@ public class GeneralTab
 
         startButton = new Button(controlComposite, SWT.PUSH);
         startButton.setText("Start"); //$NON-NLS-1$
-        if (startIcon != null)
-        {
-            startButton.setImage(startIcon.createImage());
-        }
+        setManagedImage(startButton, startIcon);
         startButton.addSelectionListener(new SelectionAdapter()
         {
             @Override
@@ -353,10 +356,7 @@ public class GeneralTab
 
         stopButton = new Button(controlComposite, SWT.PUSH);
         stopButton.setText("Stop"); //$NON-NLS-1$
-        if (stopIcon != null)
-        {
-            stopButton.setImage(stopIcon.createImage());
-        }
+        setManagedImage(stopButton, stopIcon);
         stopButton.addSelectionListener(new SelectionAdapter()
         {
             @Override
@@ -368,10 +368,7 @@ public class GeneralTab
 
         restartButton = new Button(controlComposite, SWT.PUSH);
         restartButton.setText("Restart"); //$NON-NLS-1$
-        if (restartIcon != null)
-        {
-            restartButton.setImage(restartIcon.createImage());
-        }
+        setManagedImage(restartButton, restartIcon);
         restartButton.addSelectionListener(new SelectionAdapter()
         {
             @Override
@@ -489,41 +486,86 @@ public class GeneralTab
 
     private void startServer()
     {
+        McpServer server = Activator.getDefault().getMcpServer();
+        if (server == null)
+        {
+            return;
+        }
         try
         {
-            performOk(); // Save settings before starting
-            int port = portSpinner.getSelection();
-            Activator.getDefault().getMcpServer().start(port);
+            performOk();
+            server.start(portSpinner.getSelection());
             updateStatusLabel();
             updateButtons();
         }
         catch (IOException e)
         {
             Activator.logError("Failed to start MCP Server", e); //$NON-NLS-1$
+            MessageDialog.openError(composite.getShell(),
+                "Start Failed", "Failed to start MCP Server: " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
     private void stopServer()
     {
-        Activator.getDefault().getMcpServer().stop();
+        McpServer server = Activator.getDefault().getMcpServer();
+        if (server == null)
+        {
+            return;
+        }
+        server.stop();
         updateStatusLabel();
         updateButtons();
     }
 
     private void restartServer()
     {
+        McpServer server = Activator.getDefault().getMcpServer();
+        if (server == null)
+        {
+            return;
+        }
         try
         {
-            performOk(); // Save settings before restarting
-            int port = portSpinner.getSelection();
-            Activator.getDefault().getMcpServer().restart(port);
+            performOk();
+            server.restart(portSpinner.getSelection());
             updateStatusLabel();
             updateButtons();
         }
         catch (IOException e)
         {
             Activator.logError("Failed to restart MCP Server", e); //$NON-NLS-1$
+            MessageDialog.openError(composite.getShell(),
+                "Restart Failed", "Failed to restart MCP Server: " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
         }
+    }
+
+    /**
+     * Creates an Image from the descriptor, sets it on the button, and tracks it for disposal.
+     */
+    private void setManagedImage(Button button, ImageDescriptor descriptor)
+    {
+        if (descriptor != null)
+        {
+            org.eclipse.swt.graphics.Image image = descriptor.createImage();
+            button.setImage(image);
+            managedImages.add(image);
+        }
+    }
+
+    /**
+     * Disposes all managed SWT images. Must be called when the tab is disposed.
+     */
+    public void dispose()
+    {
+        for (org.eclipse.swt.graphics.Image image : managedImages)
+        {
+            if (image != null && !image.isDisposed())
+            {
+                image.dispose();
+            }
+        }
+        managedImages.clear();
     }
 
     private Label createLabel(String text)
