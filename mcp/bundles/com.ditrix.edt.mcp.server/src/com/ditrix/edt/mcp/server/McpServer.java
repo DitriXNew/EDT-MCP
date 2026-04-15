@@ -56,6 +56,18 @@ import com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool;
 import com.ditrix.edt.mcp.server.tools.impl.ValidateQueryTool;
 import com.ditrix.edt.mcp.server.tools.impl.RenameMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
+import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
+import com.ditrix.edt.mcp.server.tools.impl.RemoveBreakpointTool;
+import com.ditrix.edt.mcp.server.tools.impl.ListBreakpointsTool;
+import com.ditrix.edt.mcp.server.tools.impl.WaitForBreakTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetVariablesTool;
+import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
+import com.ditrix.edt.mcp.server.tools.impl.StepTool;
+import com.ditrix.edt.mcp.server.tools.impl.ResumeTool;
+import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
+import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetProfilingResultsTool;
+import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.AddMetadataAttributeTool;
 import com.sun.net.httpserver.HttpExchange;
@@ -201,6 +213,20 @@ public class McpServer
         registry.register(new UpdateDatabaseTool());
         registry.register(new DebugLaunchTool());
         registry.register(new RunYaxunitTestsTool());
+
+        // Debug inspection tools (breakpoints + suspended state)
+        registry.register(new SetBreakpointTool());
+        registry.register(new RemoveBreakpointTool());
+        registry.register(new ListBreakpointsTool());
+        registry.register(new WaitForBreakTool());
+        registry.register(new GetVariablesTool());
+        registry.register(new StepTool());
+        registry.register(new ResumeTool());
+        registry.register(new EvaluateExpressionTool());
+        registry.register(new DebugYaxunitTestsTool());
+        registry.register(new DebugStatusTool());
+        registry.register(new StartProfilingTool());
+        registry.register(new GetProfilingResultsTool());
 
         // BSL code analysis tools
         registry.register(new ReadModuleSourceTool());
