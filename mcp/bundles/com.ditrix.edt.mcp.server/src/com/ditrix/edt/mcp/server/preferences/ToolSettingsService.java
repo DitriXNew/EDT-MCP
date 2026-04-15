@@ -164,10 +164,24 @@ public final class ToolSettingsService
 
     /**
      * Returns the count of currently enabled tools.
+     * Only counts known tools (those belonging to a ToolGroup) to avoid
+     * incorrect counts from obsolete tool names left in preferences.
      */
     public int getEnabledToolCount()
     {
-        return ToolGroup.getTotalToolCount() - getDisabledTools().size();
+        Set<String> disabled = getDisabledTools();
+        int enabled = 0;
+        for (ToolGroup group : ToolGroup.values())
+        {
+            for (String toolName : group.getToolNames())
+            {
+                if (!disabled.contains(toolName))
+                {
+                    enabled++;
+                }
+            }
+        }
+        return enabled;
     }
 
     /**

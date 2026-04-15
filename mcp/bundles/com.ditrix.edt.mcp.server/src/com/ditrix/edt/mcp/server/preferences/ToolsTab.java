@@ -102,6 +102,10 @@ public class ToolsTab
         presetCombo.setToolTipText("Select a preset configuration or customize manually"); //$NON-NLS-1$
         selectMatchingPreset();
 
+        // Spacer to push buttons to the right
+        Label spacer = new Label(bar, SWT.NONE);
+        spacer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
         presetCombo.addSelectionListener(new SelectionAdapter()
         {
             @Override
@@ -179,10 +183,6 @@ public class ToolsTab
                 updateCountLabel();
             }
         });
-
-        // Spacer to push buttons right
-        Label spacer = new Label(bar, SWT.NONE);
-        spacer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     }
 
     private void createToolTree()
@@ -328,8 +328,19 @@ public class ToolsTab
 
     private void updateCountLabel()
     {
-        int total = ToolGroup.getTotalToolCount();
-        int enabled = total - disabledTools.size();
+        int total = 0;
+        int enabled = 0;
+        for (ToolGroup group : ToolGroup.values())
+        {
+            for (String toolName : group.getToolNames())
+            {
+                total++;
+                if (!disabledTools.contains(toolName))
+                {
+                    enabled++;
+                }
+            }
+        }
         countLabel.setText(enabled + " of " + total + " tools enabled"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
