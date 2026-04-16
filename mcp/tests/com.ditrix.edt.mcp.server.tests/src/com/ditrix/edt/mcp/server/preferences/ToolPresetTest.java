@@ -156,6 +156,21 @@ public class ToolPresetTest
         assertEquals(ToolPreset.ALL_TOOLS, ToolPreset.matchPreset(new HashSet<>()));
     }
 
+    @Test
+    public void testMatchPresetIgnoresStaleToolNames()
+    {
+        // Simulate stale tool names from an older plugin version
+        Set<String> disabled = new HashSet<>();
+        disabled.add("obsolete_tool_from_old_version");
+        // Empty known tools = should match ALL_TOOLS
+        assertEquals(ToolPreset.ALL_TOOLS, ToolPreset.matchPreset(disabled));
+
+        // Stale names mixed with valid preset tools should still match
+        Set<String> disabledWithStale = new HashSet<>(ToolPreset.DEVELOPMENT.getDisabledTools());
+        disabledWithStale.add("another_obsolete_tool");
+        assertEquals(ToolPreset.DEVELOPMENT, ToolPreset.matchPreset(disabledWithStale));
+    }
+
     // === Disabled tools validity ===
 
     @Test

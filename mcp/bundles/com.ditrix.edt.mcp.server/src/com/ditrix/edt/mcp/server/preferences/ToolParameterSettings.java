@@ -106,6 +106,10 @@ public final class ToolParameterSettings
             new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
                 "Default number of metadata objects to return", 100, 1, 1000))); //$NON-NLS-1$
 
+        map.put("get_content_assist", Collections.singletonList( //$NON-NLS-1$
+            new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
+                "Default number of content assist proposals to return", 100, 1, 1000))); //$NON-NLS-1$
+
         map.put("search_in_code", Arrays.asList( //$NON-NLS-1$
             new ParameterDef("maxResults", "Max results", //$NON-NLS-1$ //$NON-NLS-2$
                 "Maximum number of search matches to return", 100, 1, 500), //$NON-NLS-1$

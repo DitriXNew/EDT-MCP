@@ -70,16 +70,27 @@ public enum ToolPreset
 
     /**
      * Finds the preset that matches the given disabled tools set, or CUSTOM if none match.
+     * Unknown tool names (e.g. from older plugin versions) are ignored during comparison.
      */
     public static ToolPreset matchPreset(Set<String> disabledTools)
     {
+        // Filter out tool names not known to any group (stale after upgrades)
+        Set<String> knownDisabled = new HashSet<>();
+        for (String tool : disabledTools)
+        {
+            if (ToolGroup.getGroupForTool(tool) != null)
+            {
+                knownDisabled.add(tool);
+            }
+        }
+
         for (ToolPreset preset : values())
         {
             if (preset == CUSTOM)
             {
                 continue;
             }
-            if (preset.disabledTools.equals(disabledTools))
+            if (preset.disabledTools.equals(knownDisabled))
             {
                 return preset;
             }
