@@ -117,6 +117,10 @@ public class McpToolRegistry
      */
     public boolean isToolEnabled(String name)
     {
+        if (name == null)
+        {
+            return false;
+        }
         return tools.containsKey(name)
             && ToolSettingsService.getInstance().isToolEnabled(name);
     }
