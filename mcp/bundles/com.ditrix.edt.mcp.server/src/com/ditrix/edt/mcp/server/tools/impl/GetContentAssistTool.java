@@ -91,7 +91,6 @@ public class GetContentAssistTool implements IMcpTool
         String filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
         String columnStr = JsonUtils.extractStringArgument(params, "column"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
         String offsetStr = JsonUtils.extractStringArgument(params, "offset"); //$NON-NLS-1$
         String containsFilter = JsonUtils.extractStringArgument(params, "contains"); //$NON-NLS-1$
         String extendedDocStr = JsonUtils.extractStringArgument(params, "extendedDocumentation"); //$NON-NLS-1$
@@ -124,18 +123,8 @@ public class GetContentAssistTool implements IMcpTool
             return ToolResult.error("Line and column must be >= 1").toJson(); //$NON-NLS-1$
         }
         
-        int limit = 100;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min((int) Double.parseDouble(limitStr), 1000);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
+        int limit = JsonUtils.extractIntArgument(params, "limit", 100); //$NON-NLS-1$
+        limit = Math.min(Math.max(1, limit), 1000);
         
         int offset = 0;
         if (offsetStr != null && !offsetStr.isEmpty())

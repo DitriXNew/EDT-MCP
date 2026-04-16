@@ -92,15 +92,15 @@ public final class ToolParameterSettings
 
         map.put("get_project_errors", Collections.singletonList( //$NON-NLS-1$
             new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
-                "Default number of errors to return", 100, 1, 10000))); //$NON-NLS-1$
+                "Default number of errors to return", 100, 1, 1000))); //$NON-NLS-1$
 
         map.put("get_bookmarks", Collections.singletonList( //$NON-NLS-1$
             new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
-                "Default number of bookmarks to return", 100, 1, 10000))); //$NON-NLS-1$
+                "Default number of bookmarks to return", 100, 1, 1000))); //$NON-NLS-1$
 
         map.put("get_tasks", Collections.singletonList( //$NON-NLS-1$
             new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
-                "Default number of tasks to return", 100, 1, 10000))); //$NON-NLS-1$
+                "Default number of tasks to return", 100, 1, 1000))); //$NON-NLS-1$
 
         map.put("get_metadata_objects", Collections.singletonList( //$NON-NLS-1$
             new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
