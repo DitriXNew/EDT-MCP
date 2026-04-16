@@ -27,9 +27,8 @@ public class ConstantsTest
         assertNotNull(PreferenceConstants.PREF_PORT);
         assertNotNull(PreferenceConstants.PREF_AUTO_START);
         assertNotNull(PreferenceConstants.PREF_CHECKS_FOLDER);
-        assertNotNull(PreferenceConstants.PREF_DEFAULT_LIMIT);
-        assertNotNull(PreferenceConstants.PREF_MAX_LIMIT);
         assertNotNull(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
+        assertNotNull(PreferenceConstants.PREF_DISABLED_TOOLS);
     }
 
     @Test
@@ -37,9 +36,8 @@ public class ConstantsTest
     {
         assertFalse(PreferenceConstants.PREF_PORT.isEmpty());
         assertFalse(PreferenceConstants.PREF_AUTO_START.isEmpty());
-        assertFalse(PreferenceConstants.PREF_DEFAULT_LIMIT.isEmpty());
-        assertFalse(PreferenceConstants.PREF_MAX_LIMIT.isEmpty());
         assertFalse(PreferenceConstants.PREF_PLAIN_TEXT_MODE.isEmpty());
+        assertFalse(PreferenceConstants.PREF_DISABLED_TOOLS.isEmpty());
     }
 
     @Test
@@ -50,14 +48,11 @@ public class ConstantsTest
     }
 
     @Test
-    public void testDefaultLimits()
+    public void testDisabledToolsDefault()
     {
-        assertTrue("Default limit should be positive",
-            PreferenceConstants.DEFAULT_DEFAULT_LIMIT > 0);
-        assertTrue("Max limit should be positive",
-            PreferenceConstants.DEFAULT_MAX_LIMIT > 0);
-        assertTrue("Max limit should be >= default limit",
-            PreferenceConstants.DEFAULT_MAX_LIMIT >= PreferenceConstants.DEFAULT_DEFAULT_LIMIT);
+        assertNotNull(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        assertTrue("Default disabled tools should be empty",
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS.isEmpty());
     }
 
     @Test

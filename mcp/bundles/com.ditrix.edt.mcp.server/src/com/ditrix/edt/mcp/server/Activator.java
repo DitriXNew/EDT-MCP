@@ -490,28 +490,6 @@ public class Activator extends AbstractUIPlugin
     }
 
     /**
-     * Returns the default result limit for tools from preferences.
-     * 
-     * @return default limit
-     */
-    public int getDefaultLimit()
-    {
-        return getPreferenceStore().getInt(
-            com.ditrix.edt.mcp.server.preferences.PreferenceConstants.PREF_DEFAULT_LIMIT);
-    }
-
-    /**
-     * Returns the maximum result limit for tools from preferences.
-     * 
-     * @return max limit
-     */
-    public int getMaxLimit()
-    {
-        return getPreferenceStore().getInt(
-            com.ditrix.edt.mcp.server.preferences.PreferenceConstants.PREF_MAX_LIMIT);
-    }
-
-    /**
      * Logs an info message.
      * 
      * @param message the message

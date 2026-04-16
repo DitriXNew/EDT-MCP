@@ -124,12 +124,12 @@ public class GetContentAssistTool implements IMcpTool
             return ToolResult.error("Line and column must be >= 1").toJson(); //$NON-NLS-1$
         }
         
-        int limit = Activator.getDefault().getDefaultLimit();
+        int limit = 100;
         if (limitStr != null && !limitStr.isEmpty())
         {
             try
             {
-                limit = Math.min((int) Double.parseDouble(limitStr), Activator.getDefault().getMaxLimit());
+                limit = Math.min((int) Double.parseDouble(limitStr), 1000);
             }
             catch (NumberFormatException e)
             {
