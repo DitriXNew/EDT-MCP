@@ -26,14 +26,12 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
 /**
  * MCP Server preference page with tabbed layout.
  * Tab 1: General - port, auto-start, limits, tags, updates, server control
- * Tab 2: Tools - tree of tool groups with enable/disable checkboxes
- * Tab 3: Tool Settings - per-tool parameter configuration
+ * Tab 2: Tools - tree of tool groups with enable/disable, description, and parameter settings
  */
 public class McpServerPreferencePage extends PreferencePage implements IWorkbenchPreferencePage
 {
     private GeneralTab generalTab;
     private ToolsTab toolsTab;
-    private ToolSettingsTab toolSettingsTab;
 
     public McpServerPreferencePage()
     {
@@ -57,9 +55,9 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
         container.setLayout(containerLayout);
         container.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
-        CTabFolder tabFolder = new CTabFolder(container, SWT.BORDER | SWT.FLAT);
+        CTabFolder tabFolder = new CTabFolder(container, SWT.BORDER);
         tabFolder.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-        tabFolder.setSimple(false);
+        tabFolder.setSimple(true);
 
         // Tab 1: General
         CTabItem generalItem = new CTabItem(tabFolder, SWT.NONE);
@@ -72,12 +70,6 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
         toolsItem.setText("Tools"); //$NON-NLS-1$
         toolsTab = new ToolsTab(tabFolder);
         toolsItem.setControl(toolsTab.getControl());
-
-        // Tab 3: Tool Settings
-        CTabItem toolSettingsItem = new CTabItem(tabFolder, SWT.NONE);
-        toolSettingsItem.setText("Tool Settings"); //$NON-NLS-1$
-        toolSettingsTab = new ToolSettingsTab(tabFolder);
-        toolSettingsItem.setControl(toolSettingsTab.getControl());
 
         // Select the first tab
         tabFolder.setSelection(0);
@@ -92,7 +84,6 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
 
         generalTab.performOk();
         toolsTab.performOk();
-        toolSettingsTab.performOk();
 
         // If tool enablement changed and server is running, restart to apply
         if (toolsChanged)
@@ -120,7 +111,6 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
     {
         generalTab.performDefaults();
         toolsTab.performDefaults();
-        toolSettingsTab.performDefaults();
         super.performDefaults();
     }
 

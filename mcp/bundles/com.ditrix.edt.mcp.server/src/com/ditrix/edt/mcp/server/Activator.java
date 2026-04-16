@@ -67,6 +67,10 @@ public class Activator extends AbstractUIPlugin
         plugin = this;
         mcpServer = new McpServer();
 
+        // Register tools eagerly so descriptions are available in the preferences UI
+        // even if the MCP server has not been started yet.
+        mcpServer.registerTools();
+
         // In Tycho headless test runtime, avoid eager workspace/UI/platform initialization.
         // This prevents background platform startup races that can fail the test process.
         if (isHeadless())

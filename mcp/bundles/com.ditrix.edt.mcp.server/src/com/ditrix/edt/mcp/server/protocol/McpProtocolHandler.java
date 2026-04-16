@@ -152,8 +152,10 @@ public class McpProtocolHandler
         // Check if tool is enabled
         if (!toolRegistry.isToolEnabled(toolName))
         {
-            return buildErrorResponse(McpConstants.ERROR_METHOD_NOT_FOUND,
-                "Tool is disabled: " + toolName + ". Enable it in EDT Preferences > MCP Server > Tools.", requestId); //$NON-NLS-1$ //$NON-NLS-2$
+            String msg = "Tool '" + toolName + "' is disabled by the user. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "If this functionality is needed, ask the user to enable it: " //$NON-NLS-1$
+                + "EDT Preferences \u2192 MCP Server \u2192 Tools tab \u2192 check '" + toolName + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            return buildToolCallTextResponse(msg, requestId);
         }
         
         Activator.logInfo("Processing tools/call: " + tool.getName()); //$NON-NLS-1$

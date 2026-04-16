@@ -46,8 +46,6 @@ public class GeneralTab
     private Spinner portSpinner;
     private Button autoStartCheck;
     private Text checksFolderText;
-    private Spinner defaultLimitSpinner;
-    private Spinner maxLimitSpinner;
     private Button plainTextCheck;
     private Button showTagsCheck;
     private Combo tagStyleCombo;
@@ -139,26 +137,6 @@ public class GeneralTab
 
     private void createLimitsSection()
     {
-        // Default limit
-        createLabel("Default result limit:"); //$NON-NLS-1$
-        defaultLimitSpinner = new Spinner(composite, SWT.BORDER);
-        defaultLimitSpinner.setMinimum(1);
-        defaultLimitSpinner.setMaximum(10000);
-        defaultLimitSpinner.setSelection(store.getInt(PreferenceConstants.PREF_DEFAULT_LIMIT));
-        defaultLimitSpinner.setToolTipText("Default number of results returned by tools"); //$NON-NLS-1$
-        defaultLimitSpinner.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
-        createLabel(""); //$NON-NLS-1$
-
-        // Max limit
-        createLabel("Maximum result limit:"); //$NON-NLS-1$
-        maxLimitSpinner = new Spinner(composite, SWT.BORDER);
-        maxLimitSpinner.setMinimum(1);
-        maxLimitSpinner.setMaximum(100000);
-        maxLimitSpinner.setSelection(store.getInt(PreferenceConstants.PREF_MAX_LIMIT));
-        maxLimitSpinner.setToolTipText("Maximum number of results that can be requested"); //$NON-NLS-1$
-        maxLimitSpinner.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
-        createLabel(""); //$NON-NLS-1$
-
         // Plain text mode
         plainTextCheck = new Button(composite, SWT.CHECK);
         plainTextCheck.setText("Plain text mode (Cursor compatibility)"); //$NON-NLS-1$
@@ -399,8 +377,6 @@ public class GeneralTab
         store.setValue(PreferenceConstants.PREF_PORT, portSpinner.getSelection());
         store.setValue(PreferenceConstants.PREF_AUTO_START, autoStartCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_CHECKS_FOLDER, checksFolderText.getText());
-        store.setValue(PreferenceConstants.PREF_DEFAULT_LIMIT, defaultLimitSpinner.getSelection());
-        store.setValue(PreferenceConstants.PREF_MAX_LIMIT, maxLimitSpinner.getSelection());
         store.setValue(PreferenceConstants.PREF_PLAIN_TEXT_MODE, plainTextCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR, showTagsCheck.getSelection());
 
@@ -425,8 +401,6 @@ public class GeneralTab
         portSpinner.setSelection(PreferenceConstants.DEFAULT_PORT);
         autoStartCheck.setSelection(PreferenceConstants.DEFAULT_AUTO_START);
         checksFolderText.setText(PreferenceConstants.DEFAULT_CHECKS_FOLDER);
-        defaultLimitSpinner.setSelection(PreferenceConstants.DEFAULT_DEFAULT_LIMIT);
-        maxLimitSpinner.setSelection(PreferenceConstants.DEFAULT_MAX_LIMIT);
         plainTextCheck.setSelection(PreferenceConstants.DEFAULT_PLAIN_TEXT_MODE);
         showTagsCheck.setSelection(PreferenceConstants.DEFAULT_TAGS_SHOW_IN_NAVIGATOR);
 

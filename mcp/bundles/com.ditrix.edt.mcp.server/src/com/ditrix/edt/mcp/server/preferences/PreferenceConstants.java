@@ -20,12 +20,6 @@ public final class PreferenceConstants
     /** Path to check descriptions folder */
     public static final String PREF_CHECKS_FOLDER = "mcpChecksFolder"; //$NON-NLS-1$
     
-    /** Default result limit for tools */
-    public static final String PREF_DEFAULT_LIMIT = "mcpDefaultLimit"; //$NON-NLS-1$
-    
-    /** Maximum result limit for tools */
-    public static final String PREF_MAX_LIMIT = "mcpMaxLimit"; //$NON-NLS-1$
-    
     /** Plain text mode (Cursor compatibility) - returns text instead of embedded resources */
     public static final String PREF_PLAIN_TEXT_MODE = "mcpPlainTextMode"; //$NON-NLS-1$
 
@@ -49,12 +43,6 @@ public final class PreferenceConstants
     
     /** Default checks folder (empty - feature disabled) */
     public static final String DEFAULT_CHECKS_FOLDER = ""; //$NON-NLS-1$
-    
-    /** Default result limit */
-    public static final int DEFAULT_DEFAULT_LIMIT = 100;
-    
-    /** Default maximum limit */
-    public static final int DEFAULT_MAX_LIMIT = 1000;
     
     /** Default plain text mode (disabled - use embedded resources by default) */
     public static final boolean DEFAULT_PLAIN_TEXT_MODE = false;
