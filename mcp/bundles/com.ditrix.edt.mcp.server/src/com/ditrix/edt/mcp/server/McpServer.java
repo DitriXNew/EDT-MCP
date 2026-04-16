@@ -178,9 +178,10 @@ public class McpServer
     }
 
     /**
-     * Registers all MCP tools.
+     * Registers all MCP tools. Package-private so Activator can call it early
+     * to populate descriptions for the preferences UI even if the server hasn't started.
      */
-    private void registerTools()
+    void registerTools()
     {
         McpToolRegistry registry = McpToolRegistry.getInstance();
         

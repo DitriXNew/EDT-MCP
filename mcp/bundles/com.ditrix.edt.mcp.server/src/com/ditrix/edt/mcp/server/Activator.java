@@ -74,6 +74,10 @@ public class Activator extends AbstractUIPlugin
             logInfo("EDT MCP Server plugin started in headless mode (startup integrations skipped)"); //$NON-NLS-1$
             return;
         }
+
+        // Register tools eagerly so descriptions are available in the preferences UI
+        // even if the MCP server has not been started yet.
+        mcpServer.registerTools();
         
         // Initialize service trackers
         v8ProjectManagerTracker = new ServiceTracker<>(context, IV8ProjectManager.class, null);
@@ -483,28 +487,6 @@ public class Activator extends AbstractUIPlugin
     {
         Activator activator = getDefault();
         return activator != null ? activator.getGroupService() : null;
-    }
-
-    /**
-     * Returns the default result limit for tools from preferences.
-     * 
-     * @return default limit
-     */
-    public int getDefaultLimit()
-    {
-        return getPreferenceStore().getInt(
-            com.ditrix.edt.mcp.server.preferences.PreferenceConstants.PREF_DEFAULT_LIMIT);
-    }
-
-    /**
-     * Returns the maximum result limit for tools from preferences.
-     * 
-     * @return max limit
-     */
-    public int getMaxLimit()
-    {
-        return getPreferenceStore().getInt(
-            com.ditrix.edt.mcp.server.preferences.PreferenceConstants.PREF_MAX_LIMIT);
     }
 
     /**

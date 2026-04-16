@@ -33,6 +33,7 @@ import org.eclipse.xtext.ui.editor.XtextEditor;
 import org.eclipse.xtext.ui.editor.XtextSourceViewer;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -91,7 +92,6 @@ public class GetContentAssistTool implements IMcpTool
         String filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
         String columnStr = JsonUtils.extractStringArgument(params, "column"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
         String offsetStr = JsonUtils.extractStringArgument(params, "offset"); //$NON-NLS-1$
         String containsFilter = JsonUtils.extractStringArgument(params, "contains"); //$NON-NLS-1$
         String extendedDocStr = JsonUtils.extractStringArgument(params, "extendedDocumentation"); //$NON-NLS-1$
@@ -124,18 +124,10 @@ public class GetContentAssistTool implements IMcpTool
             return ToolResult.error("Line and column must be >= 1").toJson(); //$NON-NLS-1$
         }
         
-        int limit = Activator.getDefault().getDefaultLimit();
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min((int) Double.parseDouble(limitStr), Activator.getDefault().getMaxLimit());
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
+        int defaultLimit = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
+        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+        limit = Math.min(Math.max(1, limit), 1000);
         
         int offset = 0;
         if (offsetStr != null && !offsetStr.isEmpty())

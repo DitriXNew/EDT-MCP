@@ -23,6 +23,7 @@ import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -77,7 +78,6 @@ public class GetProjectErrorsTool implements IMcpTool
         String severity = JsonUtils.extractStringArgument(params, "severity"); //$NON-NLS-1$
         String checkId = JsonUtils.extractStringArgument(params, "checkId"); //$NON-NLS-1$
         String objectsJson = JsonUtils.extractStringArgument(params, "objects"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
         
         // Check if project is ready for operations
         if (projectName != null && !projectName.isEmpty())
@@ -92,21 +92,11 @@ public class GetProjectErrorsTool implements IMcpTool
         // Parse objects filter
         List<String> objects = parseObjectsList(objectsJson);
         
-        int defaultLimit = Activator.getDefault().getDefaultLimit();
-        int maxLimit = Activator.getDefault().getMaxLimit();
-        
-        int limit = defaultLimit;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min(Integer.parseInt(limitStr), maxLimit);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
+        int defaultLimit = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
+
+        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+        limit = Math.min(Math.max(1, limit), 1000);
         
         return getProjectErrors(projectName, severity, checkId, objects, limit);
     }

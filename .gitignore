@@ -1,3 +1,8 @@
+# Eclipse IDE files
+**/.project
+**/.classpath
+**/.settings/
+
 /mcp/bundles/com.ditrix.edt.mcp.server/target
 /mcp/tests/com.ditrix.edt.mcp.server.tests/target
 /mcp/tests/com.ditrix.edt.mcp.server.tests/bin

@@ -19,6 +19,7 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -65,24 +66,13 @@ public class GetTasksTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
         String priority = JsonUtils.extractStringArgument(params, "priority"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
-        
-        int defaultLimit = Activator.getDefault().getDefaultLimit();
-        int maxLimit = Activator.getDefault().getMaxLimit();
-        
-        int limit = defaultLimit;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min(Integer.parseInt(limitStr), maxLimit);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
-        
+
+        int defaultLimit = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
+
+        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+        limit = Math.min(Math.max(1, limit), 1000);
+
         return getTasks(projectName, filePath, priority, limit);
     }
     

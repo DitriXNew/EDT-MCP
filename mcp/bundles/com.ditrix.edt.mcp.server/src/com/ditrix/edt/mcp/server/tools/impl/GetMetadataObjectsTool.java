@@ -36,6 +36,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.Task;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -123,34 +124,25 @@ public class GetMetadataObjectsTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String metadataType = JsonUtils.extractStringArgument(params, "metadataType"); //$NON-NLS-1$
         String nameFilter = JsonUtils.extractStringArgument(params, "nameFilter"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
-        
+
         // Validate required parameter
         if (projectName == null || projectName.isEmpty())
         {
             return "Error: projectName is required"; //$NON-NLS-1$
         }
-        
+
         // Set defaults
         if (metadataType == null || metadataType.isEmpty())
         {
             metadataType = TYPE_ALL;
         }
         // Note: language will be resolved from configuration default if null/empty
-        
-        int limit = 100;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min((int) Double.parseDouble(limitStr), 1000);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
+
+        int defaultLimit = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
+        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+        limit = Math.min(Math.max(1, limit), 1000);
         
         // Execute on UI thread
         AtomicReference<String> resultRef = new AtomicReference<>();

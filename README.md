@@ -27,6 +27,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
 - 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection
 - ✏️ **Metadata Refactoring** - Rename/delete metadata objects with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
+- 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
 ## Installation
 
@@ -68,15 +69,21 @@ As well, we can also manually check via **Help → About → Installation Detail
 
 ### Configuration
 
-Go to **Window → Preferences → MCP Server**:
+Go to **Window → Preferences → MCP Server**. The settings page has two tabs:
+
+#### General Tab
+
 - **Server Port**: HTTP port (default: 8765)
 - **Check descriptions folder**: Path to check description markdown files
 - **Auto-start**: Start server on EDT launch
-- **Default result limit**: Default number of results returned by tools (default: 100)
-- **Maximum result limit**: Maximum number of results that can be requested (default: 1000)
 - **Plain text mode (Cursor compatibility)**: Returns results as plain text instead of embedded resources (for AI clients that don't support MCP resources)
 - **Show tags in Navigator**: Display tags as decorations in the Navigator tree
 - **Tag decoration style**: How tags are displayed — all tags as suffix, first tag only, or tag count
+- **Server control**: Start, stop, and restart the MCP server directly from preferences
+
+#### Tools Tab
+
+Manage which tools are available to AI assistants. Tools are organized into groups that can be enabled or disabled together. See [Tool Management](#tool-management) for details.
 
 ![MCP Server Settings](img/Settings.png)
 
@@ -132,6 +139,56 @@ Note: The EDT operation may still be running in background.
 - Want to switch agent's focus to a different task
 
 </details>
+
+## Tool Management
+
+Control which MCP tools are exposed to AI assistants. This lets you reduce context window usage and restrict AI to read-only operations when needed.
+
+### Tool Groups
+
+All 47 tools are organized into 8 semantic groups:
+
+| Group | Description | Tools |
+|-------|-------------|-------|
+| **Core / Project** | EDT version, project listing, configuration, validation | `get_edt_version`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description` |
+| **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
+| **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `find_references` |
+| **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
+| **Applications & Testing** | App management, database updates, testing | `get_applications`, `update_database`, `debug_launch`, `run_yaxunit_tests` |
+| **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
+| **BSL Code** | Module browsing, code reading/writing, search | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_screenshot`, `validate_query` |
+| **Refactoring** | Metadata rename, delete, add attributes | `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
+
+Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
+
+### Presets
+
+Quickly switch between common tool configurations using presets:
+
+| Preset | Description |
+|--------|-------------|
+| **All Tools** | All 47 tools enabled (default) |
+| **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
+| **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
+| **Development** | Full development without debugging tools |
+
+Select a preset from the dropdown in the Tools tab. The preset auto-detects based on the current enabled/disabled state and shows "Custom" when the configuration doesn't match any built-in preset.
+
+### Per-Tool Parameter Defaults
+
+Some tools have configurable default values for parameters like result limits. These defaults are used when the AI client doesn't specify the parameter explicitly:
+
+| Tool | Parameter | Default | Range |
+|------|-----------|---------|-------|
+| `get_project_errors` | Result limit | 100 | 1–1000 |
+| `get_bookmarks` | Result limit | 100 | 1–1000 |
+| `get_tasks` | Result limit | 100 | 1–1000 |
+| `get_metadata_objects` | Result limit | 100 | 1–1000 |
+| `get_content_assist` | Result limit | 100 | 1–1000 |
+| `search_in_code` | Max results | 100 | 1–500 |
+| `search_in_code` | Context lines | 2 | 0–5 |
+
+Configure these in the Tools tab by selecting a tool that has configurable parameters — the parameter editors appear in the details panel below the tool tree.
 
 ## Connecting AI Assistants
 
