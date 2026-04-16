@@ -112,14 +112,6 @@ public final class ToolParameterSettings
             new ParameterDef("contextLines", "Context lines", //$NON-NLS-1$ //$NON-NLS-2$
                 "Lines of context around each match", 2, 0, 5))); //$NON-NLS-1$
 
-        map.put("get_method_call_hierarchy", Collections.singletonList( //$NON-NLS-1$
-            new ParameterDef("maxDepth", "Max depth", //$NON-NLS-1$ //$NON-NLS-2$
-                "Maximum call hierarchy depth", 3, 1, 10))); //$NON-NLS-1$
-
-        map.put("read_module_source", Collections.singletonList( //$NON-NLS-1$
-            new ParameterDef("maxLines", "Max lines", //$NON-NLS-1$ //$NON-NLS-2$
-                "Maximum number of source lines to return", 5000, 100, 50000))); //$NON-NLS-1$
-
         TOOL_PARAMETERS = Collections.unmodifiableMap(map);
     }
 

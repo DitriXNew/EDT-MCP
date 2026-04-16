@@ -36,7 +36,8 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
 
 /**
  * General settings tab for MCP Server preferences.
- * Contains port, auto-start, limits, plain text, tag decoration, update check, and server control.
+ * Contains server port, auto-start, checks folder, plain text, tag decoration,
+ * update check, and server control settings.
  */
 public class GeneralTab
 {
