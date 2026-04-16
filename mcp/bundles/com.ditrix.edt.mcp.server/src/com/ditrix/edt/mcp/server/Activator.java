@@ -67,10 +67,6 @@ public class Activator extends AbstractUIPlugin
         plugin = this;
         mcpServer = new McpServer();
 
-        // Register tools eagerly so descriptions are available in the preferences UI
-        // even if the MCP server has not been started yet.
-        mcpServer.registerTools();
-
         // In Tycho headless test runtime, avoid eager workspace/UI/platform initialization.
         // This prevents background platform startup races that can fail the test process.
         if (isHeadless())
@@ -78,6 +74,10 @@ public class Activator extends AbstractUIPlugin
             logInfo("EDT MCP Server plugin started in headless mode (startup integrations skipped)"); //$NON-NLS-1$
             return;
         }
+
+        // Register tools eagerly so descriptions are available in the preferences UI
+        // even if the MCP server has not been started yet.
+        mcpServer.registerTools();
         
         // Initialize service trackers
         v8ProjectManagerTracker = new ServiceTracker<>(context, IV8ProjectManager.class, null);

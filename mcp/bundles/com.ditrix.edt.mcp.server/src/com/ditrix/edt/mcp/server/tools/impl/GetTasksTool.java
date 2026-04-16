@@ -66,24 +66,13 @@ public class GetTasksTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
         String priority = JsonUtils.extractStringArgument(params, "priority"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
-        
+
         int defaultLimit = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
 
-        int limit = defaultLimit;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min(Integer.parseInt(limitStr), 10000);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
-        
+        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+        limit = Math.min(Math.max(1, limit), 1000);
+
         return getTasks(projectName, filePath, priority, limit);
     }
     

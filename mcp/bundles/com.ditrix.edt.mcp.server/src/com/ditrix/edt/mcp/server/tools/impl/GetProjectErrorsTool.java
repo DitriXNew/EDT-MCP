@@ -78,7 +78,6 @@ public class GetProjectErrorsTool implements IMcpTool
         String severity = JsonUtils.extractStringArgument(params, "severity"); //$NON-NLS-1$
         String checkId = JsonUtils.extractStringArgument(params, "checkId"); //$NON-NLS-1$
         String objectsJson = JsonUtils.extractStringArgument(params, "objects"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
         
         // Check if project is ready for operations
         if (projectName != null && !projectName.isEmpty())
@@ -96,18 +95,8 @@ public class GetProjectErrorsTool implements IMcpTool
         int defaultLimit = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
 
-        int limit = defaultLimit;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min(Integer.parseInt(limitStr), 10000);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
+        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+        limit = Math.min(Math.max(1, limit), 1000);
         
         return getProjectErrors(projectName, severity, checkId, objects, limit);
     }
