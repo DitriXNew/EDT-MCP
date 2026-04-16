@@ -184,6 +184,7 @@ Some tools have configurable default values for parameters like result limits. T
 | `get_bookmarks` | Result limit | 100 | 1–1000 |
 | `get_tasks` | Result limit | 100 | 1–1000 |
 | `get_metadata_objects` | Result limit | 100 | 1–1000 |
+| `get_content_assist` | Result limit | 100 | 1–1000 |
 | `search_in_code` | Max results | 100 | 1–500 |
 | `search_in_code` | Context lines | 2 | 0–5 |
 
