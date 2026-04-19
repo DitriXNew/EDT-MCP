@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -157,6 +158,25 @@ public class DebugLaunchTool implements IMcpTool
             String configProject = LaunchConfigUtils.readAttribute(config,
                 LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
             String effectiveAppId = LaunchConfigUtils.getApplicationIdFor(config);
+
+            // If the config is already running in debug mode, don't re-launch.
+            if (effectiveAppId != null
+                && DebugSessionRegistry.findActiveTarget(effectiveAppId) != null)
+            {
+                ToolResult already = ToolResult.success()
+                    .put("launchConfiguration", config.getName()) //$NON-NLS-1$
+                    .put("configurationType", typeId) //$NON-NLS-1$
+                    .put("attach", isAttach) //$NON-NLS-1$
+                    .put("applicationId", effectiveAppId) //$NON-NLS-1$
+                    .put("alreadyRunning", true) //$NON-NLS-1$
+                    .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put("message", "Launch configuration is already running — skipped re-launch."); //$NON-NLS-1$ //$NON-NLS-2$
+                if (configProject != null && !configProject.isEmpty())
+                {
+                    already.put("project", configProject); //$NON-NLS-1$
+                }
+                return already.toJson();
+            }
 
             // For runtime-client configs, run the usual DB-update preflight.
             if (!isAttach && updateBeforeLaunch && configProject != null && !configProject.isEmpty())

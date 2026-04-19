@@ -213,6 +213,7 @@ public class McpServer
         registry.register(new GetApplicationsTool());
         registry.register(new UpdateDatabaseTool());
         registry.register(new DebugLaunchTool());
+        registry.register(new ListDebugConfigurationsTool());
         registry.register(new RunYaxunitTestsTool());
 
         // Debug inspection tools (breakpoints + suspended state)
