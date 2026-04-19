@@ -148,8 +148,14 @@ public final class LaunchConfigUtils
     }
 
     /**
-     * Finds the best matching runtime-client launch configuration for the given
-     * project and application. Attach configs are not considered here.
+     * Finds the launch configuration of the given {@code configType} that matches
+     * {@code project + applicationId} <em>exactly</em>. Returns {@code null} if
+     * no exact match exists.
+     *
+     * <p>Historically this method also fell back to "first config for the same
+     * project" which silently routed runs to an unrelated launch configuration.
+     * That fallback has been removed — callers should either use this strict
+     * lookup or {@link #findLaunchConfigByName(ILaunchManager, String)}.
      *
      * @param launchManager Eclipse launch manager (must not be null)
      * @param configType    1C runtime client config type (must not be null)
@@ -162,10 +168,7 @@ public final class LaunchConfigUtils
     {
         try
         {
-            ILaunchConfiguration[] allConfigs = launchManager.getLaunchConfigurations(configType);
-
-            // 1. Exact match: project + application
-            for (ILaunchConfiguration config : allConfigs)
+            for (ILaunchConfiguration config : launchManager.getLaunchConfigurations(configType))
             {
                 try
                 {
@@ -182,23 +185,6 @@ public final class LaunchConfigUtils
                     Activator.logError("Error reading launch configuration: " + config.getName(), e); //$NON-NLS-1$
                 }
             }
-
-            // 2. Fallback: any config for the same project
-            for (ILaunchConfiguration config : allConfigs)
-            {
-                try
-                {
-                    String configProject = config.getAttribute(ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-                    if (projectName.equals(configProject))
-                    {
-                        return config;
-                    }
-                }
-                catch (CoreException e)
-                {
-                    // Skip unreadable config
-                }
-            }
         }
         catch (CoreException e)
         {
@@ -206,6 +192,42 @@ public final class LaunchConfigUtils
         }
 
         return null;
+    }
+
+    /**
+     * Resolves a launch configuration from a dual input: either an explicit
+     * {@code launchConfigurationName} (searched across all EDT debug config
+     * types) or a {@code projectName + applicationId} pair (strict match
+     * against runtime-client configs only).
+     *
+     * <p>At least one of the two must be provided. When both are provided and
+     * the named config doesn't match the given {@code projectName}/{@code applicationId},
+     * the name wins — callers pre-resolve the config and can then cross-check.
+     *
+     * @return resolved config, or {@code null} if nothing matches.
+     */
+    public static ILaunchConfiguration resolveLaunchConfig(ILaunchManager launchManager,
+            String launchConfigurationName, String projectName, String applicationId)
+    {
+        if (launchManager == null)
+        {
+            return null;
+        }
+        if (launchConfigurationName != null && !launchConfigurationName.isEmpty())
+        {
+            return findLaunchConfigByName(launchManager, launchConfigurationName);
+        }
+        if (projectName == null || projectName.isEmpty()
+            || applicationId == null || applicationId.isEmpty())
+        {
+            return null;
+        }
+        ILaunchConfigurationType type = launchManager.getLaunchConfigurationType(LAUNCH_CONFIG_TYPE_ID);
+        if (type == null)
+        {
+            return null;
+        }
+        return findLaunchConfig(launchManager, type, projectName, applicationId);
     }
 
     /**
@@ -295,6 +317,47 @@ public final class LaunchConfigUtils
             }
         }
         return result;
+    }
+
+    /**
+     * Returns all 1C:EDT launch configurations — any config whose type id is
+     * in the 1C namespace ({@code com._1c.} or {@code com.e1c.}). Covers runtime
+     * client, attach (remote/local) and mobile types; ignores unrelated Eclipse
+     * launches (Java apps, Ant tasks, etc.).
+     */
+    public static List<ILaunchConfiguration> getAllEdtConfigs(ILaunchManager launchManager)
+    {
+        List<ILaunchConfiguration> result = new ArrayList<>();
+        if (launchManager == null)
+        {
+            return result;
+        }
+        try
+        {
+            for (ILaunchConfiguration config : launchManager.getLaunchConfigurations())
+            {
+                if (isEdtConfig(config))
+                {
+                    result.add(config);
+                }
+            }
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Error listing launch configurations", e); //$NON-NLS-1$
+        }
+        return result;
+    }
+
+    /**
+     * Returns {@code true} if the given launch configuration belongs to the 1C/EDT
+     * namespace.
+     */
+    public static boolean isEdtConfig(ILaunchConfiguration config)
+    {
+        String typeId = getConfigTypeId(config);
+        return typeId.startsWith("com._1c.") //$NON-NLS-1$
+            || typeId.startsWith("com.e1c."); //$NON-NLS-1$
     }
 
     /**

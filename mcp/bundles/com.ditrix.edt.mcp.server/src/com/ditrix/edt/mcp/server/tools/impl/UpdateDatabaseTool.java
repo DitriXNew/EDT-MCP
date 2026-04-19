@@ -14,6 +14,9 @@ import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.debug.core.DebugPlugin;
+import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 
@@ -22,6 +25,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -47,54 +51,94 @@ public class UpdateDatabaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Update database (infobase) for an application. " + //$NON-NLS-1$
-               "Requires application ID from get_applications tool. " + //$NON-NLS-1$
-               "Supports full update (complete reload) and incremental update (changes only)."; //$NON-NLS-1$
+        return "Update database (infobase) for an application. " //$NON-NLS-1$
+            + "Target the application either by launchConfigurationName (preferred; " //$NON-NLS-1$
+            + "from list_configurations) or by projectName + applicationId (from get_applications). " //$NON-NLS-1$
+            + "Supports full update (complete reload) and incremental update (changes only)."; //$NON-NLS-1$
     }
-    
+
     @Override
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application ID from get_applications (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("launchConfigurationName", //$NON-NLS-1$
+                "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)") //$NON-NLS-1$
+            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", //$NON-NLS-1$
+                "Application ID from get_applications (required if launchConfigurationName is omitted)") //$NON-NLS-1$
             .booleanProperty("fullUpdate", "If true - full reload, if false - incremental update (default: false)") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("autoRestructure", "Automatically apply restructurization if needed (default: true)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
-    
+
     @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;
     }
-    
+
     @Override
     public String execute(Map<String, String> params)
     {
+        String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
         boolean fullUpdate = JsonUtils.extractBooleanArgument(params, "fullUpdate", false); //$NON-NLS-1$
         boolean autoRestructure = JsonUtils.extractBooleanArgument(params, "autoRestructure", true); //$NON-NLS-1$
-        
-        // Validate required parameters
-        if (projectName == null || projectName.isEmpty())
+
+        boolean hasName = configName != null && !configName.isEmpty();
+        if (!hasName)
         {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
+            if (projectName == null || projectName.isEmpty())
+            {
+                return ToolResult.error("projectName is required (or pass launchConfigurationName)").toJson(); //$NON-NLS-1$
+            }
+            if (applicationId == null || applicationId.isEmpty())
+            {
+                return ToolResult.error("applicationId is required (or pass launchConfigurationName). " //$NON-NLS-1$
+                    + "Use get_applications or list_configurations.").toJson(); //$NON-NLS-1$
+            }
         }
-        
-        if (applicationId == null || applicationId.isEmpty())
+
+        // Resolve via launch config if name is given — it fixes the project + applicationId pair.
+        if (hasName)
         {
-            return ToolResult.error("applicationId is required. Use get_applications to get application list.").toJson(); //$NON-NLS-1$
+            ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
+            if (launchManager == null)
+            {
+                return ToolResult.error("Launch manager is not available").toJson(); //$NON-NLS-1$
+            }
+            ILaunchConfiguration cfg = LaunchConfigUtils.findLaunchConfigByName(launchManager, configName);
+            if (cfg == null)
+            {
+                return ToolResult.error("Launch configuration not found: '" + configName //$NON-NLS-1$
+                    + "'. Use list_configurations to see what's available.").toJson(); //$NON-NLS-1$
+            }
+            if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(cfg)))
+            {
+                return ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                    + "' is not a runtime-client config — update_database requires one.").toJson(); //$NON-NLS-1$
+            }
+            String cfgProject = LaunchConfigUtils.readAttribute(cfg,
+                LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String cfgAppId = LaunchConfigUtils.readAttribute(cfg,
+                LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+            if (cfgProject.isEmpty() || cfgAppId.isEmpty())
+            {
+                return ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                    + "' has no project or applicationId attribute — cannot derive update target.").toJson(); //$NON-NLS-1$
+            }
+            projectName = cfgProject;
+            applicationId = cfgAppId;
         }
-        
+
         // Check if project is ready for operations
         String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
         if (notReadyError != null)
         {
             return ToolResult.error(notReadyError).toJson();
         }
-        
+
         return updateDatabase(projectName, applicationId, fullUpdate, autoRestructure);
     }
     

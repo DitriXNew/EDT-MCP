@@ -20,7 +20,6 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunchConfiguration;
-import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.eclipse.debug.core.ILaunchManager;
 
@@ -81,8 +80,11 @@ public class DebugYaxunitTestsTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application id from get_applications (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("launchConfigurationName", //$NON-NLS-1$
+                "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)") //$NON-NLS-1$
+            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", //$NON-NLS-1$
+                "Application id from get_applications (required if launchConfigurationName is omitted)") //$NON-NLS-1$
             .stringProperty("extensions", "Comma-separated extension names to filter tests by extension") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("modules", "Comma-separated module names to filter tests") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("tests", "Comma-separated test names in Module.Method format (recommended: pin to one test)") //$NON-NLS-1$ //$NON-NLS-2$
@@ -98,29 +100,78 @@ public class DebugYaxunitTestsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
         String extensions = JsonUtils.extractStringArgument(params, "extensions"); //$NON-NLS-1$
         String modules = JsonUtils.extractStringArgument(params, "modules"); //$NON-NLS-1$
         String tests = JsonUtils.extractStringArgument(params, "tests"); //$NON-NLS-1$
 
-        if (projectName == null || projectName.isEmpty())
+        boolean hasName = configName != null && !configName.isEmpty();
+        if (!hasName)
         {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-        if (applicationId == null || applicationId.isEmpty())
-        {
-            return ToolResult.error("applicationId is required").toJson(); //$NON-NLS-1$
-        }
-
-        String notReady = ProjectStateChecker.checkReadyOrError(projectName);
-        if (notReady != null)
-        {
-            return ToolResult.error(notReady).toJson();
+            if (projectName == null || projectName.isEmpty())
+            {
+                return ToolResult.error("projectName is required (or pass launchConfigurationName)").toJson(); //$NON-NLS-1$
+            }
+            if (applicationId == null || applicationId.isEmpty())
+            {
+                return ToolResult.error("applicationId is required (or pass launchConfigurationName)").toJson(); //$NON-NLS-1$
+            }
         }
 
         try
         {
+            ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
+            if (launchManager == null)
+            {
+                return ToolResult.error("Launch manager is not available").toJson(); //$NON-NLS-1$
+            }
+
+            ILaunchConfiguration matchingConfig = LaunchConfigUtils.resolveLaunchConfig(
+                launchManager, configName, projectName, applicationId);
+            if (matchingConfig == null)
+            {
+                return ToolResult.error(hasName
+                    ? "Launch configuration not found: '" + configName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                    : "No runtime-client launch configuration for project '" + projectName //$NON-NLS-1$
+                        + "' and application '" + applicationId //$NON-NLS-1$
+                        + "'. Use list_configurations to see what's available.").toJson(); //$NON-NLS-1$
+            }
+
+            if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(matchingConfig)))
+            {
+                return ToolResult.error("Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
+                    + "' is not a runtime-client config — YAXUnit tests require one.").toJson(); //$NON-NLS-1$
+            }
+
+            // Derive effective project/application from the resolved config so
+            // subsequent validation and the success response match reality.
+            String effectiveProject = LaunchConfigUtils.readAttribute(matchingConfig,
+                LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String effectiveAppId = LaunchConfigUtils.readAttribute(matchingConfig,
+                LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+            if (projectName == null || projectName.isEmpty())
+            {
+                projectName = effectiveProject;
+            }
+            if (applicationId == null || applicationId.isEmpty())
+            {
+                applicationId = effectiveAppId;
+            }
+
+            if (projectName == null || projectName.isEmpty())
+            {
+                return ToolResult.error("Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
+                    + "' has no project attribute set").toJson(); //$NON-NLS-1$
+            }
+
+            String notReady = ProjectStateChecker.checkReadyOrError(projectName);
+            if (notReady != null)
+            {
+                return ToolResult.error(notReady).toJson();
+            }
+
             IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
             if (project == null || !project.exists())
             {
@@ -136,32 +187,20 @@ public class DebugYaxunitTestsTool implements IMcpTool
             {
                 return ToolResult.error("IApplicationManager service not available").toJson(); //$NON-NLS-1$
             }
-            try
+            if (applicationId != null && !applicationId.isEmpty())
             {
-                Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
-                if (!appOpt.isPresent())
+                try
                 {
-                    return ToolResult.error("Application not found: " + applicationId).toJson(); //$NON-NLS-1$
+                    Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+                    if (!appOpt.isPresent())
+                    {
+                        return ToolResult.error("Application not found: " + applicationId).toJson(); //$NON-NLS-1$
+                    }
                 }
-            }
-            catch (ApplicationException e)
-            {
-                return ToolResult.error("Failed to validate application: " + e.getMessage()).toJson(); //$NON-NLS-1$
-            }
-
-            ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
-            ILaunchConfigurationType configType =
-                launchManager.getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID);
-            if (configType == null)
-            {
-                return ToolResult.error("Launch configuration type not found").toJson(); //$NON-NLS-1$
-            }
-            ILaunchConfiguration matchingConfig = LaunchConfigUtils.findLaunchConfig(
-                launchManager, configType, projectName, applicationId);
-            if (matchingConfig == null)
-            {
-                return ToolResult.error("No launch configuration for project '" + projectName //$NON-NLS-1$
-                        + "' and application '" + applicationId + "'. Create one in EDT first.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                catch (ApplicationException e)
+                {
+                    return ToolResult.error("Failed to validate application: " + e.getMessage()).toJson(); //$NON-NLS-1$
+                }
             }
 
             // Prepare a unique report dir + xUnitParams.json (uses native path separators

@@ -118,7 +118,7 @@ public class ToolGroupTest
     {
         assertEquals(ToolGroup.CORE, ToolGroup.getGroupForTool("get_edt_version"));
         assertEquals(ToolGroup.PROBLEMS, ToolGroup.getGroupForTool("get_project_errors"));
-        assertEquals(ToolGroup.APPLICATIONS, ToolGroup.getGroupForTool("list_debug_configurations"));
+        assertEquals(ToolGroup.APPLICATIONS, ToolGroup.getGroupForTool("list_configurations"));
         assertEquals(ToolGroup.DEBUG, ToolGroup.getGroupForTool("set_breakpoint"));
         assertEquals(ToolGroup.BSL_CODE, ToolGroup.getGroupForTool("read_module_source"));
         assertEquals(ToolGroup.REFACTORING, ToolGroup.getGroupForTool("rename_metadata_object"));

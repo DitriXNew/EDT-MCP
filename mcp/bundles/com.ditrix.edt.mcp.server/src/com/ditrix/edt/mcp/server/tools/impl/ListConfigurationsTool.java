@@ -26,22 +26,25 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 
 /**
- * Lists EDT debug launch configurations (runtime client + Attach) with their
- * current running state.
+ * Lists EDT launch configurations — runtime-client, Attach (RemoteRuntime /
+ * LocalRuntime), and any other config in the 1C/EDT namespace — together with
+ * their current running state. This is the discovery step that precedes
+ * {@code debug_launch}, {@code run_yaxunit_tests}, {@code debug_yaxunit_tests}
+ * and {@code update_database}: once the MCP client knows the exact
+ * {@code name}, it can target that configuration by name without having to
+ * juggle applicationId/project pairs.
  *
- * <p>Intended as the first step of the server-side debugging workflow:
+ * <p>Intended workflow for server-side debugging:
  * <ol>
- *   <li>{@code list_debug_configurations({type: "attach"})} — see what Attach
- *       configs exist and which one is already running.</li>
- *   <li>{@code debug_launch({launchConfigurationName})} — start it if it's
- *       not running.</li>
- *   <li>Standard debug flow: {@code set_breakpoint}, {@code wait_for_break},
- *       {@code get_variables}, {@code step}, {@code resume}, etc.</li>
+ *   <li>{@code list_configurations({type: "attach"})} — see available Attach
+ *       configs, their infobase aliases, and whether any is already running.</li>
+ *   <li>{@code debug_launch({launchConfigurationName: ...})} — attach to it.</li>
+ *   <li>{@code set_breakpoint} → {@code wait_for_break} → standard debug flow.</li>
  * </ol>
  */
-public class ListDebugConfigurationsTool implements IMcpTool
+public class ListConfigurationsTool implements IMcpTool
 {
-    public static final String NAME = "list_debug_configurations"; //$NON-NLS-1$
+    public static final String NAME = "list_configurations"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -52,12 +55,14 @@ public class ListDebugConfigurationsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List EDT debug launch configurations with their running state. " //$NON-NLS-1$
-            + "Each entry carries configuration name, type, attach flag, applicationId " //$NON-NLS-1$
+        return "List EDT launch configurations (runtime client + Attach + other 1C types) " //$NON-NLS-1$
+            + "with their current running state. Each entry carries the configuration name " //$NON-NLS-1$
+            + "(use it as launchConfigurationName in debug_launch / run_yaxunit_tests / " //$NON-NLS-1$
+            + "debug_yaxunit_tests / update_database), type id, attach flag, applicationId " //$NON-NLS-1$
             + "(real or synthetic 'attach:<name>'), project, infobase alias, debug server URL, " //$NON-NLS-1$
-            + "and a 'running' flag (plus 'suspended' when the debug session is paused). " //$NON-NLS-1$
-            + "Use type='attach' to only list Attach configurations (for server-side debugging — " //$NON-NLS-1$
-            + "HTTP services, background jobs), or type='client' / type='all' (default)."; //$NON-NLS-1$
+            + "and a 'running' flag (plus 'suspended' when the session is paused on a breakpoint). " //$NON-NLS-1$
+            + "Use type='attach' for server-side debug setups (HTTP services, background jobs), " //$NON-NLS-1$
+            + "type='client' for 1C:Enterprise client configs, or type='all' (default)."; //$NON-NLS-1$
     }
 
     @Override
@@ -66,7 +71,7 @@ public class ListDebugConfigurationsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty("type", //$NON-NLS-1$
                 "Filter: 'attach' (RemoteRuntime + LocalRuntime), 'client' (RuntimeClient), " //$NON-NLS-1$
-                    + "or 'all' (default)") //$NON-NLS-1$
+                    + "or 'all' (default — any 1C/EDT launch config)") //$NON-NLS-1$
             .stringProperty("projectName", "Optional project name filter") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -94,12 +99,13 @@ public class ListDebugConfigurationsTool implements IMcpTool
             Map<String, ILaunch> liveByAppId = indexLiveLaunches(launchManager);
 
             List<Map<String, Object>> configs = new ArrayList<>();
-            for (ILaunchConfiguration cfg : LaunchConfigUtils.getAllDebugConfigs(launchManager))
+            for (ILaunchConfiguration cfg : LaunchConfigUtils.getAllEdtConfigs(launchManager))
             {
                 String typeId = LaunchConfigUtils.getConfigTypeId(cfg);
                 boolean isAttach = LaunchConfigUtils.isAttachConfigTypeId(typeId);
+                boolean isClient = LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(typeId);
 
-                if (!matchesTypeFilter(typeFilter, isAttach))
+                if (!matchesTypeFilter(typeFilter, isAttach, isClient))
                 {
                     continue;
                 }
@@ -116,6 +122,7 @@ public class ListDebugConfigurationsTool implements IMcpTool
                 entry.put("name", cfg.getName()); //$NON-NLS-1$
                 entry.put("type", typeId); //$NON-NLS-1$
                 entry.put("attach", isAttach); //$NON-NLS-1$
+
                 String appId = LaunchConfigUtils.getApplicationIdFor(cfg);
                 if (appId != null)
                 {
@@ -157,12 +164,12 @@ public class ListDebugConfigurationsTool implements IMcpTool
         }
         catch (Exception e)
         {
-            Activator.logError("Error in list_debug_configurations", e); //$NON-NLS-1$
+            Activator.logError("Error in list_configurations", e); //$NON-NLS-1$
             return ToolResult.error("Error: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 
-    private static boolean matchesTypeFilter(String filter, boolean isAttach)
+    private static boolean matchesTypeFilter(String filter, boolean isAttach, boolean isClient)
     {
         if (filter == null || filter.isEmpty() || "all".equalsIgnoreCase(filter)) //$NON-NLS-1$
         {
@@ -175,7 +182,7 @@ public class ListDebugConfigurationsTool implements IMcpTool
         if ("client".equalsIgnoreCase(filter) || "runtime".equalsIgnoreCase(filter) //$NON-NLS-1$ //$NON-NLS-2$
             || "runtimeClient".equalsIgnoreCase(filter)) //$NON-NLS-1$
         {
-            return !isAttach;
+            return isClient;
         }
         // Unknown filter — be permissive.
         return true;
