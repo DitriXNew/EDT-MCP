@@ -42,6 +42,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTagsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetObjectsByTagsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTasksTool;
+import com.ditrix.edt.mcp.server.tools.impl.ListConfigurationsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
