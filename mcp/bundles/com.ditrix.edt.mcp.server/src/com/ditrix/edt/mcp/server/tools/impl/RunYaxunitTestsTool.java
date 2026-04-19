@@ -95,8 +95,11 @@ public class RunYaxunitTestsTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application ID from get_applications (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("launchConfigurationName", //$NON-NLS-1$
+                "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)") //$NON-NLS-1$
+            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", //$NON-NLS-1$
+                "Application ID from get_applications (required if launchConfigurationName is omitted)") //$NON-NLS-1$
             .stringProperty("extensions", "Comma-separated extension names to filter tests by extension") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("modules", "Comma-separated module names to filter tests") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("tests", "Comma-separated test names in Module.Method format") //$NON-NLS-1$ //$NON-NLS-2$
@@ -113,6 +116,7 @@ public class RunYaxunitTestsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
         String extensions = JsonUtils.extractStringArgument(params, "extensions"); //$NON-NLS-1$
@@ -124,26 +128,24 @@ public class RunYaxunitTestsTool implements IMcpTool
             timeout = 1;
         }
 
-        if (projectName == null || projectName.isEmpty())
+        boolean hasName = configName != null && !configName.isEmpty();
+        if (!hasName)
         {
-            return "**Error:** projectName is required"; //$NON-NLS-1$
-        }
-
-        if (applicationId == null || applicationId.isEmpty())
-        {
-            return "**Error:** applicationId is required. Use get_applications to get application list."; //$NON-NLS-1$
-        }
-
-        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-        if (notReadyError != null)
-        {
-            return "**Error:** " + notReadyError; //$NON-NLS-1$
+            if (projectName == null || projectName.isEmpty())
+            {
+                return "**Error:** projectName is required (or pass launchConfigurationName)"; //$NON-NLS-1$
+            }
+            if (applicationId == null || applicationId.isEmpty())
+            {
+                return "**Error:** applicationId is required (or pass launchConfigurationName). " //$NON-NLS-1$
+                    + "Use get_applications or list_configurations."; //$NON-NLS-1$
+            }
         }
 
         ensureLaunchListenerRegistered();
         purgeTerminatedLaunches();
 
-        return runTests(projectName, applicationId, extensions, modules, tests, timeout);
+        return runTests(configName, projectName, applicationId, extensions, modules, tests, timeout);
     }
 
     /**
@@ -160,11 +162,60 @@ public class RunYaxunitTestsTool implements IMcpTool
      * The temp directory is NEVER deleted in finally — the caller can invoke the tool again to fetch
      * the result. Old runs are cleaned up automatically before starting a new launch.
      */
-    private String runTests(String projectName, String applicationId,
+    private String runTests(String configName, String projectName, String applicationId,
             String extensions, String modules, String tests, int timeout)
     {
         try
         {
+            ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
+            if (launchManager == null)
+            {
+                return "**Error:** Launch manager is not available"; //$NON-NLS-1$
+            }
+
+            ILaunchConfiguration matchingConfig = LaunchConfigUtils.resolveLaunchConfig(
+                    launchManager, configName, projectName, applicationId);
+            if (matchingConfig == null)
+            {
+                boolean hasName = configName != null && !configName.isEmpty();
+                return hasName
+                    ? "**Error:** Launch configuration not found: '" + configName + "'. " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "Use list_configurations to see what's available." //$NON-NLS-1$
+                    : buildNoConfigError(launchManager,
+                        launchManager.getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID),
+                        projectName, applicationId);
+            }
+            if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(matchingConfig)))
+            {
+                return "**Error:** Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
+                    + "' is not a runtime-client config — YAXUnit tests require one."; //$NON-NLS-1$
+            }
+
+            // Derive effective project/application from the resolved config.
+            String effectiveProject = LaunchConfigUtils.readAttribute(matchingConfig,
+                LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String effectiveAppId = LaunchConfigUtils.readAttribute(matchingConfig,
+                LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+            if (projectName == null || projectName.isEmpty())
+            {
+                projectName = effectiveProject;
+            }
+            if (applicationId == null || applicationId.isEmpty())
+            {
+                applicationId = effectiveAppId;
+            }
+            if (projectName == null || projectName.isEmpty())
+            {
+                return "**Error:** Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
+                    + "' has no project attribute set"; //$NON-NLS-1$
+            }
+
+            String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
+            if (notReadyError != null)
+            {
+                return "**Error:** " + notReadyError; //$NON-NLS-1$
+            }
+
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             IProject project = workspace.getRoot().getProject(projectName);
 
@@ -184,23 +235,28 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return "**Error:** IApplicationManager service is not available"; //$NON-NLS-1$
             }
 
-            try
+            if (applicationId != null && !applicationId.isEmpty())
             {
-                Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
-                if (!appOpt.isPresent())
+                try
                 {
-                    return "**Error:** Application not found: " + applicationId //$NON-NLS-1$
-                            + ". Use get_applications to get valid application IDs."; //$NON-NLS-1$
+                    Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+                    if (!appOpt.isPresent())
+                    {
+                        return "**Error:** Application not found: " + applicationId //$NON-NLS-1$
+                                + ". Use get_applications to get valid application IDs."; //$NON-NLS-1$
+                    }
+                }
+                catch (ApplicationException e)
+                {
+                    Activator.logError("Error checking application", e); //$NON-NLS-1$
+                    return "**Error:** Failed to validate application: " + applicationId //$NON-NLS-1$
+                            + " (" + e.getMessage() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
-            catch (ApplicationException e)
-            {
-                Activator.logError("Error checking application", e); //$NON-NLS-1$
-                return "**Error:** Failed to validate application: " + applicationId //$NON-NLS-1$
-                        + " (" + e.getMessage() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
-            }
 
-            String runKey = projectName + ":" + applicationId + ":" //$NON-NLS-1$ //$NON-NLS-2$
+            // Use the launch config name as the run-key root — stable across
+            // (project, applicationId) vs. launchConfigurationName call styles.
+            String runKey = matchingConfig.getName() + ":" //$NON-NLS-1$
                     + sha1(safe(extensions) + "|" + safe(modules) + "|" + safe(tests)); //$NON-NLS-1$ //$NON-NLS-2$
             Path reportDir = stableReportDir(runKey);
 
@@ -233,28 +289,6 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 Activator.logInfo("Returning cached YAXUnit results from " + cached); //$NON-NLS-1$
                 return readResults(cached);
-            }
-
-            ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
-            if (launchManager == null)
-            {
-                return "**Error:** Launch manager is not available"; //$NON-NLS-1$
-            }
-
-            ILaunchConfigurationType configType = launchManager
-                    .getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID);
-            if (configType == null)
-            {
-                return "**Error:** Launch configuration type not found: " //$NON-NLS-1$
-                        + LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID;
-            }
-
-            ILaunchConfiguration matchingConfig = LaunchConfigUtils.findLaunchConfig(
-                    launchManager, configType, projectName, applicationId);
-
-            if (matchingConfig == null)
-            {
-                return buildNoConfigError(launchManager, configType, projectName, applicationId);
             }
 
             // Atomically reuse an existing active launch for the same runKey, or create exactly

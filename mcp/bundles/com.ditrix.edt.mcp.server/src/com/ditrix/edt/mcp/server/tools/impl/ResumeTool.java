@@ -21,6 +21,11 @@ import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 /**
  * Resumes a suspended debug thread (or, if {@code applicationId} is given,
  * resumes all threads of the matching debug target).
+ *
+ * <p>If neither parameter is given and there is exactly one active debug launch,
+ * that launch is used as a fallback — useful for Attach configurations whose
+ * synthetic applicationId is not known to the caller, and for the common
+ * one-session workflow.
  */
 public class ResumeTool implements IMcpTool
 {
@@ -36,7 +41,8 @@ public class ResumeTool implements IMcpTool
     public String getDescription()
     {
         return "Resume a suspended debug thread or all threads of a debug target. " //$NON-NLS-1$
-            + "Either pass threadId (from wait_for_break) or applicationId."; //$NON-NLS-1$
+            + "Pass threadId (from wait_for_break) or applicationId. " //$NON-NLS-1$
+            + "With no arguments, resumes the single active debug launch if exactly one exists."; //$NON-NLS-1$
     }
 
     @Override
@@ -44,7 +50,8 @@ public class ResumeTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .integerProperty("threadId", "Thread id from wait_for_break") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application id (resumes all threads of this target)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", //$NON-NLS-1$
+                "Application id (real or 'attach:<configName>' — resumes all threads of this target)") //$NON-NLS-1$
             .build();
     }
 
@@ -61,6 +68,7 @@ public class ResumeTool implements IMcpTool
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
 
         DebugSessionRegistry registry = DebugSessionRegistry.get();
+        registry.ensureListenerRegistered();
 
         try
         {
@@ -69,7 +77,7 @@ public class ResumeTool implements IMcpTool
                 IThread thread = registry.getThread(threadId);
                 if (thread == null)
                 {
-                    return ToolResult.error("stale threadId").toJson(); //$NON-NLS-1$
+                    return ToolResult.error("stale threadId — call wait_for_break again").toJson(); //$NON-NLS-1$
                 }
                 if (!thread.canResume())
                 {
@@ -79,21 +87,36 @@ public class ResumeTool implements IMcpTool
                 thread.resume();
                 return ToolResult.success().put("resumed", true).put("scope", "thread").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
-            if (applicationId != null && !applicationId.isEmpty())
+
+            String effectiveAppId = (applicationId != null && !applicationId.isEmpty())
+                ? applicationId
+                : DebugSessionRegistry.findLoneActiveApplicationId();
+
+            if (effectiveAppId == null)
             {
-                IDebugTarget target = DebugSessionRegistry.findActiveTarget(applicationId);
-                if (target == null)
-                {
-                    return ToolResult.error("no active debug target for applicationId: " + applicationId).toJson(); //$NON-NLS-1$
-                }
-                if (!target.canResume())
-                {
-                    return ToolResult.error("debug target cannot resume").toJson(); //$NON-NLS-1$
-                }
-                target.resume();
-                return ToolResult.success().put("resumed", true).put("scope", "target").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                return ToolResult.error("Provide threadId or applicationId — no single active debug " //$NON-NLS-1$
+                    + "launch available for auto-resolution. Use debug_status to list active launches.").toJson(); //$NON-NLS-1$
             }
-            return ToolResult.error("Provide either threadId or applicationId").toJson(); //$NON-NLS-1$
+
+            IDebugTarget target = DebugSessionRegistry.findActiveTarget(effectiveAppId);
+            if (target == null)
+            {
+                return ToolResult.error("no active debug target for applicationId: " + effectiveAppId).toJson(); //$NON-NLS-1$
+            }
+            if (!target.canResume())
+            {
+                return ToolResult.error("debug target cannot resume").toJson(); //$NON-NLS-1$
+            }
+            target.resume();
+            ToolResult res = ToolResult.success()
+                .put("resumed", true) //$NON-NLS-1$
+                .put("scope", "target") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("applicationId", effectiveAppId); //$NON-NLS-1$
+            if (applicationId == null || applicationId.isEmpty())
+            {
+                res.put("autoResolved", true); //$NON-NLS-1$
+            }
+            return res.toJson();
         }
         catch (Exception e)
         {

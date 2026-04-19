@@ -135,7 +135,7 @@ public class StepTool implements IMcpTool
                     .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
                     .toJson();
             }
-            return WaitForBreakTool.buildSnapshotResponse(snapshot, registry);
+            return WaitForBreakTool.buildSnapshotResponse(snapshot, registry, appId, false);
         }
         catch (InterruptedException e)
         {

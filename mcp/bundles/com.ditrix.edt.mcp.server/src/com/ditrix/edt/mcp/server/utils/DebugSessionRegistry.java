@@ -6,7 +6,9 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,8 +32,10 @@ import com.ditrix.edt.mcp.server.Activator;
  *
  * <p>The registry installs a single {@link IDebugEventSetListener} on the
  * Eclipse {@link DebugPlugin} on first use. Suspend events are recorded per
- * launch (keyed by {@code applicationId} extracted from the launch configuration);
- * resume/terminate events purge the cached snapshot and any associated IDs.
+ * launch (keyed by {@code applicationId} extracted from the launch configuration —
+ * real {@code ATTR_APPLICATION_ID} for runtime-client launches, or the synthetic
+ * {@code attach:<configName>} id for attach launches); resume/terminate events
+ * purge the cached snapshot and any associated IDs.
  */
 public final class DebugSessionRegistry
 {
@@ -284,10 +288,17 @@ public final class DebugSessionRegistry
         return framesById.get(frameRef);
     }
 
+    /** Returns the most recent suspend snapshot for the given appId, or {@code null}. */
+    public SuspendSnapshot getSnapshot(String applicationId)
+    {
+        return applicationId != null ? snapshots.get(applicationId) : null;
+    }
+
     /**
      * Walks the launch configuration of the given thread/target/launch and pulls
-     * the {@code ATTR_APPLICATION_ID} attribute. Returns {@code null} if it can't
-     * be determined (orphan launch, missing attribute, etc.).
+     * a stable applicationId: the real {@code ATTR_APPLICATION_ID} for runtime-client
+     * launches, or the synthetic {@code attach:<configName>} id for attach launches.
+     * Returns {@code null} if it can't be determined (orphan launch, unknown config type).
      */
     public static String findApplicationIdFor(IThread thread)
     {
@@ -316,17 +327,12 @@ public final class DebugSessionRegistry
 
     public static String findApplicationIdFor(ILaunch launch)
     {
-        if (launch == null || launch.getLaunchConfiguration() == null)
-        {
-            return null;
-        }
-        return LaunchConfigUtils.readAttribute(launch.getLaunchConfiguration(),
-                LaunchConfigUtils.ATTR_APPLICATION_ID, null);
+        return LaunchConfigUtils.getApplicationIdFor(launch);
     }
 
     /**
      * Searches for an active (non-terminated) {@link IDebugTarget} whose launch
-     * configuration {@code ATTR_APPLICATION_ID} equals the given value.
+     * resolves to the given applicationId (real or synthetic).
      */
     public static IDebugTarget findActiveTarget(String applicationId)
     {
@@ -373,6 +379,44 @@ public final class DebugSessionRegistry
         info.put("liveThreads", threadsById.size()); //$NON-NLS-1$
         info.put("liveFrames", framesById.size()); //$NON-NLS-1$
         return info;
+    }
+
+    /**
+     * Returns all applicationIds (real or synthetic) that currently have an
+     * active, non-terminated debug launch in the Eclipse launch manager.
+     */
+    public static List<String> listActiveApplicationIds()
+    {
+        List<String> ids = new ArrayList<>();
+        DebugPlugin debugPlugin = DebugPlugin.getDefault();
+        if (debugPlugin == null)
+        {
+            return ids;
+        }
+        ILaunchManager mgr = debugPlugin.getLaunchManager();
+        for (ILaunch launch : mgr.getLaunches())
+        {
+            if (launch.isTerminated())
+            {
+                continue;
+            }
+            String appId = findApplicationIdFor(launch);
+            if (appId != null && !ids.contains(appId))
+            {
+                ids.add(appId);
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * Convenience: returns the applicationId of the single active, non-terminated
+     * debug launch, or {@code null} if there is none or more than one.
+     */
+    public static String findLoneActiveApplicationId()
+    {
+        List<String> ids = listActiveApplicationIds();
+        return ids.size() == 1 ? ids.get(0) : null;
     }
 
     /** For tests only — drops all cached state. */

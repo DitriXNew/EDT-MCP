@@ -13,6 +13,7 @@ import java.util.Map;
 
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunch;
+import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IStackFrame;
@@ -24,11 +25,14 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 
 /**
  * Reports active debug launches and their suspend state. If {@code applicationId}
  * is given the response is filtered to that one launch; otherwise all currently
- * tracked launches are returned.
+ * tracked launches are returned. Covers both runtime-client and Attach debug
+ * configurations (synthetic {@code attach:<configName>} ids are reported for
+ * attach launches that don't carry {@code ATTR_APPLICATION_ID}).
  */
 public class DebugStatusTool implements IMcpTool
 {
@@ -43,8 +47,9 @@ public class DebugStatusTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Report active debug launches: mode (debug/run), whether the target is " //$NON-NLS-1$
-            + "currently suspended, thread count, and the line of the top suspended frame. " //$NON-NLS-1$
+        return "Report active debug launches: applicationId (real or synthetic 'attach:<name>'), " //$NON-NLS-1$
+            + "launch configuration name/type, mode (debug/run), whether the target is currently " //$NON-NLS-1$
+            + "suspended, thread count, and the line of the top suspended frame. " //$NON-NLS-1$
             + "Optionally filter by applicationId."; //$NON-NLS-1$
     }
 
@@ -86,6 +91,11 @@ public class DebugStatusTool implements IMcpTool
                     continue;
                 }
                 String appId = DebugSessionRegistry.findApplicationIdFor(launch);
+                // Skip non-EDT launches entirely (e.g. Java apps, Ant tasks).
+                if (appId == null)
+                {
+                    continue;
+                }
                 if (filterAppId != null && !filterAppId.isEmpty() && !filterAppId.equals(appId))
                 {
                     continue;
@@ -95,6 +105,33 @@ public class DebugStatusTool implements IMcpTool
                 entry.put("applicationId", appId); //$NON-NLS-1$
                 entry.put("mode", launch.getLaunchMode()); //$NON-NLS-1$
                 entry.put("debug", ILaunchManager.DEBUG_MODE.equals(launch.getLaunchMode())); //$NON-NLS-1$
+
+                ILaunchConfiguration config = launch.getLaunchConfiguration();
+                if (config != null)
+                {
+                    entry.put("launchConfiguration", config.getName()); //$NON-NLS-1$
+                    String typeId = LaunchConfigUtils.getConfigTypeId(config);
+                    entry.put("configurationType", typeId); //$NON-NLS-1$
+                    entry.put("attach", LaunchConfigUtils.isAttachConfigTypeId(typeId)); //$NON-NLS-1$
+                    String project = LaunchConfigUtils.readAttribute(config,
+                        LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+                    if (!project.isEmpty())
+                    {
+                        entry.put("project", project); //$NON-NLS-1$
+                    }
+                    String alias = LaunchConfigUtils.readAttribute(config,
+                        LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, ""); //$NON-NLS-1$
+                    if (!alias.isEmpty())
+                    {
+                        entry.put("infobaseAlias", alias); //$NON-NLS-1$
+                    }
+                    String url = LaunchConfigUtils.readAttribute(config,
+                        LaunchConfigUtils.ATTR_DEBUG_SERVER_URL, ""); //$NON-NLS-1$
+                    if (!url.isEmpty())
+                    {
+                        entry.put("debugServerUrl", url); //$NON-NLS-1$
+                    }
+                }
 
                 IDebugTarget[] targets = launch.getDebugTargets();
                 int threadCount = 0;
@@ -136,6 +173,7 @@ public class DebugStatusTool implements IMcpTool
                 {
                     entry.put("suspendedAt", suspendedAt); //$NON-NLS-1$
                 }
+                entry.put("registered", DebugSessionRegistry.get().hasSnapshot(appId)); //$NON-NLS-1$
                 launches.add(entry);
             }
 
