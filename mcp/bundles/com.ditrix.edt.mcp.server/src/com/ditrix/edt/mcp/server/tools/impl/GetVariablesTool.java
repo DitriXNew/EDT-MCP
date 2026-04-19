@@ -104,7 +104,20 @@ public class GetVariablesTool implements IMcpTool
             }
             else
             {
-                return ToolResult.error("Provide either frameRef or threadId").toJson(); //$NON-NLS-1$
+                // Fallback: if exactly one active debug launch is suspended, use its top frame.
+                String appId = DebugSessionRegistry.findLoneActiveApplicationId();
+                DebugSessionRegistry.SuspendSnapshot snap = appId != null ? registry.getSnapshot(appId) : null;
+                if (snap == null)
+                {
+                    return ToolResult.error("Provide frameRef or threadId — no single suspended debug " //$NON-NLS-1$
+                        + "launch available for auto-resolution. Call wait_for_break first.").toJson(); //$NON-NLS-1$
+                }
+                IStackFrame[] frames = snap.thread.getStackFrames();
+                if (frames.length == 0)
+                {
+                    return ToolResult.error("suspended thread has no stack frames").toJson(); //$NON-NLS-1$
+                }
+                frame = frames[Math.min(Math.max(frameIndex, 0), frames.length - 1)];
             }
 
             List<Map<String, Object>> vars;

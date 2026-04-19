@@ -29,6 +29,11 @@ import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
  * <p>If the application is already suspended at the time of the call, returns
  * immediately. If the timeout expires without a suspend, returns
  * {@code {hit:false, reason:"timeout"}} — the launch is NOT terminated.
+ *
+ * <p>{@code applicationId} may be a real id from {@code get_applications} or the
+ * synthetic {@code attach:<configName>} id reported by {@code debug_status} for
+ * Attach launches. If omitted and exactly one EDT debug launch is active, that
+ * launch is auto-resolved.
  */
 public class WaitForBreakTool implements IMcpTool
 {
@@ -44,8 +49,10 @@ public class WaitForBreakTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Wait for a debug suspend event (e.g. breakpoint hit) on the given " //$NON-NLS-1$
-            + "application. Returns the suspended thread/frame snapshot, or {hit:false} on timeout. " //$NON-NLS-1$
+        return "Wait for a debug suspend event (e.g. breakpoint hit) on the given application. " //$NON-NLS-1$
+            + "Returns the suspended thread/frame snapshot, or {hit:false} on timeout. " //$NON-NLS-1$
+            + "applicationId may be real or synthetic 'attach:<configName>'. " //$NON-NLS-1$
+            + "If omitted and exactly one EDT debug launch is active, that launch is used. " //$NON-NLS-1$
             + "Does NOT terminate the launch on timeout — call again to keep waiting."; //$NON-NLS-1$
     }
 
@@ -53,7 +60,9 @@ public class WaitForBreakTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("applicationId", "Application id of the running debug session (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", //$NON-NLS-1$
+                "Application id of the running debug session (real or 'attach:<configName>'). " //$NON-NLS-1$
+                    + "Optional if exactly one debug launch is active.") //$NON-NLS-1$
             .integerProperty("timeout", "Wait window in seconds (default: 60)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -73,13 +82,21 @@ public class WaitForBreakTool implements IMcpTool
         {
             timeout = 1;
         }
-        if (applicationId == null || applicationId.isEmpty())
-        {
-            return ToolResult.error("applicationId is required").toJson(); //$NON-NLS-1$
-        }
 
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         registry.ensureListenerRegistered();
+
+        boolean autoResolved = false;
+        if (applicationId == null || applicationId.isEmpty())
+        {
+            applicationId = DebugSessionRegistry.findLoneActiveApplicationId();
+            if (applicationId == null)
+            {
+                return ToolResult.error("applicationId is required — no single active debug launch " //$NON-NLS-1$
+                    + "available for auto-resolution. Use debug_status to list active launches.").toJson(); //$NON-NLS-1$
+            }
+            autoResolved = true;
+        }
 
         // Proactively scan live targets for threads already suspended before the
         // listener was registered (e.g. manual breakpoint hit in EDT, or suspend
@@ -92,12 +109,17 @@ public class WaitForBreakTool implements IMcpTool
                 registry.waitForSuspend(applicationId, timeout * 1000L);
             if (snapshot == null)
             {
-                return ToolResult.success()
+                ToolResult r = ToolResult.success()
                     .put("hit", false) //$NON-NLS-1$
                     .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
-                    .toJson();
+                    .put("applicationId", applicationId); //$NON-NLS-1$
+                if (autoResolved)
+                {
+                    r.put("autoResolved", true); //$NON-NLS-1$
+                }
+                return r.toJson();
             }
-            return buildSnapshotResponse(snapshot, registry);
+            return buildSnapshotResponse(snapshot, registry, applicationId, autoResolved);
         }
         catch (InterruptedException e)
         {
@@ -151,7 +173,7 @@ public class WaitForBreakTool implements IMcpTool
      * (get_variables, evaluate_expression, step) can refer back to it.
      */
     static String buildSnapshotResponse(DebugSessionRegistry.SuspendSnapshot snapshot,
-            DebugSessionRegistry registry) throws Exception
+            DebugSessionRegistry registry, String applicationId, boolean autoResolved) throws Exception
     {
         IThread thread = snapshot.thread;
         List<Map<String, Object>> frames = new ArrayList<>();
@@ -178,7 +200,12 @@ public class WaitForBreakTool implements IMcpTool
             .put("hit", true) //$NON-NLS-1$
             .put("threadId", snapshot.threadId) //$NON-NLS-1$
             .put("threadName", thread.getName()) //$NON-NLS-1$
+            .put("applicationId", applicationId) //$NON-NLS-1$
             .put("frames", frames); //$NON-NLS-1$
+        if (autoResolved)
+        {
+            result.put("autoResolved", true); //$NON-NLS-1$
+        }
         if (!frames.isEmpty())
         {
             result.put("topFrameRef", frames.get(0).get("frameRef")); //$NON-NLS-1$ //$NON-NLS-2$
