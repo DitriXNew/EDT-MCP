@@ -154,7 +154,7 @@ All 47 tools are organized into 8 semantic groups:
 | **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
-| **Applications & Testing** | App management, database updates, testing | `get_applications`, `update_database`, `debug_launch`, `run_yaxunit_tests` |
+| **Applications & Testing** | App management, database updates, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_screenshot`, `validate_query` |
 | **Refactoring** | Metadata rename, delete, add attributes | `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
@@ -303,8 +303,9 @@ Add to `claude_desktop_config.json`:
 | `get_tags` | Get list of all tags defined in the project with descriptions and object counts |
 | `get_objects_by_tags` | Get metadata objects filtered by tags with tag descriptions and object FQNs |
 | `get_applications` | Get list of applications (infobases) for a project with update state |
-| `update_database` | Update database (infobase) with full or incremental update mode |
-| `debug_launch` | Launch application in debug mode (auto-updates database before launch) |
+| `list_configurations` | List EDT launch configurations (runtime-client + Attach) with current running / suspended state |
+| `update_database` | Update database (infobase) with full or incremental update mode — by `launchConfigurationName` or `projectName + applicationId` |
+| `debug_launch` | Launch application in debug mode — by `launchConfigurationName` (any type, incl. Attach to 1C:Enterprise Debug Server) or `projectName + applicationId` |
 | `run_yaxunit_tests` | Run YAXUnit tests for a project: launches 1C with `RunUnitTests`, parses JUnit XML, returns Markdown report |
 | `debug_yaxunit_tests` | Launch YAXUnit tests in DEBUG mode so breakpoints fire (autonomous LLM debug cycle) |
 | `set_breakpoint` | Set a 1C BSL line breakpoint (accepts EDT module path or absolute path) |
@@ -570,6 +571,18 @@ Add to `claude_desktop_config.json`:
 |-----------|----------|-------------|
 | `projectName` | Yes | EDT project name |
 
+#### List Configurations Tool
+
+**`list_configurations`** - List EDT launch configurations (runtime-client + Attach + other 1C types) with their current running state. Discovery step that precedes `debug_launch`, `run_yaxunit_tests`, `debug_yaxunit_tests` and `update_database`: once the MCP client knows the exact configuration name, it can target it by name without juggling `projectName + applicationId` pairs.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `type` | No | Filter: `attach` (RemoteRuntime + LocalRuntime), `client` (RuntimeClient), `all` (default — any 1C/EDT launch config) |
+| `projectName` | No | Project-name filter |
+
+**Returns:** per configuration — `name`, `type` (full type id), `attach` flag, `applicationId` (real or synthetic `attach:<name>`), `project`, `infobaseAlias`, `debugServerUrl`, `running`, `mode`, `suspended`.
+
 #### Update Database Tool
 
 **`update_database`** - Update database (infobase) configuration. Supports full and incremental update modes.
@@ -577,26 +590,30 @@ Add to `claude_desktop_config.json`:
 **Parameters:**
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `projectName` | Yes | EDT project name |
-| `applicationId` | Yes | Application ID from `get_applications` |
+| `launchConfigurationName` | No (preferred) | Exact EDT runtime-client launch configuration name (from `list_configurations`). When given, `projectName` and `applicationId` are derived from the config. |
+| `projectName` | If no name | EDT project name |
+| `applicationId` | If no name | Application ID from `get_applications` |
 | `fullUpdate` | No | If true - full reload, if false - incremental update (default: false) |
 | `autoRestructure` | No | Automatically apply restructurization if needed (default: true) |
 
 #### Debug Launch Tool
 
-**`debug_launch`** - Launch application in debug mode. Automatically updates database before launching and finds existing launch configuration.
+**`debug_launch`** - Start an EDT debug session. Works for both runtime-client configs (spawns `1cv8c`) and **Attach to 1C:Enterprise Debug Server** configs (attaches to a running `ragent`/`rphost`, required for debugging server-side code — HTTP services, server calls, scheduled and background jobs).
 
 **Parameters:**
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `projectName` | Yes | EDT project name |
-| `applicationId` | Yes | Application ID from `get_applications` |
-| `updateBeforeLaunch` | No | If true - update database before launching (default: true) |
+| `launchConfigurationName` | No (preferred) | Exact name of an EDT debug launch configuration (runtime client or Attach). Use this for Attach configs or to pick a specific client config by name. |
+| `projectName` | If no name | EDT project name |
+| `applicationId` | If no name | Application ID from `get_applications` (runtime-client launches only) |
+| `updateBeforeLaunch` | No | If true - update database before launching (default: true, ignored for Attach) |
 
 **Notes:**
-- Requires a launch configuration to be created in EDT first (Run → Run Configurations...)
-- If no configuration exists, returns list of available configurations
-- `updateBeforeLaunch=true` skips update if database is already up to date
+- Requires a launch configuration to be created in EDT first (Run → Run Configurations...).
+- For an Attach config, `debug_launch` returns `applicationId: "attach:<name>"` — a stable synthetic id used by `wait_for_break`, `resume`, `debug_status` and friends.
+- If the config is already running in debug mode, the tool short-circuits with `alreadyRunning: true` instead of spawning a duplicate launch.
+- If no configuration exists, returns list of available configurations (runtime client + attach) so the MCP client can discover what's on offer.
+- `updateBeforeLaunch=true` skips update if database is already up to date.
 
 #### Run YAXUnit Tests Tool
 
@@ -605,8 +622,9 @@ Add to `claude_desktop_config.json`:
 **Parameters:**
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `projectName` | Yes | EDT project name |
-| `applicationId` | Yes | Application ID from `get_applications` |
+| `launchConfigurationName` | No (preferred) | Exact EDT runtime-client launch configuration name (from `list_configurations`). When given, `projectName` and `applicationId` are derived from the config. |
+| `projectName` | If no name | EDT project name |
+| `applicationId` | If no name | Application ID from `get_applications` |
 | `extensions` | No | Comma-separated extension names to filter tests by extension |
 | `modules` | No | Comma-separated common-module names to run (e.g. `OM_tmrlGlovoCatalog`) |
 | `tests` | No | Comma-separated test names in `Module.Method` format |
@@ -616,6 +634,27 @@ Add to `claude_desktop_config.json`:
 - Requires a launch configuration in EDT for the project/application and the YAXUnit extension installed in the infobase.
 - The launch is **not** terminated when the polling window expires — call the tool again with identical arguments to keep waiting and fetch the result once 1C closes.
 - Reports are stored under `%TEMP%/edt-mcp-yaxunit/<sanitized-key>_<sha1>/` (`junit.xml` + `report.md` + `xUnitParams.json`). The directory name is derived from `projectName:applicationId:filterHash` — sanitized and suffixed with a SHA-1 hash to avoid collisions. A fresh `junit.xml` (younger than 5 minutes) is reused without restarting 1C.
+
+#### Server-Side Debugging (Attach to 1C:Enterprise Debug Server)
+
+The debug tools also drive **Attach** launch configurations (`com._1c.g5.v8.dt.debug.core.RemoteRuntime` / `LocalRuntime`), which is the only way to debug server-side BSL via MCP: HTTP services, server calls, scheduled jobs, background jobs, external connections running inside `rphost`.
+
+**Prerequisites on the 1C side:**
+- Cluster `ragent` launched with `-debug -http` (HTTP debugger, typical port `1550`).
+- For published infobases: debug flag enabled in the `.vrd` (Apache `wsap24.dll` or IIS).
+- In EDT, create a launch configuration of type *Attach to 1C:Enterprise Debug Server* with the infobase alias / UUID and the debug-server URL (e.g. `http://localhost:1550`).
+
+**Workflow:**
+
+1. `list_configurations({type: "attach"})` — discover available Attach configs and see which one is already running.
+2. `debug_launch({launchConfigurationName: "<name>"})` — attach to `rphost` (or short-circuit with `alreadyRunning: true` if the session is live). Returns `applicationId: "attach:<name>"`.
+3. `set_breakpoint` on the suspect HTTP-service handler / server procedure.
+4. Trigger the server-side call (e.g. `curl http://host/base/hs/your-endpoint`).
+5. `wait_for_break` — returns `threadId`, `frameRef`, suspended line.
+6. `evaluate_expression({frameRef, expression: "Request.QueryOptions[\"..\"]"})` — inspect request parameters, catalog refs, etc. (`get_variables` also works for most frames; use `evaluate_expression` as a fallback when the attach frame doesn't expose variables eagerly.)
+7. `step` / `resume` — finish the call; the HTTP request on the client returns.
+
+Attach launches register in the same snapshot / thread / frame registry as runtime-client launches — `debug_status` reports `applicationId`, `launchConfiguration`, `configurationType`, `attach: true`, `suspended`, `suspendedAt` and a `registered` flag.
 
 #### Debug Inspection Tools
 
