@@ -426,9 +426,15 @@ public class DebugLaunchTool implements IMcpTool
     }
 
     /**
-     * Launches the given configuration in debug mode on the UI thread when a
-     * Display is available, otherwise directly. Returns {@code null} on success,
-     * or an error message describing the failure.
+     * Launches the given configuration in debug mode.
+     *
+     * <p>Uses a direct {@code config.launch(DEBUG_MODE, null)} — not
+     * {@code DebugUITools.launch} — because the latter may open modal dialogs
+     * (save-prompt, perspective-switch, already-running-confirmation) that
+     * block the MCP worker thread indefinitely and eventually close the HTTP
+     * socket. {@code debug_yaxunit_tests} uses the same direct path.
+     *
+     * @return {@code null} on success, or an error message on failure.
      */
     private String performLaunch(ILaunchConfiguration config)
     {
@@ -440,7 +446,7 @@ public class DebugLaunchTool implements IMcpTool
             display.syncExec(() -> {
                 try
                 {
-                    org.eclipse.debug.ui.DebugUITools.launch(config, ILaunchManager.DEBUG_MODE);
+                    config.launch(ILaunchManager.DEBUG_MODE, null);
                     launchSuccess[0] = true;
                 }
                 catch (Exception e)
