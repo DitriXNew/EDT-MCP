@@ -14,6 +14,7 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -22,16 +23,16 @@ import com.ditrix.edt.mcp.server.utils.FrontMatter;
 /**
  * Tool to read BSL module source code (whole file or line range).
  * Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines;
- * plus truncated: true when clamped by MAX_LINES) followed by the source in a
- * fenced bsl block. For an empty file, startLine/endLine are omitted and
- * totalLines is 0. Max 5000 lines per call.
+ * plus truncated: true when clamped by the configured line limit) followed by
+ * the source in a fenced bsl block. For an empty file, startLine/endLine are
+ * omitted and totalLines is 0.
  */
 public class ReadModuleSourceTool implements IMcpTool
 {
     public static final String NAME = "read_module_source"; //$NON-NLS-1$
 
-    /** Maximum lines to return in a single call */
-    private static final int MAX_LINES = 5000;
+    /** Fallback when the {@code maxLines} tool parameter is not configured */
+    private static final int DEFAULT_MAX_LINES = 5000;
 
     @Override
     public String getName()
@@ -44,10 +45,10 @@ public class ReadModuleSourceTool implements IMcpTool
     {
         return "Read BSL module source code from EDT project. " + //$NON-NLS-1$
                "Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines; " + //$NON-NLS-1$
-               "plus truncated: true when the range was clamped by the 5000-line limit) " + //$NON-NLS-1$
+               "plus truncated: true when the range was clamped by the configured line limit) " + //$NON-NLS-1$
                "followed by clean source in a fenced bsl block (no line-number prefixes). " + //$NON-NLS-1$
                "For an empty file, startLine/endLine are omitted and totalLines is 0. " + //$NON-NLS-1$
-               "Supports reading full file or a specific line range. Max 5000 lines per call."; //$NON-NLS-1$
+               "Supports reading full file or a specific line range."; //$NON-NLS-1$
     }
 
     @Override
@@ -144,11 +145,13 @@ public class ReadModuleSourceTool implements IMcpTool
                 to = Math.max(from, Math.min(endLine, totalLines));
             }
 
-            // Clamp to MAX_LINES
+            // Clamp to the configured line limit
+            int maxLines = ToolParameterSettings.getInstance()
+                .getParameterValue(NAME, "maxLines", DEFAULT_MAX_LINES); //$NON-NLS-1$
             boolean truncated = false;
-            if (to - from + 1 > MAX_LINES)
+            if (to - from + 1 > maxLines)
             {
-                to = from + MAX_LINES - 1;
+                to = from + maxLines - 1;
                 truncated = true;
             }
 
@@ -169,7 +172,7 @@ public class ReadModuleSourceTool implements IMcpTool
      * @param from 1-based start line (inclusive); ignored when totalLines == 0
      * @param to 1-based end line (inclusive); ignored when totalLines == 0
      * @param totalLines total line count in the file (0 for empty file)
-     * @param truncated true if the returned range was clamped by MAX_LINES
+     * @param truncated true if the returned range was clamped by the configured line limit
      * @return formatted result string
      */
     static String formatOutput(String projectName, String modulePath, List<String> allLines,
