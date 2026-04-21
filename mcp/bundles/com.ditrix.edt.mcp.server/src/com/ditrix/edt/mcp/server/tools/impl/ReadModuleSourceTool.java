@@ -21,10 +21,10 @@ import com.ditrix.edt.mcp.server.utils.FrontMatter;
 
 /**
  * Tool to read BSL module source code (whole file or line range).
- * Returns YAML frontmatter metadata (startLine, endLine, totalLines; plus
- * {@code truncated: true} only when the range was clamped by MAX_LINES)
- * followed by the source in a fenced bsl block. Supports range extraction and
- * large file protection (max 5000 lines per call).
+ * Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines;
+ * plus truncated: true when clamped by MAX_LINES) followed by the source in a
+ * fenced bsl block. For an empty file, startLine/endLine are omitted and
+ * totalLines is 0. Max 5000 lines per call.
  */
 public class ReadModuleSourceTool implements IMcpTool
 {
