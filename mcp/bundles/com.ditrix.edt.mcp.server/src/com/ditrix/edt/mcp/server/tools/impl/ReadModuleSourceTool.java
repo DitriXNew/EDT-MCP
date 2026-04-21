@@ -43,7 +43,10 @@ public class ReadModuleSourceTool implements IMcpTool
     public String getDescription()
     {
         return "Read BSL module source code from EDT project. " + //$NON-NLS-1$
-               "Returns source with YAML frontmatter metadata (startLine, endLine, totalLines). " + //$NON-NLS-1$
+               "Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines; " + //$NON-NLS-1$
+               "plus truncated: true when the range was clamped by the 5000-line limit) " + //$NON-NLS-1$
+               "followed by clean source in a fenced bsl block (no line-number prefixes). " + //$NON-NLS-1$
+               "For an empty file, startLine/endLine are omitted and totalLines is 0. " + //$NON-NLS-1$
                "Supports reading full file or a specific line range. Max 5000 lines per call."; //$NON-NLS-1$
     }
 
