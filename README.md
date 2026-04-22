@@ -322,7 +322,7 @@ Add to `claude_desktop_config.json`:
 | `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
-| `read_module_source` | Read BSL module source code with line numbers (full file or line range) |
+| `read_module_source` | Read BSL module source code with YAML frontmatter metadata (full file or line range) |
 | `write_module_source` | Write BSL source code to metadata object modules (searchReplace, replace, append) with syntax check |
 | `read_method_source` | Read a specific procedure/function from a BSL module by name |
 | `search_in_code` | Full-text/regex search across BSL modules with outputMode: full/count/files |
@@ -713,7 +713,7 @@ A family of MCP tools that lets the LLM set breakpoints, inspect runtime state a
 
 #### Read Module Source Tool
 
-**`read_module_source`** - Read BSL module source code from EDT project. Returns source with line numbers. Supports reading full file or a specific line range. Max 5000 lines per call.
+**`read_module_source`** - Read BSL module source code from EDT project. Returns source with YAML frontmatter metadata (`startLine`, `endLine`, `totalLines`). Supports reading full file or a specific line range. The per-call line limit is configurable in **Window → Preferences → MCP Server → Tools** (`maxLines`, default 5000).
 
 **Parameters:**
 | Parameter | Required | Description |
@@ -722,6 +722,13 @@ A family of MCP tools that lets the LLM set breakpoints, inspect runtime state a
 | `modulePath` | Yes | Path from `src/` folder (e.g. `CommonModules/MyModule/Module.bsl` or `Documents/SalesOrder/ObjectModule.bsl`) |
 | `startLine` | No | Start line number (1-based, inclusive). If omitted, reads from beginning |
 | `endLine` | No | End line number (1-based, inclusive). If omitted, reads to end |
+
+**Returns:** Markdown with YAML frontmatter followed by a fenced `bsl` code block containing clean source (no line-number prefixes). Frontmatter fields:
+
+- `projectName`, `module` — echo of input parameters
+- `startLine`, `endLine` — actual 1-based range returned (omitted for an empty file)
+- `totalLines` — total line count of the file
+- `truncated: true` — present only when the requested range was clamped by the configured line limit (`maxLines` setting)
 
 #### Write Module Source Tool
 

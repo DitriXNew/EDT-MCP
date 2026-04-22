@@ -14,20 +14,25 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 
 /**
  * Tool to read BSL module source code (whole file or line range).
- * Supports reading with line numbers, range extraction, and large file protection.
+ * Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines;
+ * plus truncated: true when clamped by the configured line limit) followed by
+ * the source in a fenced bsl block. For an empty file, startLine/endLine are
+ * omitted and totalLines is 0.
  */
 public class ReadModuleSourceTool implements IMcpTool
 {
     public static final String NAME = "read_module_source"; //$NON-NLS-1$
 
-    /** Maximum lines to return in a single call */
-    private static final int MAX_LINES = 5000;
+    /** Fallback when the {@code maxLines} tool parameter is not configured */
+    private static final int DEFAULT_MAX_LINES = 5000;
 
     @Override
     public String getName()
@@ -39,8 +44,11 @@ public class ReadModuleSourceTool implements IMcpTool
     public String getDescription()
     {
         return "Read BSL module source code from EDT project. " + //$NON-NLS-1$
-               "Returns source with line numbers. Supports reading full file or a specific line range. " + //$NON-NLS-1$
-               "Max 5000 lines per call."; //$NON-NLS-1$
+               "Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines; " + //$NON-NLS-1$
+               "plus truncated: true when the range was clamped by the configured line limit) " + //$NON-NLS-1$
+               "followed by clean source in a fenced bsl block (no line-number prefixes). " + //$NON-NLS-1$
+               "For an empty file, startLine/endLine are omitted and totalLines is 0. " + //$NON-NLS-1$
+               "Supports reading full file or a specific line range."; //$NON-NLS-1$
     }
 
     @Override
@@ -121,7 +129,7 @@ public class ReadModuleSourceTool implements IMcpTool
             // Handle empty file
             if (totalLines == 0)
             {
-                return "## " + modulePath + "\n\n**Lines:** 0 (empty file)\n\n```bsl\n```\n"; //$NON-NLS-1$ //$NON-NLS-2$
+                return formatOutput(projectName, modulePath, allLines, 0, 0, 0, false);
             }
 
             // Determine range
@@ -137,37 +145,67 @@ public class ReadModuleSourceTool implements IMcpTool
                 to = Math.max(from, Math.min(endLine, totalLines));
             }
 
-            // Clamp to MAX_LINES
+            // Clamp to the configured line limit
+            int maxLines = ToolParameterSettings.getInstance()
+                .getParameterValue(NAME, "maxLines", DEFAULT_MAX_LINES); //$NON-NLS-1$
             boolean truncated = false;
-            if (to - from + 1 > MAX_LINES)
+            if (to - from + 1 > maxLines)
             {
-                to = from + MAX_LINES - 1;
+                to = from + maxLines - 1;
                 truncated = true;
             }
 
-            // Build output
-            StringBuilder sb = new StringBuilder();
-            sb.append("## ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("**Lines:** ").append(from).append("-").append(to); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append(" of ").append(totalLines).append(" total"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (truncated)
-            {
-                sb.append(" (truncated to ").append(MAX_LINES).append(" lines)"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            sb.append("\n\n"); //$NON-NLS-1$
-
-            sb.append("```bsl\n"); //$NON-NLS-1$
-            for (int i = from - 1; i < to; i++)
-            {
-                sb.append(String.format("%d: %s\n", i + 1, allLines.get(i))); //$NON-NLS-1$
-            }
-            sb.append("```\n"); //$NON-NLS-1$
-
-            return sb.toString();
+            return formatOutput(projectName, modulePath, allLines, from, to, totalLines, truncated);
         }
         catch (Exception e)
         {
             return "Error reading file: " + e.getMessage(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Formats module source output as YAML frontmatter + fenced BSL code block.
+     *
+     * @param projectName EDT project name (for frontmatter)
+     * @param modulePath path from src/ (for frontmatter)
+     * @param allLines all source lines of the file
+     * @param from 1-based start line (inclusive); ignored when totalLines == 0
+     * @param to 1-based end line (inclusive); ignored when totalLines == 0
+     * @param totalLines total line count in the file (0 for empty file)
+     * @param truncated true if the returned range was clamped by the configured line limit
+     * @return formatted result string
+     */
+    static String formatOutput(String projectName, String modulePath, List<String> allLines,
+        int from, int to, int totalLines, boolean truncated)
+    {
+        FrontMatter fm = FrontMatter.create()
+            .put("projectName", projectName) //$NON-NLS-1$
+            .put("module", modulePath); //$NON-NLS-1$
+
+        if (totalLines > 0)
+        {
+            fm.put("startLine", from) //$NON-NLS-1$
+                .put("endLine", to); //$NON-NLS-1$
+        }
+
+        fm.put("totalLines", totalLines); //$NON-NLS-1$
+
+        if (truncated)
+        {
+            fm.put("truncated", true); //$NON-NLS-1$
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("```bsl\n"); //$NON-NLS-1$
+        if (totalLines > 0)
+        {
+            for (int i = from - 1; i < to; i++)
+            {
+                sb.append(allLines.get(i)).append('\n');
+            }
+        }
+        sb.append("```\n"); //$NON-NLS-1$
+
+        return fm.wrapContent(sb.toString());
     }
 }
