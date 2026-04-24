@@ -21,7 +21,7 @@ public enum ToolPreset
 
     ANALYSIS_ONLY("Analysis Only", //$NON-NLS-1$
         "Read-only analysis - no code changes, no debugging", //$NON-NLS-1$
-        disabledFor(ToolGroup.APPLICATIONS, ToolGroup.DEBUG, ToolGroup.BSL_CODE, ToolGroup.REFACTORING)),
+        disabledFor(ToolGroup.APPLICATIONS, ToolGroup.DEBUG, ToolGroup.BSL_CODE, ToolGroup.REFACTORING, ToolGroup.TRANSLATION)),
 
     CODE_REVIEW("Code Review", //$NON-NLS-1$
         "Analysis + BSL code reading (no writing)", //$NON-NLS-1$
@@ -120,6 +120,7 @@ public enum ToolPreset
         disabled.addAll(ToolGroup.APPLICATIONS.getToolNames());
         disabled.addAll(ToolGroup.DEBUG.getToolNames());
         disabled.addAll(ToolGroup.REFACTORING.getToolNames());
+        disabled.addAll(ToolGroup.TRANSLATION.getToolNames());
         disabled.add("write_module_source"); //$NON-NLS-1$
         return Collections.unmodifiableSet(disabled);
     }

@@ -55,7 +55,12 @@ public enum ToolGroup
 
     REFACTORING("refactoring", "Refactoring", //$NON-NLS-1$ //$NON-NLS-2$
         "Metadata rename, delete, and attribute management", //$NON-NLS-1$
-        "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    TRANSLATION("translation", "Translation (LanguageTool)", //$NON-NLS-1$ //$NON-NLS-2$
+        "LanguageTool: translation strings generation, configuration sync, conversion, import, project info", //$NON-NLS-1$
+        "run_language_tool", "translate_configuration", "convert_to_translation_language", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "import_translations_from_translated_object", "get_translation_project_info"); //$NON-NLS-1$ //$NON-NLS-2$
 
     private final String id;
     private final String displayName;

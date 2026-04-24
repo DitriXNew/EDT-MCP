@@ -146,7 +146,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 47 tools are organized into 8 semantic groups:
+All 53 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -158,6 +158,7 @@ All 47 tools are organized into 8 semantic groups:
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_screenshot`, `validate_query` |
 | **Refactoring** | Metadata rename, delete, add attributes | `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
+| **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, conversion, import, project info | `run_language_tool`, `translate_configuration`, `convert_to_translation_language`, `import_translations_from_translated_object`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
 
@@ -167,7 +168,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 47 tools enabled (default) |
+| **All Tools** | All 53 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -330,6 +331,11 @@ Add to `claude_desktop_config.json`:
 | `go_to_definition` | Navigate to symbol definition (method by name, metadata object by FQN) |
 | `get_symbol_info` | Get type/hover info about a symbol at a BSL code position (inferred types, signatures, docs) |
 | `validate_query` | Validate 1C query text in project context (syntax + semantic errors, optional DCS mode) |
+| `run_language_tool` | LanguageTool: regenerate translation strings (.lstr/.trans/.dict) for a dependent translation project. EDT menu: Translation → Generate translation strings |
+| `translate_configuration` | LanguageTool: propagate dictionary changes from dependent translation projects to translated artifacts. EDT menu: Translation → Translate configuration |
+| `convert_to_translation_language` | LanguageTool: convert a project to a translation language (EDT menu: Translation → Convert to translation language) |
+| `import_translations_from_translated_object` | LanguageTool: import dependent translation projects from filesystem paths into the workspace |
+| `get_translation_project_info` | LanguageTool diagnostics: project translation storages and available translation provider IDs |
 
 <details>
 <summary><strong>Tool Details</strong> - Parameters and usage examples for each tool</summary>
@@ -856,10 +862,51 @@ A family of MCP tools that lets the LLM set breakpoints, inspect runtime state a
 - Inspect property types on objects accessed via dot notation
 - Understand platform method parameter types
 
+### LanguageTool Tools
+
+LanguageTool ships with EDT 2025.x and 2026.1 (installed separately on 2026.1). These tools wrap the official 1C CLI APIs (`com.e1c.langtool.v8.dt.cli.api.*`) via reflection, so this plugin builds without a compile-time dependency on LanguageTool. When LanguageTool is not installed, every tool returns a clear "API not available" error instead of failing.
+
+**`run_language_tool`** — wraps `IGenerateTranslationStringsApi.generateTranslationStrings(...)`. Equivalent of EDT menu *Translation → Generate translation strings*. Produces placeholder keys in `.lstr`/`.trans`/`.dict` files for a dependent translation project. The translator (or LLM) then fills in values.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | Dependent translation project name |
+| `sourceLanguage` | Yes | Source language code (e.g. `ru`) |
+| `targetLanguage` | Yes | Target language code (e.g. `en`) |
+
+**`translate_configuration`** — wraps `ISynchronizeProjectApi.synchronizeProject(IDtProject, List<String>)`. Equivalent of EDT menu *Translation → Translate configuration*. Propagates dictionary changes from dependent translation projects to the source project, regenerating the translated artifacts. This is the main action a translator runs after editing dictionaries.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | Project name (typically the source project) |
+| `targetLanguages` | Yes | Target language codes to synchronize, e.g. `["en"]` |
+
+**`convert_to_translation_language`** — wraps `IConvertLanguageProjectApi.convertLanguageProject(IProject, IProject, IProject)`. Equivalent of EDT menu *Translation → Convert to translation language*.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName1` | Yes | First project name |
+| `projectName2` | Yes | Second project name |
+| `projectName3` | Yes | Third project name |
+
+**`import_translations_from_translated_object`** — wraps `IImportLanguageProjectApi.importLanguageProjects(List<Path>)`. Equivalent of EDT menu *Translation → Import translations from translated object*. Imports one or more dependent translation projects from disk into the workspace.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `paths` | Yes | Filesystem paths to translation projects to import |
+
+**`get_translation_project_info`** — wraps `IProjectInformationApi`. Diagnostic tool that returns the translation storages declared on a project (e.g. `common-camelcase`, `common`, BSL/i18n) and the available translation provider IDs (Google, Microsoft, Yandex, etc.).
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | Project name |
+
+Returns: `{ project, storages: [...], providers: [...] }`.
+
 ### Output Formats
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description` - return Markdown as EmbeddedResource with `mimeType: text/markdown`
-- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects` - return JSON with `structuredContent`
+- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects`, all LanguageTool tools - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
 
 </details>
