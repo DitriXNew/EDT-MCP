@@ -55,7 +55,11 @@ public enum ToolGroup
 
     REFACTORING("refactoring", "Refactoring", //$NON-NLS-1$ //$NON-NLS-2$
         "Metadata rename, delete, and attribute management", //$NON-NLS-1$
-        "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    WORKSPACE("workspace", "Workspace", //$NON-NLS-1$ //$NON-NLS-2$
+        "Configuration export/import to/from XML files", //$NON-NLS-1$
+        "export_configuration_to_xml", "import_configuration_from_xml"); //$NON-NLS-1$ //$NON-NLS-2$
 
     private final String id;
     private final String displayName;

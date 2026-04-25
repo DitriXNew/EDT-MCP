@@ -146,7 +146,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 47 tools are organized into 8 semantic groups:
+All 49 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -158,6 +158,7 @@ All 47 tools are organized into 8 semantic groups:
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_screenshot`, `validate_query` |
 | **Refactoring** | Metadata rename, delete, add attributes | `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
+| **Workspace** | Configuration export/import to/from XML files | `export_configuration_to_xml`, `import_configuration_from_xml` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
 
@@ -167,7 +168,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 47 tools enabled (default) |
+| **All Tools** | All 49 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -330,6 +331,8 @@ Add to `claude_desktop_config.json`:
 | `go_to_definition` | Navigate to symbol definition (method by name, metadata object by FQN) |
 | `get_symbol_info` | Get type/hover info about a symbol at a BSL code position (inferred types, signatures, docs) |
 | `validate_query` | Validate 1C query text in project context (syntax + semantic errors, optional DCS mode) |
+| `export_configuration_to_xml` | Export an EDT configuration project to a directory of XML files (EDT menu: Export → Configuration to XML Files) |
+| `import_configuration_from_xml` | Import a configuration from a directory of XML files into a new EDT project (reverse of export) |
 
 <details>
 <summary><strong>Tool Details</strong> - Parameters and usage examples for each tool</summary>
@@ -856,10 +859,30 @@ A family of MCP tools that lets the LLM set breakpoints, inspect runtime state a
 - Inspect property types on objects accessed via dot notation
 - Understand platform method parameter types
 
+### Workspace Tools
+
+These tools wrap the official 1C EDT workspace CLI APIs (`com._1c.g5.v8.dt.cli.api.workspace.*`) via reflection — keeping zero compile-time dependency on those APIs while still surfacing them to AI assistants.
+
+**`export_configuration_to_xml`** — Export an EDT configuration project to a directory of XML source files. Equivalent of EDT menu *Export → Configuration to XML Files* and the 1C platform `DumpConfigToFiles` command. Wraps `IExportConfigurationFilesApi.exportProject(String projectName, Path outputPath)`.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name to export |
+| `outputPath` | Yes | Filesystem path of the output directory for the XML files |
+
+**`import_configuration_from_xml`** — Import a configuration from a directory of XML files into a new EDT project in the workspace. Reverse of `export_configuration_to_xml`. Wraps `IImportConfigurationFilesApi.importProject(Path importSource, String projectName, String nature, String xmlVersion)`.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `importPath` | Yes | Filesystem path of the source directory containing XML files |
+| `projectName` | Yes | Name of the new EDT project to create in the workspace |
+| `projectNature` | No | EDT project nature ID (e.g. `com._1c.g5.v8.dt.core.V8ConfigurationNature`); empty/omitted = let EDT auto-detect |
+| `xmlVersion` | No | XML format version (e.g. `8.3.20`); empty/omitted = let EDT auto-detect |
+
 ### Output Formats
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description` - return Markdown as EmbeddedResource with `mimeType: text/markdown`
-- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects` - return JSON with `structuredContent`
+- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects`, all Workspace tools - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
 
 </details>
