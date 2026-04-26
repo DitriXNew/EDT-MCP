@@ -49,7 +49,6 @@ import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GenerateTranslationStringsTool;
 import com.ditrix.edt.mcp.server.tools.impl.TranslateConfigurationTool;
 import com.ditrix.edt.mcp.server.tools.impl.ConvertToTranslationLanguageTool;
-import com.ditrix.edt.mcp.server.tools.impl.ImportTranslationsFromTranslatedObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTranslationProjectInfoTool;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
@@ -203,7 +202,6 @@ public class McpServer
         registry.register(new GenerateTranslationStringsTool());
         registry.register(new TranslateConfigurationTool());
         registry.register(new ConvertToTranslationLanguageTool());
-        registry.register(new ImportTranslationsFromTranslatedObjectTool());
         registry.register(new GetTranslationProjectInfoTool());
         registry.register(new GetProblemSummaryTool());
         registry.register(new GetProjectErrorsTool());

@@ -25,14 +25,19 @@ import com.ditrix.edt.mcp.server.utils.BuildUtils;
  * Tool that wraps the LanguageTool "Convert to translation language" action.
  *
  * <p>Equivalent of the EDT context-menu action
- * <em>Translation &rarr; Convert to translation language</em>. Uses the 1C
- * public CLI API
+ * <em>Translation &rarr; Convert to translation language</em>. Use case:
+ * an existing configuration was previously translated by another tool and
+ * has additional language objects baked into its metadata. This action
+ * extracts those translations into a dependent translation project so
+ * LangTool can manage them going forward.
+ *
+ * <p>Wraps the public CLI API
  * {@code com.e1c.langtool.v8.dt.cli.api.IConvertLanguageProjectApi} via
  * reflection so this bundle has no build-time dependency on LanguageTool.
- *
- * <p>The underlying API takes three IProject arguments. Signatures don't
- * preserve parameter names, so callers must pass project names exactly as
- * they would supply via the EDT UI (typically: source / dependent / ?).
+ * The API resolves to {@code converterService.getManager(masterProject)
+ * .runConverter(sourceProject, targetProject)}, where the source
+ * project's files are visited and their translations are written into the
+ * target dependent translation project ({@code target/src} is wiped first).
  */
 public class ConvertToTranslationLanguageTool implements IMcpTool
 {
@@ -47,8 +52,9 @@ public class ConvertToTranslationLanguageTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run EDT 'Convert to translation language' on a project. " //$NON-NLS-1$
-             + "Wraps IConvertLanguageProjectApi.convertLanguageProject(IProject, IProject, IProject). " //$NON-NLS-1$
+        return "Convert a configuration's pre-existing language objects into a " //$NON-NLS-1$
+             + "dependent translation project for LangTool. Equivalent of the EDT " //$NON-NLS-1$
+             + "menu Translation -> Convert to translation language. " //$NON-NLS-1$
              + "Requires EDT with LanguageTool installed."; //$NON-NLS-1$
     }
 
@@ -56,9 +62,15 @@ public class ConvertToTranslationLanguageTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName1", "First project name (required)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("projectName2", "Second project name (required)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("projectName3", "Third project name (required)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("masterProject", //$NON-NLS-1$
+                "Project that hosts the converter manager (typically the source " //$NON-NLS-1$
+              + "configuration with the language objects to extract). Required.")
+            .stringProperty("sourceProject", //$NON-NLS-1$
+                "Project whose files are iterated and translated. Typically the " //$NON-NLS-1$
+              + "same as masterProject. Required.")
+            .stringProperty("targetProject", //$NON-NLS-1$
+                "Dependent translation project where the extracted translations " //$NON-NLS-1$
+              + "are written. Existing target/src is replaced. Required.")
             .build();
     }
 
@@ -71,33 +83,34 @@ public class ConvertToTranslationLanguageTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String name1 = JsonUtils.extractStringArgument(params, "projectName1"); //$NON-NLS-1$
-        String name2 = JsonUtils.extractStringArgument(params, "projectName2"); //$NON-NLS-1$
-        String name3 = JsonUtils.extractStringArgument(params, "projectName3"); //$NON-NLS-1$
+        String masterName = JsonUtils.extractStringArgument(params, "masterProject"); //$NON-NLS-1$
+        String sourceName = JsonUtils.extractStringArgument(params, "sourceProject"); //$NON-NLS-1$
+        String targetName = JsonUtils.extractStringArgument(params, "targetProject"); //$NON-NLS-1$
 
-        if (name1 == null || name2 == null || name3 == null
-            || name1.isEmpty() || name2.isEmpty() || name3.isEmpty())
+        if (masterName == null || sourceName == null || targetName == null
+            || masterName.isEmpty() || sourceName.isEmpty() || targetName.isEmpty())
         {
-            return ToolResult.error("All three project names are required").toJson(); //$NON-NLS-1$
+            return ToolResult.error(
+                "masterProject, sourceProject and targetProject are required").toJson(); //$NON-NLS-1$
         }
 
         try
         {
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            IProject p1 = resolveOpenProject(workspace, name1);
-            if (p1 == null)
+            IProject master = resolveOpenProject(workspace, masterName);
+            if (master == null)
             {
-                return ToolResult.error("Project not found or closed: " + name1).toJson(); //$NON-NLS-1$
+                return ToolResult.error("Project not found or closed: " + masterName).toJson(); //$NON-NLS-1$
             }
-            IProject p2 = resolveOpenProject(workspace, name2);
-            if (p2 == null)
+            IProject source = resolveOpenProject(workspace, sourceName);
+            if (source == null)
             {
-                return ToolResult.error("Project not found or closed: " + name2).toJson(); //$NON-NLS-1$
+                return ToolResult.error("Project not found or closed: " + sourceName).toJson(); //$NON-NLS-1$
             }
-            IProject p3 = resolveOpenProject(workspace, name3);
-            if (p3 == null)
+            IProject target = resolveOpenProject(workspace, targetName);
+            if (target == null)
             {
-                return ToolResult.error("Project not found or closed: " + name3).toJson(); //$NON-NLS-1$
+                return ToolResult.error("Project not found or closed: " + targetName).toJson(); //$NON-NLS-1$
             }
 
             Object api = Activator.getDefault().getConvertLanguageProjectApi();
@@ -110,14 +123,14 @@ public class ConvertToTranslationLanguageTool implements IMcpTool
 
             Method method = api.getClass().getMethod("convertLanguageProject", //$NON-NLS-1$
                 IProject.class, IProject.class, IProject.class);
-            method.invoke(api, p1, p2, p3);
+            method.invoke(api, master, source, target);
 
-            BuildUtils.waitForDerivedData(p1);
+            BuildUtils.waitForDerivedData(target);
 
             return ToolResult.success()
-                .put("project1", name1) //$NON-NLS-1$
-                .put("project2", name2) //$NON-NLS-1$
-                .put("project3", name3) //$NON-NLS-1$
+                .put("masterProject", masterName) //$NON-NLS-1$
+                .put("sourceProject", sourceName) //$NON-NLS-1$
+                .put("targetProject", targetName) //$NON-NLS-1$
                 .put("message", "Convert to translation language completed.") //$NON-NLS-1$ //$NON-NLS-2$
                 .toJson();
         }

@@ -58,9 +58,9 @@ public enum ToolGroup
         "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     TRANSLATION("translation", "Translation (LanguageTool)", //$NON-NLS-1$ //$NON-NLS-2$
-        "LanguageTool: translation strings generation, configuration sync, conversion, import, project info", //$NON-NLS-1$
+        "LanguageTool: translation strings generation, configuration sync, conversion, project info", //$NON-NLS-1$
         "generate_translation_strings", "translate_configuration", "convert_to_translation_language", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "import_translations_from_translated_object", "get_translation_project_info"); //$NON-NLS-1$ //$NON-NLS-2$
+        "get_translation_project_info"); //$NON-NLS-1$
 
     private final String id;
     private final String displayName;

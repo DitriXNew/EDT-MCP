@@ -158,7 +158,7 @@ All 53 tools are organized into 9 semantic groups:
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_screenshot`, `validate_query` |
 | **Refactoring** | Metadata rename, delete, add attributes | `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
-| **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, conversion, import, project info | `generate_translation_strings`, `translate_configuration`, `convert_to_translation_language`, `import_translations_from_translated_object`, `get_translation_project_info` |
+| **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, conversion, project info | `generate_translation_strings`, `translate_configuration`, `convert_to_translation_language`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
 
@@ -333,8 +333,7 @@ Add to `claude_desktop_config.json`:
 | `validate_query` | Validate 1C query text in project context (syntax + semantic errors, optional DCS mode) |
 | `generate_translation_strings` | LanguageTool: generate translation strings (.lstr/.trans/.dict) for a dependent translation project. EDT menu: Translation → Generate translation strings |
 | `translate_configuration` | LanguageTool: propagate dictionary changes from dependent translation projects to translated artifacts. EDT menu: Translation → Translate configuration |
-| `convert_to_translation_language` | LanguageTool: convert a project to a translation language (EDT menu: Translation → Convert to translation language) |
-| `import_translations_from_translated_object` | LanguageTool: import dependent translation projects from filesystem paths into the workspace |
+| `convert_to_translation_language` | LanguageTool: extract a configuration's pre-existing language objects into a dependent translation project. EDT menu: Translation → Convert to translation language |
 | `get_translation_project_info` | LanguageTool diagnostics: project translation storages and available translation provider IDs |
 
 <details>
@@ -881,19 +880,13 @@ LanguageTool ships with EDT 2025.x and 2026.1 (installed separately on 2026.1). 
 | `projectName` | Yes | Project name (typically the source project) |
 | `targetLanguages` | Yes | Target language codes to synchronize, e.g. `["en"]` |
 
-**`convert_to_translation_language`** — wraps `IConvertLanguageProjectApi.convertLanguageProject(IProject, IProject, IProject)`. Equivalent of EDT menu *Translation → Convert to translation language*.
+**`convert_to_translation_language`** — wraps `IConvertLanguageProjectApi.convertLanguageProject(IProject, IProject, IProject)`. Equivalent of EDT menu *Translation → Convert to translation language*. Use case: an existing configuration was previously translated by another tool and has additional language objects baked into its metadata; this action extracts those translations into a dependent translation project so LangTool can manage them going forward.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `projectName1` | Yes | First project name |
-| `projectName2` | Yes | Second project name |
-| `projectName3` | Yes | Third project name |
-
-**`import_translations_from_translated_object`** — wraps `IImportLanguageProjectApi.importLanguageProjects(List<Path>)`. Equivalent of EDT menu *Translation → Import translations from translated object*. Imports one or more dependent translation projects from disk into the workspace.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `paths` | Yes | Filesystem paths to translation projects to import |
+| `masterProject` | Yes | Project that hosts the converter manager (typically the source configuration with the language objects to extract) |
+| `sourceProject` | Yes | Project whose files are iterated and translated (typically the same as masterProject) |
+| `targetProject` | Yes | Dependent translation project where the extracted translations are written (existing `target/src` is replaced) |
 
 **`get_translation_project_info`** — wraps `IProjectInformationApi`. Diagnostic tool that returns the translation storages declared on a project (e.g. `common-camelcase`, `common`, BSL/i18n) and the available translation provider IDs (Google, Microsoft, Yandex, etc.).
 
