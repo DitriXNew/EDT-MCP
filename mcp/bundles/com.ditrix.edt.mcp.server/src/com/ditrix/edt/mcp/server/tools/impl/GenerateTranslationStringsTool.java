@@ -28,8 +28,9 @@ import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
- * Tool that invokes LanguageTool to regenerate translation strings
- * (.lstr / .trans / .dict) for a dependent translation project.
+ * Tool that generates translation strings (.lstr / .trans / .dict) for a
+ * dependent translation project — populates dictionary keys based on the
+ * parent project's translatable features.
  *
  * <p>Equivalent of the EDT UI action
  * <em>Translation &rarr; Generate translation strings</em>. Uses the 1C public
@@ -38,9 +39,9 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
  * (LanguageTool ships with EDT 2025.x but not with EDT 2026.1). When running on
  * an EDT without LanguageTool, returns a clear "not available" error.
  */
-public class RunLanguageToolTool implements IMcpTool
+public class GenerateTranslationStringsTool implements IMcpTool
 {
-    public static final String NAME = "run_language_tool"; //$NON-NLS-1$
+    public static final String NAME = "generate_translation_strings"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -51,9 +52,10 @@ public class RunLanguageToolTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run LanguageTool - regenerate translation strings " //$NON-NLS-1$
-             + "(.lstr/.trans/.dict) for a dependent translation project. " //$NON-NLS-1$
-             + "Equivalent of the EDT 'Translate' / LanguageTool action. " //$NON-NLS-1$
+        return "Generate translation strings (.lstr/.trans/.dict) for a " //$NON-NLS-1$
+             + "dependent translation project — populates dictionary keys " //$NON-NLS-1$
+             + "based on the parent project's translatable features. " //$NON-NLS-1$
+             + "Equivalent of the EDT menu Translation -> Generate translation strings. " //$NON-NLS-1$
              + "Requires EDT with LanguageTool installed (EDT 2025.x)."; //$NON-NLS-1$
     }
 
@@ -152,7 +154,7 @@ public class RunLanguageToolTool implements IMcpTool
                 .put("project", projectName) //$NON-NLS-1$
                 .put("sourceLanguage", sourceLanguage) //$NON-NLS-1$
                 .put("targetLanguage", targetLanguage) //$NON-NLS-1$
-                .put("message", "LanguageTool completed.") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("message", "Translation strings generated.") //$NON-NLS-1$ //$NON-NLS-2$
                 .toJson();
         }
         catch (InvocationTargetException e)

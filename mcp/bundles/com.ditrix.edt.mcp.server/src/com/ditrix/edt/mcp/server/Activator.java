@@ -60,8 +60,8 @@ public class Activator extends AbstractUIPlugin
      * LanguageTool CLI APIs are tracked by String class name to keep this
      * bundle build-independent of the com.e1c.langtool.* bundles (which are
      * present on EDT 2025.x but dropped in EDT 2026.1). All invocations on the
-     * returned services go through reflection — see RunLanguageToolTool and
-     * TranslateConfigurationTool.
+     * returned services go through reflection — see GenerateTranslationStringsTool
+     * and TranslateConfigurationTool.
      */
     private ServiceTracker<Object, Object> generateTranslationStringsApiTracker;
     private ServiceTracker<Object, Object> synchronizeProjectApiTracker;
