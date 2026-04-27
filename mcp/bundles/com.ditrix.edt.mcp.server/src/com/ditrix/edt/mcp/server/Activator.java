@@ -56,7 +56,15 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<IApplicationManager, IApplicationManager> applicationManagerTracker;
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
-    
+
+    /**
+     * EDT workspace CLI APIs are tracked by String class name and invoked via
+     * reflection from the tools, keeping this bundle build-independent of
+     * com._1c.g5.v8.dt.cli.api.
+     */
+    private ServiceTracker<Object, Object> exportConfigurationFilesApiTracker;
+    private ServiceTracker<Object, Object> importConfigurationFilesApiTracker;
+
     /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
     private IGroupService groupService;
 
@@ -118,7 +126,15 @@ public class Activator extends AbstractUIPlugin
         
         mdRefactoringServiceTracker = new ServiceTracker<>(context, IMdRefactoringService.class, null);
         mdRefactoringServiceTracker.open();
-        
+
+        exportConfigurationFilesApiTracker = new ServiceTracker<>(
+            context, "com._1c.g5.v8.dt.cli.api.workspace.IExportConfigurationFilesApi", null); //$NON-NLS-1$
+        exportConfigurationFilesApiTracker.open();
+
+        importConfigurationFilesApiTracker = new ServiceTracker<>(
+            context, "com._1c.g5.v8.dt.cli.api.workspace.IImportConfigurationFilesApi", null); //$NON-NLS-1$
+        importConfigurationFilesApiTracker.open();
+
         // Create group service directly (not via OSGi DS to avoid circular references)
         groupService = new com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl();
         ((com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl) groupService).activate();
@@ -216,7 +232,17 @@ public class Activator extends AbstractUIPlugin
             mdRefactoringServiceTracker.close();
             mdRefactoringServiceTracker = null;
         }
-        
+        if (exportConfigurationFilesApiTracker != null)
+        {
+            exportConfigurationFilesApiTracker.close();
+            exportConfigurationFilesApiTracker = null;
+        }
+        if (importConfigurationFilesApiTracker != null)
+        {
+            importConfigurationFilesApiTracker.close();
+            importConfigurationFilesApiTracker = null;
+        }
+
         // Dispose UI components only in non-headless mode
         if (!isHeadless())
         {
@@ -466,7 +492,37 @@ public class Activator extends AbstractUIPlugin
         }
         return mdRefactoringServiceTracker.getService();
     }
-    
+
+    /**
+     * Returns the com._1c.g5.v8.dt.cli.api.workspace.IExportConfigurationFilesApi
+     * (EDT "Export → Configuration to XML Files" action) — typed as
+     * {@code Object}, callers invoke via reflection. Returns null when
+     * the underlying CLI API plugin is not installed.
+     */
+    public Object getExportConfigurationFilesApi()
+    {
+        if (exportConfigurationFilesApiTracker == null)
+        {
+            return null;
+        }
+        return exportConfigurationFilesApiTracker.getService();
+    }
+
+    /**
+     * Returns the com._1c.g5.v8.dt.cli.api.workspace.IImportConfigurationFilesApi
+     * (EDT "Import → Configuration from XML Files" action) — typed as
+     * {@code Object}, callers invoke via reflection. Returns null when
+     * the underlying CLI API plugin is not installed.
+     */
+    public Object getImportConfigurationFilesApi()
+    {
+        if (importConfigurationFilesApiTracker == null)
+        {
+            return null;
+        }
+        return importConfigurationFilesApiTracker.getService();
+    }
+
     /**
      * Returns the IGroupService for group operations.
      * Used for virtual folder groups in the Navigator.
