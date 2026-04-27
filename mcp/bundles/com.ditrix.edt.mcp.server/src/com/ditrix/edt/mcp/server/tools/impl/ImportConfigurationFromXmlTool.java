@@ -12,6 +12,12 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
 
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.NullProgressMonitor;
+
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -112,6 +118,24 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             Method method = api.getClass().getMethod("importProject", //$NON-NLS-1$
                 Path.class, String.class, String.class, String.class);
             method.invoke(api, importPath, projectName, projectNature, xmlVersion);
+
+            // The CLI API hardcodes setRefreshProject(false) on the import
+            // operation, so the imported project is left in a state where
+            // IDtProjectManager.getDtProject(p) returns null until something
+            // triggers EDT's project lifecycle. Close + open + refresh here
+            // forces EDT to re-scan and bring the project to the ready state.
+            IWorkspace workspace = ResourcesPlugin.getWorkspace();
+            IProject created = workspace.getRoot().getProject(projectName);
+            if (created != null && created.exists())
+            {
+                NullProgressMonitor monitor = new NullProgressMonitor();
+                if (created.isOpen())
+                {
+                    created.close(monitor);
+                }
+                created.open(monitor);
+                created.refreshLocal(IResource.DEPTH_INFINITE, monitor);
+            }
 
             return ToolResult.success()
                 .put("importPath", importPath.toString()) //$NON-NLS-1$
