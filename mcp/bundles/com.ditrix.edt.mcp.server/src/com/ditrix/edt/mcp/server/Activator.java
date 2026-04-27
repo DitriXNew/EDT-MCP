@@ -56,7 +56,19 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<IApplicationManager, IApplicationManager> applicationManagerTracker;
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
-    
+    /**
+     * LanguageTool CLI APIs are tracked by String class name to keep this
+     * bundle build-independent of the com.e1c.langtool.* bundles (LanguageTool
+     * is installed separately via Help -&gt; Install New Software on both EDT
+     * 2025.x and 2026.1; not bundled with the EDT base distribution). All
+     * invocations on the returned services go through reflection — see
+     * GenerateTranslationStringsTool and TranslateConfigurationTool.
+     */
+    private ServiceTracker<Object, Object> generateTranslationStringsApiTracker;
+    private ServiceTracker<Object, Object> synchronizeProjectApiTracker;
+    private ServiceTracker<Object, Object> convertLanguageProjectApiTracker;
+    private ServiceTracker<Object, Object> projectInformationApiTracker;
+
     /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
     private IGroupService groupService;
 
@@ -118,7 +130,23 @@ public class Activator extends AbstractUIPlugin
         
         mdRefactoringServiceTracker = new ServiceTracker<>(context, IMdRefactoringService.class, null);
         mdRefactoringServiceTracker.open();
-        
+
+        generateTranslationStringsApiTracker = new ServiceTracker<>(
+            context, "com.e1c.langtool.v8.dt.cli.api.IGenerateTranslationStringsApi", null); //$NON-NLS-1$
+        generateTranslationStringsApiTracker.open();
+
+        synchronizeProjectApiTracker = new ServiceTracker<>(
+            context, "com.e1c.langtool.v8.dt.cli.api.ISynchronizeProjectApi", null); //$NON-NLS-1$
+        synchronizeProjectApiTracker.open();
+
+        convertLanguageProjectApiTracker = new ServiceTracker<>(
+            context, "com.e1c.langtool.v8.dt.cli.api.IConvertLanguageProjectApi", null); //$NON-NLS-1$
+        convertLanguageProjectApiTracker.open();
+
+        projectInformationApiTracker = new ServiceTracker<>(
+            context, "com.e1c.langtool.v8.dt.cli.api.IProjectInformationApi", null); //$NON-NLS-1$
+        projectInformationApiTracker.open();
+
         // Create group service directly (not via OSGi DS to avoid circular references)
         groupService = new com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl();
         ((com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl) groupService).activate();
@@ -216,7 +244,27 @@ public class Activator extends AbstractUIPlugin
             mdRefactoringServiceTracker.close();
             mdRefactoringServiceTracker = null;
         }
-        
+        if (generateTranslationStringsApiTracker != null)
+        {
+            generateTranslationStringsApiTracker.close();
+            generateTranslationStringsApiTracker = null;
+        }
+        if (synchronizeProjectApiTracker != null)
+        {
+            synchronizeProjectApiTracker.close();
+            synchronizeProjectApiTracker = null;
+        }
+        if (convertLanguageProjectApiTracker != null)
+        {
+            convertLanguageProjectApiTracker.close();
+            convertLanguageProjectApiTracker = null;
+        }
+        if (projectInformationApiTracker != null)
+        {
+            projectInformationApiTracker.close();
+            projectInformationApiTracker = null;
+        }
+
         // Dispose UI components only in non-headless mode
         if (!isHeadless())
         {
@@ -466,7 +514,77 @@ public class Activator extends AbstractUIPlugin
         }
         return mdRefactoringServiceTracker.getService();
     }
-    
+
+    /**
+     * Returns the com.e1c.langtool.v8.dt.cli.api.IGenerateTranslationStringsApi
+     * used to invoke the LanguageTool translation-strings generator (regenerates
+     * placeholder keys in .lstr/.trans/.dict for a dependent translation project).
+     *
+     * <p>Typed as {@code Object} — callers invoke via reflection so this bundle
+     * has no build-time dependency on com.e1c.langtool.*, which is not shipped
+     * with EDT 2026.1. Returns null when LanguageTool is not installed.
+     *
+     * @return generator API (as Object) or null if not available
+     */
+    public Object getGenerateTranslationStringsApi()
+    {
+        if (generateTranslationStringsApiTracker == null)
+        {
+            return null;
+        }
+        return generateTranslationStringsApiTracker.getService();
+    }
+
+    /**
+     * Returns the com.e1c.langtool.v8.dt.cli.api.ISynchronizeProjectApi used to
+     * invoke the LanguageTool "Translate configuration" action (propagates
+     * dictionary changes from the source project to all its dependent
+     * translation projects, producing the translated artifacts).
+     *
+     * <p>Typed as {@code Object} — callers invoke via reflection so this bundle
+     * has no build-time dependency on com.e1c.langtool.*, which is not shipped
+     * with EDT 2026.1. Returns null when LanguageTool is not installed.
+     *
+     * @return synchronize project API (as Object) or null if not available
+     */
+    public Object getSynchronizeProjectApi()
+    {
+        if (synchronizeProjectApiTracker == null)
+        {
+            return null;
+        }
+        return synchronizeProjectApiTracker.getService();
+    }
+
+    /**
+     * Returns the com.e1c.langtool.v8.dt.cli.api.IConvertLanguageProjectApi
+     * (LanguageTool "Convert to translation language" action) — typed as
+     * {@code Object}, callers invoke via reflection. Returns null when
+     * LanguageTool is not installed.
+     */
+    public Object getConvertLanguageProjectApi()
+    {
+        if (convertLanguageProjectApiTracker == null)
+        {
+            return null;
+        }
+        return convertLanguageProjectApiTracker.getService();
+    }
+
+    /**
+     * Returns the com.e1c.langtool.v8.dt.cli.api.IProjectInformationApi —
+     * typed as {@code Object}, callers invoke via reflection. Returns null
+     * when LanguageTool is not installed.
+     */
+    public Object getProjectInformationApi()
+    {
+        if (projectInformationApiTracker == null)
+        {
+            return null;
+        }
+        return projectInformationApiTracker.getService();
+    }
+
     /**
      * Returns the IGroupService for group operations.
      * Used for virtual folder groups in the Navigator.
