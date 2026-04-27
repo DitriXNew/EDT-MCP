@@ -870,7 +870,7 @@ These tools wrap the official 1C EDT workspace CLI APIs (`com._1c.g5.v8.dt.cli.a
 | `projectName` | Yes | EDT project name to export |
 | `outputPath` | Yes | Filesystem path of the output directory for the XML files |
 
-**`import_configuration_from_xml`** — Import a configuration from a directory of XML files into a new EDT project in the workspace. Reverse of `export_configuration_to_xml`. Wraps `IImportConfigurationFilesApi.importProject(Path importSource, String projectName, String nature, String xmlVersion)`.
+**`import_configuration_from_xml`** — Import a configuration from a directory of XML files into a new EDT project in the workspace. Reverse of `export_configuration_to_xml`. Wraps `IImportConfigurationFilesApi.importProject(Path importSource, String projectName, String nature, String xmlVersion)`. After the API call the tool also closes/opens/refreshes the new project to trigger EDT's project lifecycle (the underlying CLI API hardcodes `setRefreshProject(false)` and would otherwise leave the project unindexed), so the imported project is ready to use without manual GUI intervention.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
