@@ -40,9 +40,10 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
  *
  * <p>Uses the 1C public CLI API
  * {@code com.e1c.langtool.v8.dt.cli.api.ISynchronizeProjectApi} via reflection
- * so this bundle has no build-time dependency on LanguageTool (LanguageTool
- * ships with EDT 2025.x but not with EDT 2026.1). When running on an EDT
- * without LanguageTool, returns a clear "not available" error.
+ * so this bundle has no build-time dependency on LanguageTool (LanguageTool is
+ * installed separately via Help -&gt; Install New Software on both EDT 2025.x
+ * and 2026.1; not bundled with the EDT base distribution). When running on an
+ * EDT without LanguageTool, returns a clear "not available" error.
  */
 public class TranslateConfigurationTool implements IMcpTool
 {
@@ -61,7 +62,7 @@ public class TranslateConfigurationTool implements IMcpTool
              + "propagates dictionary changes from dependent translation projects " //$NON-NLS-1$
              + "to produce translated artifacts. Equivalent of the context-menu " //$NON-NLS-1$
              + "action Translation -> Translate configuration. " //$NON-NLS-1$
-             + "Requires EDT with LanguageTool installed (EDT 2025.x)."; //$NON-NLS-1$
+             + "Requires LanguageTool installed in EDT."; //$NON-NLS-1$
     }
 
     @Override
@@ -126,7 +127,7 @@ public class TranslateConfigurationTool implements IMcpTool
             {
                 return ToolResult.error(
                     "LanguageTool ISynchronizeProjectApi is not available. " //$NON-NLS-1$
-                  + "LanguageTool ships with EDT 2025.x but not EDT 2026.1; install it or use an EDT version that includes it.").toJson(); //$NON-NLS-1$
+                  + "Install LanguageTool in EDT.").toJson(); //$NON-NLS-1$
             }
 
             // Reflection call:

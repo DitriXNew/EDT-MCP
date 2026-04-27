@@ -58,10 +58,11 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
     /**
      * LanguageTool CLI APIs are tracked by String class name to keep this
-     * bundle build-independent of the com.e1c.langtool.* bundles (which are
-     * present on EDT 2025.x but dropped in EDT 2026.1). All invocations on the
-     * returned services go through reflection — see GenerateTranslationStringsTool
-     * and TranslateConfigurationTool.
+     * bundle build-independent of the com.e1c.langtool.* bundles (LanguageTool
+     * is installed separately via Help -&gt; Install New Software on both EDT
+     * 2025.x and 2026.1; not bundled with the EDT base distribution). All
+     * invocations on the returned services go through reflection — see
+     * GenerateTranslationStringsTool and TranslateConfigurationTool.
      */
     private ServiceTracker<Object, Object> generateTranslationStringsApiTracker;
     private ServiceTracker<Object, Object> synchronizeProjectApiTracker;

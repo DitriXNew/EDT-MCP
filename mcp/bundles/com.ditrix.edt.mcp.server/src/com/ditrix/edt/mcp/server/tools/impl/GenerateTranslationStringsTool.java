@@ -43,7 +43,8 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
  * <p>Wraps the public CLI API
  * {@code com.e1c.langtool.v8.dt.cli.api.IGenerateTranslationStringsApi} via
  * reflection so this bundle has no build-time dependency on LanguageTool
- * (LanguageTool ships with EDT 2025.x but not with EDT 2026.1).
+ * (LanguageTool is installed separately via Help -&gt; Install New Software
+ * on both EDT 2025.x and 2026.1; not bundled with the EDT base distribution).
  */
 public class GenerateTranslationStringsTool implements IMcpTool
 {
@@ -68,7 +69,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
              + "Equivalent of the EDT menu Translation -> Generate translation " //$NON-NLS-1$
              + "strings. Invoke on the configuration project " //$NON-NLS-1$
              + "(V8ConfigurationNature), NOT on a dependent translation project. " //$NON-NLS-1$
-             + "Requires EDT with LanguageTool installed (EDT 2025.x)."; //$NON-NLS-1$
+             + "Requires LanguageTool installed in EDT."; //$NON-NLS-1$
     }
 
     @Override
@@ -165,7 +166,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
             {
                 return ToolResult.error(
                     "LanguageTool IGenerateTranslationStringsApi is not available. " //$NON-NLS-1$
-                  + "LanguageTool ships with EDT 2025.x but not EDT 2026.1; install it or use an EDT version that includes it.").toJson(); //$NON-NLS-1$
+                  + "Install LanguageTool in EDT.").toJson(); //$NON-NLS-1$
             }
 
             // Build fillUpAndProviderId argument: "FillUpType" or "FillUpType:providerId".
