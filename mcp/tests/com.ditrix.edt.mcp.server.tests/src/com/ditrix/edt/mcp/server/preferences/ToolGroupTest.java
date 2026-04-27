@@ -63,9 +63,9 @@ public class ToolGroupTest
     }
 
     @Test
-    public void testNineGroups()
+    public void testEightGroups()
     {
-        assertEquals("Should have 9 tool groups", 9, ToolGroup.values().length);
+        assertEquals("Should have 8 tool groups", 8, ToolGroup.values().length);
     }
 
     // === Tool membership ===
