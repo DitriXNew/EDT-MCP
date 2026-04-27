@@ -21,7 +21,8 @@ public enum ToolGroup
     CORE("core", "Core / Project", //$NON-NLS-1$ //$NON-NLS-2$
         "Essential project and configuration tools", //$NON-NLS-1$
         "get_edt_version", "list_projects", "get_configuration_properties", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "clean_project", "revalidate_objects", "get_check_description"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "clean_project", "revalidate_objects", "get_check_description", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "export_configuration_to_xml", "import_configuration_from_xml"), //$NON-NLS-1$ //$NON-NLS-2$
 
     PROBLEMS("problems", "Errors & Problems", //$NON-NLS-1$ //$NON-NLS-2$
         "Error reporting, bookmarks, and tasks", //$NON-NLS-1$
@@ -55,11 +56,7 @@ public enum ToolGroup
 
     REFACTORING("refactoring", "Refactoring", //$NON-NLS-1$ //$NON-NLS-2$
         "Metadata rename, delete, and attribute management", //$NON-NLS-1$
-        "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-    WORKSPACE("workspace", "Workspace", //$NON-NLS-1$ //$NON-NLS-2$
-        "Configuration export/import to/from XML files", //$NON-NLS-1$
-        "export_configuration_to_xml", "import_configuration_from_xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     private final String id;
     private final String displayName;
