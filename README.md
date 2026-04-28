@@ -1052,11 +1052,25 @@ Response:
   "project": "HTTPConnector_ru",
   "storages": [
     "edit:default",
-    "edit:common",
-    "edit:common-camelcase"
+    "context:model",
+    "dictionary:common-camelcase",
+    "dictionary:common",
+    "context:interface",
+    "dictionary:common-interface",
+    "com.e1c.langtool.v8.dt.storage:platform"
   ],
   "providers": [
-    "com.e1c.langtool.history.externalTranslationProvider"
+    "com.e1c.langtool.history.externalTranslationProvider",
+    "com.e1c.langtool.microsoft.microsoftTranslatorProvider",
+    "com.e1c.langtool.google.googleTranslateProvider",
+    "com.e1c.langtool.yandex.yandexTranslateProvider",
+    "com.e1c.langtool.v8.dt.md.dbview",
+    "com.e1c.langtool.translit",
+    "CamelCaseInterfaceProvider",
+    "ComputedStringsProvider",
+    "com.e1c.langtool.v8.dt.bsl.contextdef",
+    "com.e1c.langtool.dictionary",
+    "com.e1c.langtool.context"
   ]
 }
 ```
