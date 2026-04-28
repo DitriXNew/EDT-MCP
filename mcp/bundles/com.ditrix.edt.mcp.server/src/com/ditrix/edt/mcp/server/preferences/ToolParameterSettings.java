@@ -106,6 +106,10 @@ public final class ToolParameterSettings
             new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
                 "Default number of metadata objects to return", 100, 1, 1000))); //$NON-NLS-1$
 
+        map.put("list_subsystems", Collections.singletonList( //$NON-NLS-1$
+            new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
+                "Default number of subsystems to return", 100, 1, 1000))); //$NON-NLS-1$
+
         map.put("get_content_assist", Collections.singletonList( //$NON-NLS-1$
             new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
                 "Default number of content assist proposals to return", 100, 1, 1000))); //$NON-NLS-1$
