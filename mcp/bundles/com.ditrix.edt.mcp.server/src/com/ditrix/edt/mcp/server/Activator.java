@@ -62,7 +62,8 @@ public class Activator extends AbstractUIPlugin
      * is installed separately via Help -&gt; Install New Software on both EDT
      * 2025.x and 2026.1; not bundled with the EDT base distribution). All
      * invocations on the returned services go through reflection — see
-     * GenerateTranslationStringsTool and TranslateConfigurationTool.
+     * GenerateTranslationStringsTool, TranslateConfigurationTool, and
+     * GetTranslationProjectInfoTool.
      */
     private ServiceTracker<Object, Object> generateTranslationStringsApiTracker;
     private ServiceTracker<Object, Object> synchronizeProjectApiTracker;
