@@ -66,7 +66,6 @@ public class Activator extends AbstractUIPlugin
      */
     private ServiceTracker<Object, Object> generateTranslationStringsApiTracker;
     private ServiceTracker<Object, Object> synchronizeProjectApiTracker;
-    private ServiceTracker<Object, Object> convertLanguageProjectApiTracker;
     private ServiceTracker<Object, Object> projectInformationApiTracker;
 
     /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
@@ -138,10 +137,6 @@ public class Activator extends AbstractUIPlugin
         synchronizeProjectApiTracker = new ServiceTracker<>(
             context, "com.e1c.langtool.v8.dt.cli.api.ISynchronizeProjectApi", null); //$NON-NLS-1$
         synchronizeProjectApiTracker.open();
-
-        convertLanguageProjectApiTracker = new ServiceTracker<>(
-            context, "com.e1c.langtool.v8.dt.cli.api.IConvertLanguageProjectApi", null); //$NON-NLS-1$
-        convertLanguageProjectApiTracker.open();
 
         projectInformationApiTracker = new ServiceTracker<>(
             context, "com.e1c.langtool.v8.dt.cli.api.IProjectInformationApi", null); //$NON-NLS-1$
@@ -253,11 +248,6 @@ public class Activator extends AbstractUIPlugin
         {
             synchronizeProjectApiTracker.close();
             synchronizeProjectApiTracker = null;
-        }
-        if (convertLanguageProjectApiTracker != null)
-        {
-            convertLanguageProjectApiTracker.close();
-            convertLanguageProjectApiTracker = null;
         }
         if (projectInformationApiTracker != null)
         {
@@ -554,21 +544,6 @@ public class Activator extends AbstractUIPlugin
             return null;
         }
         return synchronizeProjectApiTracker.getService();
-    }
-
-    /**
-     * Returns the com.e1c.langtool.v8.dt.cli.api.IConvertLanguageProjectApi
-     * (LanguageTool "Convert to translation language" action) — typed as
-     * {@code Object}, callers invoke via reflection. Returns null when
-     * LanguageTool is not installed.
-     */
-    public Object getConvertLanguageProjectApi()
-    {
-        if (convertLanguageProjectApiTracker == null)
-        {
-            return null;
-        }
-        return convertLanguageProjectApiTracker.getService();
     }
 
     /**

@@ -54,6 +54,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
     private static final String DEFAULT_COLLECT_MODEL_TYPE = "ANY"; //$NON-NLS-1$
     private static final String DEFAULT_FILL_UP_TYPE = "NOT_FILLUP"; //$NON-NLS-1$
     private static final String FILL_UP_FROM_PROVIDER = "FROM_PROVIDER"; //$NON-NLS-1$
+    private static final String V8_CONFIGURATION_NATURE = "com._1c.g5.v8.dt.core.V8ConfigurationNature"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -160,13 +161,24 @@ public class GenerateTranslationStringsTool implements IMcpTool
                 return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
             }
 
+            // Reject dependent translation projects, extensions and any
+            // non-configuration EDT project — they would resolve to a non-null
+            // IDtProject but fail deep inside LangTool with a confusing error.
+            if (!project.hasNature(V8_CONFIGURATION_NATURE))
+            {
+                return ToolResult.error(
+                    "Not a V8 configuration project: " + projectName //$NON-NLS-1$
+                  + ". This action must be run on the configuration project (V8ConfigurationNature), " //$NON-NLS-1$
+                  + "not on a dependent translation project or extension.").toJson(); //$NON-NLS-1$
+            }
+
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
             IDtProject dtProject = dtProjectManager != null ? dtProjectManager.getDtProject(project) : null;
             if (dtProject == null)
             {
                 return ToolResult.error(
-                    "Not an EDT project: " + projectName //$NON-NLS-1$
-                  + ". This action must be run on the configuration project (V8ConfigurationNature), not on a dependent translation project.").toJson(); //$NON-NLS-1$
+                    "EDT has not yet resolved an IDtProject for: " + projectName //$NON-NLS-1$
+                  + ". The project may still be indexing — please retry.").toJson(); //$NON-NLS-1$
             }
 
             Object api = Activator.getDefault().getGenerateTranslationStringsApi();
@@ -177,16 +189,14 @@ public class GenerateTranslationStringsTool implements IMcpTool
                   + "Install LanguageTool in EDT.").toJson(); //$NON-NLS-1$
             }
 
-            // Build fillUpAndProviderId argument: "FillUpType" or "FillUpType:providerId".
-            String fillUpAndProviderId;
-            if (DEFAULT_FILL_UP_TYPE.equals(fillUpType) || providerId.isEmpty())
-            {
-                fillUpAndProviderId = fillUpType;
-            }
-            else
-            {
-                fillUpAndProviderId = fillUpType + ":" + providerId; //$NON-NLS-1$
-            }
+            // Build fillUpAndProviderId argument. Provider suffix is meaningful
+            // only for FROM_PROVIDER (other modes ignore providerId — appending
+            // it would produce malformed values like FROM_SOURCE_LANGUAGE:foo).
+            // The earlier validation already enforced non-empty providerId when
+            // fillUpType is FROM_PROVIDER, so no extra check is needed here.
+            String fillUpAndProviderId = FILL_UP_FROM_PROVIDER.equals(fillUpType)
+                ? fillUpType + ":" + providerId //$NON-NLS-1$
+                : fillUpType;
 
             // Reflection call:
             // IGenerateTranslationStringsApi.generateTranslationStrings(

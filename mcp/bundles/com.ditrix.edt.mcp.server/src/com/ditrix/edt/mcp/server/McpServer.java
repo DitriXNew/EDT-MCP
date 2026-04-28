@@ -50,7 +50,6 @@ import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GenerateTranslationStringsTool;
 import com.ditrix.edt.mcp.server.tools.impl.TranslateConfigurationTool;
-import com.ditrix.edt.mcp.server.tools.impl.ConvertToTranslationLanguageTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTranslationProjectInfoTool;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
@@ -260,7 +259,6 @@ public class McpServer
         // LanguageTool translation tools
         registry.register(new GenerateTranslationStringsTool());
         registry.register(new TranslateConfigurationTool());
-        registry.register(new ConvertToTranslationLanguageTool());
         registry.register(new GetTranslationProjectInfoTool());
 
         Activator.logInfo("Registered " + registry.getToolCount() + " MCP tools"); //$NON-NLS-1$ //$NON-NLS-2$
