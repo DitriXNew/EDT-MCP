@@ -333,7 +333,7 @@ Add to `claude_desktop_config.json`:
 | `go_to_definition` | Navigate to symbol definition (method by name, metadata object by FQN) |
 | `get_symbol_info` | Get type/hover info about a symbol at a BSL code position (inferred types, signatures, docs) |
 | `validate_query` | Validate 1C query text in project context (syntax + semantic errors, optional DCS mode) |
-| `generate_translation_strings` | LanguageTool: generate translation strings (.lstr/.trans/.dict) for a dependent translation project. EDT menu: Translation → Generate translation strings |
+| `generate_translation_strings` | LanguageTool: generate translation strings (.lstr/.trans/.dict) for a configuration project, with translation storage and collection options. EDT menu: Translation → Generate translation strings |
 | `translate_configuration` | LanguageTool: propagate dictionary changes from dependent translation projects to translated artifacts. EDT menu: Translation → Translate configuration |
 | `convert_to_translation_language` | LanguageTool: extract a configuration's pre-existing language objects into a dependent translation project. EDT menu: Translation → Convert to translation language |
 | `get_translation_project_info` | LanguageTool diagnostics: project translation storages and available translation provider IDs |
@@ -939,15 +939,46 @@ A family of MCP tools that lets the LLM set breakpoints, inspect runtime state a
 
 ### LanguageTool Tools
 
-LanguageTool ships with EDT 2025.x and 2026.1 (installed separately on 2026.1). These tools wrap the official 1C CLI APIs (`com.e1c.langtool.v8.dt.cli.api.*`) via reflection, so this plugin builds without a compile-time dependency on LanguageTool. When LanguageTool is not installed, every tool returns a clear "API not available" error instead of failing.
+LanguageTool is installed separately via *Help → Install New Software* on both EDT 2025.x and 2026.1; it is not bundled with the EDT base distribution. These tools wrap the official 1C CLI APIs (`com.e1c.langtool.v8.dt.cli.api.*`) via reflection, so this plugin builds without a compile-time dependency on LanguageTool. When LanguageTool is not installed, every tool returns a clear "API not available" error instead of failing.
 
-**`generate_translation_strings`** — wraps `IGenerateTranslationStringsApi.generateTranslationStrings(...)`. Equivalent of EDT menu *Translation → Generate translation strings*. Produces placeholder keys in `.lstr`/`.trans`/`.dict` files for a dependent translation project. The translator (or LLM) then fills in values.
+**`generate_translation_strings`** — wraps `IGenerateTranslationStringsApi.generateTranslationStrings(...)`. Equivalent of EDT menu *Translation → Generate translation strings*. Invoked on a **configuration project** (`V8ConfigurationNature`), not on a dependent translation project. Produces placeholder keys in `.lstr`/`.trans`/`.dict` files. The translator (or LLM) then fills in values.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `projectName` | Yes | Dependent translation project name |
-| `sourceLanguage` | Yes | Source language code (e.g. `ru`) |
-| `targetLanguage` | Yes | Target language code (e.g. `en`) |
+| `projectName` | Yes | Configuration project name (`V8ConfigurationNature`) |
+| `targetLanguages` | Yes | Target language codes to generate strings for, e.g. `["en"]` |
+| `storageId` | No | Storage ID to write generated keys into. Default: `edit:default`. Use `get_translation_project_info` to list available storages |
+| `collectInterface` | No | Generate interface (`.lstr`) keys. Default: `true` |
+| `collectModel` | No | Generate model (`.trans`) keys. Default: `true` |
+| `collectModelType` | No | Model collection mode: `ANY` \| `NONE` \| `COMPUTED_ONLY` \| `UNKNOWN_ONLY` \| `TAGS_ONLY`. Default: `ANY` |
+| `fillUpType` | No | Pre-fill new keys with values from: `NOT_FILLUP` \| `FROM_SOURCE_LANGUAGE` \| `FROM_PROVIDER`. Default: `NOT_FILLUP` |
+| `providerId` | No | Translation provider ID (used only when `fillUpType=FROM_PROVIDER`). Use `get_translation_project_info` to list available providers |
+
+Example call:
+```json
+{
+  "projectName": "HTTPConnector_ru",
+  "targetLanguages": ["en"],
+  "storageId": "edit:default",
+  "collectInterface": true,
+  "collectModel": true
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "project": "HTTPConnector_ru",
+  "targetLanguages": ["en"],
+  "storageId": "edit:default",
+  "collectModel": true,
+  "collectInterface": true,
+  "collectModelType": "ANY",
+  "fillUpType": "NOT_FILLUP",
+  "message": "Translation strings generated."
+}
+```
 
 **`translate_configuration`** — wraps `ISynchronizeProjectApi.synchronizeProject(IDtProject, List<String>)`. Equivalent of EDT menu *Translation → Translate configuration*. Propagates dictionary changes from dependent translation projects to the source project, regenerating the translated artifacts. This is the main action a translator runs after editing dictionaries.
 
@@ -955,6 +986,23 @@ LanguageTool ships with EDT 2025.x and 2026.1 (installed separately on 2026.1). 
 |-----------|----------|-------------|
 | `projectName` | Yes | Project name (typically the source project) |
 | `targetLanguages` | Yes | Target language codes to synchronize, e.g. `["en"]` |
+
+Example call:
+```json
+{
+  "projectName": "HTTPConnector_ru",
+  "targetLanguages": ["en"]
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "project": "HTTPConnector_ru",
+  "message": "Translate configuration completed."
+}
+```
 
 **`convert_to_translation_language`** — wraps `IConvertLanguageProjectApi.convertLanguageProject(IProject, IProject, IProject)`. Equivalent of EDT menu *Translation → Convert to translation language*. Use case: an existing configuration was previously translated by another tool and has additional language objects baked into its metadata; this action extracts those translations into a dependent translation project so LangTool can manage them going forward.
 
@@ -964,13 +1012,54 @@ LanguageTool ships with EDT 2025.x and 2026.1 (installed separately on 2026.1). 
 | `sourceProject` | Yes | Project whose files are iterated and translated (typically the same as masterProject) |
 | `targetProject` | Yes | Dependent translation project where the extracted translations are written (existing `target/src` is replaced) |
 
+Example call:
+```json
+{
+  "masterProject": "HTTPConnector_ru",
+  "sourceProject": "HTTPConnector_ru",
+  "targetProject": "HTTPConnector_en"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "masterProject": "HTTPConnector_ru",
+  "sourceProject": "HTTPConnector_ru",
+  "targetProject": "HTTPConnector_en",
+  "message": "Convert to translation language completed."
+}
+```
+
 **`get_translation_project_info`** — wraps `IProjectInformationApi`. Diagnostic tool that returns the translation storages declared on a project (e.g. `common-camelcase`, `common`, BSL/i18n) and the available translation provider IDs (Google, Microsoft, Yandex, etc.).
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `projectName` | Yes | Project name |
 
-Returns: `{ project, storages: [...], providers: [...] }`.
+Example call:
+```json
+{
+  "projectName": "HTTPConnector_ru"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "project": "HTTPConnector_ru",
+  "storages": [
+    "edit:default",
+    "edit:common",
+    "edit:common-camelcase"
+  ],
+  "providers": [
+    "com.e1c.langtool.history.externalTranslationProvider"
+  ]
+}
+```
 
 ### Output Formats
 

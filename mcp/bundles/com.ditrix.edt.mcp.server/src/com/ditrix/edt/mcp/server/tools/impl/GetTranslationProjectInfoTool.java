@@ -56,7 +56,7 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "Project name (required)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("projectName", "Project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 

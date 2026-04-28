@@ -64,13 +64,13 @@ public class ConvertToTranslationLanguageTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty("masterProject", //$NON-NLS-1$
                 "Project that hosts the converter manager (typically the source " //$NON-NLS-1$
-              + "configuration with the language objects to extract). Required.")
+              + "configuration with the language objects to extract). Required.", true)
             .stringProperty("sourceProject", //$NON-NLS-1$
                 "Project whose files are iterated and translated. Typically the " //$NON-NLS-1$
-              + "same as masterProject. Required.")
+              + "same as masterProject. Required.", true)
             .stringProperty("targetProject", //$NON-NLS-1$
                 "Dependent translation project where the extracted translations " //$NON-NLS-1$
-              + "are written. Existing target/src is replaced. Required.")
+              + "are written. Existing target/src is replaced. Required.", true)
             .build();
     }
 

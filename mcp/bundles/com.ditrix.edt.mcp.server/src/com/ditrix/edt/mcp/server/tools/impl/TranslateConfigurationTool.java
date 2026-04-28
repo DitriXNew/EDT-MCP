@@ -69,9 +69,9 @@ public class TranslateConfigurationTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "Project name (typically the source, e.g. the ru project). Required.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("projectName", "Project name (typically the source, e.g. the ru project). Required.", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty("targetLanguages", //$NON-NLS-1$
-                "Target language codes to synchronize (e.g. [\"en\"]). Required.") //$NON-NLS-1$
+                "Target language codes to synchronize (e.g. [\"en\"]). Required.", true) //$NON-NLS-1$
             .build();
     }
 

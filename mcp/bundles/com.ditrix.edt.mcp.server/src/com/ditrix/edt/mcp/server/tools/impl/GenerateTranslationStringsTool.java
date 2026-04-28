@@ -79,9 +79,9 @@ public class GenerateTranslationStringsTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "Configuration project name (V8ConfigurationNature). NOT a dependent " //$NON-NLS-1$
               + "translation project — pass the configuration whose translatable " //$NON-NLS-1$
-              + "features should be scanned. Required.")
+              + "features should be scanned. Required.", true)
             .stringArrayProperty("targetLanguages", //$NON-NLS-1$
-                "Target language codes to generate strings for, e.g. [\"en\"] (required).") //$NON-NLS-1$
+                "Target language codes to generate strings for, e.g. [\"en\"] (required).", true) //$NON-NLS-1$
             .stringProperty("storageId", //$NON-NLS-1$
                 "Storage ID to write generated keys into. Use get_translation_project_info to list " //$NON-NLS-1$
               + "available storages. Default: \"edit:default\".")
@@ -157,8 +157,8 @@ public class GenerateTranslationStringsTool implements IMcpTool
             if (dtProject == null)
             {
                 return ToolResult.error(
-                    "Not an EDT configuration project: " + projectName //$NON-NLS-1$
-                  + ". This action runs on the configuration project (V8ConfigurationNature), not on a dependent translation project.").toJson(); //$NON-NLS-1$
+                    "Not an EDT project: " + projectName //$NON-NLS-1$
+                  + ". This action must be run on the configuration project (V8ConfigurationNature), not on a dependent translation project.").toJson(); //$NON-NLS-1$
             }
 
             Object api = Activator.getDefault().getGenerateTranslationStringsApi();
@@ -211,10 +211,10 @@ public class GenerateTranslationStringsTool implements IMcpTool
 
             return ToolResult.success()
                 .put("project", projectName) //$NON-NLS-1$
-                .put("targetLanguages", String.join(",", targetLanguages)) //$NON-NLS-1$ //$NON-NLS-2$
+                .put("targetLanguages", targetLanguages) //$NON-NLS-1$
                 .put("storageId", storageId) //$NON-NLS-1$
-                .put("collectModel", String.valueOf(collectModel)) //$NON-NLS-1$
-                .put("collectInterface", String.valueOf(collectInterface)) //$NON-NLS-1$
+                .put("collectModel", collectModel) //$NON-NLS-1$
+                .put("collectInterface", collectInterface) //$NON-NLS-1$
                 .put("collectModelType", collectModelType) //$NON-NLS-1$
                 .put("fillUpType", fillUpType) //$NON-NLS-1$
                 .put("message", "Translation strings generated.") //$NON-NLS-1$ //$NON-NLS-2$
