@@ -954,31 +954,7 @@ LanguageTool is installed separately via *Help → Install New Software* on both
 | `fillUpType` | No | Pre-fill new keys with values from: `NOT_FILLUP` \| `FROM_SOURCE_LANGUAGE` \| `FROM_PROVIDER`. Default: `NOT_FILLUP` |
 | `providerId` | No | Translation provider ID (used only when `fillUpType=FROM_PROVIDER`). Use `get_translation_project_info` to list available providers |
 
-Example call:
-```json
-{
-  "projectName": "HTTPConnector_ru",
-  "targetLanguages": ["en"],
-  "storageId": "edit:default",
-  "collectInterface": true,
-  "collectModel": true
-}
-```
-
-Response:
-```json
-{
-  "success": true,
-  "project": "HTTPConnector_ru",
-  "targetLanguages": ["en"],
-  "storageId": "edit:default",
-  "collectModel": true,
-  "collectInterface": true,
-  "collectModelType": "ANY",
-  "fillUpType": "NOT_FILLUP",
-  "message": "Translation strings generated."
-}
-```
+**Returns:** `{ project, targetLanguages: [...], storageId, collectInterface, collectModel, collectModelType, fillUpType, message }`.
 
 **`translate_configuration`** — wraps `ISynchronizeProjectApi.synchronizeProject(IDtProject, List<String>)`. Equivalent of EDT menu *Translation → Translate configuration*. Propagates dictionary changes from dependent translation projects to the source project, regenerating the translated artifacts. This is the main action a translator runs after editing dictionaries.
 
@@ -987,22 +963,7 @@ Response:
 | `projectName` | Yes | Project name (typically the source project) |
 | `targetLanguages` | Yes | Target language codes to synchronize, e.g. `["en"]` |
 
-Example call:
-```json
-{
-  "projectName": "HTTPConnector_ru",
-  "targetLanguages": ["en"]
-}
-```
-
-Response:
-```json
-{
-  "success": true,
-  "project": "HTTPConnector_ru",
-  "message": "Translate configuration completed."
-}
-```
+**Returns:** `{ project, message }`.
 
 **`convert_to_translation_language`** — wraps `IConvertLanguageProjectApi.convertLanguageProject(IProject, IProject, IProject)`. Equivalent of EDT menu *Translation → Convert to translation language*. Use case: an existing configuration was previously translated by another tool and has additional language objects baked into its metadata; this action extracts those translations into a dependent translation project so LangTool can manage them going forward.
 
@@ -1012,25 +973,7 @@ Response:
 | `sourceProject` | Yes | Project whose files are iterated and translated (typically the same as masterProject) |
 | `targetProject` | Yes | Dependent translation project where the extracted translations are written (existing `target/src` is replaced) |
 
-Example call:
-```json
-{
-  "masterProject": "HTTPConnector_ru",
-  "sourceProject": "HTTPConnector_ru",
-  "targetProject": "HTTPConnector_en"
-}
-```
-
-Response:
-```json
-{
-  "success": true,
-  "masterProject": "HTTPConnector_ru",
-  "sourceProject": "HTTPConnector_ru",
-  "targetProject": "HTTPConnector_en",
-  "message": "Convert to translation language completed."
-}
-```
+**Returns:** `{ masterProject, sourceProject, targetProject, message }`.
 
 **`get_translation_project_info`** — wraps `IProjectInformationApi`. Diagnostic tool that returns the translation storages declared on a project (e.g. `common-camelcase`, `common`, BSL/i18n) and the available translation provider IDs (Google, Microsoft, Yandex, etc.).
 
@@ -1038,42 +981,7 @@ Response:
 |-----------|----------|-------------|
 | `projectName` | Yes | Project name |
 
-Example call:
-```json
-{
-  "projectName": "HTTPConnector_ru"
-}
-```
-
-Response:
-```json
-{
-  "success": true,
-  "project": "HTTPConnector_ru",
-  "storages": [
-    "edit:default",
-    "context:model",
-    "dictionary:common-camelcase",
-    "dictionary:common",
-    "context:interface",
-    "dictionary:common-interface",
-    "com.e1c.langtool.v8.dt.storage:platform"
-  ],
-  "providers": [
-    "com.e1c.langtool.history.externalTranslationProvider",
-    "com.e1c.langtool.microsoft.microsoftTranslatorProvider",
-    "com.e1c.langtool.google.googleTranslateProvider",
-    "com.e1c.langtool.yandex.yandexTranslateProvider",
-    "com.e1c.langtool.v8.dt.md.dbview",
-    "com.e1c.langtool.translit",
-    "CamelCaseInterfaceProvider",
-    "ComputedStringsProvider",
-    "com.e1c.langtool.v8.dt.bsl.contextdef",
-    "com.e1c.langtool.dictionary",
-    "com.e1c.langtool.context"
-  ]
-}
-```
+**Returns:** `{ project, storages: [...], providers: [...] }`.
 
 ### Output Formats
 
