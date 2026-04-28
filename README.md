@@ -152,7 +152,7 @@ All 49 tools are organized into 8 semantic groups:
 |-------|-------------|-------|
 | **Core / Project** | EDT version, project listing, configuration, validation, XML export/import | `get_edt_version`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml` |
 | **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
-| **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `find_references` |
+| **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
 | **Applications & Testing** | App management, database updates, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
@@ -296,6 +296,8 @@ Add to `claude_desktop_config.json`:
 | `get_platform_documentation` | Get platform type documentation (methods, properties, constructors) |
 | `get_metadata_objects` | Get list of metadata objects from 1C configuration |
 | `get_metadata_details` | Get detailed properties of metadata objects (attributes, tabular sections, etc.) |
+| `list_subsystems` | List 1C subsystems (flat table with FQN, synonym, content/children counts; recursive by default) |
+| `get_subsystem_content` | Get content of a specific 1C subsystem by FQN: properties, included metadata objects, nested subsystems |
 | `find_references` | Find all references to a metadata object (in metadata, BSL code, forms, roles, etc.) — top-level objects only |
 | `rename_metadata_object` | Rename a metadata object or attribute with full refactoring: cascading updates in BSL code, forms, and metadata. Preview + confirm workflow |
 | `delete_metadata_object` | Delete a metadata object or attribute with reference cleanup. Preview + confirm workflow |
@@ -435,6 +437,80 @@ Add to `claude_desktop_config.json`:
 | `objectFqns` | Yes | Array of FQNs (e.g. `["Catalog.Products", "Document.SalesOrder"]`) |
 | `full` | No | Return all properties (`true`) or only key info (`false`). Default: `false` |
 | `language` | No | Language code for synonyms. Uses configuration default if not specified |
+
+### Subsystem Tools
+
+#### List Subsystems Tool
+
+**`list_subsystems`** - List 1C subsystems of a configuration as a flat table with FQN, synonym, command interface flag, and counts of objects/children. Recursively walks the subsystem tree by default; nested FQN format is `Subsystem.Parent.Subsystem.Child`.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `nameFilter` | No | Partial name match filter (case-insensitive, matches `Name` only) |
+| `recursive` | No | Include nested subsystems (default: `true`) |
+| `limit` | No | Maximum number of results (default: from preferences) |
+| `language` | No | Language code for synonyms. Uses configuration default if not specified |
+
+**Returns markdown table:**
+
+```markdown
+## Subsystems: MyProject
+
+**Total:** 4 subsystems
+
+| FQN | Synonym | Comment | InCommandInterface | Content | Children |
+|-----|---------|---------|--------------------|---------|----------|
+| Subsystem.Sales | Продажи |  | Yes | 23 | 2 |
+| Subsystem.Sales.Subsystem.Orders | Заказы |  | Yes | 5 | 0 |
+| Subsystem.Sales.Subsystem.Pricing | Ценообразование |  | No | 8 | 0 |
+| Subsystem.Administration | Администрирование |  | Yes | 14 | 0 |
+```
+
+#### Get Subsystem Content Tool
+
+**`get_subsystem_content`** - Get detailed content of a specific 1C subsystem: properties, the list of metadata objects included in the subsystem, and nested child subsystems. Subsystem is identified by FQN.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `subsystemFqn` | Yes | Subsystem FQN, e.g. `Subsystem.Sales` or `Subsystem.Sales.Subsystem.Orders` |
+| `recursive` | No | Include objects from nested subsystems in `Content` (deduplicated). Default: `false` |
+| `language` | No | Language code for synonyms. Uses configuration default if not specified |
+
+**Returns markdown:**
+
+```markdown
+# Subsystem: Sales (Продажи)
+
+## Properties
+
+| Property | Value |
+|----------|-------|
+| FQN | Subsystem.Sales |
+| Name | Sales |
+| Synonym | Продажи |
+| Include In Command Interface | Yes |
+| Include Help In Contents | Yes |
+| Use One Command | No |
+
+## Content — 23 objects
+
+| Type | Name | Synonym | FQN |
+|------|------|---------|-----|
+| Catalog | Products | Номенклатура | Catalog.Products |
+| CommonModule | SalesAPI | API продаж | CommonModule.SalesAPI |
+| Document | SalesOrder | Заказ покупателя | Document.SalesOrder |
+
+## Child Subsystems — 2
+
+| FQN | Synonym | Content | Children |
+|-----|---------|---------|----------|
+| Subsystem.Sales.Subsystem.Orders | Заказы | 5 | 0 |
+| Subsystem.Sales.Subsystem.Pricing | Ценообразование | 8 | 0 |
+```
 
 ### Find References Tool
 

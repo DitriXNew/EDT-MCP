@@ -31,7 +31,7 @@ public enum ToolGroup
     CODE_INTELLIGENCE("codeIntelligence", "Code Intelligence", //$NON-NLS-1$ //$NON-NLS-2$
         "Content assist, documentation, metadata browsing, and references", //$NON-NLS-1$
         "get_content_assist", "get_platform_documentation", "get_metadata_objects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "get_metadata_details", "find_references"), //$NON-NLS-1$ //$NON-NLS-2$
+        "get_metadata_details", "list_subsystems", "get_subsystem_content", "find_references"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     TAGS("tags", "Tags", //$NON-NLS-1$ //$NON-NLS-2$
         "Metadata tag management", //$NON-NLS-1$
