@@ -129,8 +129,10 @@ public enum ToolPreset
     }
 
     /**
-     * Builds the Analysis Only preset: disable apps, debug, BSL code edits,
-     * refactoring, and the state-mutating workspace export/import tools.
+     * Builds the Analysis Only preset: disable apps, debug, the entire BSL
+     * Code group (both read and write tools — analysis is metadata- and
+     * error-level only), refactoring, and the state-mutating workspace
+     * export/import tools.
      */
     private static Set<String> buildAnalysisOnlyDisabled()
     {

@@ -19,7 +19,7 @@ import java.util.Map;
 public enum ToolGroup
 {
     CORE("core", "Core / Project", //$NON-NLS-1$ //$NON-NLS-2$
-        "Essential project and configuration tools", //$NON-NLS-1$
+        "Essential project, configuration, and XML export/import tools", //$NON-NLS-1$
         "get_edt_version", "list_projects", "get_configuration_properties", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "clean_project", "revalidate_objects", "get_check_description", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "export_configuration_to_xml", "import_configuration_from_xml"), //$NON-NLS-1$ //$NON-NLS-2$

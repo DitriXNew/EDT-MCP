@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
@@ -82,7 +83,18 @@ public class ExportConfigurationToXmlTool implements IMcpTool
 
         try
         {
-            Path outputPath = Paths.get(outputPathStr);
+            // Normalize to an absolute path so the underlying CLI API isn't
+            // surprised by relative paths resolved against an unexpected
+            // working directory. Reject early if the path exists but is a
+            // file (not a directory); create the directory if it does not
+            // exist yet so the export has a deterministic destination.
+            Path outputPath = Paths.get(outputPathStr).toAbsolutePath().normalize();
+            if (Files.exists(outputPath) && !Files.isDirectory(outputPath))
+            {
+                return ToolResult.error(
+                    "outputPath exists but is not a directory: " + outputPath).toJson(); //$NON-NLS-1$
+            }
+            Files.createDirectories(outputPath);
 
             Object api = Activator.getDefault().getExportConfigurationFilesApi();
             if (api == null)

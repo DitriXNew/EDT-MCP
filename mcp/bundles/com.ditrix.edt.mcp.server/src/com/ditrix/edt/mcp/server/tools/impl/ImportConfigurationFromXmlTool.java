@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
@@ -104,7 +105,23 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
 
         try
         {
-            Path importPath = Paths.get(importPathStr);
+            // Normalize to an absolute path so the underlying CLI API isn't
+            // surprised by relative paths resolved against an unexpected
+            // working directory. Reject early if the path is missing or is
+            // a file (not a directory) so failures are deterministic and
+            // the AI agent gets a clear error instead of an opaque API
+            // exception.
+            Path importPath = Paths.get(importPathStr).toAbsolutePath().normalize();
+            if (!Files.exists(importPath))
+            {
+                return ToolResult.error(
+                    "importPath does not exist: " + importPath).toJson(); //$NON-NLS-1$
+            }
+            if (!Files.isDirectory(importPath))
+            {
+                return ToolResult.error(
+                    "importPath is not a directory: " + importPath).toJson(); //$NON-NLS-1$
+            }
 
             // The tool's contract is "import into a NEW project", so reject early
             // if a workspace project with this name already exists. Without this
