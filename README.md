@@ -975,7 +975,7 @@ LanguageTool is installed separately via *Help → Install New Software* on both
 
 **Returns:** `{ masterProject, sourceProject, targetProject, message }`.
 
-**`get_translation_project_info`** — wraps `IProjectInformationApi`. Diagnostic tool that returns the translation storages declared on a project (e.g. `common-camelcase`, `common`, BSL/i18n) and the available translation provider IDs (Google, Microsoft, Yandex, etc.).
+**`get_translation_project_info`** — wraps `IProjectInformationApi`. Diagnostic tool that returns the translation storage IDs declared on a project (e.g. `edit:default`, `dictionary:common-camelcase`, `dictionary:common`, `context:model`, `context:interface`) and the available translation provider IDs (Google, Microsoft, Yandex, history, etc.).
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|

@@ -20,6 +20,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
  * Tool that wraps the LanguageTool "Convert to translation language" action.
@@ -92,6 +93,15 @@ public class ConvertToTranslationLanguageTool implements IMcpTool
         {
             return ToolResult.error(
                 "masterProject, sourceProject and targetProject are required").toJson(); //$NON-NLS-1$
+        }
+
+        for (String name : new String[] { masterName, sourceName, targetName })
+        {
+            String notReadyError = ProjectStateChecker.checkReadyOrError(name);
+            if (notReadyError != null)
+            {
+                return ToolResult.error(notReadyError).toJson();
+            }
         }
 
         try

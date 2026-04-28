@@ -201,10 +201,6 @@ public class McpServer
         registry.register(new GetConfigurationPropertiesTool());
         registry.register(new CleanProjectTool());
         registry.register(new RevalidateObjectsTool());
-        registry.register(new GenerateTranslationStringsTool());
-        registry.register(new TranslateConfigurationTool());
-        registry.register(new ConvertToTranslationLanguageTool());
-        registry.register(new GetTranslationProjectInfoTool());
         registry.register(new GetProblemSummaryTool());
         registry.register(new GetProjectErrorsTool());
         registry.register(new GetBookmarksTool());
@@ -260,6 +256,12 @@ public class McpServer
         registry.register(new RenameMetadataObjectTool());
         registry.register(new DeleteMetadataObjectTool());
         registry.register(new AddMetadataAttributeTool());
+
+        // LanguageTool translation tools
+        registry.register(new GenerateTranslationStringsTool());
+        registry.register(new TranslateConfigurationTool());
+        registry.register(new ConvertToTranslationLanguageTool());
+        registry.register(new GetTranslationProjectInfoTool());
 
         Activator.logInfo("Registered " + registry.getToolCount() + " MCP tools"); //$NON-NLS-1$ //$NON-NLS-2$
     }

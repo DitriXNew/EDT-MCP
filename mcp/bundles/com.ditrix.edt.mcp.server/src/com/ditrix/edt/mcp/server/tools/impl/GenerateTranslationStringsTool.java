@@ -53,6 +53,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
     private static final String DEFAULT_STORAGE_ID = "edit:default"; //$NON-NLS-1$
     private static final String DEFAULT_COLLECT_MODEL_TYPE = "ANY"; //$NON-NLS-1$
     private static final String DEFAULT_FILL_UP_TYPE = "NOT_FILLUP"; //$NON-NLS-1$
+    private static final String FILL_UP_FROM_PROVIDER = "FROM_PROVIDER"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -132,6 +133,13 @@ public class GenerateTranslationStringsTool implements IMcpTool
         if (collectModelType == null || collectModelType.isEmpty()) collectModelType = DEFAULT_COLLECT_MODEL_TYPE;
         if (fillUpType == null || fillUpType.isEmpty()) fillUpType = DEFAULT_FILL_UP_TYPE;
         if (providerId == null) providerId = ""; //$NON-NLS-1$
+
+        if (FILL_UP_FROM_PROVIDER.equals(fillUpType) && providerId.isEmpty())
+        {
+            return ToolResult.error(
+                "providerId is required when fillUpType=FROM_PROVIDER. " //$NON-NLS-1$
+              + "Use get_translation_project_info to list available providers.").toJson(); //$NON-NLS-1$
+        }
 
         String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
         if (notReadyError != null)

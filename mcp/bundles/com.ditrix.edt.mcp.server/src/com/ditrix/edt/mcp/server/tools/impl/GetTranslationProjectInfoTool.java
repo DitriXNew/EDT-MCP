@@ -23,12 +23,14 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
  * Tool that returns translation-related metadata for a project: the list of
- * translation storages declared on the project (e.g. {@code common-camelcase},
- * {@code common}, BSL/i18n storages) and the available translation provider
- * IDs (Google, Microsoft, Yandex, etc.).
+ * translation storage IDs declared on the project (e.g. {@code edit:default},
+ * {@code dictionary:common-camelcase}, {@code dictionary:common},
+ * {@code context:model}, {@code context:interface}) and the available
+ * translation provider IDs (Google, Microsoft, Yandex, history, etc.).
  *
  * <p>Wraps {@code com.e1c.langtool.v8.dt.cli.api.IProjectInformationApi}
  * via reflection so this bundle has no build-time dependency on LanguageTool.
@@ -73,6 +75,12 @@ public class GetTranslationProjectInfoTool implements IMcpTool
         if (projectName == null || projectName.isEmpty())
         {
             return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
+        }
+
+        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
+        if (notReadyError != null)
+        {
+            return ToolResult.error(notReadyError).toJson();
         }
 
         try
