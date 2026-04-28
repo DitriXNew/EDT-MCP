@@ -59,9 +59,9 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("importPath", //$NON-NLS-1$
-                "Filesystem path of the source directory containing XML files (required)") //$NON-NLS-1$
+                "Filesystem path of the source directory containing XML files (required)", true) //$NON-NLS-1$
             .stringProperty("projectName", //$NON-NLS-1$
-                "Name of the new EDT project to create in the workspace (required)") //$NON-NLS-1$
+                "Name of the new EDT project to create in the workspace (required)", true) //$NON-NLS-1$
             .stringProperty("projectNature", //$NON-NLS-1$
                 "EDT project nature ID, e.g. 'com._1c.g5.v8.dt.core.V8ConfigurationNature'. " //$NON-NLS-1$
               + "Pass empty string to let EDT auto-detect.") //$NON-NLS-1$
@@ -106,6 +106,21 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         {
             Path importPath = Paths.get(importPathStr);
 
+            // The tool's contract is "import into a NEW project", so reject early
+            // if a workspace project with this name already exists. Without this
+            // check the underlying EDT API still throws (with a less direct
+            // message) and we'd surface it via the catch block — but a clean
+            // up-front error is friendlier and matches the validation pattern
+            // used elsewhere (DeleteMetadataObjectTool, CleanProjectTool, etc.).
+            IWorkspace workspace = ResourcesPlugin.getWorkspace();
+            IProject existing = workspace.getRoot().getProject(projectName);
+            if (existing != null && existing.exists())
+            {
+                return ToolResult.error(
+                    "Project already exists in workspace: " + projectName //$NON-NLS-1$
+                  + ". Import requires a new project name.").toJson(); //$NON-NLS-1$
+            }
+
             Object api = Activator.getDefault().getImportConfigurationFilesApi();
             if (api == null)
             {
@@ -124,7 +139,6 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             // IDtProjectManager.getDtProject(p) returns null until something
             // triggers EDT's project lifecycle. Close + open + refresh here
             // forces EDT to re-scan and bring the project to the ready state.
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
             IProject created = workspace.getRoot().getProject(projectName);
             if (created != null && created.exists())
             {

@@ -53,9 +53,9 @@ public class ExportConfigurationToXmlTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name to export (required)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("projectName", "EDT project name to export (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("outputPath", //$NON-NLS-1$
-                "Filesystem path of the output directory for the XML files (required)") //$NON-NLS-1$
+                "Filesystem path of the output directory for the XML files (required)", true) //$NON-NLS-1$
             .build();
     }
 
