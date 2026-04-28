@@ -146,7 +146,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 51 tools are organized into 8 semantic groups:
+All 52 tools are organized into 8 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -167,7 +167,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 51 tools enabled (default) |
+| **All Tools** | All 52 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -943,13 +943,13 @@ These tools sit in the Core / Project group and wrap the official 1C EDT workspa
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `projectName` | Yes | EDT project name to export |
-| `outputPath` | Yes | Filesystem path of the output directory for the XML files |
+| `outputPath` | Yes | Filesystem path of the output directory. Resolved to an absolute path. Created automatically if it does not exist; an existing file (not a directory) at that path is rejected with a clear error |
 
 **`import_configuration_from_xml`** — Import a configuration from a directory of XML files into a new EDT project in the workspace. Reverse of `export_configuration_to_xml`. Wraps `IImportConfigurationFilesApi.importProject(Path importSource, String projectName, String nature, String xmlVersion)`. After the API call the tool also closes/opens/refreshes the new project to trigger EDT's project lifecycle (the underlying CLI API hardcodes `setRefreshProject(false)` and would otherwise leave the project unindexed), so the imported project is ready to use without manual GUI intervention.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `importPath` | Yes | Filesystem path of the source directory containing XML files |
+| `importPath` | Yes | Filesystem path of the source directory containing XML files. Resolved to an absolute path. Must exist and be a directory; otherwise rejected with a clear error before the API call |
 | `projectName` | Yes | Name of the new EDT project to create in the workspace |
 | `projectNature` | No | EDT project nature ID (e.g. `com._1c.g5.v8.dt.core.V8ConfigurationNature`); empty/omitted = let EDT auto-detect |
 | `xmlVersion` | No | XML format version (e.g. `8.3.20`); empty/omitted = let EDT auto-detect |
