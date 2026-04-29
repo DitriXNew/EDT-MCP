@@ -52,7 +52,16 @@ public class GetTranslationProjectInfoTool implements IMcpTool
         return "Return LanguageTool metadata for a project: translation storages " //$NON-NLS-1$
              + "declared on the project and available translation provider IDs. " //$NON-NLS-1$
              + "Wraps IProjectInformationApi. " //$NON-NLS-1$
-             + "Requires EDT with LanguageTool installed."; //$NON-NLS-1$
+             + "Requires EDT with LanguageTool installed. " //$NON-NLS-1$
+             + "If the storages list is empty, the configuration has no dictionary " //$NON-NLS-1$
+             + "storage attached yet. The user has to set this up in EDT manually " //$NON-NLS-1$
+             + "(no MCP tool for it): create a plain Eclipse project (File -> New -> " //$NON-NLS-1$
+             + "Project -> General -> Project), then attach it to the configuration " //$NON-NLS-1$
+             + "via the configuration project's properties (Translation settings). " //$NON-NLS-1$
+             + "Do NOT use any '1C:Enterprise -> Dependent translation project' " //$NON-NLS-1$
+             + "wizard — the dictionary storage project must be a plain Eclipse " //$NON-NLS-1$
+             + "project, and the configuration itself can also act as its own " //$NON-NLS-1$
+             + "storage if no separate Eclipse project is desired."; //$NON-NLS-1$
     }
 
     @Override

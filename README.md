@@ -984,7 +984,8 @@ A practical example of this loop is automating the translation of an actively-de
 #### Notes and gotchas
 
 - `generate_translation_strings` rejects non-configuration projects (dictionary storage projects, extensions, plain Eclipse projects) with an explicit error before contacting LanguageTool. The check uses `IProject.hasNature(V8ConfigurationNature)`.
-- A dictionary storage project does not need any special setup beyond being created as an empty Eclipse project and being registered in the configuration's translation settings — there is no MCP tool for that registration step (it is a one-time GUI action in the configuration project's properties).
+- A dictionary storage project is a **plain Eclipse project** — created via *File → New → Project → General → Project*, **not** through any 1C:Enterprise wizard. It is then attached to the configuration via the configuration project's properties (Translation page). There is no MCP tool for either step — the setup is a one-time GUI action.
+- The configuration project can act as its own dictionary storage (then the `.lstr`/`.trans`/`.dict` files live inside it). A separate Eclipse project is just an organizational choice.
 - `providerId` is meaningful **only** when `fillUpType=FROM_PROVIDER`. Passing it with any other `fillUpType` is silently ignored (the suffix is appended only for FROM_PROVIDER), and forgetting it when the mode is FROM_PROVIDER returns a fail-fast error before the underlying API is called.
 - `translate_configuration` does NOT touch user dictionaries — it only re-derives the translated artifacts from them. Edits to `.lstr` / `.trans` / `.dict` are the translator's responsibility.
 - All three tools surface the underlying LangTool exceptions verbatim under `error` when something goes wrong inside LanguageTool itself, so an AI agent can retry with adjusted parameters or escalate to the user.
