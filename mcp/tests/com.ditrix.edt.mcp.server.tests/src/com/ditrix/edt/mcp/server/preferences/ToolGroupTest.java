@@ -158,7 +158,9 @@ public class ToolGroupTest
         assertTrue(tools.contains("get_edt_version"));
         assertTrue(tools.contains("list_projects"));
         assertTrue(tools.contains("get_configuration_properties"));
-        assertEquals(6, tools.size());
+        assertTrue(tools.contains("export_configuration_to_xml"));
+        assertTrue(tools.contains("import_configuration_from_xml"));
+        assertEquals(8, tools.size());
     }
 
     @Test

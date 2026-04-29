@@ -21,7 +21,7 @@ public enum ToolPreset
 
     ANALYSIS_ONLY("Analysis Only", //$NON-NLS-1$
         "Read-only analysis - no code changes, no debugging", //$NON-NLS-1$
-        disabledFor(ToolGroup.APPLICATIONS, ToolGroup.DEBUG, ToolGroup.BSL_CODE, ToolGroup.REFACTORING, ToolGroup.TRANSLATION)),
+        buildAnalysisOnlyDisabled()),
 
     CODE_REVIEW("Code Review", //$NON-NLS-1$
         "Analysis + BSL code reading (no writing)", //$NON-NLS-1$
@@ -112,7 +112,9 @@ public enum ToolPreset
     }
 
     /**
-     * Builds the Code Review preset: disable apps, debug, refactoring, and write_module_source.
+     * Builds the Code Review preset: disable apps, debug, refactoring,
+     * write_module_source, and the state-mutating workspace export/import tools
+     * (which sit in CORE alongside read-only project tools).
      */
     private static Set<String> buildCodeReviewDisabled()
     {
@@ -122,6 +124,27 @@ public enum ToolPreset
         disabled.addAll(ToolGroup.REFACTORING.getToolNames());
         disabled.addAll(ToolGroup.TRANSLATION.getToolNames());
         disabled.add("write_module_source"); //$NON-NLS-1$
+        disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
+        disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
+        return Collections.unmodifiableSet(disabled);
+    }
+
+    /**
+     * Builds the Analysis Only preset: disable apps, debug, the entire BSL
+     * Code group (both read and write tools — analysis is metadata- and
+     * error-level only), refactoring, the state-mutating workspace
+     * export/import tools, and the LanguageTool translation tools.
+     */
+    private static Set<String> buildAnalysisOnlyDisabled()
+    {
+        Set<String> disabled = new HashSet<>();
+        disabled.addAll(ToolGroup.APPLICATIONS.getToolNames());
+        disabled.addAll(ToolGroup.DEBUG.getToolNames());
+        disabled.addAll(ToolGroup.BSL_CODE.getToolNames());
+        disabled.addAll(ToolGroup.REFACTORING.getToolNames());
+        disabled.addAll(ToolGroup.TRANSLATION.getToolNames());
+        disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
+        disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
         return Collections.unmodifiableSet(disabled);
     }
 }

@@ -57,6 +57,14 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
     /**
+     * EDT workspace CLI APIs are tracked by String class name and invoked via
+     * reflection from the tools, keeping this bundle build-independent of
+     * com._1c.g5.v8.dt.cli.api.
+     */
+    private ServiceTracker<Object, Object> exportConfigurationFilesApiTracker;
+    private ServiceTracker<Object, Object> importConfigurationFilesApiTracker;
+
+    /**
      * LanguageTool CLI APIs are tracked by String class name to keep this
      * bundle build-independent of the com.e1c.langtool.* bundles (LanguageTool
      * is installed separately via Help -&gt; Install New Software on both EDT
@@ -130,6 +138,14 @@ public class Activator extends AbstractUIPlugin
         
         mdRefactoringServiceTracker = new ServiceTracker<>(context, IMdRefactoringService.class, null);
         mdRefactoringServiceTracker.open();
+
+        exportConfigurationFilesApiTracker = new ServiceTracker<>(
+            context, "com._1c.g5.v8.dt.cli.api.workspace.IExportConfigurationFilesApi", null); //$NON-NLS-1$
+        exportConfigurationFilesApiTracker.open();
+
+        importConfigurationFilesApiTracker = new ServiceTracker<>(
+            context, "com._1c.g5.v8.dt.cli.api.workspace.IImportConfigurationFilesApi", null); //$NON-NLS-1$
+        importConfigurationFilesApiTracker.open();
 
         generateTranslationStringsApiTracker = new ServiceTracker<>(
             context, "com.e1c.langtool.v8.dt.cli.api.IGenerateTranslationStringsApi", null); //$NON-NLS-1$
@@ -239,6 +255,16 @@ public class Activator extends AbstractUIPlugin
         {
             mdRefactoringServiceTracker.close();
             mdRefactoringServiceTracker = null;
+        }
+        if (exportConfigurationFilesApiTracker != null)
+        {
+            exportConfigurationFilesApiTracker.close();
+            exportConfigurationFilesApiTracker = null;
+        }
+        if (importConfigurationFilesApiTracker != null)
+        {
+            importConfigurationFilesApiTracker.close();
+            importConfigurationFilesApiTracker = null;
         }
         if (generateTranslationStringsApiTracker != null)
         {
@@ -504,6 +530,36 @@ public class Activator extends AbstractUIPlugin
             return null;
         }
         return mdRefactoringServiceTracker.getService();
+    }
+
+    /**
+     * Returns the com._1c.g5.v8.dt.cli.api.workspace.IExportConfigurationFilesApi
+     * (EDT "Export → Configuration to XML Files" action) — typed as
+     * {@code Object}, callers invoke via reflection. Returns null when
+     * the underlying CLI API plugin is not installed.
+     */
+    public Object getExportConfigurationFilesApi()
+    {
+        if (exportConfigurationFilesApiTracker == null)
+        {
+            return null;
+        }
+        return exportConfigurationFilesApiTracker.getService();
+    }
+
+    /**
+     * Returns the com._1c.g5.v8.dt.cli.api.workspace.IImportConfigurationFilesApi
+     * (EDT "Import → Configuration from XML Files" action) — typed as
+     * {@code Object}, callers invoke via reflection. Returns null when
+     * the underlying CLI API plugin is not installed.
+     */
+    public Object getImportConfigurationFilesApi()
+    {
+        if (importConfigurationFilesApiTracker == null)
+        {
+            return null;
+        }
+        return importConfigurationFilesApiTracker.getService();
     }
 
     /**
