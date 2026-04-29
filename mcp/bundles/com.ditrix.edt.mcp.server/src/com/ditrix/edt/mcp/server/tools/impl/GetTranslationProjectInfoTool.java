@@ -77,19 +77,24 @@ public class GetTranslationProjectInfoTool implements IMcpTool
             return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
 
-        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-        if (notReadyError != null)
-        {
-            return ToolResult.error(notReadyError).toJson();
-        }
-
         try
         {
+            // Resolve the IProject first so AI clients get a specific
+            // "Project not found or closed" diagnostic for unknown names
+            // instead of the generic "Not an EDT project" message that
+            // ProjectStateChecker.checkReadyOrError returns for missing
+            // projects.
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             IProject project = workspace.getRoot().getProject(projectName);
             if (project == null || !project.exists() || !project.isOpen())
             {
                 return ToolResult.error("Project not found or closed: " + projectName).toJson(); //$NON-NLS-1$
+            }
+
+            String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
+            if (notReadyError != null)
+            {
+                return ToolResult.error(notReadyError).toJson();
             }
 
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();

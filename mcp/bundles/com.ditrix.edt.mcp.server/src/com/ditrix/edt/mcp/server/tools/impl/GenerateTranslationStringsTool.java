@@ -142,14 +142,13 @@ public class GenerateTranslationStringsTool implements IMcpTool
               + "Use get_translation_project_info to list available providers.").toJson(); //$NON-NLS-1$
         }
 
-        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-        if (notReadyError != null)
-        {
-            return ToolResult.error(notReadyError).toJson();
-        }
-
         try
         {
+            // Resolve the IProject first so AI clients get the most specific
+            // diagnostic ("Project not found" / "Project is closed") for bad
+            // names instead of the generic "Not an EDT project" message that
+            // ProjectStateChecker.checkReadyOrError returns for unknown
+            // projects.
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             IProject project = workspace.getRoot().getProject(projectName);
             if (project == null || !project.exists())
@@ -159,6 +158,12 @@ public class GenerateTranslationStringsTool implements IMcpTool
             if (!project.isOpen())
             {
                 return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
+            }
+
+            String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
+            if (notReadyError != null)
+            {
+                return ToolResult.error(notReadyError).toJson();
             }
 
             // Reject dependent translation projects, extensions and any

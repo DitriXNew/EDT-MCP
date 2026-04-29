@@ -564,8 +564,11 @@ public class Activator extends AbstractUIPlugin
 
     /**
      * Returns the com.e1c.langtool.v8.dt.cli.api.IGenerateTranslationStringsApi
-     * used to invoke the LanguageTool translation-strings generator (regenerates
-     * placeholder keys in .lstr/.trans/.dict for a dependent translation project).
+     * used to invoke the LanguageTool translation-strings generator. The
+     * action is invoked on the configuration project (V8ConfigurationNature)
+     * and writes placeholder keys into the .lstr/.trans/.dict storages
+     * declared on the project (some of which typically live in a paired
+     * dependent translation project).
      *
      * <p>Typed as {@code Object} — callers invoke via reflection so this bundle
      * has no build-time dependency on com.e1c.langtool.*, which is not shipped
