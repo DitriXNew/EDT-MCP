@@ -27,7 +27,7 @@ public class TranslateConfigurationToolTest
     @Test
     public void testResponseType()
     {
-        assertEquals(ResponseType.JSON, new TranslateConfigurationTool().getResponseType());
+        assertEquals(ResponseType.MARKDOWN, new TranslateConfigurationTool().getResponseType());
     }
 
     @Test

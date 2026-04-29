@@ -27,7 +27,7 @@ public class GetTranslationProjectInfoToolTest
     @Test
     public void testResponseType()
     {
-        assertEquals(ResponseType.JSON, new GetTranslationProjectInfoTool().getResponseType());
+        assertEquals(ResponseType.MARKDOWN, new GetTranslationProjectInfoTool().getResponseType());
     }
 
     @Test

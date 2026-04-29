@@ -975,7 +975,7 @@ LanguageTool is installed separately via *Help → Install New Software* on both
 | `fillUpType` | No | Pre-fill new keys with values from: `NOT_FILLUP` \| `FROM_SOURCE_LANGUAGE` \| `FROM_PROVIDER`. Default: `NOT_FILLUP` |
 | `providerId` | No | Translation provider ID (used only when `fillUpType=FROM_PROVIDER`). Use `get_translation_project_info` to list available providers |
 
-**Returns:** `{ project, targetLanguages: [...], storageId, collectInterface, collectModel, collectModelType, fillUpType, message }`.
+**Returns:** Markdown with YAML frontmatter (`tool`, `project`, `targetLanguages`, `storageId`, `collectInterface`, `collectModel`, `collectModelType`, `fillUpType`, `status`) followed by a brief textual confirmation.
 
 **`translate_configuration`** — wraps `ISynchronizeProjectApi.synchronizeProject(IDtProject, List<String>)`. Equivalent of EDT menu *Translation → Translate configuration*. Propagates dictionary changes from dependent translation projects to the source project, regenerating the translated artifacts. This is the main action a translator runs after editing dictionaries.
 
@@ -984,7 +984,7 @@ LanguageTool is installed separately via *Help → Install New Software* on both
 | `projectName` | Yes | Project name (typically the source project) |
 | `targetLanguages` | Yes | Target language codes to synchronize, e.g. `["en"]` |
 
-**Returns:** `{ project, message }`.
+**Returns:** Markdown with YAML frontmatter (`tool`, `project`, `targetLanguages`, `status`) followed by a brief textual confirmation.
 
 **`get_translation_project_info`** — wraps `IProjectInformationApi`. Diagnostic tool that returns the translation storage IDs declared on a project (e.g. `edit:default`, `dictionary:common-camelcase`, `dictionary:common`, `context:model`, `context:interface`) and the available translation provider IDs (Google, Microsoft, Yandex, history, etc.).
 
@@ -992,12 +992,12 @@ LanguageTool is installed separately via *Help → Install New Software* on both
 |-----------|----------|-------------|
 | `projectName` | Yes | Project name |
 
-**Returns:** `{ project, storages: [...], providers: [...] }`.
+**Returns:** Markdown with YAML frontmatter (`tool`, `project`, `storagesCount`, `providersCount`) followed by `## Storages` and `## Translation providers` sections, each rendered as a bulleted list.
 
 ### Output Formats
 
-- **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description` - return Markdown as EmbeddedResource with `mimeType: text/markdown`
-- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, all LanguageTool tools - return JSON with `structuredContent`
+- **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description`, all LanguageTool tools - return Markdown as EmbeddedResource with `mimeType: text/markdown`
+- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml` - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
 
 </details>

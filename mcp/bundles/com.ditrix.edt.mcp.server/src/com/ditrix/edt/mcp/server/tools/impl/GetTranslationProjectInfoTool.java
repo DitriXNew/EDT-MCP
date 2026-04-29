@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
@@ -65,7 +66,7 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        return ResponseType.JSON;
+        return ResponseType.MARKDOWN;
     }
 
     @Override
@@ -123,11 +124,38 @@ public class GetTranslationProjectInfoTool implements IMcpTool
             List<String> providers = providersObj instanceof List
                 ? castStringList(providersObj) : Collections.emptyList();
 
-            return ToolResult.success()
+            StringBuilder body = new StringBuilder();
+            body.append("## Storages\n\n"); //$NON-NLS-1$
+            if (storages.isEmpty())
+            {
+                body.append("(none)\n"); //$NON-NLS-1$
+            }
+            else
+            {
+                for (String storage : storages)
+                {
+                    body.append("- ").append(storage).append('\n'); //$NON-NLS-1$
+                }
+            }
+            body.append("\n## Translation providers\n\n"); //$NON-NLS-1$
+            if (providers.isEmpty())
+            {
+                body.append("(none)\n"); //$NON-NLS-1$
+            }
+            else
+            {
+                for (String provider : providers)
+                {
+                    body.append("- ").append(provider).append('\n'); //$NON-NLS-1$
+                }
+            }
+
+            return FrontMatter.create()
+                .put("tool", NAME) //$NON-NLS-1$
                 .put("project", projectName) //$NON-NLS-1$
-                .put("storages", storages) //$NON-NLS-1$
-                .put("providers", providers) //$NON-NLS-1$
-                .toJson();
+                .put("storagesCount", storages.size()) //$NON-NLS-1$
+                .put("providersCount", providers.size()) //$NON-NLS-1$
+                .wrapContent(body.toString());
         }
         catch (InvocationTargetException e)
         {

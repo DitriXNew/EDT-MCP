@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
@@ -78,7 +79,7 @@ public class TranslateConfigurationTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        return ResponseType.JSON;
+        return ResponseType.MARKDOWN;
     }
 
     @Override
@@ -143,10 +144,12 @@ public class TranslateConfigurationTool implements IMcpTool
 
             BuildUtils.waitForDerivedData(project);
 
-            return ToolResult.success()
+            return FrontMatter.create()
+                .put("tool", NAME) //$NON-NLS-1$
                 .put("project", projectName) //$NON-NLS-1$
-                .put("message", "Translate configuration completed.") //$NON-NLS-1$ //$NON-NLS-2$
-                .toJson();
+                .put("targetLanguages", String.join(", ", targetLanguages)) //$NON-NLS-1$ //$NON-NLS-2$
+                .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
+                .wrapContent("Translate configuration completed."); //$NON-NLS-1$
         }
         catch (InvocationTargetException e)
         {

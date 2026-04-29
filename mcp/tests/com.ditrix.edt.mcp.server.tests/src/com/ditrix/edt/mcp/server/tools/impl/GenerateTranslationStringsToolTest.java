@@ -27,7 +27,7 @@ public class GenerateTranslationStringsToolTest
     @Test
     public void testResponseType()
     {
-        assertEquals(ResponseType.JSON, new GenerateTranslationStringsTool().getResponseType());
+        assertEquals(ResponseType.MARKDOWN, new GenerateTranslationStringsTool().getResponseType());
     }
 
     @Test

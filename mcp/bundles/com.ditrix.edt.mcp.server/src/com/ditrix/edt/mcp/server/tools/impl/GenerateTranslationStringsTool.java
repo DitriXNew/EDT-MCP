@@ -25,6 +25,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
@@ -105,7 +106,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        return ResponseType.JSON;
+        return ResponseType.MARKDOWN;
     }
 
     @Override
@@ -232,16 +233,17 @@ public class GenerateTranslationStringsTool implements IMcpTool
 
             BuildUtils.waitForDerivedData(project);
 
-            return ToolResult.success()
+            return FrontMatter.create()
+                .put("tool", NAME) //$NON-NLS-1$
                 .put("project", projectName) //$NON-NLS-1$
-                .put("targetLanguages", targetLanguages) //$NON-NLS-1$
+                .put("targetLanguages", String.join(", ", targetLanguages)) //$NON-NLS-1$ //$NON-NLS-2$
                 .put("storageId", storageId) //$NON-NLS-1$
-                .put("collectModel", collectModel) //$NON-NLS-1$
                 .put("collectInterface", collectInterface) //$NON-NLS-1$
+                .put("collectModel", collectModel) //$NON-NLS-1$
                 .put("collectModelType", collectModelType) //$NON-NLS-1$
                 .put("fillUpType", fillUpType) //$NON-NLS-1$
-                .put("message", "Translation strings generated.") //$NON-NLS-1$ //$NON-NLS-2$
-                .toJson();
+                .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
+                .wrapContent("Translation strings generated."); //$NON-NLS-1$
         }
         catch (InvocationTargetException e)
         {
