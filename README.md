@@ -146,11 +146,11 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 49 tools are organized into 8 semantic groups:
+All 52 tools are organized into 8 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
-| **Core / Project** | EDT version, project listing, configuration, validation | `get_edt_version`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description` |
+| **Core / Project** | EDT version, project listing, configuration, validation, XML export/import | `get_edt_version`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml` |
 | **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
@@ -167,7 +167,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 49 tools enabled (default) |
+| **All Tools** | All 52 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -332,6 +332,8 @@ Add to `claude_desktop_config.json`:
 | `go_to_definition` | Navigate to symbol definition (method by name, metadata object by FQN) |
 | `get_symbol_info` | Get type/hover info about a symbol at a BSL code position (inferred types, signatures, docs) |
 | `validate_query` | Validate 1C query text in project context (syntax + semantic errors, optional DCS mode) |
+| `export_configuration_to_xml` | Export an EDT configuration project to a directory of XML files (EDT menu: Export → Configuration to XML Files) |
+| `import_configuration_from_xml` | Import a configuration from a directory of XML files into a new EDT project (reverse of export) |
 
 <details>
 <summary><strong>Tool Details</strong> - Parameters and usage examples for each tool</summary>
@@ -932,10 +934,30 @@ A family of MCP tools that lets the LLM set breakpoints, inspect runtime state a
 - Inspect property types on objects accessed via dot notation
 - Understand platform method parameter types
 
+### Configuration XML Export / Import
+
+These tools sit in the Core / Project group and wrap the official 1C EDT workspace CLI APIs (`com._1c.g5.v8.dt.cli.api.workspace.*`) via reflection — keeping zero compile-time dependency on those APIs while still surfacing them to AI assistants.
+
+**`export_configuration_to_xml`** — Export an EDT configuration project to a directory of XML source files. Equivalent of EDT menu *Export → Configuration to XML Files* and the 1C platform `DumpConfigToFiles` command. Wraps `IExportConfigurationFilesApi.exportProject(String projectName, Path outputPath)`.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name to export |
+| `outputPath` | Yes | Filesystem path of the output directory. Resolved to an absolute path. Created automatically if it does not exist; an existing file (not a directory) at that path is rejected with a clear error |
+
+**`import_configuration_from_xml`** — Import a configuration from a directory of XML files into a new EDT project in the workspace. Reverse of `export_configuration_to_xml`. Wraps `IImportConfigurationFilesApi.importProject(Path importSource, String projectName, String nature, String xmlVersion)`. After the API call the tool also closes/opens/refreshes the new project to trigger EDT's project lifecycle (the underlying CLI API hardcodes `setRefreshProject(false)` and would otherwise leave the project unindexed), so the imported project is ready to use without manual GUI intervention.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `importPath` | Yes | Filesystem path of the source directory containing XML files. Resolved to an absolute path. Must exist and be a directory; otherwise rejected with a clear error before the API call |
+| `projectName` | Yes | Name of the new EDT project to create in the workspace |
+| `projectNature` | No | EDT project nature ID (e.g. `com._1c.g5.v8.dt.core.V8ConfigurationNature`); empty/omitted = let EDT auto-detect |
+| `xmlVersion` | No | XML format version (e.g. `8.3.20`); empty/omitted = let EDT auto-detect |
+
 ### Output Formats
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description` - return Markdown as EmbeddedResource with `mimeType: text/markdown`
-- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects` - return JSON with `structuredContent`
+- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml` - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
 
 </details>
