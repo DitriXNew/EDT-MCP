@@ -82,9 +82,10 @@ public class GenerateTranslationStringsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
-                "Configuration project name (V8ConfigurationNature). NOT a dependent " //$NON-NLS-1$
-              + "translation project — pass the configuration whose translatable " //$NON-NLS-1$
-              + "features should be scanned. Required.", true)
+                "Configuration project name (V8ConfigurationNature). NOT a dictionary " //$NON-NLS-1$
+              + "storage project (the plain Eclipse project where .lstr/.trans/.dict " //$NON-NLS-1$
+              + "live) — pass the configuration whose translatable features should be " //$NON-NLS-1$
+              + "scanned. Required.", true)
             .stringArrayProperty("targetLanguages", //$NON-NLS-1$
                 "Target language codes to generate strings for, e.g. [\"en\"] (required).", true) //$NON-NLS-1$
             .stringProperty("storageId", //$NON-NLS-1$
