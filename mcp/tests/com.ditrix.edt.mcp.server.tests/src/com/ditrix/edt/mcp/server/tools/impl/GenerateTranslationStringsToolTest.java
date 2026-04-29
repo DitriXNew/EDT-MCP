@@ -8,8 +8,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.*;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
 /**
@@ -41,31 +46,36 @@ public class GenerateTranslationStringsToolTest
     @Test
     public void testInputSchemaContainsAllParameters()
     {
-        String schema = new GenerateTranslationStringsTool().getInputSchema();
-        assertNotNull(schema);
-        assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"targetLanguages\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"storageId\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"collectInterface\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"collectModel\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"collectModelType\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"fillUpType\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"providerId\"")); //$NON-NLS-1$
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parsed =
+            GsonProvider.get().fromJson(new GenerateTranslationStringsTool().getInputSchema(), Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> properties = (Map<String, Object>) parsed.get("properties"); //$NON-NLS-1$
+        assertNotNull("schema must declare properties", properties); //$NON-NLS-1$
+        assertTrue(properties.containsKey("projectName")); //$NON-NLS-1$
+        assertTrue(properties.containsKey("targetLanguages")); //$NON-NLS-1$
+        assertTrue(properties.containsKey("storageId")); //$NON-NLS-1$
+        assertTrue(properties.containsKey("collectInterface")); //$NON-NLS-1$
+        assertTrue(properties.containsKey("collectModel")); //$NON-NLS-1$
+        assertTrue(properties.containsKey("collectModelType")); //$NON-NLS-1$
+        assertTrue(properties.containsKey("fillUpType")); //$NON-NLS-1$
+        assertTrue(properties.containsKey("providerId")); //$NON-NLS-1$
     }
 
     @Test
     public void testRequiredArrayMarksOnlyMandatoryParams()
     {
-        String schema = new GenerateTranslationStringsTool().getInputSchema();
-        // Required array must contain projectName + targetLanguages and nothing else.
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
-        assertTrue("schema must declare required array", requiredIdx >= 0); //$NON-NLS-1$
-        String tail = schema.substring(requiredIdx);
-        assertTrue("required must include projectName", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("required must include targetLanguages", tail.contains("\"targetLanguages\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse("storageId must NOT be required", tail.contains("\"storageId\",") //$NON-NLS-1$ //$NON-NLS-2$
-            || tail.contains(",\"storageId\"")); //$NON-NLS-1$
-        assertFalse("providerId must NOT be required", tail.contains("\"providerId\",") //$NON-NLS-1$ //$NON-NLS-2$
-            || tail.contains(",\"providerId\"")); //$NON-NLS-1$
+        // Parse the schema and verify the required array contains exactly
+        // the mandatory parameters. Asserting on the parsed structure (rather
+        // than substring-matching the JSON text) keeps the test stable across
+        // serialization-order changes in JsonSchemaBuilder.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parsed =
+            GsonProvider.get().fromJson(new GenerateTranslationStringsTool().getInputSchema(), Map.class);
+        @SuppressWarnings("unchecked")
+        List<String> required = (List<String>) parsed.get("required"); //$NON-NLS-1$
+        assertNotNull("schema must declare required array", required); //$NON-NLS-1$
+        assertEquals("required must be exactly [projectName, targetLanguages]", //$NON-NLS-1$
+            Arrays.asList("projectName", "targetLanguages"), required); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

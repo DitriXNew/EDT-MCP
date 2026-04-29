@@ -8,8 +8,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.*;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
 /**
@@ -41,20 +46,29 @@ public class TranslateConfigurationToolTest
     @Test
     public void testInputSchemaContainsAllParameters()
     {
-        String schema = new TranslateConfigurationTool().getInputSchema();
-        assertNotNull(schema);
-        assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"targetLanguages\"")); //$NON-NLS-1$
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parsed =
+            GsonProvider.get().fromJson(new TranslateConfigurationTool().getInputSchema(), Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> properties = (Map<String, Object>) parsed.get("properties"); //$NON-NLS-1$
+        assertNotNull("schema must declare properties", properties); //$NON-NLS-1$
+        assertTrue(properties.containsKey("projectName")); //$NON-NLS-1$
+        assertTrue(properties.containsKey("targetLanguages")); //$NON-NLS-1$
     }
 
     @Test
     public void testBothParamsRequired()
     {
-        String schema = new TranslateConfigurationTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
-        assertTrue("schema must declare required array", requiredIdx >= 0); //$NON-NLS-1$
-        String tail = schema.substring(requiredIdx);
-        assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("targetLanguages must be required", tail.contains("\"targetLanguages\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Parse the schema and verify the required array contains exactly
+        // both parameters — string-substring matching would also match the
+        // properties section and is fragile to serialization-order changes.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parsed =
+            GsonProvider.get().fromJson(new TranslateConfigurationTool().getInputSchema(), Map.class);
+        @SuppressWarnings("unchecked")
+        List<String> required = (List<String>) parsed.get("required"); //$NON-NLS-1$
+        assertNotNull("schema must declare required array", required); //$NON-NLS-1$
+        assertEquals("required must be exactly [projectName, targetLanguages]", //$NON-NLS-1$
+            Arrays.asList("projectName", "targetLanguages"), required); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

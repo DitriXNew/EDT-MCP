@@ -8,8 +8,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.*;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
 /**
@@ -41,18 +46,28 @@ public class GetTranslationProjectInfoToolTest
     @Test
     public void testInputSchemaContainsProjectName()
     {
-        String schema = new GetTranslationProjectInfoTool().getInputSchema();
-        assertNotNull(schema);
-        assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parsed =
+            GsonProvider.get().fromJson(new GetTranslationProjectInfoTool().getInputSchema(), Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> properties = (Map<String, Object>) parsed.get("properties"); //$NON-NLS-1$
+        assertNotNull("schema must declare properties", properties); //$NON-NLS-1$
+        assertTrue(properties.containsKey("projectName")); //$NON-NLS-1$
     }
 
     @Test
     public void testProjectNameRequired()
     {
-        String schema = new GetTranslationProjectInfoTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
-        assertTrue("schema must declare required array", requiredIdx >= 0); //$NON-NLS-1$
-        assertTrue("projectName must be required", //$NON-NLS-1$
-            schema.substring(requiredIdx).contains("\"projectName\"")); //$NON-NLS-1$
+        // Parse the schema and verify the required array contains exactly
+        // projectName — string-substring matching would also match the
+        // properties section and is fragile to serialization-order changes.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parsed =
+            GsonProvider.get().fromJson(new GetTranslationProjectInfoTool().getInputSchema(), Map.class);
+        @SuppressWarnings("unchecked")
+        List<String> required = (List<String>) parsed.get("required"); //$NON-NLS-1$
+        assertNotNull("schema must declare required array", required); //$NON-NLS-1$
+        assertEquals("required must be exactly [projectName]", //$NON-NLS-1$
+            Collections.singletonList("projectName"), required); //$NON-NLS-1$
     }
 }
