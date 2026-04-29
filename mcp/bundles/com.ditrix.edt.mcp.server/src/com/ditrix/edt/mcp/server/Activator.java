@@ -567,8 +567,9 @@ public class Activator extends AbstractUIPlugin
      * used to invoke the LanguageTool translation-strings generator. The
      * action is invoked on the configuration project (V8ConfigurationNature)
      * and writes placeholder keys into the .lstr/.trans/.dict storages
-     * declared on the project (some of which typically live in a paired
-     * dependent translation project).
+     * declared on the project (each storage routes to either an external
+     * dictionary storage project — a plain Eclipse project with the
+     * dependentProjectNature — or to the configuration itself).
      *
      * <p>Typed as {@code Object} — callers invoke via reflection so this bundle
      * has no build-time dependency on com.e1c.langtool.*, which is not shipped

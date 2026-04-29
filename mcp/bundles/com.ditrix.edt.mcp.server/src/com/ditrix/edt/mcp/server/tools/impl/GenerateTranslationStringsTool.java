@@ -31,14 +31,15 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 /**
  * Tool that generates translation strings (.lstr / .trans / .dict) for a
  * configuration project — scans the configuration's translatable features and
- * writes the resulting keys into the storages declared on the project (some
- * may live in a dependent translation project, some inside the configuration
+ * writes the resulting keys into the storages declared on the project (each
+ * storage routes to either an external dictionary storage project — a plain
+ * Eclipse project with the dependentProjectNature — or to the configuration
  * itself, depending on {@code .settings/translation_storages.yml}).
  *
  * <p>Equivalent of the EDT UI action
  * <em>Translation &rarr; Generate translation strings</em>, which is invoked
  * on the <strong>configuration project</strong> (V8ConfigurationNature). It is
- * NOT meant to be invoked on a dependent translation project — pass the
+ * NOT meant to be invoked on a dictionary storage project — pass the
  * configuration project here.
  *
  * <p>Wraps the public CLI API
@@ -71,7 +72,8 @@ public class GenerateTranslationStringsTool implements IMcpTool
              + "the resulting keys into the storages declared on the project. " //$NON-NLS-1$
              + "Equivalent of the EDT menu Translation -> Generate translation " //$NON-NLS-1$
              + "strings. Invoke on the configuration project " //$NON-NLS-1$
-             + "(V8ConfigurationNature), NOT on a dependent translation project. " //$NON-NLS-1$
+             + "(V8ConfigurationNature), NOT on a dictionary storage project " //$NON-NLS-1$
+             + "(plain Eclipse project where .lstr/.trans/.dict live). " //$NON-NLS-1$
              + "Requires LanguageTool installed in EDT."; //$NON-NLS-1$
     }
 
@@ -167,15 +169,16 @@ public class GenerateTranslationStringsTool implements IMcpTool
                 return ToolResult.error(notReadyError).toJson();
             }
 
-            // Reject dependent translation projects, extensions and any
-            // non-configuration EDT project — they would resolve to a non-null
-            // IDtProject but fail deep inside LangTool with a confusing error.
+            // Reject dictionary storage projects, extensions and any
+            // non-configuration EDT project — they would either resolve to a
+            // non-null IDtProject and fail deep inside LangTool with a
+            // confusing error, or simply do nothing useful.
             if (!project.hasNature(V8_CONFIGURATION_NATURE))
             {
                 return ToolResult.error(
                     "Not a V8 configuration project: " + projectName //$NON-NLS-1$
                   + ". This action must be run on the configuration project (V8ConfigurationNature), " //$NON-NLS-1$
-                  + "not on a dependent translation project or extension.").toJson(); //$NON-NLS-1$
+                  + "not on a dictionary storage project or extension.").toJson(); //$NON-NLS-1$
             }
 
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();

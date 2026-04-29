@@ -32,12 +32,15 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
  * <p>Equivalent of the context-menu action
  * <em>Translation &rarr; Translate configuration</em> in EDT. Under the hood
  * this is the LanguageTool <em>SynchronizeProject</em> operation: it takes the
- * source project's current state + dictionaries from its dependent translation
- * projects and regenerates the translated artifacts.
+ * source configuration project's current state and the dictionaries from the
+ * storages bound to it (which may live in external dictionary storage
+ * projects — plain Eclipse projects with the dependentProjectNature — or
+ * inside the configuration itself) and regenerates the translated artifacts.
  *
  * <p>Pass the project the user right-clicks in EDT — typically the source
- * (e.g. ru) project. The API resolves the dependent translation projects
- * automatically and regenerates each translated project accordingly.
+ * (e.g. ru) configuration project. The API resolves the bound dictionary
+ * storages automatically and regenerates each translated artifact
+ * accordingly.
  *
  * <p>Uses the 1C public CLI API
  * {@code com.e1c.langtool.v8.dt.cli.api.ISynchronizeProjectApi} via reflection
@@ -59,10 +62,12 @@ public class TranslateConfigurationTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run EDT 'Translate configuration' on a project - " //$NON-NLS-1$
-             + "propagates dictionary changes from dependent translation projects " //$NON-NLS-1$
-             + "to produce translated artifacts. Equivalent of the context-menu " //$NON-NLS-1$
-             + "action Translation -> Translate configuration. " //$NON-NLS-1$
+        return "Run EDT 'Translate configuration' on a configuration project - " //$NON-NLS-1$
+             + "reads the dictionaries from the storages bound to it (external " //$NON-NLS-1$
+             + "dictionary storage projects with the dependentProjectNature, or " //$NON-NLS-1$
+             + "in-configuration storages) and regenerates the translated " //$NON-NLS-1$
+             + "artifacts. Equivalent of the context-menu action " //$NON-NLS-1$
+             + "Translation -> Translate configuration. " //$NON-NLS-1$
              + "Requires LanguageTool installed in EDT."; //$NON-NLS-1$
     }
 
