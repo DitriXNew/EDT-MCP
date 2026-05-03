@@ -146,7 +146,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 52 tools are organized into 8 semantic groups:
+All 55 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -158,6 +158,7 @@ All 52 tools are organized into 8 semantic groups:
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_screenshot`, `validate_query` |
 | **Refactoring** | Metadata rename, delete, add attributes | `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
+| **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
 
@@ -167,7 +168,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 52 tools enabled (default) |
+| **All Tools** | All 55 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -334,6 +335,9 @@ Add to `claude_desktop_config.json`:
 | `validate_query` | Validate 1C query text in project context (syntax + semantic errors, optional DCS mode) |
 | `export_configuration_to_xml` | Export an EDT configuration project to a directory of XML files (EDT menu: Export → Configuration to XML Files) |
 | `import_configuration_from_xml` | Import a configuration from a directory of XML files into a new EDT project (reverse of export) |
+| `generate_translation_strings` | LanguageTool: generate translation strings (.lstr/.trans/.dict) for a configuration project, with translation storage and collection options. EDT menu: Translation → Generate translation strings |
+| `translate_configuration` | LanguageTool: propagate dictionary changes from the configured dictionary storage projects (or from in-configuration storages) into translated artifacts. EDT menu: Translation → Translate configuration |
+| `get_translation_project_info` | LanguageTool diagnostics: project translation storages and available translation provider IDs |
 
 <details>
 <summary><strong>Tool Details</strong> - Parameters and usage examples for each tool</summary>
@@ -954,9 +958,73 @@ These tools sit in the Core / Project group and wrap the official 1C EDT workspa
 | `projectNature` | No | EDT project nature ID (e.g. `com._1c.g5.v8.dt.core.V8ConfigurationNature`); empty/omitted = let EDT auto-detect |
 | `xmlVersion` | No | XML format version (e.g. `8.3.20`); empty/omitted = let EDT auto-detect |
 
+### LanguageTool Tools
+
+LanguageTool is installed separately via *Help → Install New Software* on both EDT 2025.x and 2026.1; it is not bundled with the EDT base distribution. These tools wrap the official 1C CLI APIs (`com.e1c.langtool.v8.dt.cli.api.*`) via reflection, so this plugin builds without a compile-time dependency on LanguageTool. When LanguageTool is not installed, every tool returns a clear "API not available" error instead of failing.
+
+#### Concepts
+
+The three tools touch four kinds of objects, and a clear mental model helps choose the right one:
+
+- **Configuration project** — the regular EDT project of your application. Has the `V8ConfigurationNature` and contains all metadata (`Catalogs`, `Documents`, etc.) plus declared `Languages`. `generate_translation_strings` MUST run on this project.
+- **Dictionary storage project** — *plain* Eclipse project (NOT a 1C-EDT project) with the `dependentProjectNature`, used by LangTool as an external location to keep `.lstr` / `.trans` / `.dict` files. It is created as a regular empty Eclipse project and is **not** intrinsically linked to any configuration. The link is established from the configuration side: in the configuration project's settings the user points to this Eclipse project as an external dictionary storage. The configuration project itself can also serve as its own storage — in that case the dictionaries live inside it.
+- **Storage** — a logical destination inside the LangTool configuration that decides where each generated key is written. The configuration project declares several storages in `.settings/translation_storages.yml` (`edit:default`, `dictionary:common-camelcase`, `context:model`, etc.); each storage is bound either to the configuration itself or to one of the dictionary storage projects from the previous bullet. Use `get_translation_project_info` to enumerate the storages declared on a given project.
+- **Translation provider** — an integration that can pre-fill values for newly generated keys (Google, Microsoft, Yandex, history-based, etc.). Used only when `fillUpType=FROM_PROVIDER`. Use `get_translation_project_info` to enumerate available IDs.
+
+#### Typical workflow
+
+1. **Discover** — call `get_translation_project_info` once on the configuration project to learn which storages and providers are available. Cache the result; it does not change between dictionary edits.
+2. **Generate** — call `generate_translation_strings` against the configuration project, passing the target languages. This populates placeholder keys in the storages declared on the project. The action is idempotent: re-running it adds only new keys that did not exist yet.
+3. **Translate** — fill in the placeholder values. This step happens outside the MCP tools: edit the `.lstr` / `.trans` / `.dict` files (in whichever dictionary storage project — or in the configuration itself — the storages route them to), either by hand or by feeding them to an LLM. The plugin treats this step as a black box.
+4. **Synchronize** — call `translate_configuration` on the source configuration project. This reads the dictionaries from the storages bound to the configuration and regenerates the translated artifacts. This is the action a translator runs after every batch of dictionary edits.
+5. **Iterate** — typical real-world flow alternates between steps 2–4: source code changes add new translatable strings → `generate_translation_strings` extends the dictionaries → translator fills the new keys → `translate_configuration` propagates them.
+
+A practical example of this loop is automating the translation of an actively-developing upstream library (Russian → English/de/ro/etc.) on every release: a CI script calls these tools after a `git pull` to extend the dictionaries with newly added strings, runs the translator over the new keys, then synchronizes — producing fresh translated XML sources without manual clicks in the EDT UI.
+
+#### Notes and gotchas
+
+- `generate_translation_strings` rejects non-configuration projects (dictionary storage projects, extensions, plain Eclipse projects) with an explicit error before contacting LanguageTool. The check uses `IProject.hasNature(V8ConfigurationNature)`.
+- A dictionary storage project is a **plain Eclipse project** — created via *File → New → Project → General → Project*, **not** through any 1C:Enterprise wizard. It is then attached to the configuration via the configuration project's properties (Translation page). There is no MCP tool for either step — the setup is a one-time GUI action.
+- The configuration project can act as its own dictionary storage (then the `.lstr`/`.trans`/`.dict` files live inside it). A separate Eclipse project is just an organizational choice.
+- `providerId` is meaningful **only** when `fillUpType=FROM_PROVIDER`. Passing it with any other `fillUpType` is silently ignored (the suffix is appended only for FROM_PROVIDER), and forgetting it when the mode is FROM_PROVIDER returns a fail-fast error before the underlying API is called.
+- `translate_configuration` does NOT touch user dictionaries — it only re-derives the translated artifacts from them. Edits to `.lstr` / `.trans` / `.dict` are the translator's responsibility.
+- All three tools surface the underlying LangTool exceptions verbatim under `error` when something goes wrong inside LanguageTool itself, so an AI agent can retry with adjusted parameters or escalate to the user.
+
+**`generate_translation_strings`** — wraps `IGenerateTranslationStringsApi.generateTranslationStrings(...)`. Equivalent of EDT menu *Translation → Generate translation strings*. Invoked on a **configuration project** (`V8ConfigurationNature`); a dictionary storage project (the plain Eclipse project where dictionaries live) is the wrong target. Produces placeholder keys in `.lstr` / `.trans` / `.dict` files routed by the configuration's translation storages. The translator (or LLM) then fills in values.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | Configuration project name (`V8ConfigurationNature`) |
+| `targetLanguages` | Yes | Target language codes to generate strings for, e.g. `["en"]` |
+| `storageId` | No | Storage ID to write generated keys into. Default: `edit:default`. Use `get_translation_project_info` to list available storages |
+| `collectInterface` | No | Generate interface (`.lstr`) keys. Default: `true` |
+| `collectModel` | No | Generate model (`.trans`) keys. Default: `true` |
+| `collectModelType` | No | Model collection mode: `ANY` \| `NONE` \| `COMPUTED_ONLY` \| `UNKNOWN_ONLY` \| `TAGS_ONLY`. Default: `ANY` |
+| `fillUpType` | No | Pre-fill new keys with values from: `NOT_FILLUP` \| `FROM_SOURCE_LANGUAGE` \| `FROM_PROVIDER`. Default: `NOT_FILLUP` |
+| `providerId` | No | Translation provider ID (used only when `fillUpType=FROM_PROVIDER`). Use `get_translation_project_info` to list available providers |
+
+**Returns:** Markdown with YAML frontmatter (`tool`, `project`, `targetLanguages`, `storageId`, `collectInterface`, `collectModel`, `collectModelType`, `fillUpType`, `status`) followed by a brief textual confirmation.
+
+**`translate_configuration`** — wraps `ISynchronizeProjectApi.synchronizeProject(IDtProject, List<String>)`. Equivalent of EDT menu *Translation → Translate configuration*. Reads the dictionaries from the storages bound to the configuration (these may live in external dictionary storage projects or inside the configuration itself) and regenerates the translated artifacts. This is the main action a translator runs after editing dictionaries.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | Project name (typically the source project) |
+| `targetLanguages` | Yes | Target language codes to synchronize, e.g. `["en"]` |
+
+**Returns:** Markdown with YAML frontmatter (`tool`, `project`, `targetLanguages`, `status`) followed by a brief textual confirmation.
+
+**`get_translation_project_info`** — wraps `IProjectInformationApi`. Diagnostic tool that returns the translation storage IDs declared on a project (e.g. `edit:default`, `dictionary:common-camelcase`, `dictionary:common`, `context:model`, `context:interface`) and the available translation provider IDs (Google, Microsoft, Yandex, history, etc.).
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | Project name |
+
+**Returns:** Markdown with YAML frontmatter (`tool`, `project`, `storagesCount`, `providersCount`) followed by `## Storages` and `## Translation providers` sections, each rendered as a bulleted list.
+
 ### Output Formats
 
-- **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description` - return Markdown as EmbeddedResource with `mimeType: text/markdown`
+- **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description`, all LanguageTool tools - return Markdown as EmbeddedResource with `mimeType: text/markdown`
 - **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml` - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
 

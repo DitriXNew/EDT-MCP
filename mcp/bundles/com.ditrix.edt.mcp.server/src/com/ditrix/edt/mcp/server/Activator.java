@@ -56,7 +56,6 @@ public class Activator extends AbstractUIPlugin
     private ServiceTracker<IApplicationManager, IApplicationManager> applicationManagerTracker;
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
-
     /**
      * EDT workspace CLI APIs are tracked by String class name and invoked via
      * reflection from the tools, keeping this bundle build-independent of
@@ -64,6 +63,19 @@ public class Activator extends AbstractUIPlugin
      */
     private ServiceTracker<Object, Object> exportConfigurationFilesApiTracker;
     private ServiceTracker<Object, Object> importConfigurationFilesApiTracker;
+
+    /**
+     * LanguageTool CLI APIs are tracked by String class name to keep this
+     * bundle build-independent of the com.e1c.langtool.* bundles (LanguageTool
+     * is installed separately via Help -&gt; Install New Software on both EDT
+     * 2025.x and 2026.1; not bundled with the EDT base distribution). All
+     * invocations on the returned services go through reflection — see
+     * GenerateTranslationStringsTool, TranslateConfigurationTool, and
+     * GetTranslationProjectInfoTool.
+     */
+    private ServiceTracker<Object, Object> generateTranslationStringsApiTracker;
+    private ServiceTracker<Object, Object> synchronizeProjectApiTracker;
+    private ServiceTracker<Object, Object> projectInformationApiTracker;
 
     /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
     private IGroupService groupService;
@@ -134,6 +146,18 @@ public class Activator extends AbstractUIPlugin
         importConfigurationFilesApiTracker = new ServiceTracker<>(
             context, "com._1c.g5.v8.dt.cli.api.workspace.IImportConfigurationFilesApi", null); //$NON-NLS-1$
         importConfigurationFilesApiTracker.open();
+
+        generateTranslationStringsApiTracker = new ServiceTracker<>(
+            context, "com.e1c.langtool.v8.dt.cli.api.IGenerateTranslationStringsApi", null); //$NON-NLS-1$
+        generateTranslationStringsApiTracker.open();
+
+        synchronizeProjectApiTracker = new ServiceTracker<>(
+            context, "com.e1c.langtool.v8.dt.cli.api.ISynchronizeProjectApi", null); //$NON-NLS-1$
+        synchronizeProjectApiTracker.open();
+
+        projectInformationApiTracker = new ServiceTracker<>(
+            context, "com.e1c.langtool.v8.dt.cli.api.IProjectInformationApi", null); //$NON-NLS-1$
+        projectInformationApiTracker.open();
 
         // Create group service directly (not via OSGi DS to avoid circular references)
         groupService = new com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl();
@@ -241,6 +265,21 @@ public class Activator extends AbstractUIPlugin
         {
             importConfigurationFilesApiTracker.close();
             importConfigurationFilesApiTracker = null;
+        }
+        if (generateTranslationStringsApiTracker != null)
+        {
+            generateTranslationStringsApiTracker.close();
+            generateTranslationStringsApiTracker = null;
+        }
+        if (synchronizeProjectApiTracker != null)
+        {
+            synchronizeProjectApiTracker.close();
+            synchronizeProjectApiTracker = null;
+        }
+        if (projectInformationApiTracker != null)
+        {
+            projectInformationApiTracker.close();
+            projectInformationApiTracker = null;
         }
 
         // Dispose UI components only in non-headless mode
@@ -521,6 +560,65 @@ public class Activator extends AbstractUIPlugin
             return null;
         }
         return importConfigurationFilesApiTracker.getService();
+    }
+
+    /**
+     * Returns the com.e1c.langtool.v8.dt.cli.api.IGenerateTranslationStringsApi
+     * used to invoke the LanguageTool translation-strings generator. The
+     * action is invoked on the configuration project (V8ConfigurationNature)
+     * and writes placeholder keys into the .lstr/.trans/.dict storages
+     * declared on the project (each storage routes to either an external
+     * dictionary storage project — a plain Eclipse project with the
+     * dependentProjectNature — or to the configuration itself).
+     *
+     * <p>Typed as {@code Object} — callers invoke via reflection so this bundle
+     * has no build-time dependency on com.e1c.langtool.*, which is not shipped
+     * with EDT 2026.1. Returns null when LanguageTool is not installed.
+     *
+     * @return generator API (as Object) or null if not available
+     */
+    public Object getGenerateTranslationStringsApi()
+    {
+        if (generateTranslationStringsApiTracker == null)
+        {
+            return null;
+        }
+        return generateTranslationStringsApiTracker.getService();
+    }
+
+    /**
+     * Returns the com.e1c.langtool.v8.dt.cli.api.ISynchronizeProjectApi used to
+     * invoke the LanguageTool "Translate configuration" action (propagates
+     * dictionary changes from the source project to all its dependent
+     * translation projects, producing the translated artifacts).
+     *
+     * <p>Typed as {@code Object} — callers invoke via reflection so this bundle
+     * has no build-time dependency on com.e1c.langtool.*, which is not shipped
+     * with EDT 2026.1. Returns null when LanguageTool is not installed.
+     *
+     * @return synchronize project API (as Object) or null if not available
+     */
+    public Object getSynchronizeProjectApi()
+    {
+        if (synchronizeProjectApiTracker == null)
+        {
+            return null;
+        }
+        return synchronizeProjectApiTracker.getService();
+    }
+
+    /**
+     * Returns the com.e1c.langtool.v8.dt.cli.api.IProjectInformationApi —
+     * typed as {@code Object}, callers invoke via reflection. Returns null
+     * when LanguageTool is not installed.
+     */
+    public Object getProjectInformationApi()
+    {
+        if (projectInformationApiTracker == null)
+        {
+            return null;
+        }
+        return projectInformationApiTracker.getService();
     }
 
     /**
