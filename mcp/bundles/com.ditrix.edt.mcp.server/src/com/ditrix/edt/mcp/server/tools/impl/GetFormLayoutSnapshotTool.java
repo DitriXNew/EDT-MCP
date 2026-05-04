@@ -23,6 +23,9 @@ import org.eclipse.swt.widgets.Display;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -44,8 +47,6 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
     private static final String MODEL_PROJECTION_FIELD = "modelProjection"; //$NON-NLS-1$
     private static final String LAYOUT_PROJECTION_FIELD = "layoutProjection"; //$NON-NLS-1$
     private static final String VIEW_PROJECTION_FIELD = "viewProjection"; //$NON-NLS-1$
-    private static final String NATIVE_RENDER_SERVICE_CLASS =
-        "com._1c.g5.v8.dt.form.layout.service.NativeRenderService"; //$NON-NLS-1$
     private static final String MODE_COMPACT = "compact"; //$NON-NLS-1$
     private static final String MODE_FULL = "full"; //$NON-NLS-1$
     private static final List<String> DISPLAY_PROPERTY_NAMES = List.of(
@@ -123,9 +124,14 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String formPath = JsonUtils.extractStringArgument(params, "formPath"); //$NON-NLS-1$
         String refreshParam = JsonUtils.extractStringArgument(params, "refresh"); //$NON-NLS-1$
-        String mode = normalizeMode(JsonUtils.extractStringArgument(params, "mode")); //$NON-NLS-1$
+        String rawMode = JsonUtils.extractStringArgument(params, "mode"); //$NON-NLS-1$
+        String mode = normalizeMode(rawMode);
         boolean refresh = refreshParam == null || "true".equalsIgnoreCase(refreshParam); //$NON-NLS-1$
 
+        if (mode == null)
+        {
+            return errorYaml("Invalid mode: " + rawMode + ". Expected 'compact' or 'full'."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         if (formPath != null && !formPath.isEmpty()
             && (projectName == null || projectName.isEmpty()))
         {
@@ -150,11 +156,14 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
 
         try
         {
-            ensureJavaLayoutRenderMode(warnings);
-
             Object editorPage = resolveEditorPage(projectName, formPath);
             if (editorPage == null)
             {
+                if (formPath != null && !formPath.isEmpty())
+                {
+                    return errorYaml("Form editor opened but WYSIWYG page is not available. " + //$NON-NLS-1$
+                        "The form may still be loading or rendering; try again."); //$NON-NLS-1$
+                }
                 return errorYaml("No active form editor page found. Specify formPath to open a form automatically."); //$NON-NLS-1$
             }
 
@@ -196,7 +205,7 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
                 warnings.add("No calculated element bounds were found. The form may not be fully rendered yet."); //$NON-NLS-1$
             }
 
-            Map<String, Object> formSize = getFormSize(wysiwygViewer);
+            Map<String, Object> formSize = getFormSize(wysiwygViewer, refresh);
 
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("success", true); //$NON-NLS-1$
@@ -210,6 +219,10 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
             result.put("warnings", warnings); //$NON-NLS-1$
             result.put("elements", elements); //$NON-NLS-1$
             return dumpYaml(result);
+        }
+        catch (IllegalStateException e)
+        {
+            return errorYaml(e.getMessage());
         }
         catch (Exception e)
         {
@@ -225,7 +238,7 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
             String openError = EditorScreenshotHelper.openAndActivateForm(projectName, formPath);
             if (openError != null)
             {
-                throw new IllegalStateException(openError);
+                throw new IllegalStateException(extractToolErrorMessage(openError));
             }
 
             Display display = Display.getCurrent();
@@ -241,30 +254,34 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
         return EditorScreenshotHelper.getActiveFormEditorPage();
     }
 
-    private void ensureJavaLayoutRenderMode(List<String> warnings)
-    {
-        System.setProperty("nativeFormLayoutRender", "false"); //$NON-NLS-1$ //$NON-NLS-2$
-        try
-        {
-            Class<?> nativeRenderService = Class.forName(NATIVE_RENDER_SERVICE_CLASS);
-            if (!ReflectionUtils.forceStaticFinalBoolean(nativeRenderService, "NATIVE_FORM_LAYOUT_RENDER", false)) //$NON-NLS-1$
-            {
-                warnings.add("Could not force Java layout render mode after NativeRenderService was loaded."); //$NON-NLS-1$
-            }
-        }
-        catch (ClassNotFoundException e)
-        {
-            warnings.add("NativeRenderService class is not available; layout snapshot will use current render mode."); //$NON-NLS-1$
-        }
-    }
-
     private String normalizeMode(String mode)
     {
+        if (mode == null || mode.isEmpty() || MODE_COMPACT.equalsIgnoreCase(mode))
+        {
+            return MODE_COMPACT;
+        }
         if (MODE_FULL.equalsIgnoreCase(mode))
         {
             return MODE_FULL;
         }
-        return MODE_COMPACT;
+        return null;
+    }
+
+    private String extractToolErrorMessage(String errorJson)
+    {
+        try
+        {
+            JsonObject object = JsonParser.parseString(errorJson).getAsJsonObject();
+            if (object.has("error")) //$NON-NLS-1$
+            {
+                return object.get("error").getAsString(); //$NON-NLS-1$
+            }
+        }
+        catch (Exception e)
+        {
+            return errorJson;
+        }
+        return errorJson;
     }
 
     private List<Map<String, Object>> collectElements(EObject hippoLayForm, Object hippoSession,
@@ -857,12 +874,15 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
         }
     }
 
-    private Map<String, Object> getFormSize(Object wysiwygViewer) throws Exception
+    private Map<String, Object> getFormSize(Object wysiwygViewer, boolean refresh) throws Exception
     {
-        ImageData imageData = EditorScreenshotHelper.extractFormImageData(wysiwygViewer);
-        if (imageData != null)
+        if (refresh)
         {
-            return boundsMap(0, 0, imageData.width, imageData.height);
+            ImageData imageData = EditorScreenshotHelper.extractFormImageData(wysiwygViewer);
+            if (imageData != null)
+            {
+                return boundsMap(0, 0, imageData.width, imageData.height);
+            }
         }
 
         ImageData controlImageData = EditorScreenshotHelper.captureControlImageData(wysiwygViewer);
