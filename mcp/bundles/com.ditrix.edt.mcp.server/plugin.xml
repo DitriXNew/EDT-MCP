@@ -252,6 +252,13 @@
                tooltip="Filter navigator by tags"
                style="toggle">
          </command>
+         <command
+               commandId="com.ditrix.edt.mcp.server.groups.hideGroups"
+               icon="icons/group.png"
+               label="Hide Groups"
+               tooltip="Hide virtual groups in the Navigator"
+               style="toggle">
+         </command>
       </menuContribution>
       
       <!-- Filter by Tag in EDT Navigator view menu -->
@@ -415,6 +422,16 @@
             name="Remove from Group"
             description="Remove object from group (return to original location)">
       </command>
+      <command
+            categoryId="com.ditrix.edt.mcp.server.groups.category"
+            id="com.ditrix.edt.mcp.server.groups.hideGroups"
+            name="Hide Groups"
+            description="Hide virtual groups in the Navigator">
+         <state
+               class="org.eclipse.ui.handlers.RegistryToggleState:false"
+               id="org.eclipse.ui.commands.toggleState">
+         </state>
+      </command>
    </extension>
    
    <!-- Handlers for group commands -->
@@ -462,6 +479,10 @@
             class="com.ditrix.edt.mcp.server.groups.handlers.RemoveFromGroupHandler"
             commandId="com.ditrix.edt.mcp.server.groups.removeFromGroup">
          <!-- Handler has setEnabled() that checks for EObjects in groups -->
+      </handler>
+      <handler
+            class="com.ditrix.edt.mcp.server.groups.handlers.HideGroupsHandler"
+            commandId="com.ditrix.edt.mcp.server.groups.hideGroups">
       </handler>
       <!-- Copy handler for groups - copies group name to clipboard -->
       <handler

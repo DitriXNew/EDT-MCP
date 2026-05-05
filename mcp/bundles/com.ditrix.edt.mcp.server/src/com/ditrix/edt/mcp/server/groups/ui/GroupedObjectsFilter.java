@@ -29,6 +29,10 @@ public class GroupedObjectsFilter extends ViewerFilter {
     
     @Override
     public boolean select(Viewer viewer, Object parentElement, Object element) {
+        if (GroupVisibilityManager.getInstance().areGroupsHidden()) {
+            return true;
+        }
+
         // Check if search/filter is active on the viewer
         // When search is active, we should show all objects (disable group filtering)
         if (isSearchActive(viewer)) {

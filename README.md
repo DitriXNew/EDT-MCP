@@ -25,7 +25,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🎯 **Status Bar** - Real-time server status with tool name, execution time, and interactive controls
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
-- 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection
+- 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection, with a toolbar toggle to hide groups temporarily
 - ✏️ **Metadata Refactoring** - Rename/delete metadata objects with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
@@ -1231,6 +1231,7 @@ Grouped objects appear inside their group folders in the Navigator tree:
 - Groups are created per metadata collection (Catalogs, Common modules, Documents, etc.)
 - Objects inside groups are still accessible via standard EDT navigation
 - Ungrouped objects appear at the end of the list
+- Use the **Hide Groups** toggle button in the Navigator toolbar to temporarily hide virtual group folders and show grouped objects in their original collections again
 
 ### Group Operations
 
@@ -1242,6 +1243,7 @@ Grouped objects appear inside their group folders in the Navigator tree:
 | Copy group name | Select group → **Ctrl+C** |
 | Delete group | Right-click group → **Delete** |
 | Rename group | Right-click group → **Rename...** |
+| Hide/show groups | Click **Hide Groups** in the Navigator toolbar |
 
 ### Where Groups Are Stored
 
