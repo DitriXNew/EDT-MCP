@@ -78,6 +78,10 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     
     @Override
     public Object[] getChildren(Object parentElement) {
+        if (GroupVisibilityManager.getInstance().areGroupsHidden()) {
+            return NO_CHILDREN;
+        }
+
         // Handle collection folders (CommonModules, Catalogs, etc.)
         if (isCollectionAdapter(parentElement)) {
             return getChildrenForCollection(parentElement);
@@ -146,6 +150,10 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     
     @Override
     public boolean hasChildren(Object element) {
+        if (GroupVisibilityManager.getInstance().areGroupsHidden()) {
+            return false;
+        }
+
         if (element instanceof GroupNavigatorAdapter groupAdapter) {
             Group group = groupAdapter.getGroup();
             // Has children if has nested groups or objects
