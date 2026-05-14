@@ -23,9 +23,9 @@ import com.ditrix.edt.mcp.server.utils.FrontMatter;
 /**
  * Tool to read BSL module source code (whole file or line range).
  * Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines;
- * plus truncated: true when clamped by the configured line limit) followed by
- * the source in a fenced bsl block. For an empty file, startLine/endLine are
- * omitted and totalLines is 0.
+ * plus truncated: true, nextStartLine, hint when clamped by the configured line
+ * limit) followed by the source in a fenced bsl block. For an empty file,
+ * startLine/endLine are omitted and totalLines is 0.
  */
 public class ReadModuleSourceTool implements IMcpTool
 {
@@ -45,10 +45,10 @@ public class ReadModuleSourceTool implements IMcpTool
     {
         return "Read BSL module source code from EDT project. " + //$NON-NLS-1$
                "Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines; " + //$NON-NLS-1$
-               "plus truncated: true when the range was clamped by the configured line limit) " + //$NON-NLS-1$
-               "followed by clean source in a fenced bsl block (no line-number prefixes). " + //$NON-NLS-1$
-               "For an empty file, startLine/endLine are omitted and totalLines is 0. " + //$NON-NLS-1$
-               "Supports reading full file or a specific line range."; //$NON-NLS-1$
+               "plus truncated: true, nextStartLine and hint when the range was clamped by " + //$NON-NLS-1$
+               "the configured line limit) followed by clean source in a fenced bsl block " + //$NON-NLS-1$
+               "(no line-number prefixes). For an empty file, startLine/endLine are omitted " + //$NON-NLS-1$
+               "and totalLines is 0. Supports reading full file or a specific line range."; //$NON-NLS-1$
     }
 
     @Override
@@ -193,6 +193,11 @@ public class ReadModuleSourceTool implements IMcpTool
         if (truncated)
         {
             fm.put("truncated", true); //$NON-NLS-1$
+            fm.put("nextStartLine", to + 1); //$NON-NLS-1$
+            fm.put("hint", //$NON-NLS-1$
+                "Output clamped to the configured line limit. " //$NON-NLS-1$
+                + "To continue reading, call read_module_source again with startLine=nextStartLine. " //$NON-NLS-1$
+                + "For an overview of procedures, functions and regions, call get_module_structure."); //$NON-NLS-1$
         }
 
         StringBuilder sb = new StringBuilder();

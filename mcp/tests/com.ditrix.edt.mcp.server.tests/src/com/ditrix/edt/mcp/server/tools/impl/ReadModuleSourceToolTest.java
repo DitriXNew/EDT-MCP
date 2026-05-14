@@ -170,6 +170,12 @@ public class ReadModuleSourceToolTest
         assertTrue("must contain totalLines", result.contains("totalLines: 15000\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must contain startLine", result.contains("startLine: 1\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must contain endLine", result.contains("endLine: 5\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must contain nextStartLine = endLine + 1", //$NON-NLS-1$
+            result.contains("nextStartLine: 6\n")); //$NON-NLS-1$
+        assertTrue("must contain hint mentioning get_module_structure", //$NON-NLS-1$
+            result.contains("get_module_structure")); //$NON-NLS-1$
+        assertTrue("must contain hint mentioning startLine=nextStartLine", //$NON-NLS-1$
+            result.contains("startLine=nextStartLine")); //$NON-NLS-1$
     }
 
     @Test
