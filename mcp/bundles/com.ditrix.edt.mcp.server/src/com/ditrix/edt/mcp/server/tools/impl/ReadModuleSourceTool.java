@@ -196,7 +196,8 @@ public class ReadModuleSourceTool implements IMcpTool
             fm.put("nextStartLine", to + 1); //$NON-NLS-1$
             fm.put("hint", //$NON-NLS-1$
                 "Output clamped to the configured line limit. " //$NON-NLS-1$
-                + "To continue reading, call read_module_source again with startLine=nextStartLine. " //$NON-NLS-1$
+                + "To continue reading, call read_module_source again with the same projectName and modulePath " //$NON-NLS-1$
+                + "and startLine=" + (to + 1) + ". " //$NON-NLS-1$
                 + "For an overview of procedures, functions and regions, call get_module_structure."); //$NON-NLS-1$
         }
 
