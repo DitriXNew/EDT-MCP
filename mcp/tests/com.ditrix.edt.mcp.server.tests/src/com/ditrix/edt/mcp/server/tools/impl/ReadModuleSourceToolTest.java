@@ -174,8 +174,8 @@ public class ReadModuleSourceToolTest
             result.contains("nextStartLine: 6\n")); //$NON-NLS-1$
         assertTrue("must contain hint mentioning get_module_structure", //$NON-NLS-1$
             result.contains("get_module_structure")); //$NON-NLS-1$
-        assertTrue("must contain hint mentioning startLine=nextStartLine", //$NON-NLS-1$
-            result.contains("startLine=nextStartLine")); //$NON-NLS-1$
+        assertTrue("must contain hint mentioning concrete startLine value", //$NON-NLS-1$
+            result.contains("startLine=6")); //$NON-NLS-1$
     }
 
     @Test
