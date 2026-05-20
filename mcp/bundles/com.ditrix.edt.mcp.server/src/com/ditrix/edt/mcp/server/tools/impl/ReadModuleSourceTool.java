@@ -32,7 +32,7 @@ public class ReadModuleSourceTool implements IMcpTool
     public static final String NAME = "read_module_source"; //$NON-NLS-1$
 
     /** Fallback when the {@code maxLines} tool parameter is not configured */
-    private static final int DEFAULT_MAX_LINES = 5000;
+    private static final int DEFAULT_MAX_LINES = 500;
 
     @Override
     public String getName()

@@ -122,7 +122,7 @@ public final class ToolParameterSettings
 
         map.put("read_module_source", Collections.singletonList( //$NON-NLS-1$
             new ParameterDef("maxLines", "Max lines", //$NON-NLS-1$ //$NON-NLS-2$
-                "Maximum lines to return per call", 5000, 100, 50000))); //$NON-NLS-1$
+                "Maximum lines to return per call", 500, 100, 50000))); //$NON-NLS-1$
 
         TOOL_PARAMETERS = Collections.unmodifiableMap(map);
     }
