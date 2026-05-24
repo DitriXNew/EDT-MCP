@@ -81,7 +81,7 @@ Rules:
 
 - `ВызватьИсключение;` without a parameter — preserves the original stack trace. Use in intermediate code.
 - `ВызватьИсключение "Текст";` — a new exception; the stack is lost. Use at the boundary with the user.
-- `КраткоеПредставлениеОшибки()` — for user-facing messages; `ПодробноеПредставлениеОшибки()` — for the log.
+- `КраткоеПредставлениеОшибки()` — for user-facing messages; `ОбработкаОшибок.ПодробноеПредставлениеОшибки()` — for the log.
 
 ## String performance
 
