@@ -442,6 +442,60 @@ public final class LaunchLifecycleUtils
                 terminated++;
             }
 
+            // Second pass: stale Attach launches on the same project. Attach
+            // configs don't carry a real ATTR_APPLICATION_ID — getApplicationIdFor
+            // synthesises "attach:<name>", which never equals a runtime client's
+            // UUID, so the per-applicationId loop above never sweeps them. A
+            // lingering Attach (e.g. left over from a previous debug session) can
+            // mask which 1С client really holds the IB and clutter diagnostics,
+            // so disconnect it before the new spawn. Killing an Attach launch is
+            // just a debugger disconnect — the 1С server keeps running, no
+            // unsaved state is at risk.
+            for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager,
+                project.getName()))
+            {
+                if (!LaunchConfigUtils.isAttachConfig(live.getLaunchConfiguration()))
+                {
+                    continue;
+                }
+                String name = live.getLaunchConfiguration() != null
+                    ? live.getLaunchConfiguration().getName() : "<unknown>"; //$NON-NLS-1$
+                // Defensive: today both YAXUnit tools register only runtime
+                // launches, so an Attach in OWNED is purely hypothetical. If a
+                // future tool starts registering Attach launches as owned, we
+                // intentionally fast-fail here rather than skipping — at the
+                // attach-pass level we don't know which IB the foreign attach
+                // targets, and silent skip would risk a spawn that hangs on a
+                // locked IB until the MCP timeout. The error message points the
+                // caller at terminate_launch, which is the right escape hatch.
+                if (OWNED_LAUNCHES.contains(live))
+                {
+                    return new PreLaunchResult(false, terminated,
+                        "An Attach debug session for this project is owned by another " //$NON-NLS-1$
+                            + "MCP tool (launch '" + name + "'). Wait for it to finish, " //$NON-NLS-1$ //$NON-NLS-2$
+                            + "or call `terminate_launch` to disconnect it first."); //$NON-NLS-1$
+                }
+                boolean done = terminateAndWait(live, terminateTimeoutSeconds);
+                if (!done)
+                {
+                    // An Attach disconnect that doesn't complete is unusual but
+                    // not fatal to the test run: Attach launches don't hold the
+                    // IB lock (the foreign 1С client does), so a stuck disconnect
+                    // shouldn't block the new spawn. Log and continue.
+                    Activator.logError("Could not disconnect stale Attach launch '" //$NON-NLS-1$
+                        + name + "' within " + terminateTimeoutSeconds //$NON-NLS-1$
+                        + "s, continuing with the auto-chain", null); //$NON-NLS-1$
+                    continue;
+                }
+                // Surface attach disconnects in the log because the per-call
+                // PreLaunchResult counter slips them into the same total as
+                // runtime terminations — without this line, post-mortems can't
+                // tell which launches the second pass swept.
+                Activator.logInfo("Pre-launch auto-chain disconnected stale Attach launch '" //$NON-NLS-1$
+                    + name + "' on project " + project.getName()); //$NON-NLS-1$
+                terminated++;
+            }
+
             Optional<String> updateErr = updateApplicationIfNeeded(project, applicationId,
                 appManager);
             if (updateErr.isPresent())
