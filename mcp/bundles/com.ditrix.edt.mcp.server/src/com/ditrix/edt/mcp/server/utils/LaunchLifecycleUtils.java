@@ -16,6 +16,7 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchManager;
+import org.eclipse.swt.SWTError;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 
@@ -464,7 +465,18 @@ public final class LaunchLifecycleUtils
 
     private static Shell grabActiveShell()
     {
-        Display display = Display.getDefault();
+        Display display;
+        try
+        {
+            // Headless-окружения (CI Linux без X-сервера, EDT через CLI без UI)
+            // не могут инициализировать SWT — gtk_init_check() бросает SWTError.
+            // В таком случае диалогов всё равно не будет, поэтому отдаём null.
+            display = Display.getDefault();
+        }
+        catch (SWTError | UnsatisfiedLinkError e)
+        {
+            return null;
+        }
         if (display == null || display.isDisposed())
         {
             return null;
