@@ -38,6 +38,13 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class LaunchConfigUtils
 {
+    /**
+     * Poll interval (milliseconds) for waiting on launch state transitions —
+     * termination, disconnection, DB update settling. Shared by all callers
+     * that need to spin-wait on Eclipse debug API state.
+     */
+    public static final int LAUNCH_POLL_INTERVAL_MS = 100;
+
     /** 1C:EDT Runtime Client launch configuration type id. */
     public static final String LAUNCH_CONFIG_TYPE_ID = "com._1c.g5.v8.dt.launching.core.RuntimeClient"; //$NON-NLS-1$
 
@@ -405,4 +412,81 @@ public final class LaunchConfigUtils
         DebugPlugin plugin = DebugPlugin.getDefault();
         return plugin != null ? plugin.getLaunchManager() : null;
     }
+
+    /**
+     * Returns all live (non-terminated) EDT launches in the launch manager.
+     *
+     * <p>This is the exhaustive set of 1С processes that the current EDT instance
+     * spawned (runtime-client) or attached to (Attach). Externally started 1С
+     * clients never appear here — that is a constructive guarantee of the
+     * Eclipse Debug Platform.
+     *
+     * @param launchManager Eclipse launch manager (must not be null)
+     * @param projectFilter optional project name; when non-empty, only launches
+     *                      whose configuration carries this {@code ATTR_PROJECT_NAME}
+     *                      are returned
+     * @return list of live launches (possibly empty)
+     */
+    public static List<ILaunch> getAllLiveLaunches(ILaunchManager launchManager, String projectFilter)
+    {
+        List<ILaunch> result = new ArrayList<>();
+        if (launchManager == null)
+        {
+            return result;
+        }
+        for (ILaunch launch : launchManager.getLaunches())
+        {
+            if (launch == null || launch.isTerminated())
+            {
+                continue;
+            }
+            ILaunchConfiguration config = launch.getLaunchConfiguration();
+            if (config == null || !isEdtConfig(config))
+            {
+                continue;
+            }
+            if (projectFilter != null && !projectFilter.isEmpty())
+            {
+                String project = readAttribute(config, ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+                if (!projectFilter.equals(project))
+                {
+                    continue;
+                }
+            }
+            result.add(launch);
+        }
+        return result;
+    }
+
+    /**
+     * Finds the live (non-terminated) launch whose configuration has the given
+     * exact name.
+     *
+     * @return matching launch, or {@code null} if no live launch carries that name
+     */
+    public static ILaunch findLiveLaunchByName(ILaunchManager launchManager, String name)
+    {
+        if (launchManager == null || name == null || name.isEmpty())
+        {
+            return null;
+        }
+        for (ILaunch launch : launchManager.getLaunches())
+        {
+            if (launch == null || launch.isTerminated())
+            {
+                continue;
+            }
+            ILaunchConfiguration config = launch.getLaunchConfiguration();
+            // Filter to EDT/1С configs only — config names are not unique across
+            // Eclipse launch types, so without this an unrelated Java/JUnit/etc.
+            // launch with a matching name would be selected and (with force=true)
+            // killed.
+            if (config != null && isEdtConfig(config) && name.equals(config.getName()))
+            {
+                return launch;
+            }
+        }
+        return null;
+    }
+
 }

@@ -9,4 +9,7 @@ Bundle-RequiredExecutionEnvironment: JavaSE-17
 Automatic-Module-Name: com.ditrix.edt.mcp.server.tests
 Import-Package: org.junit;version="4.13.0",
  org.junit.runner;version="4.13.0",
- org.junit.runners;version="4.13.0"
+ org.junit.runners;version="4.13.0",
+ org.mockito,
+ org.mockito.invocation,
+ org.mockito.stubbing

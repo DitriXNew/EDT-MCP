@@ -174,6 +174,16 @@ public class ToolGroupTest
     }
 
     @Test
+    public void testApplicationsGroupIncludesTerminateLaunch()
+    {
+        List<String> tools = ToolGroup.APPLICATIONS.getToolNames();
+        assertTrue("terminate_launch must be registered in APPLICATIONS group",
+            tools.contains("terminate_launch"));
+        // Reverse lookup must agree
+        assertEquals(ToolGroup.APPLICATIONS, ToolGroup.getGroupForTool("terminate_launch"));
+    }
+
+    @Test
     public void testRefactoringGroupContents()
     {
         List<String> tools = ToolGroup.REFACTORING.getToolNames();

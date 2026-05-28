@@ -19,6 +19,7 @@ import java.util.Optional;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.debug.core.DebugPlugin;
+import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.eclipse.debug.core.ILaunchManager;
@@ -31,6 +32,8 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
@@ -88,6 +91,12 @@ public class DebugYaxunitTestsTool implements IMcpTool
             .stringProperty("extensions", "Comma-separated extension names to filter tests by extension") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("modules", "Comma-separated module names to filter tests") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("tests", "Comma-separated test names in Module.Method format (recommended: pin to one test)") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
+                "Auto-chain (default: true): before spawning the debug launch, " //$NON-NLS-1$
+                    + "politely terminate any live 1С client running this configuration " //$NON-NLS-1$
+                    + "and run a silent DB update — so EDT's launch delegate does not pop " //$NON-NLS-1$
+                    + "its modal 'Update database?' dialog that would block the MCP call. " //$NON-NLS-1$
+                    + "Set false to keep legacy behaviour (delegate decides; dialog may appear).") //$NON-NLS-1$
             .build();
     }
 
@@ -106,6 +115,8 @@ public class DebugYaxunitTestsTool implements IMcpTool
         String extensions = JsonUtils.extractStringArgument(params, "extensions"); //$NON-NLS-1$
         String modules = JsonUtils.extractStringArgument(params, "modules"); //$NON-NLS-1$
         String tests = JsonUtils.extractStringArgument(params, "tests"); //$NON-NLS-1$
+        boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, //$NON-NLS-1$
+            "updateBeforeLaunch", true); //$NON-NLS-1$
 
         boolean hasName = configName != null && !configName.isEmpty();
         if (!hasName)
@@ -217,34 +228,68 @@ public class DebugYaxunitTestsTool implements IMcpTool
             // Make sure suspend listener is in place before the launch starts producing events.
             DebugSessionRegistry.get().ensureListenerRegistered();
 
-            ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
-            String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
-            workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
-
-            Activator.logInfo("Launching YAXUnit tests in DEBUG mode: config=" + matchingConfig.getName() //$NON-NLS-1$
-                + ", startup=" + startupOption); //$NON-NLS-1$
-
-            // Launch the working copy directly so our ATTR_STARTUP_OPTION mutation
-            // actually takes effect (DebugUITools.launch on a working copy can
-            // re-resolve to the saved config and silently drop our changes).
-            try
+            // Auto-chain + spawn under the per-key lock — closes the window
+            // between workingCopy.launch() and registerOwnedLaunch in which a
+            // concurrent call against the same IB could otherwise terminate
+            // this fresh debug launch. Different (project, applicationId) pairs
+            // run in parallel.
+            PreLaunchResult preLaunch = null;
+            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
             {
-                workingCopy.launch(ILaunchManager.DEBUG_MODE, new org.eclipse.core.runtime.NullProgressMonitor());
-            }
-            catch (Exception ex)
-            {
-                Activator.logError("Failed to launch YAXUnit in debug mode", ex); //$NON-NLS-1$
-                return ToolResult.error("Launch failed: " + ex.getMessage()).toJson(); //$NON-NLS-1$
+                if (updateBeforeLaunch)
+                {
+                    int terminateTimeout = LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
+                    preLaunch = LaunchLifecycleUtils.prepareForFreshLaunch(launchManager, project,
+                        applicationId, appManager, terminateTimeout);
+                    if (!preLaunch.isOk())
+                    {
+                        return ToolResult.error("Pre-launch preparation failed: " //$NON-NLS-1$
+                            + preLaunch.getError()
+                            + ". If the previous launch is stuck, call terminate_launch " //$NON-NLS-1$
+                            + "with force=true and retry. As a last resort, pass " //$NON-NLS-1$
+                            + "updateBeforeLaunch=false — but the EDT launch delegate may " //$NON-NLS-1$
+                            + "then pop a modal dialog that blocks the MCP call.").toJson(); //$NON-NLS-1$
+                    }
+                }
+
+                ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
+                String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
+                workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
+
+                Activator.logInfo("Launching YAXUnit tests in DEBUG mode: config=" + matchingConfig.getName() //$NON-NLS-1$
+                    + ", startup=" + startupOption); //$NON-NLS-1$
+
+                // Launch the working copy directly so our ATTR_STARTUP_OPTION mutation
+                // actually takes effect (DebugUITools.launch on a working copy can
+                // re-resolve to the saved config and silently drop our changes).
+                try
+                {
+                    ILaunch spawned = workingCopy.launch(ILaunchManager.DEBUG_MODE,
+                        new org.eclipse.core.runtime.NullProgressMonitor());
+                    // Register inside the per-key lock so a concurrent auto-chain
+                    // for the same IB sees this launch as owned and refuses to
+                    // terminate it.
+                    LaunchLifecycleUtils.registerOwnedLaunch(spawned);
+                }
+                catch (Exception ex)
+                {
+                    Activator.logError("Failed to launch YAXUnit in debug mode", ex); //$NON-NLS-1$
+                    return ToolResult.error("Launch failed: " + ex.getMessage()).toJson(); //$NON-NLS-1$
+                }
             }
 
-            return ToolResult.success()
+            ToolResult result = ToolResult.success()
                 .put("launched", true) //$NON-NLS-1$
                 .put("projectName", projectName) //$NON-NLS-1$
                 .put("applicationId", applicationId) //$NON-NLS-1$
                 .put("reportDir", reportDir.toString()) //$NON-NLS-1$
                 .put("junitXml", junitFile.toString()) //$NON-NLS-1$
-                .put("nextStep", "call wait_for_break with the same applicationId") //$NON-NLS-1$ //$NON-NLS-2$
-                .toJson();
+                .put("nextStep", "call wait_for_break with the same applicationId"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (preLaunch != null && preLaunch.getTerminatedCount() > 0)
+            {
+                result.put("preLaunch", preLaunch.summary()); //$NON-NLS-1$
+            }
+            return result.toJson();
         }
         catch (Exception e)
         {

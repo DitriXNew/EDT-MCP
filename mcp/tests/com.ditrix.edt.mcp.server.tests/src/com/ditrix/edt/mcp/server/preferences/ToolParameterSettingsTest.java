@@ -152,6 +152,22 @@ public class ToolParameterSettingsTest
             ToolParameterSettings.buildKey("get_project_errors", "limit"));
     }
 
+    // === terminate_launch.timeoutSeconds ===
+
+    @Test
+    public void testTerminateLaunchExposesTimeoutSecondsParam()
+    {
+        List<ParameterDef> params = settings.getParametersForTool("terminate_launch");
+        assertEquals("terminate_launch should have exactly 1 configurable parameter",
+            1, params.size());
+        ParameterDef def = params.get(0);
+        assertEquals("timeoutSeconds", def.getName());
+        assertEquals("default termination timeout should be 10 seconds",
+            10, def.getDefaultValue());
+        assertEquals("min should be 1 second", 1, def.getMinValue());
+        assertEquals("max should be 120 seconds", 120, def.getMaxValue());
+    }
+
     // === All configurable tools belong to groups ===
 
     @Test

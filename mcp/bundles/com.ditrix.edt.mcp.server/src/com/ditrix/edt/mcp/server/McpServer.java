@@ -72,6 +72,7 @@ import com.ditrix.edt.mcp.server.tools.impl.WaitForBreakTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetVariablesTool;
 import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
 import com.ditrix.edt.mcp.server.tools.impl.StepTool;
+import com.ditrix.edt.mcp.server.tools.impl.TerminateLaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.ResumeTool;
 import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
@@ -228,6 +229,7 @@ public class McpServer
         registry.register(new DebugLaunchTool());
         registry.register(new ListConfigurationsTool());
         registry.register(new RunYaxunitTestsTool());
+        registry.register(new TerminateLaunchTool());
 
         // Debug inspection tools (breakpoints + suspended state)
         registry.register(new SetBreakpointTool());

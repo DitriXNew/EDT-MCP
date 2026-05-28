@@ -124,6 +124,12 @@ public final class ToolParameterSettings
             new ParameterDef("maxLines", "Max lines", //$NON-NLS-1$ //$NON-NLS-2$
                 "Maximum lines to return per call", 500, 100, 50000))); //$NON-NLS-1$
 
+        map.put("terminate_launch", Collections.singletonList( //$NON-NLS-1$
+            new ParameterDef("timeoutSeconds", "Termination timeout (sec)", //$NON-NLS-1$ //$NON-NLS-2$
+                "How long to wait for a polite ILaunch.terminate() to take effect before " //$NON-NLS-1$
+                    + "reporting timeout (or escalating to force-kill when force=true)", //$NON-NLS-1$
+                10, 1, 120)));
+
         TOOL_PARAMETERS = Collections.unmodifiableMap(map);
     }
 

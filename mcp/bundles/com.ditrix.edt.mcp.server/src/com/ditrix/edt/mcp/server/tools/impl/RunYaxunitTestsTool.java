@@ -43,6 +43,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.JUnitMarkdownFormatter;
 import com.ditrix.edt.mcp.server.utils.JUnitTestResults;
 import com.ditrix.edt.mcp.server.utils.JUnitXmlParser;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -104,6 +106,12 @@ public class RunYaxunitTestsTool implements IMcpTool
             .stringProperty("modules", "Comma-separated module names to filter tests") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("tests", "Comma-separated test names in Module.Method format") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("timeout", "Polling window in seconds (default: 60). On expiry returns Pending; call again to keep waiting.") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
+                "Auto-chain (default: true): before spawning a new test launch, " //$NON-NLS-1$
+                    + "politely terminate any live 1С client running this configuration " //$NON-NLS-1$
+                    + "and run a silent DB update — so EDT's launch delegate does not pop " //$NON-NLS-1$
+                    + "its modal 'Update database?' dialog that would block the MCP call. " //$NON-NLS-1$
+                    + "Set false to keep legacy behaviour (delegate decides; dialog may appear).") //$NON-NLS-1$
             .build();
     }
 
@@ -127,6 +135,8 @@ public class RunYaxunitTestsTool implements IMcpTool
         {
             timeout = 1;
         }
+        boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, //$NON-NLS-1$
+            "updateBeforeLaunch", true); //$NON-NLS-1$
 
         boolean hasName = configName != null && !configName.isEmpty();
         if (!hasName)
@@ -145,7 +155,8 @@ public class RunYaxunitTestsTool implements IMcpTool
         ensureLaunchListenerRegistered();
         purgeTerminatedLaunches();
 
-        return runTests(configName, projectName, applicationId, extensions, modules, tests, timeout);
+        return runTests(configName, projectName, applicationId, extensions, modules, tests,
+            timeout, updateBeforeLaunch);
     }
 
     /**
@@ -163,7 +174,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * the result. Old runs are cleaned up automatically before starting a new launch.
      */
     private String runTests(String configName, String projectName, String applicationId,
-            String extensions, String modules, String tests, int timeout)
+            String extensions, String modules, String tests, int timeout, boolean updateBeforeLaunch)
     {
         try
         {
@@ -291,10 +302,8 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return readResults(cached);
             }
 
-            // Atomically reuse an existing active launch for the same runKey, or create exactly
-            // one new launch. Cleanup + params write is inside the critical section so a concurrent
-            // call cannot overwrite the params while the first is starting.
-            ILaunch launch;
+            // Phase 1 (quick, JVM-wide): try to reuse an active launch for this runKey.
+            ILaunch launch = null;
             synchronized (ACTIVE_LAUNCHES)
             {
                 ILaunch concurrent = ACTIVE_LAUNCHES.get(runKey);
@@ -303,42 +312,90 @@ public class RunYaxunitTestsTool implements IMcpTool
                     Activator.logInfo("Reusing active YAXUnit launch for runKey=" + runKey); //$NON-NLS-1$
                     launch = concurrent;
                 }
-                else
+                else if (concurrent != null)
                 {
-                    if (concurrent != null)
+                    ACTIVE_LAUNCHES.remove(runKey);
+                }
+            }
+
+            // Phases 2 + 3 under the per-key lock — this serialises auto-chain
+            // and spawn across both YAXUnit tools for the same IB, and closes
+            // the narrow window between workingCopy.launch() and
+            // registerOwnedLaunch where a concurrent call could otherwise
+            // terminate this fresh launch before it's registered. Different
+            // (project, applicationId) pairs are unaffected.
+            PreLaunchResult preLaunch = null;
+            if (launch == null)
+            {
+                synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+                {
+                    // Phase 2: auto-chain (LaunchLifecycleUtils.prepareForFreshLaunch
+                    // re-acquires the same monitor — Java synchronized is reentrant).
+                    if (updateBeforeLaunch)
                     {
-                        ACTIVE_LAUNCHES.remove(runKey);
+                        int terminateTimeout = LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
+                        preLaunch = LaunchLifecycleUtils.prepareForFreshLaunch(launchManager,
+                            project, applicationId, appManager, terminateTimeout);
+                        if (!preLaunch.isOk())
+                        {
+                            return "**Error:** Pre-launch preparation failed: " //$NON-NLS-1$
+                                + preLaunch.getError()
+                                + "\n\nIf the previous launch is stuck, call `terminate_launch` " //$NON-NLS-1$
+                                + "with `force=true` and retry. As a last resort, pass " //$NON-NLS-1$
+                                + "`updateBeforeLaunch=false` — but the EDT launch delegate may " //$NON-NLS-1$
+                                + "then pop a modal dialog that blocks the MCP call."; //$NON-NLS-1$
+                        }
                     }
 
-                    // Prepare a clean report dir and write the params file inside the lock.
-                    cleanupTempDir(reportDir);
-                    Files.createDirectories(reportDir);
-                    Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
-                    String paramsJson = buildParamsJson(reportDir.resolve("junit.xml").toString(), //$NON-NLS-1$
-                            extensions, modules, tests);
-                    Files.write(paramsFile, paramsJson.getBytes(StandardCharsets.UTF_8));
-                    Activator.logInfo("YAXUnit params written to: " + paramsFile); //$NON-NLS-1$
+                    // Phase 3: re-check ACTIVE_LAUNCHES under JVM-wide sync (another
+                    // thread may have spawned for the same runKey while we waited
+                    // on the per-key lock), then either reuse or spawn.
+                    synchronized (ACTIVE_LAUNCHES)
+                    {
+                        ILaunch racer = ACTIVE_LAUNCHES.get(runKey);
+                        if (racer != null && !racer.isTerminated())
+                        {
+                            Activator.logInfo("Reusing YAXUnit launch spawned during auto-chain: runKey=" //$NON-NLS-1$
+                                + runKey);
+                            launch = racer;
+                        }
+                        else
+                        {
+                            cleanupTempDir(reportDir);
+                            Files.createDirectories(reportDir);
+                            Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
+                            String paramsJson = buildParamsJson(reportDir.resolve("junit.xml").toString(), //$NON-NLS-1$
+                                    extensions, modules, tests);
+                            Files.write(paramsFile, paramsJson.getBytes(StandardCharsets.UTF_8));
+                            Activator.logInfo("YAXUnit params written to: " + paramsFile); //$NON-NLS-1$
 
-                    ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
-                    String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
-                    workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
+                            ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
+                            String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
+                            workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
 
-                    Activator.logInfo("Launching YAXUnit tests: config=" + matchingConfig.getName() //$NON-NLS-1$
-                            + ", startup=" + startupOption); //$NON-NLS-1$
+                            Activator.logInfo("Launching YAXUnit tests: config=" + matchingConfig.getName() //$NON-NLS-1$
+                                    + ", startup=" + startupOption); //$NON-NLS-1$
 
-                    launch = workingCopy.launch(ILaunchManager.RUN_MODE, new NullProgressMonitor());
-                    ACTIVE_LAUNCHES.put(runKey, launch);
+                            launch = workingCopy.launch(ILaunchManager.RUN_MODE,
+                                new NullProgressMonitor());
+                            // Register BEFORE leaving the per-key lock so a concurrent
+                            // auto-chain on the same IB sees this launch as owned and
+                            // refuses to terminate it.
+                            LaunchLifecycleUtils.registerOwnedLaunch(launch);
+                            ACTIVE_LAUNCHES.put(runKey, launch);
+                        }
+                    }
                 }
             }
 
             String pollResult = pollLaunch(launch, reportDir, timeout, runKey);
             if (pollResult != null)
             {
-                return pollResult;
+                return prependPreLaunchInfo(preLaunch, pollResult);
             }
 
             // Polling window expired — return Pending without terminating the launch.
-            return buildPendingMessage(reportDir);
+            return prependPreLaunchInfo(preLaunch, buildPendingMessage(reportDir));
         }
         catch (CoreException e)
         {
@@ -482,6 +539,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             return;
         }
         ACTIVE_LAUNCHES.entrySet().removeIf(e -> e.getValue() == launch);
+        LaunchLifecycleUtils.unregisterOwnedLaunch(launch);
     }
 
     /** Defensive sweep that drops any terminated launches still lingering in the map. */
@@ -503,6 +561,20 @@ public class RunYaxunitTestsTool implements IMcpTool
                 + "Report directory: `" + reportDir + "`\n\n" //$NON-NLS-1$ //$NON-NLS-2$
                 + "Call `run_yaxunit_tests` again with the same arguments to wait further " //$NON-NLS-1$
                 + "and fetch the JUnit XML once the launch completes.\n"; //$NON-NLS-1$
+    }
+
+    /**
+     * Prepends a one-line pre-launch summary to the given report, but only when
+     * the auto-chain actually terminated a live launch — a no-op chain is silent
+     * to avoid cluttering reports.
+     */
+    private static String prependPreLaunchInfo(PreLaunchResult preLaunch, String report)
+    {
+        if (preLaunch == null || preLaunch.getTerminatedCount() == 0)
+        {
+            return report;
+        }
+        return "> **Pre-launch:** " + preLaunch.summary() + "\n\n" + report; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

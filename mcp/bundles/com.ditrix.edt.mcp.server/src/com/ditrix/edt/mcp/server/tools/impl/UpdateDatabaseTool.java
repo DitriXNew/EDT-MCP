@@ -54,7 +54,11 @@ public class UpdateDatabaseTool implements IMcpTool
         return "Update database (infobase) for an application. " //$NON-NLS-1$
             + "Target the application either by launchConfigurationName (preferred; " //$NON-NLS-1$
             + "from list_configurations) or by projectName + applicationId (from get_applications). " //$NON-NLS-1$
-            + "Supports full update (complete reload) and incremental update (changes only)."; //$NON-NLS-1$
+            + "Supports full update (complete reload) and incremental update (changes only). " //$NON-NLS-1$
+            + "IMPORTANT: if a 1С client launched from this EDT is currently running against " //$NON-NLS-1$
+            + "the target infobase, the update typically fails because the IB is held in exclusive " //$NON-NLS-1$
+            + "use. Check `list_configurations` for `running: true`; if so, call `terminate_launch` " //$NON-NLS-1$
+            + "first (it only affects launches started from this EDT instance), then retry."; //$NON-NLS-1$
     }
 
     @Override

@@ -19,6 +19,7 @@ import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchManager;
+import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.swt.widgets.Display;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -70,7 +71,11 @@ public class DebugLaunchTool implements IMcpTool
             + "Pass launchConfigurationName to run any existing EDT debug configuration by name " //$NON-NLS-1$
             + "(runtime client OR 'Attach to 1C:Enterprise Debug Server' — required for debugging " //$NON-NLS-1$
             + "server-side code: HTTP services, background jobs, scheduled jobs). " //$NON-NLS-1$
-            + "Otherwise pass projectName + applicationId to launch the matching runtime-client config."; //$NON-NLS-1$
+            + "Otherwise pass projectName + applicationId to launch the matching runtime-client config. " //$NON-NLS-1$
+            + "If a previous launch of the same configuration is still alive, the tool short-circuits " //$NON-NLS-1$
+            + "with `alreadyRunning: true` and does NOT spawn a fresh client — to force a clean restart " //$NON-NLS-1$
+            + "(e.g. after code changes that require a new session), call `terminate_launch` first, " //$NON-NLS-1$
+            + "then `debug_launch` again."; //$NON-NLS-1$
     }
 
     @Override
@@ -268,6 +273,34 @@ public class DebugLaunchTool implements IMcpTool
                     Activator.logError("Error checking application", e); //$NON-NLS-1$
                     // Continue - we'll try to find launch config anyway
                 }
+            }
+
+            // If this application already has a live debug session, short-circuit
+            // — mirrors the launchConfigurationName path so both call styles behave
+            // the same. To force a fresh launch, terminate_launch first.
+            IDebugTarget activeTarget = DebugSessionRegistry.findActiveTarget(applicationId);
+            if (activeTarget != null)
+            {
+                String activeConfigName = activeTarget.getLaunch() != null
+                    && activeTarget.getLaunch().getLaunchConfiguration() != null
+                        ? activeTarget.getLaunch().getLaunchConfiguration().getName()
+                        : null;
+                Activator.logInfo("debug_launch short-circuit (alreadyRunning): project=" //$NON-NLS-1$
+                    + projectName + ", applicationId=" + applicationId //$NON-NLS-1$
+                    + ", activeConfig=" + activeConfigName); //$NON-NLS-1$
+                ToolResult already = ToolResult.success()
+                    .put("project", projectName) //$NON-NLS-1$
+                    .put("applicationId", applicationId) //$NON-NLS-1$
+                    .put("attach", false) //$NON-NLS-1$
+                    .put("alreadyRunning", true) //$NON-NLS-1$
+                    .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put("message", "Launch configuration is already running — skipped re-launch. " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "Call terminate_launch first to force a fresh session.");
+                if (activeConfigName != null)
+                {
+                    already.put("launchConfiguration", activeConfigName); //$NON-NLS-1$
+                }
+                return already.toJson();
             }
 
             // Update database before launch if requested

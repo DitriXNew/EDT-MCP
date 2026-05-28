@@ -20,7 +20,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🧪 **Query Validation** - Validate 1C query text in project context (syntax + semantic errors, optional DCS mode)
 - 🧩 **BSL Code Analysis** - Browse modules, inspect structure, read/write methods, search code, and analyze call hierarchy
 - 🖼️ **Form Inspection** - Get PNG screenshots and YAML layout snapshots from the form WYSIWYG editor
-- 🚀 **Application Management** - Get applications, update database, launch in debug mode
+- 🚀 **Application Management** - Get applications, update database, launch in debug mode, terminate EDT-launched 1С clients
 - 🎯 **Status Bar** - Real-time server status with tool name, execution time, and interactive controls
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
@@ -176,7 +176,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 56 tools are organized into 9 semantic groups:
+All 57 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -184,7 +184,7 @@ All 56 tools are organized into 9 semantic groups:
 | **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
-| **Applications & Testing** | App management, database updates, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `run_yaxunit_tests` |
+| **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
 | **Refactoring** | Metadata rename, delete, add attributes | `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
@@ -198,7 +198,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 56 tools enabled (default) |
+| **All Tools** | All 57 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -218,6 +218,8 @@ Some tools have configurable default values for parameters like result limits. T
 | `get_content_assist` | Result limit | 100 | 1–1000 |
 | `search_in_code` | Max results | 100 | 1–500 |
 | `search_in_code` | Context lines | 2 | 0–5 |
+| `read_module_source` | Max lines | 500 | 100–50000 |
+| `terminate_launch` | Termination timeout (sec) | 10 | 1–120 |
 
 Configure these in the Tools tab by selecting a tool that has configurable parameters — the parameter editors appear in the details panel below the tool tree.
 
@@ -339,6 +341,7 @@ Add to `claude_desktop_config.json`:
 | `list_configurations` | List EDT launch configurations (runtime-client + Attach) with current running / suspended state |
 | `update_database` | Update database (infobase) with full or incremental update mode — by `launchConfigurationName` or `projectName + applicationId` |
 | `debug_launch` | Launch application in debug mode — by `launchConfigurationName` (any type, incl. Attach to 1C:Enterprise Debug Server) or `projectName + applicationId` |
+| `terminate_launch` | Terminate 1С launches started from this EDT instance — by `launchConfigurationName`, `projectName + applicationId`, or `all=true` (requires `confirm=true`). Externally started 1С clients are not affected. Attach configurations are disconnected, not killed |
 | `run_yaxunit_tests` | Run YAXUnit tests for a project: launches 1C with `RunUnitTests`, parses JUnit XML, returns Markdown report |
 | `debug_yaxunit_tests` | Launch YAXUnit tests in DEBUG mode so breakpoints fire (autonomous LLM debug cycle) |
 | `set_breakpoint` | Set a 1C BSL line breakpoint (accepts EDT module path or absolute path) |
@@ -709,6 +712,9 @@ Add to `claude_desktop_config.json`:
 | `fullUpdate` | No | If true - full reload, if false - incremental update (default: false) |
 | `autoRestructure` | No | Automatically apply restructurization if needed (default: true) |
 
+**Notes:**
+- If a 1С client launched from this EDT is currently running against the target infobase, the update typically fails because the IB is held in exclusive use. Run `list_configurations` to check for `running: true`; if so, call `terminate_launch` first (it only affects launches started from this EDT), then retry `update_database`.
+
 #### Debug Launch Tool
 
 **`debug_launch`** - Start an EDT debug session. Works for both runtime-client configs (spawns `1cv8c`) and **Attach to 1C:Enterprise Debug Server** configs (attaches to a running `ragent`/`rphost`, required for debugging server-side code — HTTP services, server calls, scheduled and background jobs).
@@ -724,9 +730,47 @@ Add to `claude_desktop_config.json`:
 **Notes:**
 - Requires a launch configuration to be created in EDT first (Run → Run Configurations...).
 - For an Attach config, `debug_launch` returns `applicationId: "attach:<name>"` — a stable synthetic id used by `wait_for_break`, `resume`, `debug_status` and friends.
-- If the config is already running in debug mode, the tool short-circuits with `alreadyRunning: true` instead of spawning a duplicate launch.
+- If the config is already running in debug mode, the tool short-circuits with `alreadyRunning: true` instead of spawning a duplicate launch. To force a clean restart (e.g. after code changes that require a fresh client session), call `terminate_launch` first, then `debug_launch` again.
 - If no configuration exists, returns list of available configurations (runtime client + attach) so the MCP client can discover what's on offer.
 - `updateBeforeLaunch=true` skips update if database is already up to date.
+
+#### Terminate Launch Tool
+
+**`terminate_launch`** - Terminate 1С launches that were started from **this** EDT instance (runtime-client or Attach). Only launches visible via the Eclipse launch manager can be affected — 1С clients started externally (Designer, ad-hoc `1cv8c.exe`, another EDT) are never touched. This is a constructive guarantee of the Eclipse Debug Platform, not a heuristic.
+
+**Selection modes (mutually exclusive):**
+
+| Mode | Required parameters | Effect |
+|------|--------------------|--------|
+| **By config name** | `launchConfigurationName` | Terminate the single live launch of that configuration |
+| **By project + application** | `projectName` + `applicationId` | Terminate the single live launch matching both attributes |
+| **All** | `all=true` + `confirm=true` (optionally narrowed by `projectName`) | Terminate every live EDT launch (or every live launch of the given project) |
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `launchConfigurationName` | One mode | Exact EDT launch configuration name (from `list_configurations`) |
+| `projectName` | One mode | EDT project name. With `applicationId` — single launch; with `all=true` — narrows scope to one project |
+| `applicationId` | One mode | Application ID from `get_applications`. Requires `projectName`, cannot be combined with `all=true` |
+| `all` | One mode | Terminate every live EDT launch. Requires `confirm=true`. Default: `false` |
+| `confirm` | When `all=true` | Must be `true` to actually perform mass termination — guard against accidents |
+| `force` | No | On polite timeout, escalate to `IProcess.terminate()` (OS-level kill). May lose unsaved 1С state. Default: `false`. Ignored for Attach |
+| `timeoutSeconds` | No | Polite-wait window per launch. Default: `10`, clamped to `[1, 120]` |
+| `includeAttach` | No | Whether to act on Attach configurations (RemoteRuntime / LocalRuntime). When `true` (default), Attach launches are **disconnected** — the 1С cluster keeps running |
+
+**Behaviour notes:**
+
+- **Runtime-client launches** are stopped via `ILaunch.terminate()`. If the launch does not become terminated within `timeoutSeconds`, the result is `timeout` (unless `force=true`, which then triggers `IProcess.terminate()`).
+- **Attach launches** are disconnected via `IDisconnect.disconnect()` on each debug target. The 1С server (`ragent` / `rphost`) is never killed by this tool. `force=true` is ignored for Attach.
+- **`already_terminated`** launches are reported as such (not an error) — useful when the same call is retried.
+- **`not_found`** is returned (as a success response with empty list and explanatory body) when no live launch matches the request. This lets agents probe idempotently.
+- The response is Markdown. Single-launch results render as a `# Launch Terminated` block with key facts; multi-launch results render as `## Terminated` / `## Detached` / `## Timed Out` / `## Errors` sections with tables.
+
+**Typical workflow:**
+
+1. `list_configurations` — see which configurations are currently `running: true`.
+2. `terminate_launch` with the appropriate mode.
+3. Re-run `list_configurations` to verify (`running: false`).
 
 #### Run YAXUnit Tests Tool
 
@@ -742,11 +786,13 @@ Add to `claude_desktop_config.json`:
 | `modules` | No | Comma-separated common-module names to run (e.g. `OM_tmrlGlovoCatalog`) |
 | `tests` | No | Comma-separated test names in `Module.Method` format |
 | `timeout` | No | Polling window in seconds (default: 60). On expiry returns **Pending**; call again to keep waiting |
+| `updateBeforeLaunch` | No | Auto-chain (default: `true`). Before spawning a new launch, terminate any live 1С client running this configuration and run a silent DB update — so EDT's launch delegate skips its modal "Update database?" dialog that would block the MCP call. Set `false` to keep legacy behaviour. |
 
 **Notes:**
 - Requires a launch configuration in EDT for the project/application and the YAXUnit extension installed in the infobase.
 - The launch is **not** terminated when the polling window expires — call the tool again with identical arguments to keep waiting and fetch the result once 1C closes.
 - Reports are stored under `%TEMP%/edt-mcp-yaxunit/<sanitized-key>_<sha1>/` (`junit.xml` + `report.md` + `xUnitParams.json`). The directory name is derived from `projectName:applicationId:filterHash` — sanitized and suffixed with a SHA-1 hash to avoid collisions. A fresh `junit.xml` (younger than 5 minutes) is reused without restarting 1C.
+- The auto-chain (`updateBeforeLaunch=true`) reuses the `terminate_launch` configurable timeout from preferences. If a live launch cannot be terminated within that window, the tool aborts with a clear error instead of falling through to the interactive dialog. Pass `updateBeforeLaunch=false` to skip the auto-chain and let EDT's delegate decide (may show dialogs). When the auto-chain actually terminated a previous launch, the returned Markdown report is prefixed with a one-line `> **Pre-launch:** …` quote.
 
 #### Server-Side Debugging (Attach to 1C:Enterprise Debug Server)
 
@@ -789,6 +835,7 @@ A family of MCP tools that lets the LLM set breakpoints, inspect runtime state a
 - `frameRef` and `threadId` are reissued on every SUSPEND event. After `resume`/`step` the previous ids become stale (the tool returns a clear error).
 - `evaluate_expression` runs arbitrary BSL inside the running 1C process. Use it deliberately.
 - The actual 1C BSL breakpoint class is loaded via reflection at runtime — if the EDT version exposes it under a different name, `Activator.logError` will surface the failure and the breakpoint falls back to a marker shim.
+- `debug_yaxunit_tests` accepts the same `updateBeforeLaunch` parameter as `run_yaxunit_tests` (default `true`) — before the debug launch it terminates any live client of this configuration and runs a silent DB update, so EDT's launch delegate skips its modal "Update database?" dialog. On success the JSON response includes a `preLaunch` field when the chain actually terminated a previous launch.
 
 ### BSL Code Analysis Tools
 
