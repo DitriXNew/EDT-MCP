@@ -1,6 +1,6 @@
 /**
  * MCP Server for EDT
- * Copyright (C) 2025 Diversus23 (https://github.com/Diversus23)
+ * Copyright (C) 2026 Diversus23 (https://github.com/Diversus23)
  * Licensed under AGPL-3.0-or-later
  */
 
@@ -517,14 +517,23 @@ public final class LaunchLifecycleUtils
             .getParameterValue("terminate_launch", "timeoutSeconds", 10); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    private static Shell grabActiveShell()
+    /**
+     * Returns the active SWT {@link Shell} (or the first available one) to seed
+     * an {@link ExecutionContext} so EDT can parent its dialogs correctly.
+     * Returns {@code null} in headless environments where no shell exists.
+     *
+     * <p>Shared by every tool that builds an {@code ExecutionContext} before
+     * calling {@link IApplicationManager#update} (update_database, debug_launch,
+     * the YAXUnit auto-chain) so the SWT-grab logic lives in exactly one place.
+     */
+    public static Shell grabActiveShell()
     {
         Display display;
         try
         {
-            // Headless-окружения (CI Linux без X-сервера, EDT через CLI без UI)
-            // не могут инициализировать SWT — gtk_init_check() бросает SWTError.
-            // В таком случае диалогов всё равно не будет, поэтому отдаём null.
+            // Headless environments (CI Linux with no X server, EDT via CLI with
+            // no UI) cannot initialise SWT — gtk_init_check() throws SWTError.
+            // No dialogs will appear there anyway, so we return null.
             display = Display.getDefault();
         }
         catch (SWTError | UnsatisfiedLinkError e)

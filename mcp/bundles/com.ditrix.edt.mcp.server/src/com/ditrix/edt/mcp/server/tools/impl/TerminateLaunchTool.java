@@ -25,6 +25,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 
 /**
  * Terminates 1С launches started from this EDT instance. The set of
@@ -381,14 +382,14 @@ public class TerminateLaunchTool implements IMcpTool
             else
             {
                 launch.terminate();
-                if (waitForTerminated(launch, timeoutSeconds * 1000L))
+                if (LaunchLifecycleUtils.waitForTerminated(launch, timeoutSeconds * 1000L))
                 {
                     result.code = R_TERMINATED;
                 }
                 else if (force)
                 {
                     forceTerminateProcesses(launch);
-                    if (waitForTerminated(launch, FORCE_GRACE_MS))
+                    if (LaunchLifecycleUtils.waitForTerminated(launch, FORCE_GRACE_MS))
                     {
                         result.code = R_FORCE_TERMINATED;
                     }
@@ -457,28 +458,6 @@ public class TerminateLaunchTool implements IMcpTool
                     + safeConfigName(launch), e);
             }
         }
-    }
-
-    private static boolean waitForTerminated(ILaunch launch, long maxMillis)
-    {
-        long deadline = System.currentTimeMillis() + maxMillis;
-        while (System.currentTimeMillis() < deadline)
-        {
-            if (launch.isTerminated())
-            {
-                return true;
-            }
-            try
-            {
-                Thread.sleep(LaunchConfigUtils.LAUNCH_POLL_INTERVAL_MS);
-            }
-            catch (InterruptedException e)
-            {
-                Thread.currentThread().interrupt();
-                return launch.isTerminated();
-            }
-        }
-        return launch.isTerminated();
     }
 
     /**

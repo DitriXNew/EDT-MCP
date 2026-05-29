@@ -17,7 +17,6 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchManager;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -26,6 +25,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -202,31 +202,15 @@ public class UpdateDatabaseTool implements IMcpTool
                     ? ApplicationUpdateType.FULL 
                     : ApplicationUpdateType.INCREMENTAL;
             
-            // Create execution context with Shell from UI thread
+            // Create execution context with the active Shell so EDT can parent
+            // its dialogs. Shared SWT-grab lives in LaunchLifecycleUtils.
             ExecutionContext context = new ExecutionContext();
-            
-            // Get Shell from Display and set it in context
-            Display display = Display.getDefault();
-            if (display != null && !display.isDisposed())
+            Shell shell = LaunchLifecycleUtils.grabActiveShell();
+            if (shell != null)
             {
-                final Shell[] shellHolder = new Shell[1];
-                display.syncExec(() -> {
-                    shellHolder[0] = display.getActiveShell();
-                    if (shellHolder[0] == null)
-                    {
-                        Shell[] shells = display.getShells();
-                        if (shells.length > 0)
-                        {
-                            shellHolder[0] = shells[0];
-                        }
-                    }
-                });
-                if (shellHolder[0] != null)
-                {
-                    context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shellHolder[0]);
-                }
+                context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
             }
-            
+
             Activator.logInfo("Update database: project=" + projectName +  //$NON-NLS-1$
                     ", application=" + applicationId +  //$NON-NLS-1$
                     ", type=" + updateType +  //$NON-NLS-1$
