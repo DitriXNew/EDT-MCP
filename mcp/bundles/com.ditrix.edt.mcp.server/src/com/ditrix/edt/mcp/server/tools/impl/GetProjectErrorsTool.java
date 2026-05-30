@@ -8,16 +8,24 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.IProgressMonitor;
 
+import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.AbstractBmTask;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
+import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
@@ -39,6 +47,14 @@ import com.google.gson.JsonParser;
 /**
  * Tool to get detailed project errors with optional filters.
  * Uses EDT IMarkerManager for accessing configuration problems.
+ *
+ * <p>Marker presentation ({@link Marker#getObjectPresentation()}) is resolved lazily
+ * against the BM model and therefore must be read inside a BM read transaction.
+ * Markers restored from the persisted marker index (e.g. right after EDT startup) have
+ * a {@code null} {@code resolvedDataCache}; reading their presentation outside a
+ * transaction throws a {@link NullPointerException} that aborts the whole stream.
+ * To avoid this, markers are collected per project inside
+ * {@link IBmModel#executeReadonlyTask(AbstractBmTask)}.</p>
  */
 public class GetProjectErrorsTool implements IMcpTool
 {
@@ -158,7 +174,9 @@ public class GetProjectErrorsTool implements IMcpTool
                 return "# Error\n\nIMarkerManager service is not available"; //$NON-NLS-1$
             }
             
-            ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
+            final ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
+            IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+            IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
             
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             
@@ -175,6 +193,8 @@ public class GetProjectErrorsTool implements IMcpTool
                     // Invalid severity, will show all
                 }
             }
+            final MarkerSeverity finalSeverityFilter = severityFilter;
+            final String finalCheckId = checkId;
             
             // Validate project if specified
             if (projectName != null && !projectName.isEmpty())
@@ -186,10 +206,6 @@ public class GetProjectErrorsTool implements IMcpTool
                 }
             }
             
-            // Collect errors from EDT MarkerManager using proper stream operations
-            final MarkerSeverity finalSeverityFilter = severityFilter;
-            final String finalCheckId = checkId;
-            final String finalProjectName = projectName;
             // Normalize object FQNs to support both English and Russian metadata type names.
             // For each input FQN, generate all variants (original + English + Russian, lowercased)
             // so we can match markers regardless of the configuration language.
@@ -203,109 +219,86 @@ public class GetProjectErrorsTool implements IMcpTool
                 }
             }
             
-            // Use filter + limit instead of forEach with early return (which doesn't work)
-            final ICheckRepository finalCheckRepo = checkRepository;
-            List<ErrorInfo> errors = markerManager.markers()
-                .filter(marker -> {
-                    // Get project
+            // Determine the set of projects to scan. Marker presentation must be resolved
+            // inside a BM read transaction, and a transaction is bound to a single project's
+            // model, so we collect markers project by project.
+            List<IProject> targetProjects = new ArrayList<>();
+            if (projectName != null && !projectName.isEmpty())
+            {
+                targetProjects.add(workspace.getRoot().getProject(projectName));
+            }
+            else
+            {
+                // getProject() does not touch resolvedDataCache, so this pass is safe.
+                Set<IProject> distinct = new LinkedHashSet<>();
+                markerManager.markers().forEach(marker -> {
                     IProject markerProject = marker.getProject();
-                    if (markerProject == null)
+                    if (markerProject != null)
                     {
-                        return false;
+                        distinct.add(markerProject);
                     }
-                    
-                    // Check project filter
-                    if (finalProjectName != null && !finalProjectName.isEmpty() && 
-                        !markerProject.getName().equals(finalProjectName))
+                });
+                targetProjects.addAll(distinct);
+            }
+            
+            final List<ErrorInfo> errors = new ArrayList<>();
+            // Markers whose presentation could not be resolved even inside a transaction.
+            // They are NOT dropped: they are reported with a placeholder location and counted.
+            final int[] unresolved = {0};
+            final IMarkerManager finalMarkerManager = markerManager;
+            
+            for (IProject project : targetProjects)
+            {
+                if (project == null || !project.exists())
+                {
+                    continue;
+                }
+                if (errors.size() >= limit)
+                {
+                    break;
+                }
+                
+                final IProject finalProject = project;
+                final int remaining = limit - errors.size();
+                
+                // Resolve the project's BM model so getObjectPresentation() can lazily
+                // resolve the marker target inside a read transaction.
+                IBmModel bmModel = null;
+                if (bmModelManager != null && dtProjectManager != null)
+                {
+                    IDtProject dtProject = dtProjectManager.getDtProject(project);
+                    if (dtProject != null)
                     {
-                        return false;
+                        bmModel = bmModelManager.getModel(dtProject);
                     }
-                    
-                    // Check severity filter
-                    MarkerSeverity markerSeverity = marker.getSeverity();
-                    if (finalSeverityFilter != null && markerSeverity != finalSeverityFilter)
+                }
+                
+                Runnable collector = () -> finalMarkerManager.markers()
+                    .filter(marker -> finalProject.equals(marker.getProject()))
+                    .filter(marker -> matchesFilters(marker, finalSeverityFilter, finalCheckId,
+                        finalObjects, checkRepository, unresolved))
+                    .limit(remaining)
+                    .forEach(marker -> errors.add(toErrorInfo(marker, checkRepository, unresolved)));
+                
+                if (bmModel != null)
+                {
+                    bmModel.executeReadonlyTask(new AbstractBmTask<Void>("CollectProjectErrors") //$NON-NLS-1$
                     {
-                        return false;
-                    }
-                    
-                    // Check checkId filter
-                    String markerCheckId = marker.getCheckId();
-                    if (finalCheckId != null && !finalCheckId.isEmpty())
-                    {
-                        if (markerCheckId == null || 
-                            !markerCheckId.toLowerCase().contains(finalCheckId.toLowerCase()))
+                        @Override
+                        public Void execute(IBmTransaction transaction, IProgressMonitor monitor)
                         {
-                            return false;
+                            collector.run();
+                            return null;
                         }
-                    }
-                    
-                    // Check objects filter (FQN matching)
-                    if (!finalObjects.isEmpty())
-                    {
-                        String objectPresentation = marker.getObjectPresentation();
-                        if (objectPresentation == null || objectPresentation.isEmpty())
-                        {
-                            return false;
-                        }
-
-                        // Lowercase once for all comparisons
-                        String presentationLower = objectPresentation.toLowerCase();
-
-                        // Check if any FQN variant matches the object presentation
-                        // All variants in finalObjects are already lowercased
-                        boolean matchesAnyObject = false;
-                        for (String fqnVariant : finalObjects)
-                        {
-                            if (presentationLower.contains(fqnVariant))
-                            {
-                                matchesAnyObject = true;
-                                break;
-                            }
-                        }
-                        if (!matchesAnyObject)
-                        {
-                            return false;
-                        }
-                    }
-                    
-                    return true;
-                })
-                .limit(limit)
-                .map(marker -> {
-                    ErrorInfo error = new ErrorInfo();
-                    String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
-                    error.checkCode = shortUid;
-                    
-                    // Try to convert short UID (e.g. "SU23") to symbolic check ID (e.g. "bsl-legacy-check-expression-type")
-                    if (finalCheckRepo != null && !shortUid.isEmpty() && marker.getProject() != null)
-                    {
-                        try
-                        {
-                            CheckUid checkUid = finalCheckRepo.getUidForShortUid(shortUid, marker.getProject());
-                            if (checkUid != null)
-                            {
-                                error.checkId = checkUid.getCheckId();
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            // Ignore - will use short UID instead
-                        }
-                    }
-                    
-                    // Check if documentation exists for this check
-                    error.hasDocumentation = false;
-                    if (error.checkId != null && !error.checkId.isEmpty())
-                    {
-                        error.hasDocumentation = GetCheckDescriptionTool.hasCheckDocumentation(error.checkId);
-                    }
-                    
-                    error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
-                    error.objectPresentation = marker.getObjectPresentation() != null ? 
-                        marker.getObjectPresentation() : ""; //$NON-NLS-1$
-                    return error;
-                })
-                .collect(Collectors.toList());
+                    });
+                }
+                else
+                {
+                    // Not an EDT project (no BM model): best effort. Per-marker access is
+                    // still guarded, so an unresolved marker is reported, never dropped.
+                    collector.run();
+                }
+            }
             
             // Build Markdown response for better readability and context efficiency
             StringBuilder md = new StringBuilder();
@@ -357,12 +350,165 @@ public class GetProjectErrorsTool implements IMcpTool
                 }
             }
             
+            // Surface unresolved markers explicitly instead of silently dropping them.
+            if (unresolved[0] > 0)
+            {
+                md.append("\n> ⚠️ ").append(unresolved[0]) //$NON-NLS-1$
+                  .append(" marker(s) could not be resolved and are shown with a placeholder location. ") //$NON-NLS-1$
+                  .append("Run clean_project / revalidate_objects to refresh them."); //$NON-NLS-1$
+            }
+            
             return md.toString();
         }
         catch (Exception e)
         {
             Activator.logError("Error getting project errors", e); //$NON-NLS-1$
             return "# Error\n\nFailed to get project errors: " + e.getMessage(); //$NON-NLS-1$
+        }
+    }
+    
+    /**
+     * Applies the severity, checkId and objects filters to a single marker.
+     * Must be called inside a BM read transaction so that
+     * {@link Marker#getObjectPresentation()} can resolve.
+     */
+    private static boolean matchesFilters(Marker marker, MarkerSeverity severityFilter,
+        String checkId, Set<String> objects, ICheckRepository checkRepository, int[] unresolved)
+    {
+        // Severity filter
+        if (severityFilter != null && marker.getSeverity() != severityFilter)
+        {
+            return false;
+        }
+        
+        // checkId filter: match either the short UID (e.g. "SU23") or the symbolic id
+        // (e.g. "semicolon-missing"). The short UID alone is rarely what callers type.
+        if (checkId != null && !checkId.isEmpty() && !checkIdMatches(marker, checkId, checkRepository))
+        {
+            return false;
+        }
+        
+        // Objects filter (FQN matching against the resolved object presentation)
+        if (!objects.isEmpty())
+        {
+            String objectPresentation;
+            try
+            {
+                objectPresentation = marker.getObjectPresentation();
+            }
+            catch (Exception e)
+            {
+                // Cannot resolve the location, so we cannot decide membership for an
+                // explicit object filter. Count it so the caller is warned.
+                unresolved[0]++;
+                return false;
+            }
+            if (objectPresentation == null || objectPresentation.isEmpty())
+            {
+                return false;
+            }
+            
+            String presentationLower = objectPresentation.toLowerCase();
+            for (String fqnVariant : objects)
+            {
+                if (presentationLower.contains(fqnVariant))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Returns true when the user supplied checkId substring matches either the marker
+     * short UID or its symbolic check id.
+     */
+    private static boolean checkIdMatches(Marker marker, String checkId, ICheckRepository checkRepository)
+    {
+        String needle = checkId.toLowerCase();
+        String shortUid = marker.getCheckId();
+        if (shortUid != null && shortUid.toLowerCase().contains(needle))
+        {
+            return true;
+        }
+        if (checkRepository != null && shortUid != null && !shortUid.isEmpty() && marker.getProject() != null)
+        {
+            try
+            {
+                CheckUid uid = checkRepository.getUidForShortUid(shortUid, marker.getProject());
+                if (uid != null && uid.getCheckId() != null
+                    && uid.getCheckId().toLowerCase().contains(needle))
+                {
+                    return true;
+                }
+            }
+            catch (Exception e)
+            {
+                // Ignore - fall back to short UID comparison result
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Builds an {@link ErrorInfo} from a marker. Must be called inside a BM read
+     * transaction. If the object presentation cannot be resolved the marker is still
+     * reported with a placeholder location and counted via {@code unresolved}.
+     */
+    private static ErrorInfo toErrorInfo(Marker marker, ICheckRepository checkRepository, int[] unresolved)
+    {
+        ErrorInfo error = new ErrorInfo();
+        String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
+        error.checkCode = shortUid;
+        
+        // Try to convert short UID (e.g. "SU23") to symbolic check ID (e.g. "bsl-legacy-check-expression-type")
+        if (checkRepository != null && !shortUid.isEmpty() && marker.getProject() != null)
+        {
+            try
+            {
+                CheckUid checkUid = checkRepository.getUidForShortUid(shortUid, marker.getProject());
+                if (checkUid != null)
+                {
+                    error.checkId = checkUid.getCheckId();
+                }
+            }
+            catch (Exception e)
+            {
+                // Ignore - will use short UID instead
+            }
+        }
+        
+        // Check if documentation exists for this check
+        error.hasDocumentation = false;
+        if (error.checkId != null && !error.checkId.isEmpty())
+        {
+            error.hasDocumentation = GetCheckDescriptionTool.hasCheckDocumentation(error.checkId);
+        }
+        
+        error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
+        error.objectPresentation = safeObjectPresentation(marker, unresolved);
+        return error;
+    }
+    
+    /**
+     * Reads {@link Marker#getObjectPresentation()} defensively. On resolution failure the
+     * marker is kept (never dropped) with a placeholder location, and counted.
+     */
+    private static String safeObjectPresentation(Marker marker, int[] unresolved)
+    {
+        try
+        {
+            String presentation = marker.getObjectPresentation();
+            return presentation != null ? presentation : ""; //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            unresolved[0]++;
+            IProject project = marker.getProject();
+            return "<unresolved: " + (project != null ? project.getName() : "?") + ">"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
     }
     
