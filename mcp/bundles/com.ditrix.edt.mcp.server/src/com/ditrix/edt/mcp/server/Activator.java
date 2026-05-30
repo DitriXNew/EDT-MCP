@@ -13,12 +13,14 @@ import org.osgi.framework.BundleContext;
 import org.osgi.util.tracker.ServiceTracker;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
+import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
+import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
@@ -26,6 +28,7 @@ import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
+import com.google.inject.Injector;
 
 /**
  * EDT MCP Server plugin activator.
@@ -530,6 +533,42 @@ public class Activator extends AbstractUIPlugin
             return null;
         }
         return mdRefactoringServiceTracker.getService();
+    }
+
+    /**
+     * Returns the IModelObjectFactory used to create metadata (mdclass) objects
+     * with EDT default content (the same factory the "New" wizards use).
+     * <p>
+     * IMPORTANT: {@link IModelObjectFactory} is contributed by several language
+     * plugins (one factory per language/EPackage). A plain OSGi service lookup
+     * (ServiceTracker / ServiceAccess) returns an arbitrary implementation —
+     * in practice the GeographicalSchemaObjectFactory — which cannot create
+     * mdclass objects (Catalog, Document, CommonModule, ...) and throws an
+     * uncaught "not a valid classifier" exception. We therefore resolve the
+     * factory strictly from the MD language Guice injector, which binds
+     * IModelObjectFactory to com._1c.g5.v8.dt.md.model.MdObjectFactory.
+     *
+     * @return MD model object factory or null if not available
+     */
+    public IModelObjectFactory getModelObjectFactory()
+    {
+        try
+        {
+            MdPlugin mdPlugin = MdPlugin.getDefault();
+            if (mdPlugin != null)
+            {
+                Injector injector = mdPlugin.getInjector();
+                if (injector != null)
+                {
+                    return injector.getInstance(IModelObjectFactory.class);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            logError("Failed to obtain MD IModelObjectFactory from MdPlugin injector", e); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**

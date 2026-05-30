@@ -27,6 +27,7 @@ This section matters more than any table below. Use it to pick the right tool, t
 | "Show me the whole module" | first `get_module_structure` (the map), then `read_module_source` only if you really need the whole file | Token economy |
 | "Modify code in a method" | `read_method_source` -> `write_module_source` with `mode: searchReplace` | See `edt-mcp-write-safety.md` |
 | "Rename / delete a metadata object" | `rename_metadata_object` / `delete_metadata_object` **without** `confirm` (preview) -> the same call with `confirm: true` | Manual XML edits break references cascadingly |
+| "Create a new object" | `create_metadata_object` | EDT default content + correct UUID; do not hand-build the `.mdo` |
 | "Add an attribute" | `add_metadata_attribute` | Do not edit `.mdo` by hand |
 | "Validate a 1C query" | `validate_query` (DCS query -> `dcsMode: true`) | Before pasting a query text into code |
 | "What's in this form?" | `get_form_layout_snapshot` with `mode: compact` (YAML); `get_form_screenshot` for visuals | YAML is cheaper than PNG |
@@ -151,13 +152,14 @@ Typical cycle — see `edt-mcp-workflows.md`, section "Debugging".
 | `get_form_screenshot` | PNG form from WYSIWYG (embedded image resource) | When visual context is needed |
 | `validate_query` | Validate a 1C query (syntax + semantics). `dcsMode: true` — for DCS queries | **Before** inserting a new query into code |
 
-### 8. Refactoring (3)
+### 8. Refactoring (4)
 
 | Tool | Purpose | When to use |
 |---|---|---|
 | `rename_metadata_object` | Rename with cascading update (BSL code, forms, metadata). Workflow: 1) call without `confirm` — preview all change points with indices; 2) (optional) `disableIndices: "2,3,5"` to skip specific changes; 3) `confirm: true`. `maxResults` (default 20, 0 = no limit) caps the preview. Russian FQNs are supported | **Only** this way to rename; manual XML editing is dangerous |
 | `delete_metadata_object` | Delete with reference cleanup. Same preview -> confirm workflow | Same |
 | `add_metadata_attribute` | Add an attribute to an object (Catalog, Document, Register, ...) | Instead of manual `.mdo` editing |
+| `create_metadata_object` | Create a new top-level object with EDT default content. Supported types: `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor`. Params: `metadataType`, `name`, optional `synonym`, `comment`, `language`. UUID is generated automatically | Instead of hand-building a new `.mdo`; run `get_project_errors` afterwards |
 
 ### 9. Translation (LanguageTool) (3)
 

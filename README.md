@@ -25,7 +25,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
 - 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection, with a toolbar toggle to hide groups temporarily
-- ✏️ **Metadata Refactoring** - Rename/delete metadata objects with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
+- ✏️ **Metadata Refactoring** - Create top-level objects with EDT default content; rename/delete metadata objects with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
 ## Installation
@@ -187,7 +187,7 @@ All 57 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata rename, delete, add attributes | `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
+| **Refactoring** | Metadata create, rename, delete, add attributes | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -335,6 +335,7 @@ Add to `claude_desktop_config.json`:
 | `rename_metadata_object` | Rename a metadata object or attribute with full refactoring: cascading updates in BSL code, forms, and metadata. Preview + confirm workflow |
 | `delete_metadata_object` | Delete a metadata object or attribute with reference cleanup. Preview + confirm workflow |
 | `add_metadata_attribute` | Add a new attribute to a metadata object (Catalog, Document, Register, etc.) |
+| `create_metadata_object` | Create a new top-level metadata object (Catalog, Document, InformationRegister, AccumulationRegister, Enum, CommonModule, Report, DataProcessor) with EDT default content |
 | `get_tags` | Get list of all tags defined in the project with descriptions and object counts |
 | `get_objects_by_tags` | Get metadata objects filtered by tags with tag descriptions and object FQNs |
 | `get_applications` | Get list of applications (infobases) for a project with update state |
@@ -646,6 +647,24 @@ Add to `claude_desktop_config.json`:
 | `attributeName` | Yes | Name for the new attribute |
 
 **Supported parent types:** `Catalog`, `Document`, `ExchangePlan`, `ChartOfCharacteristicTypes`, `ChartOfAccounts`, `ChartOfCalculationTypes`, `BusinessProcess`, `Task`, `DataProcessor`, `Report`, `InformationRegister`, `AccumulationRegister`, `AccountingRegister`
+
+#### Create Metadata Object Tool
+
+**`create_metadata_object`** - Create a new top-level metadata object with the same default content as the EDT "New" wizard (correct UUID and `producedTypes` are generated automatically). The object is created via the EDT `IModelObjectFactory` and registered as a BM top object, then persisted into a new `.mdo` file.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `metadataType` | Yes | Type to create. Russian type names are also supported |
+| `name` | Yes | Name for the new object (must be a valid 1C identifier) |
+| `synonym` | No | Synonym (display name); set for the configuration default language unless `language` is given |
+| `comment` | No | Comment for the new object |
+| `language` | No | Language code for the synonym (e.g. `ru`, `en`). Defaults to the configuration default language |
+
+**Supported types:** `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor`
+
+After creating an object, run `get_project_errors` to verify (or `revalidate_objects` on the new object if validation looks stale).
 
 ### Tag Management Tools
 

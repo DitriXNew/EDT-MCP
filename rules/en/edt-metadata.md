@@ -6,6 +6,7 @@ Before editing `.mdo` or `Form.form` manually — **ask yourself**: is there an 
 
 | Task | Tool | Why it is better than doing it manually |
 |---|---|---|
+| Create a new top-level object | `create_metadata_object` | EDT default content (same as the "New" wizard); UUID and `producedTypes` are generated automatically |
 | Rename an object / attribute / tabular section / dimension / resource | `rename_metadata_object` | Cascadingly updates BSL code, forms, roles, subsystems. Provides a preview of all change points |
 | Delete an object / attribute, etc. | `delete_metadata_object` | Cleans up references across the entire project. Provides a preview |
 | Add an attribute to an object | `add_metadata_attribute` | No risky manual XML editing; UUID is generated automatically |
@@ -41,6 +42,14 @@ The `maxResults` parameter of `rename_metadata_object` controls only the size of
 To find references to attributes / tabular sections, use:
 - `rename_metadata_object` in preview mode (without `confirm`) — it shows every place where the attribute is mentioned, without actually renaming.
 - Or `search_in_code` for a textual search across BSL.
+
+## `create_metadata_object` — supported types
+
+Creates a new top-level object with the same default content as the EDT "New" wizard (correct UUID, `producedTypes`, default forms/properties where applicable). Supported `metadataType`: `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor` (Russian type names are also accepted).
+
+Parameters: `projectName`, `metadataType`, `name` (required); `synonym`, `comment`, `language` (optional). `name` must be a valid 1C identifier; an existing object with the same type and name is rejected. `synonym` is written for the configuration default language unless `language` is given.
+
+This tool creates only the object itself. To add attributes / tabular sections / set the attribute type — use `add_metadata_attribute` or edit the `.mdo` afterwards. After creation, run `get_project_errors` (and `revalidate_objects` on the new object if validation looks stale).
 
 ## `add_metadata_attribute` — supported parents
 

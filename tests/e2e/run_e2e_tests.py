@@ -17,6 +17,7 @@ Environment variables:
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -152,6 +153,8 @@ class TestRunner:
         self._test("get_tags", self.test_get_tags)
         self._test("get_bookmarks", self.test_get_bookmarks)
         self._test("get_tasks", self.test_get_tasks)
+        self._test("create_metadata_object", self.test_create_metadata_object)
+        self._test("create_metadata_object_invalid_name", self.test_create_metadata_object_invalid_name)
 
         # Phase 4: BSL code tools
         self._section("BSL Code Tools")
@@ -391,6 +394,121 @@ class TestRunner:
             "projectName": self.config.project
         })
         self._assert_success(resp)
+
+    # Every metadata type the create_metadata_object tool supports.
+    CREATE_METADATA_TYPES = [
+        "Catalog",
+        "Document",
+        "InformationRegister",
+        "AccumulationRegister",
+        "Enum",
+        "CommonModule",
+        "Report",
+        "DataProcessor",
+    ]
+
+    def _create_metadata_object(self, metadata_type: str):
+        """Create one object of the given type, then read it back via EDT MCP
+        (get_metadata_details) and verify the attributes that were set at
+        creation (synonym, comment). Tolerant to re-runs: a second invocation
+        returns an "already exists" tool-level message, which is still a valid
+        (non-error) JSON-RPC response — the existing object keeps the same
+        deterministic synonym/comment, so the read-back assertions still hold."""
+        name = "E2EChk" + metadata_type
+        synonym = "E2EChk " + metadata_type + " Synonym"
+        comment = "E2EChk " + metadata_type + " Comment"
+        fqn = metadata_type + "." + name
+
+        # 1. Create with synonym + comment
+        resp = self._call("create_metadata_object", {
+            "projectName": self.config.project,
+            "metadataType": metadata_type,
+            "name": name,
+            "synonym": synonym,
+            "comment": comment,
+        })
+        self._assert_success(resp, f"[create {metadata_type}]")
+        text = self._get_result_text(resp)
+        assert (name in text or "already exists" in text), \
+            f"Unexpected create result for {metadata_type}: {text}"
+
+        # 2. Read the object back via EDT MCP and verify the attributes set at creation.
+        details = self._call("get_metadata_details", {
+            "projectName": self.config.project,
+            "objectFqns": [fqn],
+        })
+        self._assert_success(details, f"[read {metadata_type}]")
+        dtext = self._get_result_text(details)
+        assert "not found" not in dtext.lower(), \
+            f"{fqn}: object not found when reading back:\n{dtext}"
+        assert name in dtext, \
+            f"{fqn}: name not present in details:\n{dtext}"
+        assert synonym in dtext, \
+            f"{fqn}: synonym '{synonym}' not set/returned:\n{dtext}"
+        assert comment in dtext, \
+            f"{fqn}: comment '{comment}' not set/returned:\n{dtext}"
+
+        # 3. Strong check: the synonym must be stored under the language CODE
+        # (e.g. "en", "ru"), not under the Language object's NAME (e.g. "English").
+        # get_metadata_details applies a language fallback, so the value alone does
+        # not prove the key is correct — inspect the full synonym map instead, where
+        # full=true renders it as a "| <language> | <value> |" table.
+        self._assert_synonym_language_code(fqn, synonym)
+
+    # A 1C language code: short ISO-like code, optionally with a region suffix
+    # (e.g. "en", "ru", "en_US", "zh-Hans"). The Language object's *name*
+    # ("English", "Русский") never matches this.
+    _LANG_CODE_RE = re.compile(r"^[a-z]{2,3}([_-][A-Za-z]{2,4})?$")
+
+    def _assert_synonym_language_code(self, fqn: str, synonym: str):
+        details = self._call("get_metadata_details", {
+            "projectName": self.config.project,
+            "objectFqns": [fqn],
+            "full": True,
+        })
+        self._assert_success(details, f"[read-full {fqn}]")
+        text = self._get_result_text(details)
+
+        # Collect every table row "| KEY | VALUE |" whose VALUE is our synonym.
+        keys_for_synonym = []
+        for line in text.splitlines():
+            cells = [c.strip() for c in line.split("|")]
+            # "| KEY | VALUE |" -> ['', 'KEY', 'VALUE', '']
+            if len(cells) >= 4 and cells[2] == synonym:
+                keys_for_synonym.append(cells[1])
+
+        # The synonym map row (exclude the "Basic Properties" row keyed by the
+        # literal property name "Synonym").
+        map_keys = [k for k in keys_for_synonym if k != "Synonym"]
+        assert map_keys, (
+            f"{fqn}: synonym map row not found in full details "
+            f"(synonym '{synonym}' not rendered as a language/value entry):\n{text}")
+        for key in map_keys:
+            assert self._LANG_CODE_RE.match(key), (
+                f"{fqn}: synonym stored under '{key}', which is not a language code "
+                f"(expected e.g. 'en'/'ru' — got the Language name instead?)")
+
+    def test_create_metadata_object(self):
+        # Create one object of every supported metadata type.
+        failures = []
+        for metadata_type in self.CREATE_METADATA_TYPES:
+            try:
+                self._create_metadata_object(metadata_type)
+            except AssertionError as e:
+                failures.append(str(e))
+        assert not failures, "Failed types:\n  " + "\n  ".join(failures)
+
+    def test_create_metadata_object_invalid_name(self):
+        # Invalid identifier must be rejected at the tool level (no mutation).
+        resp = self._call("create_metadata_object", {
+            "projectName": self.config.project,
+            "metadataType": "Catalog",
+            "name": "1Invalid Name"
+        })
+        self._assert_success(resp)
+        text = self._get_result_text(resp)
+        assert "Invalid object name" in text or "error" in text.lower(), \
+            f"Expected validation error, got: {text}"
 
     # ──────────────────────────────────────────────────────────────────────
     # BSL Code Tools
