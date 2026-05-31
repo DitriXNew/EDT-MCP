@@ -11,17 +11,11 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
-import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -34,7 +28,6 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
-import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -44,7 +37,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
  * 1. Preview mode (confirm=false, default): Returns list of affected references and problems.
  * 2. Execute mode (confirm=true): Performs the deletion with reference cleanup.
  */
-public class DeleteMetadataObjectTool implements IMcpTool
+public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "delete_metadata_object"; //$NON-NLS-1$
 
@@ -81,13 +74,7 @@ public class DeleteMetadataObjectTool implements IMcpTool
     }
 
     @Override
-    public ResponseType getResponseType()
-    {
-        return ResponseType.JSON;
-    }
-
-    @Override
-    public String execute(Map<String, String> params)
+    protected String executeOnUiThread(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
@@ -106,43 +93,18 @@ public class DeleteMetadataObjectTool implements IMcpTool
                 "'Catalog.Products.TabularSection.Prices' (delete tabular section)").toJson(); //$NON-NLS-1$
         }
 
-        AtomicReference<String> resultRef = new AtomicReference<>();
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
-            try
-            {
-                resultRef.set(executeInternal(projectName, objectFqn, confirm));
-            }
-            catch (Exception e)
-            {
-                Activator.logError("Error in delete_metadata_object", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-
-        return resultRef.get();
+        return executeInternal(projectName, objectFqn, confirm);
     }
 
     private String executeInternal(String projectName, String objectFqn, boolean confirm)
     {
-        // Get project
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        // Get project and configuration
+        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        if (ctx.hasError())
         {
-            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
+            return ctx.error;
         }
-
-        // Get configuration
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        if (configProvider == null)
-        {
-            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
-        }
-        Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
-        {
-            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
+        Configuration config = ctx.config;
 
         // Get refactoring service
         IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();

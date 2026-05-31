@@ -8,21 +8,16 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.emf.common.util.EList;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.AccountingRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.AccumulationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.BusinessProcess;
@@ -43,14 +38,13 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
-import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
  * Tool to add a new attribute to a metadata object.
  * Creates the attribute with default properties via BM write transaction.
  */
-public class AddMetadataAttributeTool implements IMcpTool
+public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "add_metadata_attribute"; //$NON-NLS-1$
 
@@ -87,13 +81,7 @@ public class AddMetadataAttributeTool implements IMcpTool
     }
 
     @Override
-    public ResponseType getResponseType()
-    {
-        return ResponseType.JSON;
-    }
-
-    @Override
-    public String execute(Map<String, String> params)
+    protected String executeOnUiThread(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String parentFqn = JsonUtils.extractStringArgument(params, "parentFqn"); //$NON-NLS-1$
@@ -116,43 +104,19 @@ public class AddMetadataAttributeTool implements IMcpTool
                 "Usage: {parentFqn: 'Catalog.Products', attributeName: 'Weight'}").toJson(); //$NON-NLS-1$
         }
 
-        AtomicReference<String> resultRef = new AtomicReference<>();
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
-            try
-            {
-                resultRef.set(executeInternal(projectName, parentFqn, attributeName));
-            }
-            catch (Exception e)
-            {
-                Activator.logError("Error in add_metadata_attribute", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-
-        return resultRef.get();
+        return executeInternal(projectName, parentFqn, attributeName);
     }
 
     private String executeInternal(String projectName, String parentFqn, String attributeName)
     {
-        // Get project
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        // Get project and configuration
+        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        if (ctx.hasError())
         {
-            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
+            return ctx.error;
         }
-
-        // Get configuration
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        if (configProvider == null)
-        {
-            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
-        }
-        Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
-        {
-            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
+        IProject project = ctx.project;
+        Configuration config = ctx.config;
 
         // Get BM model
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
@@ -237,12 +201,7 @@ public class AddMetadataAttributeTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error adding attribute", e); //$NON-NLS-1$
-            String msg = e.getMessage();
-            if (e.getCause() != null && e.getCause().getMessage() != null)
-            {
-                msg = e.getCause().getMessage();
-            }
-            return ToolResult.error("Failed to add attribute: " + msg).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Failed to add attribute: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
         return ToolResult.success()

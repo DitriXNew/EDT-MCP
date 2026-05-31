@@ -10,16 +10,12 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EStructuralFeature;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -27,7 +23,6 @@ import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -37,7 +32,6 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
-import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -49,7 +43,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
  * to the corresponding Configuration collection. EDT persists the object into a
  * new {@code .mdo} file.
  */
-public class CreateMetadataObjectTool implements IMcpTool
+public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "create_metadata_object"; //$NON-NLS-1$
 
@@ -98,13 +92,7 @@ public class CreateMetadataObjectTool implements IMcpTool
     }
 
     @Override
-    public ResponseType getResponseType()
-    {
-        return ResponseType.JSON;
-    }
-
-    @Override
-    public String execute(Map<String, String> params)
+    protected String executeOnUiThread(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String metadataType = JsonUtils.extractStringArgument(params, "metadataType"); //$NON-NLS-1$
@@ -135,21 +123,7 @@ public class CreateMetadataObjectTool implements IMcpTool
                 "A name must start with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
 
-        AtomicReference<String> resultRef = new AtomicReference<>();
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
-            try
-            {
-                resultRef.set(executeInternal(projectName, metadataType, name, synonym, comment, language));
-            }
-            catch (Exception e)
-            {
-                Activator.logError("Error in create_metadata_object", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-
-        return resultRef.get();
+        return executeInternal(projectName, metadataType, name, synonym, comment, language);
     }
 
     private String executeInternal(String projectName, String metadataType, String name,
@@ -172,24 +146,14 @@ public class CreateMetadataObjectTool implements IMcpTool
             return ToolResult.error("No configuration collection mapping for type: " + canonicalType).toJson(); //$NON-NLS-1$
         }
 
-        // Get project
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        // Get project and configuration
+        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        if (ctx.hasError())
         {
-            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
+            return ctx.error;
         }
-
-        // Get configuration
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        if (configProvider == null)
-        {
-            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
-        }
-        Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
-        {
-            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
+        IProject project = ctx.project;
+        Configuration config = ctx.config;
 
         // Resolve the target collection reference and its element type
         EStructuralFeature feature = config.eClass().getEStructuralFeature(refName);
@@ -247,11 +211,6 @@ public class CreateMetadataObjectTool implements IMcpTool
         }
         final long configBmId = ((IBmObject)config).bmGetId();
         final String fqn = canonicalType + "." + name; //$NON-NLS-1$
-        final IModelObjectFactory factoryRef = factory;
-        final String refNameFinal = refName;
-        final String nameFinal = name;
-        final String synonymFinal = synonym;
-        final String commentFinal = comment;
 
         try
         {
@@ -267,35 +226,35 @@ public class CreateMetadataObjectTool implements IMcpTool
                         throw new RuntimeException("Configuration not found in transaction"); //$NON-NLS-1$
                     }
 
-                    MdObject newObject = (MdObject)factoryRef.create(eClass, version);
+                    MdObject newObject = (MdObject)factory.create(eClass, version);
                     if (newObject == null)
                     {
                         throw new RuntimeException("Factory returned null for type: " + eClass.getName()); //$NON-NLS-1$
                     }
 
-                    newObject.setName(nameFinal);
-                    if (synonymFinal != null && !synonymFinal.isEmpty())
+                    newObject.setName(name);
+                    if (synonym != null && !synonym.isEmpty())
                     {
-                        newObject.getSynonym().put(synonymLanguage, synonymFinal);
+                        newObject.getSynonym().put(synonymLanguage, synonym);
                     }
-                    if (commentFinal != null && !commentFinal.isEmpty())
+                    if (comment != null && !comment.isEmpty())
                     {
-                        newObject.setComment(commentFinal);
+                        newObject.setComment(comment);
                     }
 
                     // Register as a BM top object so EDT persists it into its own .mdo file
                     tx.attachTopObject((IBmObject)newObject, fqn);
 
                     // Add to the configuration collection
-                    Object collection = cfg.eGet(cfg.eClass().getEStructuralFeature(refNameFinal));
+                    Object collection = cfg.eGet(cfg.eClass().getEStructuralFeature(refName));
                     if (!(collection instanceof EList))
                     {
-                        throw new RuntimeException("Configuration feature '" + refNameFinal //$NON-NLS-1$
+                        throw new RuntimeException("Configuration feature '" + refName //$NON-NLS-1$
                             + "' is not a list"); //$NON-NLS-1$
                     }
                     ((EList<MdObject>)collection).add(newObject);
 
-                    factoryRef.fillDefaultReferences(newObject);
+                    factory.fillDefaultReferences(newObject);
                     return null;
                 }
             });
@@ -303,12 +262,7 @@ public class CreateMetadataObjectTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error creating metadata object", e); //$NON-NLS-1$
-            String msg = e.getMessage();
-            if (e.getCause() != null && e.getCause().getMessage() != null)
-            {
-                msg = e.getCause().getMessage();
-            }
-            return ToolResult.error("Failed to create object: " + msg).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
         return ToolResult.success()
