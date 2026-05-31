@@ -402,15 +402,25 @@ public class GetProjectErrorsTool implements IMcpTool
             return null;
         }
         
+        // Resolve the object presentation once; reused for the objects filter and the ErrorInfo.
+        // Failure handling differs by context (see below), so we only record the outcome here.
+        String objectPresentation = null;
+        boolean presentationResolved;
+        try
+        {
+            String p = marker.getObjectPresentation();
+            objectPresentation = p != null ? p : ""; //$NON-NLS-1$
+            presentationResolved = true;
+        }
+        catch (Exception e)
+        {
+            presentationResolved = false;
+        }
+        
         // Objects filter (FQN matching against the resolved object presentation)
         if (!objects.isEmpty())
         {
-            String objectPresentation;
-            try
-            {
-                objectPresentation = marker.getObjectPresentation();
-            }
-            catch (Exception e)
+            if (!presentationResolved)
             {
                 // Cannot resolve the location, so we cannot decide membership for an
                 // explicit object filter. The marker is excluded from the result; count it
@@ -418,7 +428,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 unresolvedFilteredOut[0]++;
                 return null;
             }
-            if (objectPresentation == null || objectPresentation.isEmpty())
+            if (objectPresentation.isEmpty())
             {
                 return null;
             }
@@ -439,14 +449,24 @@ public class GetProjectErrorsTool implements IMcpTool
             }
         }
         
-        // Build the ErrorInfo, reusing the already resolved symbolic check id.
+        // Build the ErrorInfo, reusing the already resolved symbolic check id and presentation.
         ErrorInfo error = new ErrorInfo();
         error.checkCode = shortUid;
         error.checkId = symbolicCheckId;
         error.hasDocumentation = symbolicCheckId != null && !symbolicCheckId.isEmpty()
             && GetCheckDescriptionTool.hasCheckDocumentation(symbolicCheckId);
         error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
-        error.objectPresentation = safeObjectPresentation(marker, unresolvedShown);
+        if (presentationResolved)
+        {
+            error.objectPresentation = objectPresentation;
+        }
+        else
+        {
+            // No objects filter was active (otherwise we would have returned above): keep the
+            // marker with a placeholder location instead of dropping it, and count it.
+            unresolvedShown[0]++;
+            error.objectPresentation = unresolvedPlaceholder(marker);
+        }
         return error;
     }
     
@@ -491,22 +511,13 @@ public class GetProjectErrorsTool implements IMcpTool
     }
     
     /**
-     * Reads {@link Marker#getObjectPresentation()} defensively. On resolution failure the
-     * marker is kept (never dropped) with a placeholder location, and counted.
+     * Placeholder location for a marker whose {@link Marker#getObjectPresentation()} could not
+     * be resolved, so the marker is reported instead of being dropped.
      */
-    private static String safeObjectPresentation(Marker marker, int[] unresolvedShown)
+    private static String unresolvedPlaceholder(Marker marker)
     {
-        try
-        {
-            String presentation = marker.getObjectPresentation();
-            return presentation != null ? presentation : ""; //$NON-NLS-1$
-        }
-        catch (Exception e)
-        {
-            unresolvedShown[0]++;
-            IProject project = marker.getProject();
-            return "<unresolved: " + (project != null ? project.getName() : "?") + ">"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        }
+        IProject project = marker.getProject();
+        return "<unresolved: " + (project != null ? project.getName() : "?") + ">"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
     
     /**
