@@ -374,7 +374,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * The filter order (severity -> checkId -> objects) is preserved so the
      * {@code unresolvedFilteredOut} counter keeps the same semantics.</p>
      */
-    private static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
+    static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
         Set<String> objects, ICheckRepository checkRepository, int[] unresolvedShown, int[] unresolvedFilteredOut)
     {
         // Severity filter
@@ -466,7 +466,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * Resolves the symbolic check id (e.g. "bsl-legacy-check-expression-type") for a marker's
      * short UID (e.g. "SU23") exactly once. Returns {@code null} when it cannot be resolved.
      */
-    private static String resolveSymbolicCheckId(Marker marker, String shortUid, ICheckRepository checkRepository)
+    static String resolveSymbolicCheckId(Marker marker, String shortUid, ICheckRepository checkRepository)
     {
         if (checkRepository == null || shortUid == null || shortUid.isEmpty() || marker.getProject() == null)
         {
@@ -488,7 +488,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * Returns true when the user supplied checkId substring matches either the marker
      * short UID or its already resolved symbolic check id.
      */
-    private static boolean checkIdMatches(String shortUid, String symbolicCheckId, String checkId)
+    static boolean checkIdMatches(String shortUid, String symbolicCheckId, String checkId)
     {
         String needle = checkId.toLowerCase();
         if (shortUid != null && shortUid.toLowerCase().contains(needle))
@@ -506,7 +506,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * Placeholder location for a marker whose {@link Marker#getObjectPresentation()} could not
      * be resolved, so the marker is reported instead of being dropped.
      */
-    private static String unresolvedPlaceholder(Marker marker)
+    static String unresolvedPlaceholder(Marker marker)
     {
         IProject project = marker.getProject();
         return "<unresolved: " + (project != null ? project.getName() : "?") + ">"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -515,7 +515,7 @@ public class GetProjectErrorsTool implements IMcpTool
     /**
      * Helper class to store error info.
      */
-    private static class ErrorInfo
+    static class ErrorInfo
     {
         String checkCode;          // Short UID like "SU23"
         String checkId;            // Symbolic ID like "bsl-legacy-check-expression-type"
