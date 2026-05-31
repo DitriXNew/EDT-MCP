@@ -56,9 +56,14 @@ public class SearchInCodeTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Full-text search across all BSL modules in a project. " + //$NON-NLS-1$
+        return "Literal/regex full-text search across all BSL modules in a project. " + //$NON-NLS-1$
                "Supports plain text and regex patterns, case sensitivity, " + //$NON-NLS-1$
                "context lines around matches, and file path filtering. " + //$NON-NLS-1$
+               "NOT dialect-aware: matching is purely textual, so a query spelled in one " + //$NON-NLS-1$
+               "BSL language (e.g. the English 'EndProcedure') will NOT find the " + //$NON-NLS-1$
+               "Russian-spelled equivalent and vice versa. To find an identifier " + //$NON-NLS-1$
+               "regardless of ru/en spelling, use get_symbol_info, find_references or " + //$NON-NLS-1$
+               "get_method_call_hierarchy instead. " + //$NON-NLS-1$
                "Use outputMode 'count' or 'files' for lightweight queries before full search."; //$NON-NLS-1$
     }
 
@@ -69,7 +74,10 @@ public class SearchInCodeTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("query", //$NON-NLS-1$
-                "Search string or regex pattern (required)", true) //$NON-NLS-1$
+                "Search string or regex pattern (required). Matched literally/as regex " //$NON-NLS-1$
+                + "against module text; NOT ru/en dialect-aware, so one language spelling " //$NON-NLS-1$
+                + "will not match the other. For identifier lookup use get_symbol_info / " //$NON-NLS-1$
+                + "find_references / get_method_call_hierarchy.", true) //$NON-NLS-1$
             .booleanProperty("caseSensitive", //$NON-NLS-1$
                 "Case-sensitive search. Default: false") //$NON-NLS-1$
             .booleanProperty("isRegex", //$NON-NLS-1$
