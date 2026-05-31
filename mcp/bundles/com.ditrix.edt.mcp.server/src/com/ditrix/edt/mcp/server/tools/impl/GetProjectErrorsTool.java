@@ -8,7 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -216,27 +216,25 @@ public class GetProjectErrorsTool implements IMcpTool
                 }
             }
             
-            // Determine the set of projects to scan. Marker presentation must be resolved
-            // inside a BM read transaction, and a transaction is bound to a single project's
-            // model, so we collect markers project by project.
-            List<IProject> targetProjects = new ArrayList<>();
-            if (projectName != null && !projectName.isEmpty())
-            {
-                targetProjects.add(workspace.getRoot().getProject(projectName));
-            }
-            else
-            {
-                // getProject() does not touch resolvedDataCache, so this pass is safe.
-                Set<IProject> distinct = new LinkedHashSet<>();
-                markerManager.markers().forEach(marker -> {
-                    IProject markerProject = marker.getProject();
-                    if (markerProject != null)
-                    {
-                        distinct.add(markerProject);
-                    }
-                });
-                targetProjects.addAll(distinct);
-            }
+            // Group markers by project in a single pass. getProject() does not touch
+            // resolvedDataCache, so this is safe outside a BM transaction. Grouping once avoids
+            // re-streaming all markers per project (previously O(markers x projects)).
+            // Marker presentation must still be resolved inside a BM read transaction bound to
+            // a single project's model, so processing below stays project by project.
+            Map<IProject, List<Marker>> markersByProject = new LinkedHashMap<>();
+            markerManager.markers().forEach(marker -> {
+                IProject markerProject = marker.getProject();
+                if (markerProject == null || !markerProject.exists())
+                {
+                    return;
+                }
+                if (projectName != null && !projectName.isEmpty()
+                    && !projectName.equals(markerProject.getName()))
+                {
+                    return;
+                }
+                markersByProject.computeIfAbsent(markerProject, k -> new ArrayList<>()).add(marker);
+            });
             
             final List<ErrorInfo> errors = new ArrayList<>();
             // Markers whose presentation could not be resolved even inside a transaction.
@@ -247,30 +245,24 @@ public class GetProjectErrorsTool implements IMcpTool
             //    filter is active and the location could not be resolved to test membership.
             final int[] unresolvedShown = {0};
             final int[] unresolvedFilteredOut = {0};
-            final IMarkerManager finalMarkerManager = markerManager;
             
-            for (IProject project : targetProjects)
+            for (Map.Entry<IProject, List<Marker>> entry : markersByProject.entrySet())
             {
-                if (project == null || !project.exists())
-                {
-                    continue;
-                }
                 if (errors.size() >= limit)
                 {
                     break;
                 }
                 
-                final IProject finalProject = project;
+                final List<Marker> projectMarkers = entry.getValue();
                 final int remaining = limit - errors.size();
                 
                 // Resolve the project's BM model so getObjectPresentation() can lazily
                 // resolve the marker target inside a read transaction. The getModel(IProject)
                 // overload is the idiomatic path used across the plugin (FindReferencesTool,
                 // AddMetadataAttributeTool, tag tools), so no IDtProjectManager is needed.
-                IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
+                IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
                 
-                Runnable collector = () -> finalMarkerManager.markers()
-                    .filter(marker -> finalProject.equals(marker.getProject()))
+                Runnable collector = () -> projectMarkers.stream()
                     .map(marker -> buildIfMatches(marker, finalSeverityFilter, finalCheckId,
                         finalObjects, checkRepository, unresolvedShown, unresolvedFilteredOut))
                     .filter(error -> error != null)
