@@ -52,6 +52,12 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
         "Catalog", "Document", "InformationRegister", "AccumulationRegister", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "Enum", "CommonModule", "Report", "DataProcessor")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
+    /** Comma-separated list for prose/error messages: {@code "Catalog, Document, …"}. */
+    private static final String SUPPORTED_TYPES_LIST = String.join(", ", SUPPORTED_TYPES); //$NON-NLS-1$
+
+    /** Quoted, comma-separated list for the JSON schema hint: {@code "'Catalog', 'Document', …"}. */
+    private static final String SUPPORTED_TYPES_QUOTED = "'" + String.join("', '", SUPPORTED_TYPES) + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
     @Override
     public String getName()
     {
@@ -62,8 +68,7 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
     public String getDescription()
     {
         return "Create a new top-level metadata object with EDT default content. " + //$NON-NLS-1$
-               "Supported types: Catalog, Document, InformationRegister, AccumulationRegister, " + //$NON-NLS-1$
-               "Enum, CommonModule, Report, DataProcessor. The object is created with a properly " + //$NON-NLS-1$
+               "Supported types: " + SUPPORTED_TYPES_LIST + ". The object is created with a properly " + //$NON-NLS-1$ //$NON-NLS-2$
                "generated UUID and default properties (same as the EDT 'New' wizard). " + //$NON-NLS-1$
                "Optionally sets synonym and comment. Russian type names are also supported."; //$NON-NLS-1$
     }
@@ -75,8 +80,7 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("metadataType", //$NON-NLS-1$
-                "Metadata type to create (required): 'Catalog', 'Document', 'InformationRegister', " + //$NON-NLS-1$
-                "'AccumulationRegister', 'Enum', 'CommonModule', 'Report', 'DataProcessor'. " + //$NON-NLS-1$
+                "Metadata type to create (required): " + SUPPORTED_TYPES_QUOTED + ". " + //$NON-NLS-1$ //$NON-NLS-2$
                 "Russian type names are also supported.", true) //$NON-NLS-1$
             .stringProperty("name", //$NON-NLS-1$
                 "Name for the new object (required). Must be a valid 1C identifier.", true) //$NON-NLS-1$
@@ -109,8 +113,7 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
         if (metadataType == null || metadataType.isEmpty())
         {
             return ToolResult.error("metadataType is required. " + //$NON-NLS-1$
-                "Supported: Catalog, Document, InformationRegister, AccumulationRegister, " + //$NON-NLS-1$
-                "Enum, CommonModule, Report, DataProcessor.").toJson(); //$NON-NLS-1$
+                "Supported: " + SUPPORTED_TYPES_LIST + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (name == null || name.isEmpty())
         {
@@ -138,7 +141,7 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
         if (!SUPPORTED_TYPES.contains(canonicalType))
         {
             return ToolResult.error("Metadata type '" + canonicalType + "' is not supported for creation. " + //$NON-NLS-1$ //$NON-NLS-2$
-                "Supported: " + String.join(", ", SUPPORTED_TYPES) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "Supported: " + SUPPORTED_TYPES_LIST + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         String refName = MetadataTypeUtils.getConfigReferenceName(canonicalType);
         if (refName == null)
