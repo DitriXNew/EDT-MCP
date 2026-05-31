@@ -12,7 +12,12 @@ nul
 !/source/compile.sh
 log.log
 .serena/
-.claude/
+# Ignore personal/local .claude state, but SHARE project skills, hooks and settings
+.claude/*
+!.claude/skills/
+!.claude/hooks/
+!.claude/settings.json
 /mcp/repositories/com.ditrix.edt.mcp.server.repository/target
 /tests/e2e/__pycache__/
 /tests/e2e/*.xml
+/.devtool

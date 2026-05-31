@@ -4,6 +4,9 @@
 
 MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (Claude, GitHub Copilot, Cursor, etc.) to interact with EDT workspace.
 
+> [!TIP]
+> **Contributing / making changes?** Read [CLAUDE.md](CLAUDE.md) first — it's the code-conduct "minefield map": hard don'ts and the stop-and-think-twice zones for this codebase (BM transactions, the bilingual ru/en model, cascading rename, etc.). Detailed how-to lives in the skills under `.claude/skills/`.
+
 > [!IMPORTANT]
 > **EDT version compatibility:**
 > EDT 2025.2+ is supported
