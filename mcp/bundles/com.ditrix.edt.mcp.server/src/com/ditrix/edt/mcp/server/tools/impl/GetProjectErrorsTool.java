@@ -243,8 +243,13 @@ public class GetProjectErrorsTool implements IMcpTool
             
             final List<ErrorInfo> errors = new ArrayList<>();
             // Markers whose presentation could not be resolved even inside a transaction.
-            // They are NOT dropped: they are reported with a placeholder location and counted.
-            final int[] unresolved = {0};
+            // They are NOT dropped, but they are surfaced differently depending on context,
+            // so we track the two cases separately to keep the warning text honest:
+            //  - unresolvedShown: reported in the table with a "<unresolved: ...>" placeholder;
+            //  - unresolvedFilteredOut: excluded from the result because an explicit objects
+            //    filter is active and the location could not be resolved to test membership.
+            final int[] unresolvedShown = {0};
+            final int[] unresolvedFilteredOut = {0};
             final IMarkerManager finalMarkerManager = markerManager;
             
             for (IProject project : targetProjects)
@@ -276,9 +281,9 @@ public class GetProjectErrorsTool implements IMcpTool
                 Runnable collector = () -> finalMarkerManager.markers()
                     .filter(marker -> finalProject.equals(marker.getProject()))
                     .filter(marker -> matchesFilters(marker, finalSeverityFilter, finalCheckId,
-                        finalObjects, checkRepository, unresolved))
+                        finalObjects, checkRepository, unresolvedFilteredOut))
                     .limit(remaining)
-                    .forEach(marker -> errors.add(toErrorInfo(marker, checkRepository, unresolved)));
+                    .forEach(marker -> errors.add(toErrorInfo(marker, checkRepository, unresolvedShown)));
                 
                 if (bmModel != null)
                 {
@@ -351,11 +356,18 @@ public class GetProjectErrorsTool implements IMcpTool
             }
             
             // Surface unresolved markers explicitly instead of silently dropping them.
-            if (unresolved[0] > 0)
+            // Two distinct cases, reported separately so each warning matches reality.
+            if (unresolvedShown[0] > 0)
             {
-                md.append("\n> ⚠️ ").append(unresolved[0]) //$NON-NLS-1$
+                md.append("\n> ⚠️ ").append(unresolvedShown[0]) //$NON-NLS-1$
                   .append(" marker(s) could not be resolved and are shown with a placeholder location. ") //$NON-NLS-1$
                   .append("Run clean_project / revalidate_objects to refresh them."); //$NON-NLS-1$
+            }
+            if (unresolvedFilteredOut[0] > 0)
+            {
+                md.append("\n> ⚠️ ").append(unresolvedFilteredOut[0]) //$NON-NLS-1$
+                  .append(" marker(s) were excluded from the object filter because their location could not be resolved. ") //$NON-NLS-1$
+                  .append("Run clean_project / revalidate_objects, or remove the objects filter, to include them."); //$NON-NLS-1$
             }
             
             return md.toString();
@@ -373,7 +385,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * {@link Marker#getObjectPresentation()} can resolve.
      */
     private static boolean matchesFilters(Marker marker, MarkerSeverity severityFilter,
-        String checkId, Set<String> objects, ICheckRepository checkRepository, int[] unresolved)
+        String checkId, Set<String> objects, ICheckRepository checkRepository, int[] unresolvedFilteredOut)
     {
         // Severity filter
         if (severityFilter != null && marker.getSeverity() != severityFilter)
@@ -399,8 +411,9 @@ public class GetProjectErrorsTool implements IMcpTool
             catch (Exception e)
             {
                 // Cannot resolve the location, so we cannot decide membership for an
-                // explicit object filter. Count it so the caller is warned.
-                unresolved[0]++;
+                // explicit object filter. The marker is excluded from the result; count it
+                // separately so the caller is warned that it was filtered out, not shown.
+                unresolvedFilteredOut[0]++;
                 return false;
             }
             if (objectPresentation == null || objectPresentation.isEmpty())
@@ -456,9 +469,9 @@ public class GetProjectErrorsTool implements IMcpTool
     /**
      * Builds an {@link ErrorInfo} from a marker. Must be called inside a BM read
      * transaction. If the object presentation cannot be resolved the marker is still
-     * reported with a placeholder location and counted via {@code unresolved}.
+     * reported with a placeholder location and counted via {@code unresolvedShown}.
      */
-    private static ErrorInfo toErrorInfo(Marker marker, ICheckRepository checkRepository, int[] unresolved)
+    private static ErrorInfo toErrorInfo(Marker marker, ICheckRepository checkRepository, int[] unresolvedShown)
     {
         ErrorInfo error = new ErrorInfo();
         String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
@@ -489,7 +502,7 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         
         error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
-        error.objectPresentation = safeObjectPresentation(marker, unresolved);
+        error.objectPresentation = safeObjectPresentation(marker, unresolvedShown);
         return error;
     }
     
@@ -497,7 +510,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * Reads {@link Marker#getObjectPresentation()} defensively. On resolution failure the
      * marker is kept (never dropped) with a placeholder location, and counted.
      */
-    private static String safeObjectPresentation(Marker marker, int[] unresolved)
+    private static String safeObjectPresentation(Marker marker, int[] unresolvedShown)
     {
         try
         {
@@ -506,7 +519,7 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         catch (Exception e)
         {
-            unresolved[0]++;
+            unresolvedShown[0]++;
             IProject project = marker.getProject();
             return "<unresolved: " + (project != null ? project.getName() : "?") + ">"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
