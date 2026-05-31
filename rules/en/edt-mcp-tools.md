@@ -2,7 +2,7 @@
 
 > The source of truth is the "Available Tools" section in the EDT-MCP repository `README.md`. If it differs from this file — trust the README.
 >
-> Total tools: **56**, organised into 9 groups.
+> Total tools: **57**, organised into 9 groups.
 
 ## Tool name prefixes across clients
 
@@ -44,7 +44,7 @@ In plugin settings (`Window -> Preferences -> MCP Server -> Tools`) the user sel
 
 | Preset | What is disabled |
 |---|---|
-| **All Tools** | Nothing (all 56 tools) |
+| **All Tools** | Nothing (all 57 tools) |
 | **Analysis Only** | Groups Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Available: Core/Project (except export/import), Errors & Problems, Code Intelligence, Tags |
 | **Code Review** | Same as Analysis Only, **plus** all BSL Code tools become available **except** `write_module_source`. So available: `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
 | **Development** | Only the Debugging group (including `debug_yaxunit_tests`, `start_profiling`, `get_profiling_results`). Refactoring, Translation, BSL Code, Applications are all available |

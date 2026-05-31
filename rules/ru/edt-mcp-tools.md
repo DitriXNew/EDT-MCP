@@ -2,7 +2,7 @@
 
 > Источник истины — раздел «Available Tools» в `README.md` репозитория EDT-MCP. Если расходится с этим файлом — верь README.
 >
-> Всего инструментов: **56**, разбиты на 9 групп.
+> Всего инструментов: **57**, разбиты на 9 групп.
 
 ## Префиксы имён в разных клиентах
 
@@ -44,7 +44,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 
 | Пресет | Что выключено |
 |---|---|
-| **All Tools** | Ничего (все 56 инструментов) |
+| **All Tools** | Ничего (все 57 инструментов) |
 | **Analysis Only** | Группы Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Доступны: Core/Project (кроме export/import), Errors & Problems, Code Intelligence, Tags |
 | **Code Review** | То же, что Analysis Only, **минус** добавляются доступными все инструменты BSL Code **кроме** `write_module_source`. То есть доступны `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
 | **Development** | Только группа Debugging (включая `debug_yaxunit_tests`, `start_profiling`, `get_profiling_results`). Refactoring, Translation, BSL Code, Applications — доступны |
