@@ -26,13 +26,13 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
-import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -293,31 +293,9 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
 
     private static String resolveLanguage(Configuration config, String language)
     {
-        if (language != null && !language.isEmpty())
-        {
-            return language;
-        }
-        // The synonym map is keyed by the language CODE (e.g. "en", "ru"), not by
-        // the Language object's name (e.g. "English"). Using the name would store
-        // the synonym under a key EDT never looks up, leaving the synonym blank in
-        // the editor.
-        Language defaultLanguage = config.getDefaultLanguage();
-        if (defaultLanguage != null
-            && defaultLanguage.getLanguageCode() != null
-            && !defaultLanguage.getLanguageCode().isEmpty())
-        {
-            return defaultLanguage.getLanguageCode();
-        }
-        // No default language: use the first configured language code instead of a
-        // hardcoded "ru", which would be wrong for non-Russian configurations.
-        for (Language lang : config.getLanguages())
-        {
-            if (lang != null && lang.getLanguageCode() != null && !lang.getLanguageCode().isEmpty())
-            {
-                return lang.getLanguageCode();
-            }
-        }
-        return null;
+        // Delegates to the shared resolver so reads and writes agree on the same
+        // language CODE key (see MetadataLanguageUtils).
+        return MetadataLanguageUtils.resolveLanguageCode(config, language);
     }
 
     private static boolean isValidIdentifier(String name)

@@ -10,6 +10,7 @@ import org.eclipse.emf.common.util.EMap;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -30,15 +31,10 @@ final class SubsystemUtils
      */
     static String resolveLanguage(String explicit, Configuration config)
     {
-        if (explicit != null && !explicit.isEmpty())
-        {
-            return explicit;
-        }
-        if (config != null && config.getDefaultLanguage() != null)
-        {
-            return config.getDefaultLanguage().getName();
-        }
-        return null;
+        // Delegate to the shared resolver (note the swapped argument order). This
+        // also fixes the former getName() bug: the synonym map is keyed by the
+        // language CODE, not the Language object's name.
+        return MetadataLanguageUtils.resolveLanguageCode(config, explicit);
     }
 
     /**
@@ -49,26 +45,7 @@ final class SubsystemUtils
      */
     static String getSynonymForLanguage(EMap<String, String> synonyms, String language)
     {
-        if (synonyms == null || synonyms.isEmpty())
-        {
-            return ""; //$NON-NLS-1$
-        }
-        if (language != null && !language.isEmpty())
-        {
-            String preferred = synonyms.get(language);
-            if (preferred != null && !preferred.isEmpty())
-            {
-                return preferred;
-            }
-        }
-        for (String value : synonyms.values())
-        {
-            if (value != null && !value.isEmpty())
-            {
-                return value;
-            }
-        }
-        return ""; //$NON-NLS-1$
+        return MetadataLanguageUtils.getSynonymForLanguage(synonyms == null ? null : synonyms.map(), language);
     }
 
     /**

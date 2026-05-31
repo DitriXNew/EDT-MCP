@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -150,19 +151,10 @@ public class GetMetadataDetailsTool implements IMcpTool
             return "Error: Could not get configuration for project: " + projectName; //$NON-NLS-1$
         }
         
-        // Determine language for synonyms
-        String effectiveLanguage = language;
-        if (effectiveLanguage == null || effectiveLanguage.isEmpty())
-        {
-            if (config.getDefaultLanguage() != null)
-            {
-                effectiveLanguage = config.getDefaultLanguage().getName();
-            }
-            else
-            {
-                effectiveLanguage = "ru"; //$NON-NLS-1$
-            }
-        }
+        // Determine language CODE for synonyms (the synonym map is keyed by code,
+        // e.g. "ru"/"en", not by the Language object's name). May be null when the
+        // configuration has no languages; downstream synonym lookup tolerates that.
+        String effectiveLanguage = MetadataLanguageUtils.resolveLanguageCode(config, language);
         
         StringBuilder sb = new StringBuilder();
         sb.append("# Metadata Details: ").append(projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$

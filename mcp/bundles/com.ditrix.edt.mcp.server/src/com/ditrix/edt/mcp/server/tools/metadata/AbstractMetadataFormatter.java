@@ -22,6 +22,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
  * Base class for metadata formatters with common utility methods.
@@ -37,28 +38,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
      */
     protected String getSynonym(EMap<String, String> synonymMap, String language)
     {
-        if (synonymMap == null || synonymMap.isEmpty())
-        {
-            return ""; //$NON-NLS-1$
-        }
-        
-        // Try the requested language first
-        String synonym = synonymMap.get(language);
-        if (synonym != null && !synonym.isEmpty())
-        {
-            return synonym;
-        }
-        
-        // Fallback: try to find any available synonym
-        for (String val : synonymMap.values())
-        {
-            if (val != null && !val.isEmpty())
-            {
-                return val;
-            }
-        }
-        
-        return ""; //$NON-NLS-1$
+        return MetadataLanguageUtils.getSynonymForLanguage(synonymMap == null ? null : synonymMap.map(), language);
     }
     
     /**

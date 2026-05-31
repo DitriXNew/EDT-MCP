@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
  * Tool to get list of metadata objects from 1C configuration.
@@ -194,20 +195,10 @@ public class GetMetadataObjectsTool implements IMcpTool
             return "Error: Could not get configuration for project: " + projectName; //$NON-NLS-1$
         }
         
-        // Determine language for synonyms
-        String effectiveLanguage = language;
-        if (effectiveLanguage == null || effectiveLanguage.isEmpty())
-        {
-            // Use configuration default language
-            if (config.getDefaultLanguage() != null)
-            {
-                effectiveLanguage = config.getDefaultLanguage().getName();
-            }
-            else
-            {
-                effectiveLanguage = "ru"; // Fallback to Russian //$NON-NLS-1$
-            }
-        }
+        // Determine language CODE for synonyms (the synonym map is keyed by code,
+        // e.g. "ru"/"en", not by the Language object's name). May be null when the
+        // configuration has no languages; getSynonymForLanguage tolerates that.
+        String effectiveLanguage = MetadataLanguageUtils.resolveLanguageCode(config, language);
         
         // Collect metadata objects
         List<MetadataInfo> objects = new ArrayList<>();
@@ -605,23 +596,8 @@ public class GetMetadataObjectsTool implements IMcpTool
      */
     private String getSynonymForLanguage(MetadataInfo info, String language)
     {
-        // Try the requested language first
-        String synonym = info.synonyms.get(language);
-        if (synonym != null && !synonym.isEmpty())
-        {
-            return synonym;
-        }
-        
-        // Fallback: try to find any available synonym
-        for (String val : info.synonyms.values())
-        {
-            if (val != null && !val.isEmpty())
-            {
-                return val;
-            }
-        }
-        
-        return ""; //$NON-NLS-1$
+        // info.synonyms is keyed by language CODE; delegate to the shared resolver.
+        return MetadataLanguageUtils.getSynonymForLanguage(info.synonyms, language);
     }
     
     /**
