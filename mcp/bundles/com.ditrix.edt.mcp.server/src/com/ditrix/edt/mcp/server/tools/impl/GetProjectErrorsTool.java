@@ -22,8 +22,6 @@ import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IDtProject;
-import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
@@ -176,7 +174,6 @@ public class GetProjectErrorsTool implements IMcpTool
             
             final ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
             IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-            IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
             
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             
@@ -267,16 +264,10 @@ public class GetProjectErrorsTool implements IMcpTool
                 final int remaining = limit - errors.size();
                 
                 // Resolve the project's BM model so getObjectPresentation() can lazily
-                // resolve the marker target inside a read transaction.
-                IBmModel bmModel = null;
-                if (bmModelManager != null && dtProjectManager != null)
-                {
-                    IDtProject dtProject = dtProjectManager.getDtProject(project);
-                    if (dtProject != null)
-                    {
-                        bmModel = bmModelManager.getModel(dtProject);
-                    }
-                }
+                // resolve the marker target inside a read transaction. The getModel(IProject)
+                // overload is the idiomatic path used across the plugin (FindReferencesTool,
+                // AddMetadataAttributeTool, tag tools), so no IDtProjectManager is needed.
+                IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
                 
                 Runnable collector = () -> finalMarkerManager.markers()
                     .filter(marker -> finalProject.equals(marker.getProject()))
