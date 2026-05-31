@@ -26,6 +26,7 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
@@ -204,8 +205,21 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
             return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
         }
 
-        // Resolve synonym language
-        final String synonymLanguage = resolveLanguage(config, language);
+        // Resolve synonym language (only required when a synonym is supplied)
+        final String synonymLanguage;
+        if (synonym != null && !synonym.isEmpty())
+        {
+            synonymLanguage = resolveLanguage(config, language);
+            if (synonymLanguage == null)
+            {
+                return ToolResult.error("Cannot determine a language code for the synonym " + //$NON-NLS-1$
+                    "in this configuration. Specify 'language' explicitly (e.g. 'en' or 'ru').").toJson(); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            synonymLanguage = null;
+        }
 
         // bmId of the configuration to re-fetch inside the transaction
         if (!(config instanceof IBmObject))
@@ -287,13 +301,23 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
         // the Language object's name (e.g. "English"). Using the name would store
         // the synonym under a key EDT never looks up, leaving the synonym blank in
         // the editor.
-        if (config.getDefaultLanguage() != null
-            && config.getDefaultLanguage().getLanguageCode() != null
-            && !config.getDefaultLanguage().getLanguageCode().isEmpty())
+        Language defaultLanguage = config.getDefaultLanguage();
+        if (defaultLanguage != null
+            && defaultLanguage.getLanguageCode() != null
+            && !defaultLanguage.getLanguageCode().isEmpty())
         {
-            return config.getDefaultLanguage().getLanguageCode();
+            return defaultLanguage.getLanguageCode();
         }
-        return "ru"; //$NON-NLS-1$
+        // No default language: use the first configured language code instead of a
+        // hardcoded "ru", which would be wrong for non-Russian configurations.
+        for (Language lang : config.getLanguages())
+        {
+            if (lang != null && lang.getLanguageCode() != null && !lang.getLanguageCode().isEmpty())
+            {
+                return lang.getLanguageCode();
+            }
+        }
+        return null;
     }
 
     private static boolean isValidIdentifier(String name)
