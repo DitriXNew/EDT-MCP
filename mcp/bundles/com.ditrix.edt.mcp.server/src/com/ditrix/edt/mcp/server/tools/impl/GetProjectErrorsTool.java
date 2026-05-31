@@ -271,10 +271,11 @@ public class GetProjectErrorsTool implements IMcpTool
                 
                 Runnable collector = () -> finalMarkerManager.markers()
                     .filter(marker -> finalProject.equals(marker.getProject()))
-                    .filter(marker -> matchesFilters(marker, finalSeverityFilter, finalCheckId,
-                        finalObjects, checkRepository, unresolvedFilteredOut))
+                    .map(marker -> buildIfMatches(marker, finalSeverityFilter, finalCheckId,
+                        finalObjects, checkRepository, unresolvedShown, unresolvedFilteredOut))
+                    .filter(error -> error != null)
                     .limit(remaining)
-                    .forEach(marker -> errors.add(toErrorInfo(marker, checkRepository, unresolvedShown)));
+                    .forEach(errors::add);
                 
                 if (bmModel != null)
                 {
@@ -371,24 +372,34 @@ public class GetProjectErrorsTool implements IMcpTool
     }
     
     /**
-     * Applies the severity, checkId and objects filters to a single marker.
-     * Must be called inside a BM read transaction so that
-     * {@link Marker#getObjectPresentation()} can resolve.
+     * Applies the severity/checkId/objects filters to a single marker and, if it passes,
+     * builds its {@link ErrorInfo}. Returns {@code null} when the marker is filtered out.
+     *
+     * <p>Must be called inside a BM read transaction so that
+     * {@link Marker#getObjectPresentation()} can resolve. The symbolic check id is resolved
+     * exactly once here and reused for both the checkId filter and the resulting
+     * {@link ErrorInfo}, avoiding a second {@link ICheckRepository#getUidForShortUid} call.
+     * The filter order (severity -> checkId -> objects) is preserved so the
+     * {@code unresolvedFilteredOut} counter keeps the same semantics.</p>
      */
-    private static boolean matchesFilters(Marker marker, MarkerSeverity severityFilter,
-        String checkId, Set<String> objects, ICheckRepository checkRepository, int[] unresolvedFilteredOut)
+    private static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, ICheckRepository checkRepository, int[] unresolvedShown, int[] unresolvedFilteredOut)
     {
         // Severity filter
         if (severityFilter != null && marker.getSeverity() != severityFilter)
         {
-            return false;
+            return null;
         }
+        
+        // Resolve the symbolic check id once; reused below for the checkId filter and display.
+        String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
+        String symbolicCheckId = resolveSymbolicCheckId(marker, shortUid, checkRepository);
         
         // checkId filter: match either the short UID (e.g. "SU23") or the symbolic id
         // (e.g. "semicolon-missing"). The short UID alone is rarely what callers type.
-        if (checkId != null && !checkId.isEmpty() && !checkIdMatches(marker, checkId, checkRepository))
+        if (checkId != null && !checkId.isEmpty() && !checkIdMatches(shortUid, symbolicCheckId, checkId))
         {
-            return false;
+            return null;
         }
         
         // Objects filter (FQN matching against the resolved object presentation)
@@ -405,96 +416,78 @@ public class GetProjectErrorsTool implements IMcpTool
                 // explicit object filter. The marker is excluded from the result; count it
                 // separately so the caller is warned that it was filtered out, not shown.
                 unresolvedFilteredOut[0]++;
-                return false;
+                return null;
             }
             if (objectPresentation == null || objectPresentation.isEmpty())
             {
-                return false;
+                return null;
             }
             
             String presentationLower = objectPresentation.toLowerCase();
+            boolean matched = false;
             for (String fqnVariant : objects)
             {
                 if (presentationLower.contains(fqnVariant))
                 {
-                    return true;
+                    matched = true;
+                    break;
                 }
             }
-            return false;
+            if (!matched)
+            {
+                return null;
+            }
         }
         
-        return true;
+        // Build the ErrorInfo, reusing the already resolved symbolic check id.
+        ErrorInfo error = new ErrorInfo();
+        error.checkCode = shortUid;
+        error.checkId = symbolicCheckId;
+        error.hasDocumentation = symbolicCheckId != null && !symbolicCheckId.isEmpty()
+            && GetCheckDescriptionTool.hasCheckDocumentation(symbolicCheckId);
+        error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
+        error.objectPresentation = safeObjectPresentation(marker, unresolvedShown);
+        return error;
+    }
+    
+    /**
+     * Resolves the symbolic check id (e.g. "bsl-legacy-check-expression-type") for a marker's
+     * short UID (e.g. "SU23") exactly once. Returns {@code null} when it cannot be resolved.
+     */
+    private static String resolveSymbolicCheckId(Marker marker, String shortUid, ICheckRepository checkRepository)
+    {
+        if (checkRepository == null || shortUid == null || shortUid.isEmpty() || marker.getProject() == null)
+        {
+            return null;
+        }
+        try
+        {
+            CheckUid uid = checkRepository.getUidForShortUid(shortUid, marker.getProject());
+            return uid != null ? uid.getCheckId() : null;
+        }
+        catch (Exception e)
+        {
+            // Ignore - caller falls back to the short UID
+            return null;
+        }
     }
     
     /**
      * Returns true when the user supplied checkId substring matches either the marker
-     * short UID or its symbolic check id.
+     * short UID or its already resolved symbolic check id.
      */
-    private static boolean checkIdMatches(Marker marker, String checkId, ICheckRepository checkRepository)
+    private static boolean checkIdMatches(String shortUid, String symbolicCheckId, String checkId)
     {
         String needle = checkId.toLowerCase();
-        String shortUid = marker.getCheckId();
         if (shortUid != null && shortUid.toLowerCase().contains(needle))
         {
             return true;
         }
-        if (checkRepository != null && shortUid != null && !shortUid.isEmpty() && marker.getProject() != null)
+        if (symbolicCheckId != null && symbolicCheckId.toLowerCase().contains(needle))
         {
-            try
-            {
-                CheckUid uid = checkRepository.getUidForShortUid(shortUid, marker.getProject());
-                if (uid != null && uid.getCheckId() != null
-                    && uid.getCheckId().toLowerCase().contains(needle))
-                {
-                    return true;
-                }
-            }
-            catch (Exception e)
-            {
-                // Ignore - fall back to short UID comparison result
-            }
+            return true;
         }
         return false;
-    }
-    
-    /**
-     * Builds an {@link ErrorInfo} from a marker. Must be called inside a BM read
-     * transaction. If the object presentation cannot be resolved the marker is still
-     * reported with a placeholder location and counted via {@code unresolvedShown}.
-     */
-    private static ErrorInfo toErrorInfo(Marker marker, ICheckRepository checkRepository, int[] unresolvedShown)
-    {
-        ErrorInfo error = new ErrorInfo();
-        String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
-        error.checkCode = shortUid;
-        
-        // Try to convert short UID (e.g. "SU23") to symbolic check ID (e.g. "bsl-legacy-check-expression-type")
-        if (checkRepository != null && !shortUid.isEmpty() && marker.getProject() != null)
-        {
-            try
-            {
-                CheckUid checkUid = checkRepository.getUidForShortUid(shortUid, marker.getProject());
-                if (checkUid != null)
-                {
-                    error.checkId = checkUid.getCheckId();
-                }
-            }
-            catch (Exception e)
-            {
-                // Ignore - will use short UID instead
-            }
-        }
-        
-        // Check if documentation exists for this check
-        error.hasDocumentation = false;
-        if (error.checkId != null && !error.checkId.isEmpty())
-        {
-            error.hasDocumentation = GetCheckDescriptionTool.hasCheckDocumentation(error.checkId);
-        }
-        
-        error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
-        error.objectPresentation = safeObjectPresentation(marker, unresolvedShown);
-        return error;
     }
     
     /**
