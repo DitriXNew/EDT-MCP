@@ -79,6 +79,11 @@ python tests/e2e/run_e2e_tests.py --wait 300
 python tests/e2e/run_e2e_tests.py --junit-xml results.xml
 ```
 
+When all E2E tests pass, the runner automatically **cleans up** artifacts it created
+(`E2EChk*` metadata objects): deletes each object via `delete_metadata_object`,
+runs `clean_project`, then verifies every object is gone via `get_metadata_details`.
+If cleanup fails, the process exits with code 1 even though the functional tests passed.
+
 **E2E tests cover:**
 
 | Category | Tools |

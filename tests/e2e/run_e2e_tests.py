@@ -155,6 +155,10 @@ class TestRunner:
         self._test("get_tasks", self.test_get_tasks)
         self._test("create_metadata_object", self.test_create_metadata_object)
         self._test("create_metadata_object_invalid_name", self.test_create_metadata_object_invalid_name)
+        self._test("create_metadata_object_with_language", self.test_create_metadata_object_with_language)
+        self._test("create_metadata_object_cyrillic_synonym", self.test_create_metadata_object_cyrillic_synonym)
+        self._test("add_metadata_attribute", self.test_add_metadata_attribute)
+        self._test("delete_metadata_object", self.test_delete_metadata_object)
 
         # Phase 4: BSL code tools
         self._section("BSL Code Tools")
@@ -173,7 +177,12 @@ class TestRunner:
 
         # Summary
         self._print_summary()
-        return all(r.passed for r in self.results)
+        all_passed = all(r.passed for r in self.results)
+        if all_passed:
+            if not self._cleanup_e2e_artifacts():
+                print("\n  CLEANUP FAILED — E2E artifacts may remain in the project")
+                return False
+        return all_passed
 
     def _section(self, title: str):
         print(f"\n--- {title} ---")
@@ -407,6 +416,130 @@ class TestRunner:
         "DataProcessor",
     ]
 
+    @classmethod
+    def e2e_artifact_fqns(cls) -> list[str]:
+        """FQNs created or touched by metadata-write E2E tests (deterministic names)."""
+        fqns = [f"{metadata_type}.E2EChk{metadata_type}"
+                for metadata_type in cls.CREATE_METADATA_TYPES]
+        fqns.extend([
+            "Catalog.E2EChkLangCatalog",
+            "Catalog.E2EChkCyrillicCatalog",
+            "Catalog.E2EChkAttrCatalog",
+            "DataProcessor.E2EChkDeleteTarget",
+        ])
+        return fqns
+
+    def _cleanup_e2e_artifacts(self) -> bool:
+        """After all tests pass: delete E2E objects, clean the project, verify removal."""
+        print("\n--- E2E Cleanup (post-pass) ---")
+        errors: list[str] = []
+        start = time.time()
+
+        for fqn in self.e2e_artifact_fqns():
+            resp = self._call("delete_metadata_object", {
+                "projectName": self.config.project,
+                "objectFqn": fqn,
+                "confirm": True,
+            })
+            try:
+                self._assert_success(resp, f"[cleanup delete {fqn}]")
+                text = self._get_result_text(resp)
+                if not self._is_delete_cleanup_ok(text):
+                    errors.append(
+                        f"{fqn}: unexpected delete response: {text[:300]}")
+                else:
+                    print(f"  deleted {fqn}")
+            except AssertionError as e:
+                errors.append(str(e))
+
+        if not self._run_clean_project_with_retry(errors):
+            pass  # errors already recorded
+
+        for fqn in self.e2e_artifact_fqns():
+            details = self._call("get_metadata_details", {
+                "projectName": self.config.project,
+                "objectFqns": [fqn],
+            })
+            try:
+                self._assert_success(details, f"[cleanup verify {fqn}]")
+                dtext = self._get_result_text(details)
+                if "not found" not in dtext.lower():
+                    errors.append(
+                        f"{fqn}: still present after cleanup:\n{dtext[:400]}")
+                else:
+                    print(f"  verified gone {fqn}")
+            except AssertionError as e:
+                errors.append(str(e))
+
+        duration_ms = (time.time() - start) * 1000
+        if errors:
+            print(f"  CLEANUP FAIL ({duration_ms:.0f}ms):")
+            for err in errors:
+                print(f"    - {err}")
+            return False
+
+        print(f"  CLEANUP OK ({duration_ms:.0f}ms)")
+        return True
+
+    @staticmethod
+    def _is_delete_cleanup_ok(text: str) -> bool:
+        """Delete succeeded, or object was already removed."""
+        lower = text.lower()
+        if "executed" in lower or "completed" in lower or "not found" in lower:
+            return True
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return False
+        if data.get("success"):
+            return True
+        err = str(data.get("error", "")).lower()
+        return "not found" in err
+
+    def _run_clean_project_with_retry(self, errors: list[str],
+                                    max_attempts: int = 15,
+                                    delay_sec: float = 2.0) -> bool:
+        """Retry clean_project while EDT reports the project is still building."""
+        for attempt in range(1, max_attempts + 1):
+            resp = self._call("clean_project", {"projectName": self.config.project})
+            try:
+                self._assert_success(resp, "[cleanup clean_project]")
+            except AssertionError as e:
+                errors.append(str(e))
+                return False
+            text = self._get_result_text(resp)
+            if self._is_clean_project_ok(resp, text):
+                print("  clean_project OK")
+                return True
+            if self._is_project_building(text) and attempt < max_attempts:
+                time.sleep(delay_sec)
+                continue
+            errors.append(f"clean_project failed: {text[:300]}")
+            return False
+        errors.append("clean_project failed: project still building after retries")
+        return False
+
+    @staticmethod
+    def _is_project_building(text: str) -> bool:
+        lower = text.lower()
+        if "building" in lower or "is building" in lower:
+            return True
+        try:
+            err = str(json.loads(text).get("error", "")).lower()
+            return "building" in err
+        except json.JSONDecodeError:
+            return False
+
+    @staticmethod
+    def _is_clean_project_ok(resp: dict, text: str) -> bool:
+        sc = resp.get("result", {}).get("structuredContent")
+        if isinstance(sc, dict) and sc.get("success"):
+            return True
+        try:
+            return bool(json.loads(text).get("success"))
+        except json.JSONDecodeError:
+            return '"success":true' in text.replace(" ", "")
+
     def _create_metadata_object(self, metadata_type: str):
         """Create one object of the given type, then read it back via EDT MCP
         (get_metadata_details) and verify the attributes that were set at
@@ -509,6 +642,171 @@ class TestRunner:
         text = self._get_result_text(resp)
         assert "Invalid object name" in text or "error" in text.lower(), \
             f"Expected validation error, got: {text}"
+
+    def test_create_metadata_object_with_language(self):
+        """Passing an explicit 'language' must store the synonym under that exact
+        language CODE key (covers the resolveLanguage explicit-parameter branch,
+        instead of the configuration default / fallback)."""
+        name = "E2EChkLangCatalog"
+        fqn = "Catalog." + name
+        synonym = "E2EChk Lang Synonym"
+
+        resp = self._call("create_metadata_object", {
+            "projectName": self.config.project,
+            "metadataType": "Catalog",
+            "name": name,
+            "synonym": synonym,
+            "language": "en",
+        })
+        self._assert_success(resp, "[create with language]")
+        text = self._get_result_text(resp)
+        assert (name in text or "already exists" in text), \
+            f"Unexpected create result: {text}"
+
+        # The synonym map must contain a row "| en | <synonym> |".
+        details = self._call("get_metadata_details", {
+            "projectName": self.config.project,
+            "objectFqns": [fqn],
+            "full": True,
+        })
+        self._assert_success(details, "[read-full lang]")
+        dtext = self._get_result_text(details)
+        found = False
+        for line in dtext.splitlines():
+            cells = [c.strip() for c in line.split("|")]
+            if len(cells) >= 4 and cells[2] == synonym and cells[1] == "en":
+                found = True
+                break
+        assert found, \
+            f"{fqn}: synonym '{synonym}' not stored under explicit 'en' key:\n{dtext}"
+
+    def test_create_metadata_object_cyrillic_synonym(self):
+        """Create a catalog with a Cyrillic synonym value and verify round-trip.
+        Language code still follows configuration default (en in TestConfiguration);
+        the test ensures non-Latin synonym text is stored and read back correctly."""
+        name = "E2EChkCyrillicCatalog"
+        fqn = "Catalog." + name
+        synonym = "Проверка синонима E2E"
+        comment = "Комментарий E2E на кириллице"
+
+        resp = self._call("create_metadata_object", {
+            "projectName": self.config.project,
+            "metadataType": "Catalog",
+            "name": name,
+            "synonym": synonym,
+            "comment": comment,
+        })
+        self._assert_success(resp, "[create cyrillic synonym]")
+        text = self._get_result_text(resp)
+        assert (name in text or "already exists" in text), \
+            f"Unexpected create result: {text}"
+
+        details = self._call("get_metadata_details", {
+            "projectName": self.config.project,
+            "objectFqns": [fqn],
+        })
+        self._assert_success(details, "[read cyrillic synonym]")
+        dtext = self._get_result_text(details)
+        assert synonym in dtext, \
+            f"{fqn}: Cyrillic synonym not returned:\n{dtext}"
+        assert comment in dtext, \
+            f"{fqn}: Cyrillic comment not returned:\n{dtext}"
+
+        details_full = self._call("get_metadata_details", {
+            "projectName": self.config.project,
+            "objectFqns": [fqn],
+            "full": True,
+        })
+        self._assert_success(details_full, "[read-full cyrillic synonym]")
+        ftext = self._get_result_text(details_full)
+        found = any(
+            len([c.strip() for c in line.split("|")]) >= 4
+            and [c.strip() for c in line.split("|")][2] == synonym
+            for line in ftext.splitlines()
+        )
+        assert found, \
+            f"{fqn}: Cyrillic synonym not in full synonym map:\n{ftext}"
+        self._assert_synonym_language_code(fqn, synonym)
+
+    def test_add_metadata_attribute(self):
+        """Add an attribute to a catalog, then read it back to confirm it landed.
+        Tolerant to re-runs: a second invocation returns an 'already exists'
+        tool-level message, which is still a valid (non-error) response."""
+        parent_name = "E2EChkAttrCatalog"
+        parent_fqn = "Catalog." + parent_name
+        attr = "E2EChkWeight"
+
+        # Ensure the parent object exists (ignore result; may already exist).
+        self._call("create_metadata_object", {
+            "projectName": self.config.project,
+            "metadataType": "Catalog",
+            "name": parent_name,
+        })
+
+        resp = self._call("add_metadata_attribute", {
+            "projectName": self.config.project,
+            "parentFqn": parent_fqn,
+            "attributeName": attr,
+        })
+        self._assert_success(resp, "[add_metadata_attribute]")
+        text = self._get_result_text(resp)
+        assert ("added successfully" in text or "already exists" in text), \
+            f"Unexpected add result: {text}"
+
+        # Read back: the attribute must appear in the full details.
+        details = self._call("get_metadata_details", {
+            "projectName": self.config.project,
+            "objectFqns": [parent_fqn],
+            "full": True,
+        })
+        self._assert_success(details, "[read attribute]")
+        dtext = self._get_result_text(details)
+        assert attr in dtext, \
+            f"{parent_fqn}: attribute '{attr}' not found in details:\n{dtext}"
+
+    def test_delete_metadata_object(self):
+        """Preview then execute a delete refactoring, and verify the object is
+        gone. Tolerant to re-runs: the target is (re)created up front."""
+        target_name = "E2EChkDeleteTarget"
+        target_fqn = "DataProcessor." + target_name
+
+        # (Re)create the throwaway target (ignore result; may already exist).
+        self._call("create_metadata_object", {
+            "projectName": self.config.project,
+            "metadataType": "DataProcessor",
+            "name": target_name,
+        })
+
+        # 1. Preview (confirm omitted -> default false): must succeed, not delete.
+        preview = self._call("delete_metadata_object", {
+            "projectName": self.config.project,
+            "objectFqn": target_fqn,
+        })
+        self._assert_success(preview, "[delete preview]")
+        ptext = self._get_result_text(preview)
+        assert "preview" in ptext.lower(), \
+            f"Expected a preview action, got:\n{ptext}"
+
+        # 2. Execute (confirm=true).
+        resp = self._call("delete_metadata_object", {
+            "projectName": self.config.project,
+            "objectFqn": target_fqn,
+            "confirm": True,
+        })
+        self._assert_success(resp, "[delete execute]")
+        text = self._get_result_text(resp)
+        assert ("executed" in text.lower() or "completed" in text.lower()), \
+            f"Unexpected delete result: {text}"
+
+        # 3. Verify the object is gone.
+        details = self._call("get_metadata_details", {
+            "projectName": self.config.project,
+            "objectFqns": [target_fqn],
+        })
+        self._assert_success(details, "[verify deleted]")
+        dtext = self._get_result_text(details)
+        assert "not found" in dtext.lower(), \
+            f"{target_fqn}: object still present after delete:\n{dtext}"
 
     # ──────────────────────────────────────────────────────────────────────
     # BSL Code Tools
