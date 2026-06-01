@@ -16,11 +16,12 @@ public class ToolCallResult
 {
     private List<ContentItem> content = new ArrayList<>();
     private Object structuredContent;
-    
+    private Boolean isError;
+
     private ToolCallResult()
     {
     }
-    
+
     /**
      * Creates a text content result.
      */
@@ -30,15 +31,30 @@ public class ToolCallResult
         result.content.add(ContentItem.text(text));
         return result;
     }
-    
+
     /**
-     * Creates a JSON content result with structuredContent.
+     * Creates a successful JSON content result with structuredContent.
      */
     public static ToolCallResult json(Object structuredContent)
     {
+        return json(structuredContent, false);
+    }
+
+    /**
+     * Creates a JSON content result with structuredContent. When {@code isError}
+     * is true the result is flagged with {@code isError:true} per the MCP
+     * tools/call contract, so clients can distinguish a tool-level failure from a
+     * success (the shared Gson omits the field when it is false/null).
+     */
+    public static ToolCallResult json(Object structuredContent, boolean isError)
+    {
         ToolCallResult result = new ToolCallResult();
-        result.content.add(ContentItem.text("Done")); //$NON-NLS-1$
+        result.content.add(ContentItem.text(isError ? "Error" : "Done")); //$NON-NLS-1$ //$NON-NLS-2$
         result.structuredContent = structuredContent;
+        if (isError)
+        {
+            result.isError = Boolean.TRUE;
+        }
         return result;
     }
     
@@ -70,6 +86,11 @@ public class ToolCallResult
     public Object getStructuredContent()
     {
         return structuredContent;
+    }
+
+    public Boolean getIsError()
+    {
+        return isError;
     }
     
     /**

@@ -364,13 +364,17 @@ public class McpProtocolHandler
     
     /**
      * Builds tool call response for JSON result.
-     * Uses structuredContent per MCP 2025-11-25.
+     * Uses structuredContent per MCP 2025-11-25. A {@code ToolResult.error} JSON
+     * payload (success:false / error field) is flagged with {@code isError:true}
+     * so MCP clients can detect a tool-level failure instead of treating every
+     * tools/call as successful.
      */
     private String buildToolCallJsonResponse(String jsonResult, Object requestId)
     {
         // Parse the JSON string to JsonElement for proper nesting
         JsonElement structured = JsonParser.parseString(jsonResult);
-        ToolCallResult toolResult = ToolCallResult.json(structured);
+        boolean isError = isJsonErrorPayload(jsonResult);
+        ToolCallResult toolResult = ToolCallResult.json(structured, isError);
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
     }
     

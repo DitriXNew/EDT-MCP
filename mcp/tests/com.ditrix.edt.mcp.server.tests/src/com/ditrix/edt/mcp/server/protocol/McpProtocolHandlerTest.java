@@ -294,6 +294,40 @@ public class McpProtocolHandlerTest
         assertNotNull("Should return error for null tool name", json.get("error"));
     }
 
+    @Test
+    public void testToolCallErrorPayloadFlagsIsError()
+    {
+        // A JSON tool returning a ToolResult.error payload (success:false) must be
+        // surfaced with isError:true so clients can detect a tool-level failure.
+        registry.register(new StubJsonTool("failing_tool",
+            "{\"success\":false,\"error\":\"boom\"}"));
+
+        String request = buildToolCallRequest(1, "failing_tool", null);
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNull("tool-level failure is not a JSON-RPC error", json.get("error"));
+        JsonObject result = json.getAsJsonObject("result");
+        assertTrue("error payload must set isError:true",
+            result.get("isError").getAsBoolean());
+        assertFalse("structuredContent must carry the failure",
+            result.getAsJsonObject("structuredContent").get("success").getAsBoolean());
+    }
+
+    @Test
+    public void testToolCallSuccessPayloadOmitsIsError()
+    {
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+
+        String request = buildToolCallRequest(1, "ok_tool", null);
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        JsonObject result = json.getAsJsonObject("result");
+        assertFalse("success result must not carry isError", result.has("isError"));
+        assertEquals(7, result.getAsJsonObject("structuredContent").get("value").getAsInt());
+    }
+
     // === Helpers ===
 
     private String buildJsonRpcRequest(Object id, String method, String paramsJson)
@@ -363,5 +397,36 @@ public class McpProtocolHandlerTest
 
         @Override
         public String execute(Map<String, String> params) { return "{}"; }
+    }
+
+    /**
+     * IMcpTool stub with a JSON response type returning a fixed payload, used to
+     * exercise the isError flagging on the tools/call JSON path.
+     */
+    private static class StubJsonTool implements IMcpTool
+    {
+        private final String name;
+        private final String payload;
+
+        StubJsonTool(String name, String payload)
+        {
+            this.name = name;
+            this.payload = payload;
+        }
+
+        @Override
+        public String getName() { return name; }
+
+        @Override
+        public String getDescription() { return "stub json tool"; }
+
+        @Override
+        public String getInputSchema() { return "{\"type\":\"object\"}"; }
+
+        @Override
+        public ResponseType getResponseType() { return ResponseType.JSON; }
+
+        @Override
+        public String execute(Map<String, String> params) { return payload; }
     }
 }

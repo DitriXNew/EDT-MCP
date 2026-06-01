@@ -44,6 +44,36 @@ public class ToolCallResultTest
     }
 
     @Test
+    public void testJsonErrorResultSetsIsError()
+    {
+        JsonElement structured = JsonParser.parseString("{\"success\":false,\"error\":\"boom\"}");
+        ToolCallResult result = ToolCallResult.json(structured, true);
+
+        assertEquals(Boolean.TRUE, result.getIsError());
+        assertEquals("Error", result.getContent().get(0).getText());
+
+        String json = GsonProvider.toJson(result);
+        JsonElement element = JsonParser.parseString(json);
+        assertTrue("error result must carry isError:true",
+            element.getAsJsonObject().get("isError").getAsBoolean());
+    }
+
+    @Test
+    public void testJsonSuccessOmitsIsError()
+    {
+        JsonElement structured = JsonParser.parseString("{\"count\":42}");
+        ToolCallResult result = ToolCallResult.json(structured);
+
+        assertNull(result.getIsError());
+        assertEquals("Done", result.getContent().get(0).getText());
+
+        String json = GsonProvider.toJson(result);
+        JsonElement element = JsonParser.parseString(json);
+        assertFalse("success result must not carry isError",
+            element.getAsJsonObject().has("isError"));
+    }
+
+    @Test
     public void testResourceResult()
     {
         ToolCallResult result = ToolCallResult.resource(
