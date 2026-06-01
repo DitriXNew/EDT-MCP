@@ -163,23 +163,17 @@ public class GetTasksTool implements IMcpTool
             }
             else
             {
-                // Table header
-                md.append("| Type | Priority | Message | Path | Line |\n"); //$NON-NLS-1$
-                md.append("|------|----------|---------|------|------|\n"); //$NON-NLS-1$
-                
+                // Table header (cells escaped by MarkdownUtils.tableRow)
+                md.append(MarkdownUtils.tableHeader("Type", "Priority", "Message", "Path", "Line")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+
                 for (TaskInfo task : tasks)
                 {
-                    md.append("| "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(task.type));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(task.priority));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(task.message));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(task.path));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(task.line);
-                    md.append(" |\n"); //$NON-NLS-1$
+                    md.append(MarkdownUtils.tableRow(
+                        task.type,
+                        task.priority,
+                        task.message,
+                        task.path,
+                        String.valueOf(task.line)));
                 }
             }
         }

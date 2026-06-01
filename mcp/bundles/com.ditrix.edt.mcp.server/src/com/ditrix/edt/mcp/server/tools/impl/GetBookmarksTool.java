@@ -171,21 +171,16 @@ public class GetBookmarksTool implements IMcpTool
             }
             else
             {
-                // Table header
-                md.append("| Project | Message | Path | Line |\n"); //$NON-NLS-1$
-                md.append("|---------|---------|------|------|\n"); //$NON-NLS-1$
-                
+                // Table header (cells escaped by MarkdownUtils.tableRow)
+                md.append(MarkdownUtils.tableHeader("Project", "Message", "Path", "Line")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
                 for (BookmarkInfo bookmark : bookmarks)
                 {
-                    md.append("| "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(bookmark.project));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(bookmark.message));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(bookmark.path));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(bookmark.line);
-                    md.append(" |\n"); //$NON-NLS-1$
+                    md.append(MarkdownUtils.tableRow(
+                        bookmark.project,
+                        bookmark.message,
+                        bookmark.path,
+                        String.valueOf(bookmark.line)));
                 }
             }
         }
