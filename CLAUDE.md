@@ -64,6 +64,21 @@ This file is about **what NOT to do** and **where to stop and think twice**. For
 
 ---
 
+## 🔨 Build & validate locally (you CAN compile — do it before claiming "done")
+
+This is a Maven/Tycho project under `mcp/`. **A local build is available** — use it to validate changes; do not assume "compile is verified only by review/grep." The full reference is README "Building from source" (and the `edt-mcp-build-test` skill).
+
+- **One command** (compile + unit tests, same as CI): from the repo root
+  `bash source/compile.sh` — or to skip Surefire: `bash source/compile.sh --skip-tests`.
+- The toolchain is **not on `PATH`** by default; pass it explicitly (paths are environment-specific — discover them, don't hardcode into committed files):
+  `bash source/compile.sh --java-home "<JDK17 home>" --maven-home "<maven home>"`.
+  CI itself runs `mvn clean verify --batch-mode -T 1C` in `mcp/` on JDK 17.
+- **First build is slow** (Tycho pulls the EDT p2 repo from `edt.1c.ru` + Eclipse SDK, hundreds of MB); once the `~/.m2/repository/p2` + `.cache/tycho` caches exist, it runs in ~1 minute. If those caches are absent and there's no network, the build legitimately can't run — say so rather than fake it.
+- **Tests need the target platform too** (Mockito/JUnit come from the p2 target, not plain Maven Central) — a green `compile.sh` run is what actually proves Java changes; greps only catch anchor/text problems.
+- **Still unrunnable locally without EDT:** the `run_e2e_tests.py` e2e suite needs a live EDT workbench + MCP server. The formatter/synonym and error-shape contracts are e2e-only — those stay "verify in EDT."
+
+---
+
 ## 🤖 For agents (specifically)
 
 - **Verify the class/method/helper actually exists** before referencing or calling it. During the review, agents invented non-existent classes — `grep`/`Read` before asserting.

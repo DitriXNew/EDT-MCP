@@ -13,9 +13,20 @@ description: How to build the EDT-MCP Eclipse plugin (Tycho/Maven) and run its u
 
 ## Сборка
 
-Tycho-сборка из `mcp/` (Maven). Артефакт — p2 update-site в `repositories/com.ditrix.edt.mcp.server.repository/target`.
+Tycho-сборка из `mcp/` (Maven, JDK 17). Артефакт — p2 update-site в `repositories/com.ditrix.edt.mcp.server.repository/target`.
 
-> Команды сборки/окружение могут отличаться на машине — уточнить в README.md (секция установки/сборки) и в `mcp/` (pom/target-platform). Не выдумывать версии и пути; брать из репозитория.
+**Локальная сборка доступна — пользуйся ей для валидации правок Java** (не «проверено только ревью/грепом»). Канонический скрипт — `source/compile.sh` (он же воспроизводит CI-флоу `mvn clean verify -T 1C` из `.github/workflows/build.yml`):
+
+```bash
+# из корня репо: компиляция + юнит-тесты
+bash source/compile.sh
+# только компиляция (без Surefire) — быстрее
+bash source/compile.sh --skip-tests
+```
+
+- Тулчейн (JDK 17 + Maven 3.9+) часто **не на `PATH`** — передавай явно: `--java-home <JDK17 home> --maven-home <maven home>` (или env `JAVA_HOME`/`MAVEN_HOME`). Конкретные пути **зависят от машины — выясняй на месте**, не хардкодь в репозиторные файлы. Точные опции — в README «Building from source».
+- **Первая сборка медленная**: Tycho тянет EDT p2-репозиторий (`edt.1c.ru`) + Eclipse SDK (сотни МБ). После прогрева кэшей (`~/.m2/repository/p2`, `.cache/tycho`) — ~1 минута. Если кэшей нет и нет сети — сборка честно не пойдёт; так и сказать, не имитировать «зелёно».
+- **Юнит-тестам тоже нужна target-платформа** (Mockito/JUnit идут из p2-таргета, не из обычного Maven Central) — зелёный `compile.sh` и есть настоящее доказательство для Java-правок; греп ловит только проблемы якорей/текста.
 
 ## Юнит-тесты — конвенции
 
