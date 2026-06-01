@@ -330,6 +330,48 @@ public class McpProtocolHandlerTest
         assertEquals(7, result.getAsJsonObject("structuredContent").get("value").getAsInt());
     }
 
+    @Test
+    public void testMarkdownErrorPayloadDeliveredAsJsonError()
+    {
+        // A MARKDOWN tool that returns a ToolResult.error JSON payload is delivered
+        // as a structured JSON error (isError:true), not wrapped as a markdown
+        // resource — failures are machine-detectable regardless of response type.
+        registry.register(new StubTypedTool("md_fail",
+            "{\"success\":false,\"error\":\"boom\"}", IMcpTool.ResponseType.MARKDOWN));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "md_fail", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertTrue("markdown error payload must set isError:true",
+            result.has("isError") && result.get("isError").getAsBoolean());
+        assertNotNull("error must carry structuredContent, not a resource",
+            result.get("structuredContent"));
+    }
+
+    @Test
+    public void testMarkdownNormalDeliveredAsResource()
+    {
+        // Normal markdown output is unaffected: embedded resource, no isError.
+        registry.register(new StubTypedTool("md_ok", "# Title", IMcpTool.ResponseType.MARKDOWN));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "md_ok", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertFalse("normal markdown must not carry isError", result.has("isError"));
+        assertEquals("resource",
+            result.getAsJsonArray("content").get(0).getAsJsonObject().get("type").getAsString());
+    }
+
+    @Test
+    public void testTextErrorPayloadDeliveredAsJsonError()
+    {
+        registry.register(new StubTypedTool("txt_fail",
+            "{\"success\":false,\"error\":\"boom\"}", IMcpTool.ResponseType.TEXT));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "txt_fail", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertTrue("text error payload must set isError:true",
+            result.has("isError") && result.get("isError").getAsBoolean());
+    }
+
     // === Helpers ===
 
     private String buildJsonRpcRequest(Object id, String method, String paramsJson)
@@ -427,6 +469,39 @@ public class McpProtocolHandlerTest
 
         @Override
         public ResponseType getResponseType() { return ResponseType.JSON; }
+
+        @Override
+        public String execute(Map<String, String> params) { return payload; }
+    }
+
+    /**
+     * IMcpTool stub with a configurable response type returning a fixed payload,
+     * used to exercise the isJsonErrorPayload diversion on the MARKDOWN/TEXT paths.
+     */
+    private static class StubTypedTool implements IMcpTool
+    {
+        private final String name;
+        private final String payload;
+        private final ResponseType responseType;
+
+        StubTypedTool(String name, String payload, ResponseType responseType)
+        {
+            this.name = name;
+            this.payload = payload;
+            this.responseType = responseType;
+        }
+
+        @Override
+        public String getName() { return name; }
+
+        @Override
+        public String getDescription() { return "stub typed tool"; }
+
+        @Override
+        public String getInputSchema() { return "{\"type\":\"object\"}"; }
+
+        @Override
+        public ResponseType getResponseType() { return responseType; }
 
         @Override
         public String execute(Map<String, String> params) { return payload; }

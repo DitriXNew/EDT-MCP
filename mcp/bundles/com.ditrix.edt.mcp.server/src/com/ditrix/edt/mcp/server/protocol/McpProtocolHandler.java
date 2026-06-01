@@ -219,6 +219,13 @@ public class McpProtocolHandler
                 }
                 return buildToolCallJsonResponse(result, requestId);
             case MARKDOWN:
+                // A ToolResult.error JSON payload is delivered as a structured JSON
+                // error (isError:true) instead of a markdown resource, so failures
+                // are machine-detectable regardless of the declared response type.
+                if (isJsonErrorPayload(result))
+                {
+                    return buildToolCallJsonResponse(result, requestId);
+                }
                 // Append user signal as markdown
                 if (signal != null)
                 {
@@ -242,6 +249,12 @@ public class McpProtocolHandler
                 return buildToolCallResourceBlobResponse(result, "image/png", imageFileName, requestId); //$NON-NLS-1$
             case TEXT:
             default:
+                // See MARKDOWN: a ToolResult.error JSON payload is delivered as a
+                // structured JSON error regardless of the declared response type.
+                if (isJsonErrorPayload(result))
+                {
+                    return buildToolCallJsonResponse(result, requestId);
+                }
                 // Append user signal as text
                 if (signal != null)
                 {
