@@ -39,7 +39,6 @@ public class BuiltInToolTestCoverageTest
     private static final Set<String> KNOWN_UNTESTED = new HashSet<>(Arrays.asList(
         "GetEdtVersionTool", //$NON-NLS-1$
         "ListProjectsTool", //$NON-NLS-1$
-        "GetConfigurationPropertiesTool", //$NON-NLS-1$
         "CleanProjectTool", //$NON-NLS-1$
         "RevalidateObjectsTool", //$NON-NLS-1$
         "GetProblemSummaryTool", //$NON-NLS-1$
@@ -49,15 +48,12 @@ public class BuiltInToolTestCoverageTest
         "GetPlatformDocumentationTool", //$NON-NLS-1$
         "GetMetadataObjectsTool", //$NON-NLS-1$
         "GetMetadataDetailsTool", //$NON-NLS-1$
-        "ListSubsystemsTool", //$NON-NLS-1$
         "GetSubsystemContentTool", //$NON-NLS-1$
         "GetTagsTool", //$NON-NLS-1$
         "GetObjectsByTagsTool", //$NON-NLS-1$
         "UpdateDatabaseTool", //$NON-NLS-1$
         "ListConfigurationsTool", //$NON-NLS-1$
-        "GetModuleStructureTool", //$NON-NLS-1$
         "ListModulesTool", //$NON-NLS-1$
-        "SearchInCodeTool", //$NON-NLS-1$
         "GetFormLayoutSnapshotTool", //$NON-NLS-1$
         "GetFormScreenshotTool", //$NON-NLS-1$
         "RenameMetadataObjectTool")); //$NON-NLS-1$
