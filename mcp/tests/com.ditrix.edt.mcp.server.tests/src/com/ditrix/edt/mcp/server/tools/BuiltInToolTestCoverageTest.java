@@ -40,16 +40,12 @@ public class BuiltInToolTestCoverageTest
         "GetEdtVersionTool", //$NON-NLS-1$
         "ListProjectsTool", //$NON-NLS-1$
         "CleanProjectTool", //$NON-NLS-1$
-        "RevalidateObjectsTool", //$NON-NLS-1$
-        "GetProblemSummaryTool", //$NON-NLS-1$
         "GetBookmarksTool", //$NON-NLS-1$
         "GetTasksTool", //$NON-NLS-1$
         "GetCheckDescriptionTool", //$NON-NLS-1$
         "GetPlatformDocumentationTool", //$NON-NLS-1$
-        "GetMetadataDetailsTool", //$NON-NLS-1$
         "UpdateDatabaseTool", //$NON-NLS-1$
         "ListConfigurationsTool", //$NON-NLS-1$
-        "ListModulesTool", //$NON-NLS-1$
         "GetFormLayoutSnapshotTool", //$NON-NLS-1$
         "GetFormScreenshotTool", //$NON-NLS-1$
         "RenameMetadataObjectTool")); //$NON-NLS-1$
