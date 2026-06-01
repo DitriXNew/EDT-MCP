@@ -143,6 +143,70 @@ public class JsonUtilsTest
         assertEquals(50, JsonUtils.extractIntArgument(params, "limit", 50));
     }
 
+    @Test
+    public void testExtractIntArgumentOutOfRange()
+    {
+        // Beyond Integer.MAX_VALUE -> default (the range guard rejects it).
+        Map<String, String> params = new HashMap<>();
+        params.put("limit", "3000000000");
+        assertEquals(50, JsonUtils.extractIntArgument(params, "limit", 50));
+    }
+
+    // --- extractLongArgument ---
+
+    @Test
+    public void testExtractLongArgumentValid()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("threadId", "42");
+        assertEquals(42L, JsonUtils.extractLongArgument(params, "threadId", -1L));
+    }
+
+    @Test
+    public void testExtractLongArgumentFloat()
+    {
+        // Gson may serialize a JSON integer as "42.0".
+        Map<String, String> params = new HashMap<>();
+        params.put("threadId", "42.0");
+        assertEquals(42L, JsonUtils.extractLongArgument(params, "threadId", -1L));
+    }
+
+    @Test
+    public void testExtractLongArgumentNonInteger()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("threadId", "42.5");
+        assertEquals(-1L, JsonUtils.extractLongArgument(params, "threadId", -1L));
+    }
+
+    @Test
+    public void testExtractLongArgumentInvalid()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("threadId", "abc");
+        assertEquals(-1L, JsonUtils.extractLongArgument(params, "threadId", -1L));
+    }
+
+    @Test
+    public void testExtractLongArgumentMissingNullEmpty()
+    {
+        assertEquals(-1L, JsonUtils.extractLongArgument(new HashMap<>(), "threadId", -1L));
+        assertEquals(-1L, JsonUtils.extractLongArgument(null, "threadId", -1L));
+        Map<String, String> params = new HashMap<>();
+        params.put("threadId", "");
+        assertEquals(-1L, JsonUtils.extractLongArgument(params, "threadId", -1L));
+    }
+
+    @Test
+    public void testExtractLongArgumentBeyondIntRange()
+    {
+        // 3_000_000_000 exceeds Integer.MAX_VALUE but is a valid long -> proves it
+        // is parsed as a long, not truncated to int (frameRef/threadId can be large).
+        Map<String, String> params = new HashMap<>();
+        params.put("frameRef", "3000000000");
+        assertEquals(3000000000L, JsonUtils.extractLongArgument(params, "frameRef", -1L));
+    }
+
     // --- extractArrayArgument ---
 
     @Test
