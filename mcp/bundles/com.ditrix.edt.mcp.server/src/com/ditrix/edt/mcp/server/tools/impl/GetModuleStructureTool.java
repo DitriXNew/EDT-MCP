@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -153,10 +154,16 @@ public class GetModuleStructureTool implements IMcpTool
                    "Make sure project '" + projectName + "' is open and fully indexed in EDT."; //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        List<RegionInfo> regions = collectRegions(module);
+        // Load the source lines once: needed for accurate region end-line
+        // detection (the AST end line of a RegionPreprocessor is unreliable —
+        // it spans to the end of the module) and, when requested, for
+        // doc-comment extraction.
+        List<String> sourceLines = loadSourceLines(module);
+
+        List<RegionInfo> regions = collectRegions(module, sourceLines);
 
         // Collect methods
-        List<MethodInfo> methods = collectMethods(module, regions, includeComments);
+        List<MethodInfo> methods = collectMethods(module, regions, includeComments, sourceLines);
 
         // Collect variables if requested
         List<VariableInfo> variables = includeVariables ? collectVariables(module, regions) : null;
@@ -295,9 +302,11 @@ public class GetModuleStructureTool implements IMcpTool
 
 
     /**
-     * Collects regions from the BSL AST model.
+     * Collects regions from the BSL AST model. Region names and start lines come
+     * from the AST (so the name is resolved regardless of ru/en dialect); the
+     * end line is matched in the source (see {@link #computeRegionEndLine}).
      */
-    private List<RegionInfo> collectRegions(Module module)
+    private List<RegionInfo> collectRegions(Module module, List<String> sourceLines)
     {
         List<RegionInfo> regions = new ArrayList<>();
 
@@ -311,7 +320,7 @@ public class GetModuleStructureTool implements IMcpTool
                     RegionInfo info = new RegionInfo();
                     info.name = region.getName();
                     info.startLine = BslModuleUtils.getStartLine(region);
-                    info.endLine = computeRegionEndLine(region, info.startLine);
+                    info.endLine = computeRegionEndLine(sourceLines, info.startLine);
                     if (info.name != null && !info.name.isEmpty() && info.startLine > 0)
                     {
                         regions.add(info);
@@ -327,51 +336,95 @@ public class GetModuleStructureTool implements IMcpTool
         return regions;
     }
 
-    /** Computes region end line by scanning all contained EObjects for the maximum end line. */
-    private int computeRegionEndLine(RegionPreprocessor region, int startLine)
+    /**
+     * Computes a region's end line (the line of its matching {@code #EndRegion} /
+     * {@code #КонецОбласти}) by scanning the source from the region's start line
+     * and tracking nesting depth.
+     * <p>
+     * The AST end line of a {@code RegionPreprocessor} is unreliable — one of its
+     * contained elements resolves (via the node model) to the whole module, so
+     * every region would otherwise report the end of the file. Matching the
+     * markers in the source is exact and handles both sibling and nested regions
+     * and both BSL dialects.
+     *
+     * @param sourceLines all module lines (line N is {@code sourceLines.get(N-1)}),
+     *                    may be {@code null}
+     * @param startLine   the region's 1-based start line (its {@code #Region} marker)
+     * @return the 1-based line of the matching end marker, or {@code startLine} if
+     *         the source is unavailable or no matching marker is found
+     */
+    static int computeRegionEndLine(List<String> sourceLines, int startLine)
     {
-        int endLine = startLine;
-        for (var iter = region.eAllContents(); iter.hasNext();)
+        if (sourceLines == null || startLine < 1 || startLine > sourceLines.size())
         {
-            int childEnd = BslModuleUtils.getEndLine(iter.next());
-            if (childEnd > endLine)
+            return startLine;
+        }
+        int depth = 0;
+        for (int i = startLine - 1; i < sourceLines.size(); i++)
+        {
+            String trimmed = sourceLines.get(i).trim();
+            if (isRegionStart(trimmed))
             {
-                endLine = childEnd;
+                depth++;
+            }
+            else if (isRegionEnd(trimmed))
+            {
+                depth--;
+                if (depth <= 0)
+                {
+                    return i + 1;
+                }
             }
         }
-        return endLine > startLine ? endLine + 1 : startLine + 1; // +1 for #EndRegion line
+        return startLine;
     }
-    private List<MethodInfo> collectMethods(Module module, List<RegionInfo> regions,
-        boolean includeComments)
+
+    /** True if a trimmed line opens a region: {@code #Region} / {@code #Область} (either dialect). */
+    static boolean isRegionStart(String trimmedLine)
     {
-        List<MethodInfo> methods = new ArrayList<>();
-        
-        // Load source lines if includeComments is enabled
-        List<String> sourceLines = null;
-        if (includeComments)
+        String lower = trimmedLine.toLowerCase(Locale.ROOT);
+        return lower.startsWith("#region") //$NON-NLS-1$
+            || lower.startsWith("#\u043E\u0431\u043B\u0430\u0441\u0442\u044C"); // #Область //$NON-NLS-1$
+    }
+
+    /** True if a trimmed line closes a region: {@code #EndRegion} / {@code #КонецОбласти} (either dialect). */
+    static boolean isRegionEnd(String trimmedLine)
+    {
+        String lower = trimmedLine.toLowerCase(Locale.ROOT);
+        return lower.startsWith("#endregion") //$NON-NLS-1$
+            || lower.startsWith("#\u043A\u043E\u043D\u0435\u0446\u043E\u0431\u043B\u0430\u0441\u0442\u0438"); // #КонецОбласти //$NON-NLS-1$
+    }
+
+    /** Loads all source lines of a module's .bsl file, or {@code null} if unavailable. */
+    private List<String> loadSourceLines(Module module)
+    {
+        try
         {
-            try
+            Resource resource = module.eResource();
+            if (resource != null)
             {
-                Resource resource = module.eResource();
-                if (resource != null)
+                URI uri = resource.getURI();
+                if (uri.isPlatformResource())
                 {
-                    URI uri = resource.getURI();
-                    if (uri.isPlatformResource())
+                    String platformString = uri.toPlatformString(true);
+                    IFile file = ResourcesPlugin.getWorkspace().getRoot().getFile(new Path(platformString));
+                    if (file != null && file.exists())
                     {
-                        String platformString = uri.toPlatformString(true);
-                        IFile file = ResourcesPlugin.getWorkspace().getRoot().getFile(new Path(platformString));
-                        if (file != null && file.exists())
-                        {
-                            sourceLines = BslModuleUtils.readFileLines(file);
-                        }
+                        return BslModuleUtils.readFileLines(file);
                     }
                 }
             }
-            catch (Exception e)
-            {
-                Activator.logWarning("Failed to load source for comment extraction: " + e.getMessage()); //$NON-NLS-1$
-            }
         }
+        catch (Exception e)
+        {
+            Activator.logWarning("Failed to load source lines: " + e.getMessage()); //$NON-NLS-1$
+        }
+        return null;
+    }
+    private List<MethodInfo> collectMethods(Module module, List<RegionInfo> regions,
+        boolean includeComments, List<String> sourceLines)
+    {
+        List<MethodInfo> methods = new ArrayList<>();
 
         for (Method method : module.allMethods())
         {

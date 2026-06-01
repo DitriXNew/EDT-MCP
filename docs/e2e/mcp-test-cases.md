@@ -248,8 +248,9 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 ### get_module_structure
 - **Type:** read · **Runnable on IRP:** full
 - **Cases:** `{projectName:"IRP", modulePath:"CommonModules/AccountingClientServer/Module.bsl"}`; add `includeVariables:true`, `includeComments:true`.
-- **Assert:** methods table with Type/Name/Export/Context/Lines/Parameters; counts line up.
-- **Validated 2026‑06‑01:** PASS — 1 proc + 2 funcs; `UpdateAccountingTables` lines 2‑17.
+- **Region end-lines (regression for b2):** `{projectName:"IRP", modulePath:"CommonModules/AccountingServer/Module.bsl"}` — the Regions list must show each region ending at its own `#EndRegion`, **not** at EOF. Expected (sibling regions): `Service (607-989)`, `Accounts (991-1932)`, `Event_Handlers (2806-2895)`, … `AccountingService (4136-5057)`. Methods between Accounts' end (1932) and Event_Handlers (2806) — e.g. `UpdateAccountingTables` (1934) — must show region `-`, not `Accounts`.
+- **Assert:** methods table with Type/Name/Export/Context/Lines/Parameters; counts line up; no region range ends at `totalLines+1`.
+- **Validated 2026‑06‑01:** PASS — AccountingClientServer: 1 proc + 2 funcs; `UpdateAccountingTables` lines 2‑17. (b2 region end-lines: see below.)
 
 ### read_module_source
 - **Type:** read · **Runnable on IRP:** full
