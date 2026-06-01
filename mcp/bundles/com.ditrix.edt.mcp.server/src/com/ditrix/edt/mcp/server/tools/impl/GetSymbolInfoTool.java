@@ -47,6 +47,7 @@ import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -121,12 +122,12 @@ public class GetSymbolInfoTool implements IMcpTool
 
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
 
         if (filePath == null || filePath.isEmpty())
         {
-            return "Error: filePath is required"; //$NON-NLS-1$
+            return ToolResult.error("filePath is required").toJson(); //$NON-NLS-1$
         }
 
         int line;
@@ -139,12 +140,12 @@ public class GetSymbolInfoTool implements IMcpTool
         }
         catch (NumberFormatException | NullPointerException e)
         {
-            return "Error: Invalid line or column number"; //$NON-NLS-1$
+            return ToolResult.error("Invalid line or column number").toJson(); //$NON-NLS-1$
         }
 
         if (line < 1 || column < 1)
         {
-            return "Error: Line and column must be >= 1"; //$NON-NLS-1$
+            return ToolResult.error("Line and column must be >= 1").toJson(); //$NON-NLS-1$
         }
 
         return getSymbolInfo(projectName, filePath, line, column);
@@ -161,12 +162,12 @@ public class GetSymbolInfoTool implements IMcpTool
 
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
 
         if (!ctx.isOpen())
         {
-            return "Error: Project is closed: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
         }
 
         IProject project = ctx.project();
@@ -176,8 +177,8 @@ public class GetSymbolInfoTool implements IMcpTool
 
         if (!file.exists())
         {
-            return "Error: File not found: " + file.getProjectRelativePath().toString() + //$NON-NLS-1$
-                   " in project " + projectName; //$NON-NLS-1$
+            return ToolResult.error("File not found: " + file.getProjectRelativePath().toString() + //$NON-NLS-1$
+                   " in project " + projectName).toJson(); //$NON-NLS-1$
         }
 
         final IFile targetFile = file;
@@ -217,7 +218,7 @@ public class GetSymbolInfoTool implements IMcpTool
 
         if (result == null)
         {
-            return "Error: Could not get symbol info"; //$NON-NLS-1$
+            return ToolResult.error("Could not get symbol info").toJson(); //$NON-NLS-1$
         }
 
         // Wrap result with frontmatter (skip for error messages)

@@ -27,6 +27,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -104,11 +105,11 @@ public class GoToDefinitionTool implements IMcpTool
 
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
         if (symbol == null || symbol.isEmpty())
         {
-            return "Error: symbol is required"; //$NON-NLS-1$
+            return ToolResult.error("symbol is required").toJson(); //$NON-NLS-1$
         }
 
         boolean includeSource = !"false".equalsIgnoreCase(includeSourceStr); //$NON-NLS-1$
@@ -126,7 +127,7 @@ public class GoToDefinitionTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error resolving definition", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
 
@@ -144,7 +145,7 @@ public class GoToDefinitionTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
@@ -180,13 +181,13 @@ public class GoToDefinitionTool implements IMcpTool
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {
-            return "Error: Configuration provider not available"; //$NON-NLS-1$
+            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
         }
 
         Configuration config = configProvider.getConfiguration(project);
         if (config == null)
         {
-            return "Error: Could not get configuration for project"; //$NON-NLS-1$
+            return ToolResult.error("Could not get configuration for project").toJson(); //$NON-NLS-1$
         }
 
         // 1. Try as CommonModule method: firstPart = module name, secondPart = method name
@@ -217,9 +218,9 @@ public class GoToDefinitionTool implements IMcpTool
     {
         if (modulePath == null || modulePath.isEmpty())
         {
-            return "Error: modulePath is required when symbol is an unqualified method name. " + //$NON-NLS-1$
+            return ToolResult.error("modulePath is required when symbol is an unqualified method name. " + //$NON-NLS-1$
                    "Provide the context module path (e.g. 'CommonModules/MyModule/Module.bsl') " + //$NON-NLS-1$
-                   "or use qualified name 'ModuleName.MethodName'."; //$NON-NLS-1$
+                   "or use qualified name 'ModuleName.MethodName'.").toJson(); //$NON-NLS-1$
         }
 
         return resolveMethodInModule(project, projectName, modulePath, methodName, includeSource, null);
@@ -354,7 +355,7 @@ public class GoToDefinitionTool implements IMcpTool
         IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
         if (!file.exists())
         {
-            return "Error: Module not found: src/" + modulePath; //$NON-NLS-1$
+            return ToolResult.error("Module not found: src/" + modulePath).toJson(); //$NON-NLS-1$
         }
 
         try
@@ -410,7 +411,7 @@ public class GoToDefinitionTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return "Error reading file: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Error reading file: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 

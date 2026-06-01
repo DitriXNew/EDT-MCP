@@ -37,6 +37,7 @@ import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
@@ -117,15 +118,15 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
         if (modulePath == null || modulePath.isEmpty())
         {
-            return "Error: modulePath is required"; //$NON-NLS-1$
+            return ToolResult.error("modulePath is required").toJson(); //$NON-NLS-1$
         }
         if (methodName == null || methodName.isEmpty())
         {
-            return "Error: methodName is required"; //$NON-NLS-1$
+            return ToolResult.error("methodName is required").toJson(); //$NON-NLS-1$
         }
 
         if (direction == null || direction.isEmpty())
@@ -136,7 +137,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
         if (!"callers".equals(direction) && !"callees".equals(direction)) //$NON-NLS-1$ //$NON-NLS-2$
         {
-            return "Error: direction must be 'callers' or 'callees'"; //$NON-NLS-1$
+            return ToolResult.error("direction must be 'callers' or 'callees'").toJson(); //$NON-NLS-1$
         }
 
         limit = Math.min(Math.max(1, limit), 500);
@@ -163,7 +164,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error finding call hierarchy", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
 
@@ -184,15 +185,15 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
         {
-            return "Error: Could not load EMF model for " + modulePath + //$NON-NLS-1$
-                   ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details."; //$NON-NLS-1$
+            return ToolResult.error("Could not load EMF model for " + modulePath + //$NON-NLS-1$
+                   ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details.").toJson(); //$NON-NLS-1$
         }
 
         Method method = BslModuleUtils.findMethod(module, methodName);
@@ -205,7 +206,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         final ResourceSet resourceSet = method.eResource().getResourceSet();
         if (resourceSet == null)
         {
-            return "Error: BSL resource set not available"; //$NON-NLS-1$
+            return ToolResult.error("BSL resource set not available").toJson(); //$NON-NLS-1$
         }
         final String targetModuleName = extractModuleName(modulePath);
 
@@ -440,15 +441,15 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
         {
-            return "Error: Could not load EMF model for " + modulePath + //$NON-NLS-1$
-                   ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details."; //$NON-NLS-1$
+            return ToolResult.error("Could not load EMF model for " + modulePath + //$NON-NLS-1$
+                   ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details.").toJson(); //$NON-NLS-1$
         }
 
         Method method = BslModuleUtils.findMethod(module, methodName);

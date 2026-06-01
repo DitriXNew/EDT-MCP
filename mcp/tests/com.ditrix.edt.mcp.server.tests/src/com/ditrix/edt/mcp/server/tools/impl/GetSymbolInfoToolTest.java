@@ -117,7 +117,9 @@ public class GetSymbolInfoToolTest
         params.put("line", "0"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("column", "1"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new GetSymbolInfoTool().execute(params);
-        assertTrue(result.contains("Line and column must be >= 1")); //$NON-NLS-1$
+        // Error is now a ToolResult.error JSON; Gson HTML-escapes ">=", so assert
+        // on a delimiter-free substring (see project_gson_escapes_html_chars).
+        assertTrue(result.contains("Line and column must be")); //$NON-NLS-1$
     }
 
     // ==================== Table-cell escaping (CLAUDE.md don't #9) ====================
