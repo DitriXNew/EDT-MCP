@@ -408,7 +408,9 @@ public class FindReferencesTool implements IMcpTool
         private final List<ReferenceInfo> references = new ArrayList<>();
         /** Set to track unique references (category:path:feature) to avoid duplicates */
         private final java.util.Set<String> seenReferences = new java.util.HashSet<>();
-        
+        /** Reused across references so each .bsl is parsed at most once for line resolution. */
+        private org.eclipse.emf.ecore.resource.ResourceSet lineResolveResourceSet;
+
         ReferenceCollector(IBmModel bmModel, MdObject targetObject, int limit)
         {
             super("Find references to " + targetObject.getName()); //$NON-NLS-1$
@@ -759,34 +761,23 @@ public class FindReferencesTool implements IMcpTool
             
             try
             {
-                // Try to load the resource and get the EObject
-                org.eclipse.emf.ecore.resource.ResourceSet resourceSet = 
-                    new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
-                
-                // Configure the resource set with proper provider
-                IResourceServiceProvider rsp = 
-                    IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(sourceUri);
-                if (rsp != null)
-                {
-                    org.eclipse.xtext.resource.XtextResourceFactory factory = rsp.get(org.eclipse.xtext.resource.XtextResourceFactory.class);
-                    if (factory != null)
-                    {
-                        resourceSet.getResourceFactoryRegistry().getExtensionToFactoryMap()
-                            .put("bsl", factory); //$NON-NLS-1$
-                    }
-                }
-                
+                // Reuse a single ResourceSet across all references so each .bsl is
+                // loaded/parsed at most once. Previously a new detached
+                // ResourceSetImpl was created per reference, which re-parsed files
+                // and resolved flakily, producing a false "Line 0".
+                org.eclipse.emf.ecore.resource.ResourceSet resourceSet = getLineResolveResourceSet(sourceUri);
+
                 // Get just the resource URI (without fragment)
                 URI resourceUri = sourceUri.trimFragment();
                 org.eclipse.emf.ecore.resource.Resource resource = resourceSet.getResource(resourceUri, true);
-                
+
                 if (resource != null)
                 {
                     // Get the EObject by fragment
                     EObject eObject = resource.getEObject(sourceUri.fragment());
                     if (eObject != null)
                     {
-                        org.eclipse.xtext.nodemodel.INode node = 
+                        org.eclipse.xtext.nodemodel.INode node =
                             org.eclipse.xtext.nodemodel.util.NodeModelUtils.findActualNodeFor(eObject);
                         if (node != null)
                         {
@@ -800,9 +791,37 @@ public class FindReferencesTool implements IMcpTool
                 // Fall back to fragment parsing
                 Activator.logError("Error extracting line number from URI: " + sourceUri, e); //$NON-NLS-1$
             }
-            
+
             // Fallback: try to parse line from fragment
             return extractLineNumberFromFragment(sourceUri.fragment());
+        }
+
+        /**
+         * Lazily creates and caches a single ResourceSet (configured with the BSL
+         * Xtext resource factory) reused for every line-resolution load in this
+         * find, instead of a detached ResourceSet per reference.
+         */
+        private org.eclipse.emf.ecore.resource.ResourceSet getLineResolveResourceSet(URI sourceUri)
+        {
+            if (lineResolveResourceSet == null)
+            {
+                org.eclipse.emf.ecore.resource.ResourceSet rs =
+                    new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
+                IResourceServiceProvider rsp =
+                    IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(sourceUri);
+                if (rsp != null)
+                {
+                    org.eclipse.xtext.resource.XtextResourceFactory factory =
+                        rsp.get(org.eclipse.xtext.resource.XtextResourceFactory.class);
+                    if (factory != null)
+                    {
+                        rs.getResourceFactoryRegistry().getExtensionToFactoryMap()
+                            .put("bsl", factory); //$NON-NLS-1$
+                    }
+                }
+                lineResolveResourceSet = rs;
+            }
+            return lineResolveResourceSet;
         }
         
         /**
