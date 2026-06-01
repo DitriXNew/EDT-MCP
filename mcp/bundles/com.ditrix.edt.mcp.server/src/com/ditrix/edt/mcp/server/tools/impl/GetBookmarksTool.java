@@ -22,6 +22,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -96,7 +97,7 @@ public class GetBookmarksTool implements IMcpTool
                 ProjectContext ctx = ProjectContext.of(projectName);
                 if (!ctx.exists())
                 {
-                    return "**Error:** Project not found: " + projectName; //$NON-NLS-1$
+                    return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
                 }
                 projects = new IProject[] { ctx.project() };
             }
@@ -188,7 +189,7 @@ public class GetBookmarksTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error getting bookmarks", e); //$NON-NLS-1$
-            return "**Error:** " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
         
         return md.toString();

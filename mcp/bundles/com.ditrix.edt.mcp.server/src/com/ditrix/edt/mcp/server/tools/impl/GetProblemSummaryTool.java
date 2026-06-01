@@ -19,6 +19,7 @@ import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -75,7 +76,7 @@ public class GetProblemSummaryTool implements IMcpTool
             
             if (markerManager == null)
             {
-                return "**Error:** IMarkerManager service is not available"; //$NON-NLS-1$
+                return ToolResult.error("IMarkerManager service is not available").toJson(); //$NON-NLS-1$
             }
             
             // Validate project if specified
@@ -84,7 +85,7 @@ public class GetProblemSummaryTool implements IMcpTool
                 ProjectContext ctx = ProjectContext.of(projectName);
                 if (!ctx.exists())
                 {
-                    return "**Error:** Project not found: " + projectName; //$NON-NLS-1$
+                    return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
                 }
             }
             
@@ -201,7 +202,7 @@ public class GetProblemSummaryTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error getting problem summary", e); //$NON-NLS-1$
-            return "**Error:** " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
         
         return md.toString();
