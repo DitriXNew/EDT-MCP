@@ -22,65 +22,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
+import com.ditrix.edt.mcp.server.tools.BuiltInToolRegistrar;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
-import com.ditrix.edt.mcp.server.tools.impl.GetBookmarksTool;
-import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool;
-import com.ditrix.edt.mcp.server.tools.impl.FindReferencesTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetCheckDescriptionTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetConfigurationPropertiesTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetFormLayoutSnapshotTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetFormScreenshotTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetMetadataDetailsTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetSymbolInfoTool;
-import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetMetadataObjectsTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetPlatformDocumentationTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetProblemSummaryTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetSubsystemContentTool;
-import com.ditrix.edt.mcp.server.tools.impl.ListSubsystemsTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetTagsTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetObjectsByTagsTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetTasksTool;
-import com.ditrix.edt.mcp.server.tools.impl.ListConfigurationsTool;
-import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
-import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
-import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
-import com.ditrix.edt.mcp.server.tools.impl.ExportConfigurationToXmlTool;
-import com.ditrix.edt.mcp.server.tools.impl.ImportConfigurationFromXmlTool;
-import com.ditrix.edt.mcp.server.tools.impl.GenerateTranslationStringsTool;
-import com.ditrix.edt.mcp.server.tools.impl.TranslateConfigurationTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetTranslationProjectInfoTool;
-import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool;
-import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
-import com.ditrix.edt.mcp.server.tools.impl.WriteModuleSourceTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetModuleStructureTool;
-import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
-import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
-import com.ditrix.edt.mcp.server.tools.impl.ReadMethodSourceTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool;
-import com.ditrix.edt.mcp.server.tools.impl.ValidateQueryTool;
-import com.ditrix.edt.mcp.server.tools.impl.RenameMetadataObjectTool;
-import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
-import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
-import com.ditrix.edt.mcp.server.tools.impl.RemoveBreakpointTool;
-import com.ditrix.edt.mcp.server.tools.impl.ListBreakpointsTool;
-import com.ditrix.edt.mcp.server.tools.impl.WaitForBreakTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetVariablesTool;
-import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
-import com.ditrix.edt.mcp.server.tools.impl.StepTool;
-import com.ditrix.edt.mcp.server.tools.impl.TerminateLaunchTool;
-import com.ditrix.edt.mcp.server.tools.impl.ResumeTool;
-import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
-import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetProfilingResultsTool;
-import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
-import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataObjectTool;
-import com.ditrix.edt.mcp.server.tools.impl.AddMetadataAttributeTool;
-import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataObjectTool;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -194,84 +138,7 @@ public class McpServer
      */
     void registerTools()
     {
-        McpToolRegistry registry = McpToolRegistry.getInstance();
-        
-        // Clear existing tools
-        registry.clear();
-        
-        // Register built-in tools
-        registry.register(new GetEdtVersionTool());
-        registry.register(new ListProjectsTool());
-        registry.register(new GetConfigurationPropertiesTool());
-        registry.register(new CleanProjectTool());
-        registry.register(new RevalidateObjectsTool());
-        registry.register(new ExportConfigurationToXmlTool());
-        registry.register(new ImportConfigurationFromXmlTool());
-        registry.register(new GetProblemSummaryTool());
-        registry.register(new GetProjectErrorsTool());
-        registry.register(new GetBookmarksTool());
-        registry.register(new GetTasksTool());
-        registry.register(new GetCheckDescriptionTool());
-        registry.register(new GetContentAssistTool());
-        registry.register(new GetPlatformDocumentationTool());
-        registry.register(new GetMetadataObjectsTool());
-        registry.register(new GetMetadataDetailsTool());
-        registry.register(new ListSubsystemsTool());
-        registry.register(new GetSubsystemContentTool());
-        registry.register(new FindReferencesTool());
-        
-        // Tag tools
-        registry.register(new GetTagsTool());
-        registry.register(new GetObjectsByTagsTool());
-        
-        // Application tools
-        registry.register(new GetApplicationsTool());
-        registry.register(new UpdateDatabaseTool());
-        registry.register(new DebugLaunchTool());
-        registry.register(new ListConfigurationsTool());
-        registry.register(new RunYaxunitTestsTool());
-        registry.register(new TerminateLaunchTool());
-
-        // Debug inspection tools (breakpoints + suspended state)
-        registry.register(new SetBreakpointTool());
-        registry.register(new RemoveBreakpointTool());
-        registry.register(new ListBreakpointsTool());
-        registry.register(new WaitForBreakTool());
-        registry.register(new GetVariablesTool());
-        registry.register(new StepTool());
-        registry.register(new ResumeTool());
-        registry.register(new EvaluateExpressionTool());
-        registry.register(new DebugYaxunitTestsTool());
-        registry.register(new DebugStatusTool());
-        registry.register(new StartProfilingTool());
-        registry.register(new GetProfilingResultsTool());
-
-        // BSL code analysis tools
-        registry.register(new ReadModuleSourceTool());
-        registry.register(new WriteModuleSourceTool());
-        registry.register(new GetModuleStructureTool());
-        registry.register(new ListModulesTool());
-        registry.register(new SearchInCodeTool());
-        registry.register(new ReadMethodSourceTool());
-        registry.register(new GetMethodCallHierarchyTool());
-        registry.register(new GoToDefinitionTool());
-        registry.register(new GetSymbolInfoTool());
-        registry.register(new GetFormLayoutSnapshotTool());
-        registry.register(new GetFormScreenshotTool());
-        registry.register(new ValidateQueryTool());
-
-        // Metadata refactoring tools
-        registry.register(new RenameMetadataObjectTool());
-        registry.register(new DeleteMetadataObjectTool());
-        registry.register(new AddMetadataAttributeTool());
-        registry.register(new CreateMetadataObjectTool());
-
-        // LanguageTool translation tools
-        registry.register(new GenerateTranslationStringsTool());
-        registry.register(new TranslateConfigurationTool());
-        registry.register(new GetTranslationProjectInfoTool());
-
-        Activator.logInfo("Registered " + registry.getToolCount() + " MCP tools"); //$NON-NLS-1$ //$NON-NLS-2$
+        BuiltInToolRegistrar.registerAll(McpToolRegistry.getInstance());
     }
 
     /**
