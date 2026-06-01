@@ -307,9 +307,10 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
   - valid: `{…, queryText:"SELECT Ref FROM Catalog.Agreements WHERE NOT DeletionMark"}` → `valid:true`, 0 issues.
   - semantic error: `"SELECT Description FROM Catalog.Agreements"` → `valid:false`, "Field 'Description' not found" (IRP's Agreements has no Description field).
   - syntax error: `"SELECT FROM WHERE"` → `valid:false`, "Syntax error. Wrong token …".
-  - `dcsMode:true` for DCS queries. (RU keywords ВЫБРАТЬ/ИЗ → see card `tests-validate-query-ru-keywords`.)
+  - **Russian dialect:** `{queryText:"ВЫБРАТЬ Ссылка ИЗ Справочник.Agreements ГДЕ НЕ ПометкаУдаления"}` → `valid:true` (RU keywords + RU field `Ссылка` + RU type token `Справочник` all parse; covers card `tests-validate-query-ru-keywords` / a8).
+  - `dcsMode:true` for DCS queries.
 - **Assert:** `success:true` always; `valid` + `issues[]` (severity/message/line/column) reflect query.
-- **Validated 2026‑06‑01:** PASS — valid→true; bad field & bad syntax→correct errors. *Note:* issues sometimes duplicated (same error with/without `offset`).
+- **Validated 2026‑06‑01:** PASS — EN valid→true; bad field & bad syntax→correct errors; **RU query valid→true**. *Note:* issues sometimes duplicated (same error with/without `offset`).
 
 ### get_form_layout_snapshot
 - **Type:** read (opens form WYSIWYG) · **Runnable on IRP:** form‑level only (needs render config)
