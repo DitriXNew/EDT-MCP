@@ -895,7 +895,7 @@ A family of MCP tools that lets the LLM set breakpoints, inspect runtime state a
 
 #### Read Module Source Tool
 
-**`read_module_source`** - Read BSL module source code from EDT project. Returns source with YAML frontmatter metadata (`startLine`, `endLine`, `totalLines`). Supports reading full file or a specific line range. The per-call line limit is configurable in **Window → Preferences → MCP Server → Tools** (`maxLines`, default 5000).
+**`read_module_source`** - Read BSL module source code from EDT project. Returns source with YAML frontmatter metadata (`startLine`, `endLine`, `totalLines`). Supports reading full file or a specific line range. The per-call line limit is configurable in **Window → Preferences → MCP Server → Tools** (`maxLines`, default 500).
 
 **Parameters:**
 | Parameter | Required | Description |
