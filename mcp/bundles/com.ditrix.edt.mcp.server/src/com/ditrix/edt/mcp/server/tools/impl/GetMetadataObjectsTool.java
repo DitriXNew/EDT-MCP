@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
@@ -308,10 +309,11 @@ public class GetMetadataObjectsTool implements IMcpTool
             return sb.toString();
         }
         
-        // Table header
-        sb.append("| Name | Synonym | Comment | Type | ObjectModule | ManagerModule |\n"); //$NON-NLS-1$
-        sb.append("|------|---------|---------|------|--------------|---------------|\n"); //$NON-NLS-1$
-        
+        // Table header. Cells are escaped by MarkdownUtils.tableRow, so a
+        // synonym or comment containing '|' cannot break the table.
+        sb.append(MarkdownUtils.tableHeader(
+            "Name", "Synonym", "Comment", "Type", "ObjectModule", "ManagerModule")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+
         // Table rows
         int count = 0;
         for (MetadataInfo info : objects)
@@ -320,22 +322,22 @@ public class GetMetadataObjectsTool implements IMcpTool
             {
                 break;
             }
-            
+
             // Get synonym for the specified language
             String displaySynonym = getSynonymForLanguage(info, language);
             String displayComment = info.comment != null ? info.comment : ""; //$NON-NLS-1$
-            
-            sb.append("| ").append(info.name); //$NON-NLS-1$
-            sb.append(" | ").append(displaySynonym); //$NON-NLS-1$
-            sb.append(" | ").append(displayComment); //$NON-NLS-1$
-            sb.append(" | ").append(info.type); //$NON-NLS-1$
-            sb.append(" | ").append(info.hasObjectModule ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append(" | ").append(info.hasManagerModule ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append(" |\n"); //$NON-NLS-1$
-            
+
+            sb.append(MarkdownUtils.tableRow(
+                info.name,
+                displaySynonym,
+                displayComment,
+                info.type,
+                info.hasObjectModule ? "Yes" : "-", //$NON-NLS-1$ //$NON-NLS-2$
+                info.hasManagerModule ? "Yes" : "-")); //$NON-NLS-1$ //$NON-NLS-2$
+
             count++;
         }
-        
+
         return sb.toString();
     }
     

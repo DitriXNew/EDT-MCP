@@ -20,6 +20,7 @@ import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
 import com.ditrix.edt.mcp.server.tags.model.TagStorage;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
@@ -107,9 +108,10 @@ public class GetTagsTool implements IMcpTool
         
         StringBuilder sb = new StringBuilder();
         sb.append("# Tags in project: ").append(project.getName()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("| # | Name | Color | Description | Objects |\n"); //$NON-NLS-1$
-        sb.append("|---|------|-------|-------------|--------|\n"); //$NON-NLS-1$
-        
+        // Cells are escaped by MarkdownUtils.tableRow, so tag names/colors/
+        // descriptions containing '|' can no longer break the table.
+        sb.append(MarkdownUtils.tableHeader("#", "Name", "Color", "Description", "Objects")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+
         int index = 1;
         for (Tag tag : tags)
         {
@@ -119,21 +121,17 @@ public class GetTagsTool implements IMcpTool
             {
                 description = "-"; //$NON-NLS-1$
             }
-            else
-            {
-                // Escape pipe characters for markdown table
-                description = description.replace("|", "\\|"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            
-            sb.append("| ").append(index++).append(" | "); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append(tag.getName()).append(" | "); //$NON-NLS-1$
-            sb.append(tag.getColor()).append(" | "); //$NON-NLS-1$
-            sb.append(description).append(" | "); //$NON-NLS-1$
-            sb.append(objectCount).append(" |\n"); //$NON-NLS-1$
+
+            sb.append(MarkdownUtils.tableRow(
+                String.valueOf(index++),
+                tag.getName(),
+                tag.getColor(),
+                description,
+                String.valueOf(objectCount)));
         }
-        
+
         sb.append("\n**Total tags:** ").append(tags.size()); //$NON-NLS-1$
-        
+
         return sb.toString();
     }
     

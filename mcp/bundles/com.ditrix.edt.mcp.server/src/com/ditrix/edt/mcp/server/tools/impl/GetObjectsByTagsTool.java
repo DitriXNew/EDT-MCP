@@ -22,6 +22,7 @@ import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
 import com.ditrix.edt.mcp.server.tags.model.TagStorage;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -205,19 +206,18 @@ public class GetObjectsByTagsTool implements IMcpTool
             }
             else
             {
-                sb.append("| # | Object FQN |\n"); //$NON-NLS-1$
-                sb.append("|---|------------|\n"); //$NON-NLS-1$
-                
+                sb.append(MarkdownUtils.tableHeader("#", "Object FQN")); //$NON-NLS-1$ //$NON-NLS-2$
+
                 int count = 0;
                 for (String fqn : objects)
                 {
                     if (count >= limit)
                     {
-                        sb.append("| ... | *").append(objects.size() - limit) //$NON-NLS-1$
-                          .append(" more objects (limit reached)* |\n"); //$NON-NLS-1$
+                        sb.append(MarkdownUtils.tableRow("...", //$NON-NLS-1$
+                            "*" + (objects.size() - limit) + " more objects (limit reached)*")); //$NON-NLS-1$ //$NON-NLS-2$
                         break;
                     }
-                    sb.append("| ").append(++count).append(" | ").append(fqn).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    sb.append(MarkdownUtils.tableRow(String.valueOf(++count), fqn));
                 }
                 sb.append("\n"); //$NON-NLS-1$
                 totalObjects += Math.min(objects.size(), limit);

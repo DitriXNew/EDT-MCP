@@ -42,6 +42,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -586,8 +587,8 @@ public class ListModulesTool implements IMcpTool
             return sb.toString();
         }
 
-        sb.append("| Module Path | Module Type | Parent Type | Parent Name |\n"); //$NON-NLS-1$
-        sb.append("|-------------|-------------|-------------|-------------|\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader(
+            "Module Path", "Module Type", "Parent Type", "Parent Name")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
         int count = 0;
         for (ModuleInfo info : modules)
@@ -596,11 +597,8 @@ public class ListModulesTool implements IMcpTool
             {
                 break;
             }
-            sb.append("| ").append(info.modulePath); //$NON-NLS-1$
-            sb.append(" | ").append(info.moduleType); //$NON-NLS-1$
-            sb.append(" | ").append(info.parentType); //$NON-NLS-1$
-            sb.append(" | ").append(info.parentName); //$NON-NLS-1$
-            sb.append(" |\n"); //$NON-NLS-1$
+            sb.append(MarkdownUtils.tableRow(
+                info.modulePath, info.moduleType, info.parentType, info.parentName));
             count++;
         }
 

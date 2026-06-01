@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 
 /**
  * Tool for full-text search across all BSL modules in a project.
@@ -290,14 +291,11 @@ public class SearchInCodeTool implements IMcpTool
             return sb.toString();
         }
 
-        sb.append("| File | Matches |\n"); //$NON-NLS-1$
-        sb.append("|------|---------|\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("File", "Matches")); //$NON-NLS-1$ //$NON-NLS-2$
 
         for (Map.Entry<String, Integer> entry : collector.matchCountByFile.entrySet())
         {
-            sb.append("| ").append(entry.getKey()); //$NON-NLS-1$
-            sb.append(" | ").append(entry.getValue()); //$NON-NLS-1$
-            sb.append(" |\n"); //$NON-NLS-1$
+            sb.append(MarkdownUtils.tableRow(entry.getKey(), String.valueOf(entry.getValue())));
         }
 
         return sb.toString();
