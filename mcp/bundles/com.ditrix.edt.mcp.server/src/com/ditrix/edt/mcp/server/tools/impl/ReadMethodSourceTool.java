@@ -14,7 +14,6 @@ import java.util.regex.Matcher;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
@@ -28,6 +27,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to read a specific procedure/function from a BSL module.
@@ -132,11 +132,12 @@ public class ReadMethodSourceTool implements IMcpTool
      */
     private String readMethodViaEmf(String projectName, String modulePath, String methodName)
     {
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
         {
             return "Error: Project not found: " + projectName; //$NON-NLS-1$
         }
+        IProject project = ctx.project();
 
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
@@ -214,11 +215,12 @@ public class ReadMethodSourceTool implements IMcpTool
      */
     private String readMethodViaText(String projectName, String modulePath, String methodName)
     {
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
         {
             return "Error: Project not found: " + projectName; //$NON-NLS-1$
         }
+        IProject project = ctx.project();
 
         IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
         if (!file.exists())

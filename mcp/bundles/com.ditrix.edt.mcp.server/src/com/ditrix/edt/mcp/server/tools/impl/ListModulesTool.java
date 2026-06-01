@@ -16,7 +16,6 @@ import org.eclipse.core.resources.IContainer;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
@@ -44,6 +43,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to list all BSL modules in a project or for a specific metadata object.
@@ -153,11 +153,12 @@ public class ListModulesTool implements IMcpTool
     private String listModulesInternal(String projectName, String metadataType,
                                         String objectName, String nameFilter, int limit)
     {
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
         {
             return "Error: Project not found: " + projectName; //$NON-NLS-1$
         }
+        IProject project = ctx.project();
 
         List<ModuleInfo> modules = new ArrayList<>();
         String type = metadataType.toLowerCase();

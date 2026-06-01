@@ -39,6 +39,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to get the structure of a BSL module: methods, signatures, regions, export flags.
@@ -141,11 +142,12 @@ public class GetModuleStructureTool implements IMcpTool
     private String getStructureInternal(String projectName, String modulePath,
         boolean includeVariables, boolean includeComments)
     {
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
         {
             return "Error: Project not found: " + projectName; //$NON-NLS-1$
         }
+        IProject project = ctx.project();
 
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)

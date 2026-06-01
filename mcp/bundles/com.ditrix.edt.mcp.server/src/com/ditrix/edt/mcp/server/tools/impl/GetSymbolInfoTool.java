@@ -11,8 +11,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.URI;
@@ -54,6 +52,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 
@@ -160,18 +159,19 @@ public class GetSymbolInfoTool implements IMcpTool
     private String getSymbolInfo(String projectName, String filePath, int line, int column)
     {
         // Find the project
-        IWorkspace workspace = ResourcesPlugin.getWorkspace();
-        IProject project = workspace.getRoot().getProject(projectName);
+        ProjectContext ctx = ProjectContext.of(projectName);
 
-        if (project == null || !project.exists())
+        if (!ctx.exists())
         {
             return "Error: Project not found: " + projectName; //$NON-NLS-1$
         }
 
-        if (!project.isOpen())
+        if (!ctx.isOpen())
         {
             return "Error: Project is closed: " + projectName; //$NON-NLS-1$
         }
+
+        IProject project = ctx.project();
 
         // Build the full path: project/src/filePath
         IPath relativePath = new Path("src").append(filePath); //$NON-NLS-1$
