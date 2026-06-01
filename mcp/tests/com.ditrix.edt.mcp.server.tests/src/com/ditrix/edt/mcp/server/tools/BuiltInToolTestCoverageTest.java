@@ -9,7 +9,6 @@ package com.ditrix.edt.mcp.server.tools;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -31,20 +30,13 @@ import org.junit.Test;
 public class BuiltInToolTestCoverageTest
 {
     /**
-     * Tools that currently have no {@code XxxToolTest}. RATCHET: remove an entry
-     * when you add its test (a stale entry fails {@link #allowListHasNoStaleEntries});
-     * do NOT add new entries without a deliberate reason — a new tool should ship
-     * with a test. Snapshot: 2026-06-01.
+     * Tools with no {@code XxxToolTest}. RATCHET: a newly added tool that ships
+     * without a test fails {@link #everyRegisteredToolHasATestOrIsAllowlisted}
+     * until a test is written or (deliberately) its simple class name is added
+     * here. As of 2026-06-01 every registered tool has a test, so this allow-list
+     * is EMPTY — keep it that way.
      */
-    private static final Set<String> KNOWN_UNTESTED = new HashSet<>(Arrays.asList(
-        "GetEdtVersionTool", //$NON-NLS-1$
-        "ListProjectsTool", //$NON-NLS-1$
-        "CleanProjectTool", //$NON-NLS-1$
-        "UpdateDatabaseTool", //$NON-NLS-1$
-        "ListConfigurationsTool", //$NON-NLS-1$
-        "GetFormLayoutSnapshotTool", //$NON-NLS-1$
-        "GetFormScreenshotTool", //$NON-NLS-1$
-        "RenameMetadataObjectTool")); //$NON-NLS-1$
+    private static final Set<String> KNOWN_UNTESTED = new HashSet<>();
 
     @After
     public void tearDown()
