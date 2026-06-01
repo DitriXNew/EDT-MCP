@@ -12,8 +12,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
@@ -24,6 +22,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
@@ -109,16 +108,16 @@ public class TranslateConfigurationTool implements IMcpTool
             // names instead of the generic "Not an EDT project" message that
             // ProjectStateChecker.checkReadyOrError returns for unknown
             // projects.
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            IProject project = workspace.getRoot().getProject(projectName);
-            if (project == null || !project.exists())
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (!ctx.exists())
             {
                 return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
             }
-            if (!project.isOpen())
+            if (!ctx.isOpen())
             {
                 return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
             }
+            IProject project = ctx.project();
 
             String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
             if (notReadyError != null)

@@ -10,8 +10,6 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunchConfiguration;
@@ -28,6 +26,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
@@ -232,18 +231,19 @@ public class DebugLaunchTool implements IMcpTool
     {
         try
         {
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            IProject project = workspace.getRoot().getProject(projectName);
+            ProjectContext ctx = ProjectContext.of(projectName);
 
-            if (project == null || !project.exists())
+            if (!ctx.exists())
             {
                 return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
             }
 
-            if (!project.isOpen())
+            if (!ctx.isOpen())
             {
                 return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
             }
+
+            IProject project = ctx.project();
 
             // Verify application exists and get its name
             IApplicationManager appManager = Activator.getDefault().getApplicationManager();
@@ -382,12 +382,12 @@ public class DebugLaunchTool implements IMcpTool
         {
             return null;
         }
-        IWorkspace workspace = ResourcesPlugin.getWorkspace();
-        IProject project = workspace.getRoot().getProject(projectName);
-        if (project == null || !project.exists() || !project.isOpen())
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.isOpen())
         {
             return null;
         }
+        IProject project = ctx.project();
         IApplicationManager appManager = Activator.getDefault().getApplicationManager();
         if (appManager == null)
         {

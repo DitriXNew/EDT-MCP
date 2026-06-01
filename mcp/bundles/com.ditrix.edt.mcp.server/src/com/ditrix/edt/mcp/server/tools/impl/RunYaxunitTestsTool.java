@@ -23,8 +23,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.debug.core.DebugPlugin;
@@ -46,6 +44,7 @@ import com.ditrix.edt.mcp.server.utils.JUnitXmlParser;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
@@ -227,18 +226,17 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return "**Error:** " + notReadyError; //$NON-NLS-1$
             }
 
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            IProject project = workspace.getRoot().getProject(projectName);
-
-            if (project == null || !project.exists())
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (!ctx.exists())
             {
                 return "**Error:** Project not found: " + projectName; //$NON-NLS-1$
             }
 
-            if (!project.isOpen())
+            if (!ctx.isOpen())
             {
                 return "**Error:** Project is closed: " + projectName; //$NON-NLS-1$
             }
+            IProject project = ctx.project();
 
             IApplicationManager appManager = Activator.getDefault().getApplicationManager();
             if (appManager == null)

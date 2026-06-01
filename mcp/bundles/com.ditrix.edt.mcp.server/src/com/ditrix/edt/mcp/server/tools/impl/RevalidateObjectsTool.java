@@ -14,9 +14,7 @@ import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
-import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.IncrementalProjectBuilder;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
@@ -35,6 +33,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 import com.google.gson.JsonArray;
@@ -161,20 +160,20 @@ public class RevalidateObjectsTool implements IMcpTool
         
         try
         {
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
             IProgressMonitor monitor = new NullProgressMonitor();
-            
+
             // Find project
-            IProject project = workspace.getRoot().getProject(projectName);
-            if (project == null || !project.exists())
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (!ctx.exists())
             {
                 return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
             }
-            
-            if (!project.isOpen())
+
+            if (!ctx.isOpen())
             {
                 return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
             }
+            IProject project = ctx.project();
             
             // Refresh from disk
             project.refreshLocal(IResource.DEPTH_INFINITE, monitor);
