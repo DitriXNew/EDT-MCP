@@ -292,12 +292,14 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 - **Validated 2026‑06‑01:** PASS — GetDocumentMainTable signature with inferred return type.
 
 ### get_method_call_hierarchy
-- **Type:** read · **Runnable on IRP:** **callees OK / callers BROKEN**
+- **Type:** read · **Runnable on IRP:** full
 - **Cases:**
-  - `{…, methodName:"UpdateAccountingTables", direction:"callees"}` → lists called methods. **WORKS.**
-  - `{…, methodName:"UpdateAccountingTables", direction:"callers"}` → **BUG: returns 0** though 36 files call it (see card `fix-call-hierarchy-callers-empty`). Until fixed, expected = 0 (known‑bad); after fix, expect dozens.
+  - `{…, methodName:"UpdateAccountingTables", direction:"callees"}` → lists called methods.
+  - `{…, methodName:"UpdateAccountingTables", direction:"callers"}` → caller sites (Module/Method/Line/Call Code).
+  - `{…, modulePath:"CommonModules/DocumentsServer/Module.bsl", methodName:"GetAgreementByPartner", direction:"callers"}`.
   - unknown method → lists available methods.
-- **Validated 2026‑06‑01:** callees PASS (1 callee); **callers FAIL (0 vs 36 expected)** → card `b1`.
+- **Assert:** callers returns the real call sites (count matches `search_in_code` on the qualified call); each row carries Module/Method/Line/Call Code. (Implementation: text‑prefilter modules mentioning the name → parse → match each invocation to the method via resolved feature entry, qualifier fallback.)
+- **Validated 2026‑06‑01:** PASS — UpdateAccountingTables callers **37**, GetAgreementByPartner callers **8 (4 files)**, callees 1. (Previously callers returned 0; fixed under card `b1`.)
 
 ### validate_query
 - **Type:** read · **Runnable on IRP:** full
@@ -514,7 +516,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 
 | # | Finding | Kind | Action |
 |---|---------|------|--------|
-| 1 | `get_method_call_hierarchy direction:"callers"` returns 0 for clearly‑called methods (callees works) | **bug** | card `fix-call-hierarchy-callers-empty` (b1) |
+| 1 | `get_method_call_hierarchy direction:"callers"` returned 0 for clearly‑called methods | **bug → FIXED** | card `b1` closed; text‑prefilter + AST confirm (callers 37 / 8 validated live) |
 | 2 | `validate_query` issues list sometimes duplicated (same error with/without `offset`) | polish | note here; card if confirmed systematic |
 | 3 | Form tools blank without `-DnativeFormBufferedLayoutRender=true`; per‑element bounds need non‑native render | env/config | flag added to test EDT; re‑validate after restart |
 | 4 | `update_database` blocked by safety classifier even on error path | expected | document as approval‑gated |

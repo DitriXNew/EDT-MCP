@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.HashMap;
@@ -107,5 +108,30 @@ public class GetMethodCallHierarchyToolTest
         params.put("direction", "sideways"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new GetMethodCallHierarchyTool().execute(params);
         assertTrue(result.contains("direction must be")); //$NON-NLS-1$
+    }
+
+    // ==================== Call-qualifier derivation (pure logic) ====================
+
+    @Test
+    public void testExtractModuleNameCommonModule()
+    {
+        // The qualifier used in "Module.Method(...)" calls is the metadata object name,
+        // i.e. the folder above the .bsl file.
+        assertEquals("AccountingClientServer", //$NON-NLS-1$
+            GetMethodCallHierarchyTool.extractModuleName("CommonModules/AccountingClientServer/Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtractModuleNameManagerModule()
+    {
+        assertEquals("SalesOrder", //$NON-NLS-1$
+            GetMethodCallHierarchyTool.extractModuleName("Documents/SalesOrder/ManagerModule.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtractModuleNameDegenerate()
+    {
+        assertNull(GetMethodCallHierarchyTool.extractModuleName(null));
+        assertNull(GetMethodCallHierarchyTool.extractModuleName("Module.bsl")); //$NON-NLS-1$
     }
 }

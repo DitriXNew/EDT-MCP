@@ -12,21 +12,25 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
-import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.resource.Resource;
+import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.xtext.nodemodel.INode;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
-import org.eclipse.xtext.resource.IReferenceDescription;
-import org.eclipse.xtext.resource.IResourceServiceProvider;
-import org.eclipse.xtext.ui.editor.findrefs.IReferenceFinder;
 
 import com._1c.g5.v8.dt.bsl.model.DynamicFeatureAccess;
+import com._1c.g5.v8.dt.bsl.model.Expression;
+import com._1c.g5.v8.dt.bsl.model.FeatureEntry;
 import com._1c.g5.v8.dt.bsl.model.Invocation;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
@@ -41,9 +45,13 @@ import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 /**
  * Tool to find method call hierarchy - who calls this method (callers)
  * or what this method calls (callees).
- * Uses IReferenceFinder and BSL AST for semantic analysis.
+ * <p>
+ * BSL method calls are not stored as cross-references in the index, so callers are found the
+ * way EDT itself does: text-prefilter the modules that mention the method name, then parse only
+ * those and match each invocation to this exact method via its resolved AST feature entries
+ * (with a call-qualifier fallback when the resolver has not populated them). Callees are
+ * collected by walking the target method's own AST.
  */
-@SuppressWarnings("restriction")
 public class GetMethodCallHierarchyTool implements IMcpTool
 {
     public static final String NAME = "get_method_call_hierarchy"; //$NON-NLS-1$
@@ -59,7 +67,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     {
         return "Find method call hierarchy: who calls this method (callers) " + //$NON-NLS-1$
                "or what this method calls (callees). " + //$NON-NLS-1$
-               "Uses semantic BSL analysis via BM-index, not text search."; //$NON-NLS-1$
+               "Uses semantic BSL AST analysis (resolved feature references)."; //$NON-NLS-1$
     }
 
     @Override
@@ -163,7 +171,13 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     }
 
     /**
-     * Finds all callers of the specified method using IReferenceFinder.
+     * Finds all callers of the specified method.
+     * <p>
+     * BSL method invocations are linked by name through scoping and are not stored as ordinary
+     * cross-references in the index, so the generic Xtext reference finder cannot see them. We
+     * mirror EDT's own strategy: text-prefilter the .bsl modules whose source mentions the method
+     * name, parse only those, and match each invocation to this exact method by its resolved
+     * feature entry (falling back to the call qualifier when the resolver left entries empty).
      */
     private String findCallers(String projectName, String modulePath, String methodName, int limit)
     {
@@ -186,83 +200,235 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
         }
 
-        // Get URI of the method
-        URI methodUri = EcoreUtil.getURI(method);
-
-        // Find references using IReferenceFinder
-        IResourceServiceProvider resourceServiceProvider =
-            IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(BslModuleUtils.BSL_LOOKUP_URI);
-        if (resourceServiceProvider == null)
+        final URI methodUri = EcoreUtil.getURI(method);
+        final ResourceSet resourceSet = method.eResource().getResourceSet();
+        if (resourceSet == null)
         {
-            return "Error: BSL resource service provider not available"; //$NON-NLS-1$
+            return "Error: BSL resource set not available"; //$NON-NLS-1$
         }
+        final String targetModuleName = extractModuleName(modulePath);
 
-        IReferenceFinder finder = resourceServiceProvider.get(IReferenceFinder.class);
-        if (finder == null)
-        {
-            return "Error: Reference finder not available"; //$NON-NLS-1$
-        }
+        // Cheap text prefilter: collect .bsl files whose source mentions the method name.
+        List<IFile> candidates = collectCandidateModules(project, methodName);
 
-        // Collect references — reuse a single ResourceSet for resolving all references
         List<CallerInfo> callers = new ArrayList<>();
-        List<URI> targetURIs = new ArrayList<>();
-        targetURIs.add(methodUri);
-        final int[] totalReferences = {0};
+        int totalReferences = 0;
 
-        // Create shared ResourceSet and configure BSL factory once
-        final org.eclipse.emf.ecore.resource.ResourceSet sharedResourceSet =
-            new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
-        try
+        for (IFile candidate : candidates)
         {
-            org.eclipse.xtext.resource.XtextResourceFactory factory =
-                resourceServiceProvider.get(org.eclipse.xtext.resource.XtextResourceFactory.class);
-            if (factory != null)
+            String relToSrc = candidate.getProjectRelativePath().removeFirstSegments(1).toString();
+            Module candidateModule;
+            try
             {
-                sharedResourceSet.getResourceFactoryRegistry().getExtensionToFactoryMap()
-                    .put("bsl", factory); //$NON-NLS-1$
+                URI candidateUri =
+                    URI.createPlatformResourceURI(projectName + "/src/" + relToSrc, true); //$NON-NLS-1$
+                Resource res = resourceSet.getResource(candidateUri, true);
+                if (res == null || res.getContents().isEmpty() || !(res.getContents().get(0) instanceof Module))
+                {
+                    continue;
+                }
+                candidateModule = (Module)res.getContents().get(0);
             }
-        }
-        catch (Exception e)
-        {
-            Activator.logWarning("Failed to configure XtextResourceFactory: " + e.getMessage()); //$NON-NLS-1$
-        }
+            catch (Exception e)
+            {
+                Activator.logWarning("Failed to load candidate module " + relToSrc //$NON-NLS-1$
+                    + ": " + e.getMessage()); //$NON-NLS-1$
+                continue;
+            }
 
-        try
-        {
-            finder.findAllReferences(targetURIs, null, refDesc -> {
-                totalReferences[0]++;
+            boolean candidateIsTarget = relToSrc.equalsIgnoreCase(modulePath);
+            for (Iterator<EObject> iter = candidateModule.eAllContents(); iter.hasNext();)
+            {
+                EObject obj = iter.next();
+                if (!(obj instanceof Invocation))
+                {
+                    continue;
+                }
+                Invocation inv = (Invocation)obj;
+                if (!invocationTargetsMethod(inv, methodUri, methodName, targetModuleName, candidateIsTarget))
+                {
+                    continue;
+                }
+                totalReferences++;
                 if (callers.size() < limit)
                 {
-                    CallerInfo caller = extractCallerInfo(refDesc, sharedResourceSet);
-                    if (caller != null)
+                    callers.add(buildCallerInfo(inv, relToSrc, methodName));
+                }
+            }
+        }
+
+        return formatCallersOutput(modulePath, methodName, callers, limit, totalReferences);
+    }
+
+    /**
+     * Collects .bsl files under {@code <project>/src} whose source text contains the method name
+     * (case-insensitive). This is the lightweight prefilter that keeps the AST pass small.
+     */
+    private List<IFile> collectCandidateModules(IProject project, String methodName)
+    {
+        List<IFile> candidates = new ArrayList<>();
+        IFolder srcFolder = project.getFolder("src"); //$NON-NLS-1$
+        if (!srcFolder.exists())
+        {
+            return candidates;
+        }
+        final String lowerName = methodName.toLowerCase();
+        try
+        {
+            srcFolder.accept(res -> {
+                if (res.getType() == IResource.FILE
+                    && "bsl".equalsIgnoreCase(((IFile)res).getFileExtension())) //$NON-NLS-1$
+                {
+                    IFile file = (IFile)res;
+                    String text = readCandidateText(file);
+                    if (text != null && text.toLowerCase().contains(lowerName))
                     {
-                        callers.add(caller);
+                        candidates.add(file);
                     }
                 }
-            }, new NullProgressMonitor());
+                return true;
+            });
         }
         catch (Exception e)
         {
-            Activator.logError("Error finding callers", e); //$NON-NLS-1$
+            Activator.logError("Error scanning project for caller candidates", e); //$NON-NLS-1$
         }
-        finally
+        return candidates;
+    }
+
+    /**
+     * Fast read of a BSL file's text for the prefilter (filesystem first, workspace API fallback).
+     */
+    private String readCandidateText(IFile file)
+    {
+        try
         {
-            // Clean up shared ResourceSet to prevent memory leaks
-            for (org.eclipse.emf.ecore.resource.Resource res : sharedResourceSet.getResources())
+            if (file.getLocation() != null)
             {
-                try
+                java.io.File osFile = file.getLocation().toFile();
+                if (osFile.isFile())
                 {
-                    res.unload();
-                }
-                catch (Exception e)
-                {
-                    // Ignore cleanup errors
+                    return new String(java.nio.file.Files.readAllBytes(osFile.toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8);
                 }
             }
-            sharedResourceSet.getResources().clear();
+            return BslModuleUtils.readFileText(file);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * True when this invocation calls the target method. Prefers the semantically resolved feature
+     * entry (exact match by URI); when the resolver left entries empty, falls back to matching the
+     * call qualifier (Module.Method) or an unqualified call inside the target module itself.
+     */
+    private boolean invocationTargetsMethod(Invocation inv, URI methodUri, String methodName,
+        String targetModuleName, boolean candidateIsTarget)
+    {
+        EObject methodAccess = inv.getMethodAccess();
+        String callName;
+        EList<FeatureEntry> entries = null;
+        if (methodAccess instanceof StaticFeatureAccess)
+        {
+            callName = ((StaticFeatureAccess)methodAccess).getName();
+            entries = ((StaticFeatureAccess)methodAccess).getFeatureEntries();
+        }
+        else if (methodAccess instanceof DynamicFeatureAccess)
+        {
+            DynamicFeatureAccess dfa = (DynamicFeatureAccess)methodAccess;
+            callName = dfa.getName();
+            if (dfa.isSetFeatureEntries())
+            {
+                entries = dfa.getFeatureEntries();
+            }
+        }
+        else
+        {
+            return false;
         }
 
-        return formatCallersOutput(modulePath, methodName, callers, limit, totalReferences[0]);
+        if (callName == null || !callName.equalsIgnoreCase(methodName))
+        {
+            return false;
+        }
+
+        // Preferred: the resolver linked this access to one or more concrete features.
+        if (entries != null && !entries.isEmpty())
+        {
+            for (FeatureEntry entry : entries)
+            {
+                EObject feature = entry.getFeature();
+                if (feature != null && methodUri.equals(EcoreUtil.getURI(feature)))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Fallback: feature entries were not populated — match by call shape.
+        if (methodAccess instanceof DynamicFeatureAccess)
+        {
+            Expression source = ((DynamicFeatureAccess)methodAccess).getSource();
+            return targetModuleName != null && source instanceof StaticFeatureAccess
+                && targetModuleName.equalsIgnoreCase(((StaticFeatureAccess)source).getName());
+        }
+        // Unqualified call: only counts as a caller inside the target module itself.
+        return candidateIsTarget;
+    }
+
+    /**
+     * Builds a {@link CallerInfo} from a matched invocation (module path, containing method, line,
+     * and a compacted call snippet).
+     */
+    private CallerInfo buildCallerInfo(Invocation inv, String modulePath, String methodName)
+    {
+        CallerInfo caller = new CallerInfo();
+        caller.modulePath = modulePath;
+        caller.line = BslModuleUtils.getStartLine(inv);
+
+        EObject container = inv.eContainer();
+        while (container != null && !(container instanceof Method))
+        {
+            container = container.eContainer();
+        }
+        if (container instanceof Method)
+        {
+            caller.callerMethodName = ((Method)container).getName();
+        }
+
+        INode node = NodeModelUtils.findActualNodeFor(inv);
+        if (node != null)
+        {
+            String text = node.getText();
+            if (text != null)
+            {
+                text = stripCommentLines(text);
+                if (text.length() > 100)
+                {
+                    text = smartTruncateCall(text, methodName);
+                }
+                caller.callCode = text;
+            }
+        }
+        return caller;
+    }
+
+    /**
+     * Extracts the metadata object name that qualifies calls to a module, e.g.
+     * {@code "CommonModules/AccountingClientServer/Module.bsl"} → {@code "AccountingClientServer"}.
+     */
+    static String extractModuleName(String modulePath)
+    {
+        if (modulePath == null)
+        {
+            return null;
+        }
+        String[] parts = modulePath.split("/"); //$NON-NLS-1$
+        return parts.length >= 2 ? parts[parts.length - 2] : null;
     }
 
     /**
@@ -351,93 +517,6 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     }
 
     // ========== Helper methods ==========
-
-    private CallerInfo extractCallerInfo(IReferenceDescription refDesc,
-                                         org.eclipse.emf.ecore.resource.ResourceSet sharedResourceSet)
-    {
-        URI sourceUri = refDesc.getSourceEObjectUri();
-        if (sourceUri == null)
-        {
-            return null;
-        }
-
-        CallerInfo caller = new CallerInfo();
-
-        // Extract module path
-        String path = sourceUri.path();
-        caller.modulePath = BslModuleUtils.extractModulePath(path);
-
-        // Try to get line number using shared ResourceSet (caches loaded resources)
-        try
-        {
-            URI resourceUri = sourceUri.trimFragment();
-            org.eclipse.emf.ecore.resource.Resource resource =
-                sharedResourceSet.getResource(resourceUri, true);
-
-            if (resource != null && sourceUri.fragment() != null)
-            {
-                EObject eObject = resource.getEObject(sourceUri.fragment());
-                if (eObject != null)
-                {
-                    // Get method name from reference
-                    String refName = null;
-                    if (eObject instanceof StaticFeatureAccess)
-                    {
-                        refName = ((StaticFeatureAccess) eObject).getName();
-                    }
-                    else if (eObject instanceof DynamicFeatureAccess)
-                    {
-                        refName = ((DynamicFeatureAccess) eObject).getName();
-                    }
-
-                    // Navigate to parent Invocation for full call text
-                    EObject invocationObj = eObject;
-                    while (invocationObj != null && !(invocationObj instanceof Invocation))
-                    {
-                        invocationObj = invocationObj.eContainer();
-                    }
-
-                    INode callNode = (invocationObj instanceof Invocation)
-                        ? NodeModelUtils.findActualNodeFor(invocationObj)
-                        : NodeModelUtils.findActualNodeFor(eObject);
-
-                    if (callNode != null)
-                    {
-                        caller.line = callNode.getStartLine();
-
-                        // Get call source text (filter out comment lines)
-                        String text = callNode.getText();
-                        if (text != null)
-                        {
-                            text = stripCommentLines(text);
-                            if (text.length() > 100)
-                            {
-                                text = smartTruncateCall(text, refName);
-                            }
-                            caller.callCode = text;
-                        }
-                    }
-
-                    // Find containing method
-                    EObject parent = eObject;
-                    while (parent != null && !(parent instanceof Method))
-                    {
-                        parent = parent.eContainer();
-                    }
-                    if (parent instanceof Method)
-                    {
-                        caller.callerMethodName = ((Method) parent).getName();
-                    }
-                }
-            }
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Error extracting caller info", e); //$NON-NLS-1$
-        }
-
-        return caller;
-    }
 
     /**
      * Removes single-line comment lines (// ...) from multi-line node text.
