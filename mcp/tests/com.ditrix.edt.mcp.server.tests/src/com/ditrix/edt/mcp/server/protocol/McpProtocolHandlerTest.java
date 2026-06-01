@@ -217,16 +217,15 @@ public class McpProtocolHandlerTest
     public void testInvalidVersionDoesNotFabricateIdOne()
     {
         // Per JSON-RPC 2.0: a version-mismatch / invalid-request error whose id
-        // cannot be determined must NOT carry a fabricated id (e.g. 1) that could
-        // be mis-correlated to a pending request. The shared Gson omits the null
-        // id; emitting a strict "id":null is folded into the A9-wire e2e task.
+        // cannot be determined must carry id:null (present, not a fabricated value
+        // that could be mis-correlated to a pending request, and not omitted).
         String request = "{\"jsonrpc\":\"1.0\",\"method\":\"initialize\"}";
         String response = handler.processRequest(request);
 
         JsonObject json = parseResponse(response);
         assertNotNull(json.get("error"));
-        assertFalse("Undeterminable id must not be fabricated as 1",
-            json.has("id") && json.get("id").isJsonPrimitive() && json.get("id").getAsInt() == 1);
+        assertTrue("id field must be present per spec", json.has("id"));
+        assertTrue("undeterminable id must serialize as JSON null", json.get("id").isJsonNull());
     }
 
     @Test
@@ -249,6 +248,9 @@ public class McpProtocolHandlerTest
         assertNotNull(response);
         JsonObject json = parseResponse(response);
         assertNotNull(json.get("error"));
+        // Parse error => id cannot be determined => id:null present per JSON-RPC 2.0
+        assertTrue("parse-error response must carry id:null",
+            json.has("id") && json.get("id").isJsonNull());
     }
 
     @Test

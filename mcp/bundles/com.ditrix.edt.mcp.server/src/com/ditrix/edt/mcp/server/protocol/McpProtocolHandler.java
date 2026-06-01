@@ -435,6 +435,25 @@ public class McpProtocolHandler
      */
     private String buildErrorResponse(int code, String message, Object requestId)
     {
+        if (requestId == null)
+        {
+            // JSON-RPC 2.0: when the request id cannot be determined (parse error /
+            // invalid request) the error response MUST carry id:null. The shared
+            // Gson omits null fields, so build this envelope explicitly with a
+            // serialize-nulls writer. Only this path is affected; every id-bearing
+            // response keeps the normal (null-omitting) shape.
+            com.google.gson.JsonObject envelope = new com.google.gson.JsonObject();
+            envelope.addProperty("jsonrpc", McpConstants.JSONRPC_VERSION); //$NON-NLS-1$
+            envelope.add("id", com.google.gson.JsonNull.INSTANCE); //$NON-NLS-1$
+            com.google.gson.JsonObject err = new com.google.gson.JsonObject();
+            err.addProperty("code", code); //$NON-NLS-1$
+            if (message != null)
+            {
+                err.addProperty("message", message); //$NON-NLS-1$
+            }
+            envelope.add("error", err); //$NON-NLS-1$
+            return GsonProvider.toJsonSerializeNulls(envelope);
+        }
         return GsonProvider.toJson(JsonRpcResponse.error(requestId, code, message));
     }
 }

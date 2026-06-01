@@ -34,12 +34,11 @@ public class JsonRpcResponse
     /**
      * Creates an error response.
      * <p>
-     * When {@code id} is null (the request id could not be determined, e.g. a
-     * parse error or invalid request), the shared Gson instance omits the id
-     * field from the wire JSON. The important invariant is that no fabricated id
-     * (e.g. 1) is returned, which could be mis-correlated to a pending request.
-     * Emitting a strict {@code "id":null} per JSON-RPC 2.0 requires envelope-level
-     * serialization changes and is folded into the A9-wire e2e task.
+     * This DTO is serialized by the null-omitting shared Gson, so a null {@code id}
+     * is omitted here. The wire path for an undeterminable id (parse / invalid
+     * request) does NOT use this factory:
+     * {@code McpProtocolHandler.buildErrorResponse} builds that envelope explicitly
+     * and writes {@code "id":null} per JSON-RPC 2.0.
      */
     public static JsonRpcResponse error(Object id, int code, String message)
     {

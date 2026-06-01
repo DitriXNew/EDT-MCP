@@ -116,10 +116,10 @@ public class InitializeResultAndErrorTest
     @Test
     public void testJsonRpcErrorNullIdNotFabricated()
     {
-        // When the request id cannot be determined (parse error / invalid request),
-        // the error must not carry a fabricated id. The shared Gson omits the null
-        // id field; emitting a strict "id":null per JSON-RPC 2.0 is folded into the
-        // A9-wire e2e task (it needs envelope-level serialization changes).
+        // The DTO path (used for id-bearing responses) omits a null id via the
+        // shared null-omitting Gson. The wire path for an undeterminable id is
+        // McpProtocolHandler.buildErrorResponse, which writes "id":null explicitly
+        // (covered in McpProtocolHandlerTest).
         JsonRpcResponse response = JsonRpcResponse.error(null, -32600, "Invalid Request");
         String json = GsonProvider.toJson(response);
 
