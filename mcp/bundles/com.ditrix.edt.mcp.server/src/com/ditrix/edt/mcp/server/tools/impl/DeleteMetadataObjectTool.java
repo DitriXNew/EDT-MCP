@@ -67,7 +67,8 @@ public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty("objectFqn", //$NON-NLS-1$
                 "FQN of the object to delete " + //$NON-NLS-1$
                 "(e.g. 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount'). " + //$NON-NLS-1$
-                "Russian names supported.", true) //$NON-NLS-1$
+                "The metadata TYPE token may be English or Russian; the object name is the " + //$NON-NLS-1$
+                "programmatic Name (not the synonym / display name).", true) //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
                 "Set to true to execute the deletion. " + //$NON-NLS-1$
                 "Default false = preview only.") //$NON-NLS-1$

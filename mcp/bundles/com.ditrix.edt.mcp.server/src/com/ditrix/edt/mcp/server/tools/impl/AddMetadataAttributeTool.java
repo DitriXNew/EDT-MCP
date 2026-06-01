@@ -75,7 +75,8 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             .stringProperty("parentFqn", //$NON-NLS-1$
                 "FQN of the parent object " + //$NON-NLS-1$
                 "(e.g. 'Catalog.Products', 'Document.SalesOrder'). " + //$NON-NLS-1$
-                "Russian names supported.", true) //$NON-NLS-1$
+                "The metadata TYPE token may be English or Russian; the object name is the " + //$NON-NLS-1$
+                "programmatic Name (not the synonym / display name).", true) //$NON-NLS-1$
             .stringProperty("attributeName", //$NON-NLS-1$
                 "Name for the new attribute (required)", true) //$NON-NLS-1$
             .build();
