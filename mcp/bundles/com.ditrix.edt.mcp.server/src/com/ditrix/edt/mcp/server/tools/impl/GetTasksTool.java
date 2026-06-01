@@ -7,8 +7,10 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IProject;
@@ -93,6 +95,10 @@ public class GetTasksTool implements IMcpTool
         {
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             List<TaskInfo> tasks = new ArrayList<>();
+            // A single BSL TODO/FIXME surfaces under both the base task marker
+            // type and the Xtext task marker subtype. Dedup by a stable key so
+            // it is reported once, while tasks unique to either type are kept.
+            Set<String> seen = new HashSet<>();
             
             // Determine priority filter
             Integer priorityFilter = null;
@@ -135,11 +141,11 @@ public class GetTasksTool implements IMcpTool
                     continue;
                 }
                 
-                // Collect from both task marker types
-                collectTasksFromMarkers(project, TASK_MARKER_TYPE, tasks, filePath, priorityFilter, limit);
+                // Collect from both task marker types, sharing the dedup set
+                collectTasksFromMarkers(project, TASK_MARKER_TYPE, tasks, seen, filePath, priorityFilter, limit);
                 if (tasks.size() < limit)
                 {
-                    collectTasksFromMarkers(project, XTEXT_TASK_MARKER_TYPE, tasks, filePath, priorityFilter, limit);
+                    collectTasksFromMarkers(project, XTEXT_TASK_MARKER_TYPE, tasks, seen, filePath, priorityFilter, limit);
                 }
                 
                 if (tasks.size() >= limit)
@@ -188,9 +194,14 @@ public class GetTasksTool implements IMcpTool
     
     /**
      * Collects tasks from markers of a specific type.
+     * <p>
+     * The {@code seen} set is shared across the calls for the different marker
+     * types so that a task surfacing under both (e.g. a BSL TODO that matches
+     * both the base task marker and the Xtext task marker subtype) is added
+     * once, while any task unique to either type is preserved.
      */
-    private static void collectTasksFromMarkers(IProject project, String markerType, 
-        List<TaskInfo> tasks, String filePath, Integer priorityFilter, int limit)
+    private static void collectTasksFromMarkers(IProject project, String markerType,
+        List<TaskInfo> tasks, Set<String> seen, String filePath, Integer priorityFilter, int limit)
     {
         try
         {
@@ -231,7 +242,14 @@ public class GetTasksTool implements IMcpTool
                 task.line = marker.getAttribute(IMarker.LINE_NUMBER, -1);
                 task.priority = getPriorityString(markerPriority);
                 task.type = getTaskType(task.message);
-                
+
+                // Skip duplicates: the same task can surface under both the base
+                // task marker type and the Xtext task marker subtype.
+                if (!seen.add(taskKey(task.path, task.line, task.message, task.priority)))
+                {
+                    continue;
+                }
+
                 tasks.add(task);
             }
         }
@@ -241,6 +259,29 @@ public class GetTasksTool implements IMcpTool
         }
     }
     
+    /**
+     * Builds a stable dedup key for a task from its resource path, line number,
+     * message and priority. Pure and headless-unit-testable: identical inputs
+     * yield the same key, and a change in any component yields a different key.
+     * A null path or message is treated as an empty string.
+     *
+     * @param path the resource path (may be null)
+     * @param line the line number
+     * @param message the task message (may be null)
+     * @param priority the priority string (may be null)
+     * @return a non-null key uniquely identifying the task
+     */
+    static String taskKey(String path, int line, String message, String priority)
+    {
+        String safePath = path != null ? path : ""; //$NON-NLS-1$
+        String safeMessage = message != null ? message : ""; //$NON-NLS-1$
+        String safePriority = priority != null ? priority : ""; //$NON-NLS-1$
+        // Use a separator that cannot appear in a line number; the textual
+        // fields are compared as-is, so collisions across fields are avoided
+        // by the fixed field order plus the separator.
+        return safePath + "\n" + line + "\n" + safeMessage + "\n" + safePriority; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
     /**
      * Converts priority integer to string.
      */

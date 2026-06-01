@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -59,5 +60,70 @@ public class GetTasksToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"filePath\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"priority\"")); //$NON-NLS-1$
+    }
+
+    // --- taskKey dedup helper (A4: a BSL TODO/FIXME surfacing under both the
+    // base task marker and the Xtext task marker subtype must be counted once) ---
+
+    @Test
+    public void testTaskKeyIsStableForSameTask()
+    {
+        // Two markers for the same task (one from each marker type) carry the
+        // same path/line/message/priority, so they must produce the same key.
+        String a = GetTasksTool.taskKey("/P/src/Module.bsl", 42, "TODO: refactor", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String b = GetTasksTool.taskKey("/P/src/Module.bsl", 42, "TODO: refactor", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(a, b);
+    }
+
+    @Test
+    public void testTaskKeyDiffersByLine()
+    {
+        String a = GetTasksTool.taskKey("/P/src/Module.bsl", 42, "TODO: refactor", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String b = GetTasksTool.taskKey("/P/src/Module.bsl", 43, "TODO: refactor", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotEquals(a, b);
+    }
+
+    @Test
+    public void testTaskKeyDiffersByPath()
+    {
+        String a = GetTasksTool.taskKey("/P/src/A.bsl", 42, "TODO: refactor", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String b = GetTasksTool.taskKey("/P/src/B.bsl", 42, "TODO: refactor", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotEquals(a, b);
+    }
+
+    @Test
+    public void testTaskKeyDiffersByMessage()
+    {
+        String a = GetTasksTool.taskKey("/P/src/Module.bsl", 42, "TODO: refactor", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String b = GetTasksTool.taskKey("/P/src/Module.bsl", 42, "FIXME: broken", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotEquals(a, b);
+    }
+
+    @Test
+    public void testTaskKeyDiffersByPriority()
+    {
+        String a = GetTasksTool.taskKey("/P/src/Module.bsl", 42, "TODO: refactor", "high"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String b = GetTasksTool.taskKey("/P/src/Module.bsl", 42, "TODO: refactor", "low"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotEquals(a, b);
+    }
+
+    @Test
+    public void testTaskKeyHandlesNulls()
+    {
+        // Null path/message/priority must not throw and must be stable.
+        String a = GetTasksTool.taskKey(null, -1, null, null);
+        String b = GetTasksTool.taskKey(null, -1, null, null);
+        assertNotNull(a);
+        assertEquals(a, b);
+    }
+
+    @Test
+    public void testTaskKeyFieldsDoNotBleedAcrossBoundary()
+    {
+        // Without a field separator, ("ab","") and ("a","b") could collide.
+        // The key uses a delimiter, so adjacent fields stay distinct.
+        String a = GetTasksTool.taskKey("/P/ab", 1, "", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String b = GetTasksTool.taskKey("/P/a", 1, "b", "normal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotEquals(a, b);
     }
 }

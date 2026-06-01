@@ -119,4 +119,69 @@ public class GetSymbolInfoToolTest
         String result = new GetSymbolInfoTool().execute(params);
         assertTrue(result.contains("Line and column must be >= 1")); //$NON-NLS-1$
     }
+
+    // ==================== Table-cell escaping (CLAUDE.md don't #9) ====================
+    //
+    // The EObject info table is built from dynamic, externally-derived values
+    // (token text, symbol names, signatures, grammar/EMF type names) which may
+    // contain a '|' or a newline. Those would break the Markdown table unless
+    // escaped. The actual table builders need a live EDT model and run on the
+    // UI thread, so the escaping is funnelled through the pure cell()/codeCell()
+    // helpers, which are unit-tested here; end-to-end rendering is covered by the
+    // E2E suite against a live workbench.
+
+    @Test
+    public void testCellEscapesPipe()
+    {
+        String row = GetSymbolInfoTool.cell("Kind", "Map<String|Int>"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("| **Kind** | Map<String\\|Int> |\n", row); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCellEscapesNewline()
+    {
+        String row = GetSymbolInfoTool.cell("Parameters", "a\nb"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("newline must not leak into a table cell", row.contains("\n a")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(row.endsWith(" |\n")); //$NON-NLS-1$
+        assertFalse("only the terminating newline is allowed", //$NON-NLS-1$
+            row.substring(0, row.length() - 1).contains("\n")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCellPlainValue()
+    {
+        assertEquals("| **EMF type** | Module |\n", //$NON-NLS-1$
+            GetSymbolInfoTool.cell("EMF type", "Module")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCellNullValueRendersEmpty()
+    {
+        assertEquals("| **Symbol** |  |\n", GetSymbolInfoTool.cell("Symbol", null)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCodeCellEscapesPipeInsideBackticks()
+    {
+        // A '|' inside a code span still splits a Markdown table cell, so it
+        // must be escaped even though it is wrapped in backticks.
+        String row = GetSymbolInfoTool.codeCell("Signature", "F(a | b)"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("| **Signature** | `F(a \\| b)` |\n", row); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCodeCellWrapsValueInBackticks()
+    {
+        assertEquals("| **Symbol** | `MyProc` |\n", //$NON-NLS-1$
+            GetSymbolInfoTool.codeCell("Symbol", "MyProc")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCodeCellEscapesNewline()
+    {
+        String row = GetSymbolInfoTool.codeCell("Token", "x\ny"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(row.endsWith(" |\n")); //$NON-NLS-1$
+        assertFalse("only the terminating newline is allowed", //$NON-NLS-1$
+            row.substring(0, row.length() - 1).contains("\n")); //$NON-NLS-1$
+    }
 }

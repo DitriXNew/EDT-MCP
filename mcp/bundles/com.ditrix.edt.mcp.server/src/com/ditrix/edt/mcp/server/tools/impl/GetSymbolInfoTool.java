@@ -534,9 +534,10 @@ public class GetSymbolInfoTool implements IMcpTool
                     // Return at least token info
                     StringBuilder sb = new StringBuilder();
                     sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
-                    sb.append("| **Token** | `").append(leafNode.getText()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                    sb.append("| **Grammar** | ").append(leafNode.getGrammarElement() != null //$NON-NLS-1$
-                        ? leafNode.getGrammarElement().eClass().getName() : "-").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                    sb.append(codeCell("Token", leafNode.getText())); //$NON-NLS-1$
+                    String grammar = leafNode.getGrammarElement() != null
+                        ? leafNode.getGrammarElement().eClass().getName() : "-"; //$NON-NLS-1$
+                    sb.append(cell("Grammar", grammar)); //$NON-NLS-1$
                     return sb.toString();
                 }
             }
@@ -585,9 +586,9 @@ public class GetSymbolInfoTool implements IMcpTool
             Method method = (Method) element;
             boolean isFunction = element instanceof Function;
 
-            sb.append("| **Symbol** | `").append(method.getName()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(codeCell("Symbol", method.getName())); //$NON-NLS-1$
             sb.append("| **Kind** | ").append(isFunction ? "Function" : "Procedure").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append("| **Signature** | `").append(BslModuleUtils.buildSignature(method)).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(codeCell("Signature", BslModuleUtils.buildSignature(method))); //$NON-NLS-1$
             sb.append("| **Export** | ").append(method.isExport() ? "Yes" : "No").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
             int startLine = BslModuleUtils.getStartLine(method);
@@ -606,13 +607,13 @@ public class GetSymbolInfoTool implements IMcpTool
             String params = BslModuleUtils.buildParamsString(method);
             if (params != null && !params.isEmpty())
             {
-                sb.append("| **Parameters** | ").append(params).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                sb.append(cell("Parameters", params)); //$NON-NLS-1$
             }
         }
         else if (element instanceof FormalParam)
         {
             FormalParam param = (FormalParam) element;
-            sb.append("| **Symbol** | `").append(param.getName()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(codeCell("Symbol", param.getName())); //$NON-NLS-1$
             sb.append("| **Kind** | Parameter |\n"); //$NON-NLS-1$
             sb.append("| **ByValue** | ").append(param.isByValue() ? "Yes" : "No").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
@@ -620,65 +621,63 @@ public class GetSymbolInfoTool implements IMcpTool
             EObject container = param.eContainer();
             if (container instanceof Method)
             {
-                sb.append("| **In method** | `").append(((Method) container).getName()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                sb.append(codeCell("In method", ((Method) container).getName())); //$NON-NLS-1$
             }
         }
         else if (element instanceof StaticFeatureAccess)
         {
             StaticFeatureAccess sfa = (StaticFeatureAccess) element;
-            sb.append("| **Symbol** | `").append(sfa.getName()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(codeCell("Symbol", sfa.getName())); //$NON-NLS-1$
             sb.append("| **Kind** | StaticFeatureAccess |\n"); //$NON-NLS-1$
-            sb.append("| **EMF type** | ").append(sfa.eClass().getName()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(cell("EMF type", sfa.eClass().getName())); //$NON-NLS-1$
 
             // Show containing method
             EObject container = findContainingMethod(sfa);
             if (container instanceof Method)
             {
-                sb.append("| **In method** | `").append(((Method) container).getName()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                sb.append(codeCell("In method", ((Method) container).getName())); //$NON-NLS-1$
             }
         }
         else if (element instanceof DynamicFeatureAccess)
         {
             DynamicFeatureAccess dfa = (DynamicFeatureAccess) element;
-            sb.append("| **Symbol** | `").append(dfa.getName()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(codeCell("Symbol", dfa.getName())); //$NON-NLS-1$
             sb.append("| **Kind** | DynamicFeatureAccess |\n"); //$NON-NLS-1$
-            sb.append("| **EMF type** | ").append(dfa.eClass().getName()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(cell("EMF type", dfa.eClass().getName())); //$NON-NLS-1$
 
             // Show containing method
             EObject container = findContainingMethod(dfa);
             if (container instanceof Method)
             {
-                sb.append("| **In method** | `").append(((Method) container).getName()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                sb.append(codeCell("In method", ((Method) container).getName())); //$NON-NLS-1$
             }
         }
         else if (element instanceof Invocation)
         {
             Invocation invocation = (Invocation) element;
             sb.append("| **Kind** | Invocation |\n"); //$NON-NLS-1$
-            sb.append("| **EMF type** | ").append(invocation.eClass().getName()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(cell("EMF type", invocation.eClass().getName())); //$NON-NLS-1$
 
             // Try to get the method name from the feature access
             EObject methodAccess = invocation.getMethodAccess();
             if (methodAccess instanceof StaticFeatureAccess)
             {
-                sb.append("| **Symbol** | `").append(((StaticFeatureAccess) methodAccess).getName()) //$NON-NLS-1$
-                  .append("` |\n"); //$NON-NLS-1$
+                sb.append(codeCell("Symbol", ((StaticFeatureAccess) methodAccess).getName())); //$NON-NLS-1$
             }
             else if (methodAccess instanceof DynamicFeatureAccess)
             {
-                sb.append("| **Symbol** | `").append(((DynamicFeatureAccess) methodAccess).getName()) //$NON-NLS-1$
-                  .append("` |\n"); //$NON-NLS-1$
+                sb.append(codeCell("Symbol", ((DynamicFeatureAccess) methodAccess).getName())); //$NON-NLS-1$
             }
         }
         else if (element instanceof Module)
         {
             sb.append("| **Kind** | Module |\n"); //$NON-NLS-1$
-            sb.append("| **EMF type** | ").append(element.eClass().getName()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(cell("EMF type", element.eClass().getName())); //$NON-NLS-1$
         }
         else
         {
             // Generic EObject info
-            sb.append("| **Kind** | ").append(element.eClass().getName()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(cell("Kind", element.eClass().getName())); //$NON-NLS-1$
 
             // Try to get name via reflection
             try
@@ -686,7 +685,7 @@ public class GetSymbolInfoTool implements IMcpTool
                 Object name = ReflectionUtils.invokeMethod(element, "getName"); //$NON-NLS-1$
                 if (name instanceof String && !((String) name).isEmpty())
                 {
-                    sb.append("| **Symbol** | `").append(name).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                    sb.append(codeCell("Symbol", (String) name)); //$NON-NLS-1$
                 }
             }
             catch (Exception e)
@@ -698,7 +697,7 @@ public class GetSymbolInfoTool implements IMcpTool
             EObject container = findContainingMethod(element);
             if (container instanceof Method)
             {
-                sb.append("| **In method** | `").append(((Method) container).getName()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                sb.append(codeCell("In method", ((Method) container).getName())); //$NON-NLS-1$
             }
 
             int startLine = BslModuleUtils.getStartLine(element);
@@ -709,6 +708,36 @@ public class GetSymbolInfoTool implements IMcpTool
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Builds a single two-column table row {@code | **label** | value |}.
+     * The dynamic value is escaped via {@link MarkdownUtils#escapeForTable(String)}
+     * so a '|' or newline inside it cannot break the table. The label is a
+     * static literal supplied by this class, so it is emitted verbatim.
+     *
+     * @param label the (static) property label
+     * @param value the dynamic value (may be null; rendered as an empty cell)
+     * @return the row text, newline-terminated
+     */
+    static String cell(String label, String value)
+    {
+        return "| **" + label + "** | " + MarkdownUtils.escapeForTable(value) + " |\n"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * Builds a single two-column table row whose value is wrapped in a code
+     * span: {@code | **label** | `value` |}. The dynamic value is escaped via
+     * {@link MarkdownUtils#escapeForTable(String)} — a '|' inside a code span
+     * still splits a Markdown table cell, so escaping is required even here.
+     *
+     * @param label the (static) property label
+     * @param value the dynamic value (may be null; rendered as an empty code span)
+     * @return the row text, newline-terminated
+     */
+    static String codeCell(String label, String value)
+    {
+        return "| **" + label + "** | `" + MarkdownUtils.escapeForTable(value) + "` |\n"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     /**
@@ -886,7 +915,7 @@ public class GetSymbolInfoTool implements IMcpTool
 
             StringBuilder sb = new StringBuilder();
             sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("| **Token** | `").append(leafNode.getText()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(codeCell("Token", leafNode.getText())); //$NON-NLS-1$
             return sb.toString();
         }
         catch (Exception e)

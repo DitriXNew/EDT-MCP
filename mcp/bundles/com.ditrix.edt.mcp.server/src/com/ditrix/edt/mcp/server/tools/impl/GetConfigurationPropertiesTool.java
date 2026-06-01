@@ -239,7 +239,9 @@ public class GetConfigurationPropertiesTool implements IMcpTool
             // Default language
             if (configuration.getDefaultLanguage() != null)
             {
-                result.put("defaultLanguage", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
+                // Synonym map is keyed by the language CODE (ru/en), not the name.
+                result.put("defaultLanguage", configuration.getDefaultLanguage().getLanguageCode()); //$NON-NLS-1$
+                result.put("defaultLanguageName", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
             }
             
             // Project name

@@ -70,7 +70,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 - **Cases:**
   - `{projectName:"IRP"}` → JSON config properties.
   - `{}` → first configuration project (defaults to IRP here).
-- **Assert:** `name=="IRP"`, `scriptVariant=="English"`, `defaultLanguage=="English"`, `compatibilityMode=="8.3.25"`, `success==true`.
+- **Assert:** `name=="IRP"`, `scriptVariant=="English"`, `defaultLanguage=="en"` (language CODE, the synonym key), `defaultLanguageName=="English"`, `compatibilityMode=="8.3.25"`, `success==true`.
 - **Validated 2026‑06‑01:** PASS.
 
 ### get_check_description
