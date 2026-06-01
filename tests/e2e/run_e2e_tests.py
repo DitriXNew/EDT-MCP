@@ -148,6 +148,7 @@ class TestRunner:
         self._test("get_metadata_objects", self.test_get_metadata_objects)
         self._test("get_metadata_objects_catalogs", self.test_get_metadata_objects_catalogs)
         self._test("get_metadata_details", self.test_get_metadata_details)
+        self._test("metadata_bilingual_type_token", self.test_metadata_bilingual_type_token)
         self._test("get_problem_summary", self.test_get_problem_summary)
         self._test("get_project_errors", self.test_get_project_errors)
         self._test("get_tags", self.test_get_tags)
@@ -168,6 +169,7 @@ class TestRunner:
         self._test("read_method_source", self.test_read_method_source)
         self._test("search_in_code", self.test_search_in_code)
         self._test("search_in_code_count", self.test_search_in_code_count)
+        self._test("validate_query", self.test_validate_query)
 
         # Phase 5: Advanced tools
         self._section("Advanced Tools")
@@ -261,6 +263,23 @@ class TestRunner:
     def _get_structured_content(self, resp: dict) -> Any:
         """Extract structuredContent from tool call result."""
         return resp.get("result", {}).get("structuredContent")
+
+    def _parse_json_result(self, resp: dict) -> dict:
+        """Parse a JSON-response tool's payload.
+
+        Prefers structuredContent; falls back to parsing the text content as
+        JSON. Returns {} if neither yields a JSON object.
+        """
+        structured = self._get_structured_content(resp)
+        if isinstance(structured, dict):
+            return structured
+        text = self._get_result_text(resp).strip()
+        if text.startswith("{"):
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
     # ──────────────────────────────────────────────────────────────────────
     # Protocol Tests
@@ -375,6 +394,93 @@ class TestRunner:
             "objectFqns": ["Catalog.Catalog"]
         })
         self._assert_success(resp)
+
+    def _assert_type_token_identity(self, tool: str, en_args: dict, ru_args: dict):
+        """The metadata TYPE token is bilingual: an FQN spelled with the English
+        token ('Catalog.X') and the Russian one ('Справочник.X') must resolve to
+        the same object and render an identical result. (The object NAME is
+        programmatic and never translated.)"""
+        en = self._call(tool, en_args)
+        self._assert_success(en, f"[{tool} EN type token]")
+        ru = self._call(tool, ru_args)
+        self._assert_success(ru, f"[{tool} RU type token]")
+        en_text = self._get_result_text(en)
+        ru_text = self._get_result_text(ru)
+        assert en_text == ru_text, (
+            f"{tool}: bilingual type-token resolve diverged between the English "
+            f"and Russian type token.\n--- EN ---\n{en_text}\n--- RU ---\n{ru_text}")
+        return en_text
+
+    def test_metadata_bilingual_type_token(self):
+        # Every read tool that accepts an object FQN must treat 'Catalog.X' and
+        # 'Справочник.X' identically.
+        details = self._assert_type_token_identity(
+            "get_metadata_details",
+            {"projectName": self.config.project,
+             "objectFqns": ["Catalog.Catalog"], "full": True},
+            {"projectName": self.config.project,
+             "objectFqns": ["Справочник.Catalog"], "full": True})
+        assert "## Catalog: Catalog" in details, \
+            f"EN type token did not resolve the catalog:\n{details}"
+        # The synonym map must be keyed by the language CODE (e.g. 'en'), never
+        # the Language object's name ('English'). full=true renders the map as a
+        # "| <code> | <value> |" table.
+        assert "| en | Catalog |" in details, \
+            f"Synonym not keyed by language code 'en':\n{details}"
+
+        self._assert_type_token_identity(
+            "find_references",
+            {"projectName": self.config.project, "objectFqn": "Catalog.Catalog"},
+            {"projectName": self.config.project, "objectFqn": "Справочник.Catalog"})
+
+        self._assert_type_token_identity(
+            "go_to_definition",
+            {"projectName": self.config.project,
+             "symbol": "Catalog.Catalog", "includeSource": False},
+            {"projectName": self.config.project,
+             "symbol": "Справочник.Catalog", "includeSource": False})
+
+        self._assert_type_token_identity(
+            "get_project_errors",
+            {"projectName": self.config.project, "objects": ["Catalog.Catalog"]},
+            {"projectName": self.config.project, "objects": ["Справочник.Catalog"]})
+
+    def test_validate_query(self):
+        # 1C QL is bilingual (SELECT/ВЫБРАТЬ, FROM/ИЗ). Validate that an English
+        # query, its Russian-keyword equivalent, and a broken query are each
+        # handled correctly against the live configuration.
+        en_valid = self._call("validate_query", {
+            "projectName": self.config.project,
+            "queryText": "SELECT Ref FROM Catalog.Catalog",
+        })
+        self._assert_success(en_valid, "[EN valid]")
+        en = self._parse_json_result(en_valid)
+        assert en.get("valid") is True, f"EN query should be valid: {en}"
+        assert en.get("errorCount") == 0, f"EN query should have 0 errors: {en}"
+
+        # Russian keywords + Russian type token (Справочник) + Russian standard
+        # field (Ссылка) must parse and validate identically.
+        ru_valid = self._call("validate_query", {
+            "projectName": self.config.project,
+            "queryText": "ВЫБРАТЬ Ссылка ИЗ Справочник.Catalog",
+        })
+        self._assert_success(ru_valid, "[RU valid]")
+        ru = self._parse_json_result(ru_valid)
+        assert ru.get("valid") is True, f"RU query should be valid: {ru}"
+        assert ru.get("errorCount") == 0, f"RU query should have 0 errors: {ru}"
+
+        # A query referencing a non-existent field must be flagged invalid.
+        broken = self._call("validate_query", {
+            "projectName": self.config.project,
+            "queryText": "SELECT NoSuchFieldXYZ FROM Catalog.Catalog",
+        })
+        self._assert_success(broken, "[broken field]")
+        bad = self._parse_json_result(broken)
+        assert bad.get("valid") is False, f"Broken query should be invalid: {bad}"
+        assert bad.get("errorCount", 0) >= 1, f"Broken query should report errors: {bad}"
+        issues_text = json.dumps(bad.get("issues", []))
+        assert "NoSuchFieldXYZ" in issues_text, \
+            f"Broken query issue should name the bad field: {bad}"
 
     def test_get_problem_summary(self):
         resp = self._call("get_problem_summary", {
