@@ -197,6 +197,115 @@ public final class BslModuleUtils
     }
 
     /**
+     * Location of a method found by text/regex scan (the fallback used when the
+     * EMF model is unavailable). Line numbers are 0-indexed; {@link #startLine}
+     * already includes any adjacent doc-comment block.
+     */
+    public static final class TextMethod
+    {
+        public final boolean found;
+        public final int startLine;
+        public final int endLine;
+        public final String matchedName;
+        public final boolean isFunction;
+        public final List<String> allMethodNames;
+
+        TextMethod(boolean found, int startLine, int endLine, String matchedName,
+            boolean isFunction, List<String> allMethodNames)
+        {
+            this.found = found;
+            this.startLine = startLine;
+            this.endLine = endLine;
+            this.matchedName = matchedName;
+            this.isFunction = isFunction;
+            this.allMethodNames = allMethodNames;
+        }
+    }
+
+    /**
+     * Locates a method by name via a text/regex scan (case-insensitive), the
+     * shared fallback for read_method_source and go_to_definition when the EMF
+     * model is unavailable. The returned {@code startLine} includes any adjacent
+     * doc-comment block (via {@link #findDocCommentStartLine}); {@code endLine} is
+     * the EndProcedure/EndFunction line (or the last line if unterminated).
+     * {@code allMethodNames} lists every method found, for a not-found response.
+     *
+     * @param allLines   the module source lines (0-indexed)
+     * @param methodName the method name to find (case-insensitive)
+     * @return a {@link TextMethod}; {@code found} is false when the method is absent
+     */
+    public static TextMethod findMethodViaText(List<String> allLines, String methodName)
+    {
+        int methodStart = -1;
+        int methodEnd = -1;
+        String matchedName = null;
+        boolean isFunction = false;
+        List<String> allMethodNames = new ArrayList<>();
+
+        for (int i = 0; i < allLines.size(); i++)
+        {
+            Matcher startMatcher = METHOD_START_PATTERN.matcher(allLines.get(i));
+            if (startMatcher.find())
+            {
+                String foundName = startMatcher.group(1);
+                allMethodNames.add(foundName);
+
+                if (foundName.equalsIgnoreCase(methodName))
+                {
+                    methodStart = i;
+                    matchedName = foundName;
+                    isFunction = FUNC_KEYWORD_PATTERN.matcher(allLines.get(i)).find();
+                }
+            }
+
+            if (methodStart >= 0 && methodEnd < 0)
+            {
+                if (METHOD_END_PATTERN.matcher(allLines.get(i)).find())
+                {
+                    methodEnd = i;
+                    break;
+                }
+            }
+        }
+
+        if (methodStart < 0)
+        {
+            return new TextMethod(false, -1, -1, null, false, allMethodNames);
+        }
+        if (methodEnd < 0)
+        {
+            methodEnd = allLines.size() - 1;
+        }
+
+        // Include the doc-comment block preceding the method keyword.
+        int docStart = findDocCommentStartLine(allLines, methodStart + 1) - 1;
+        return new TextMethod(true, docStart, methodEnd, matchedName, isFunction, allMethodNames);
+    }
+
+    /**
+     * Builds the standard "method not found" response listing the available
+     * methods, shared by the text-scan fallback of read_method_source and
+     * go_to_definition.
+     *
+     * @param methodName     the requested method name
+     * @param modulePath     the module path (for the message)
+     * @param allMethodNames the methods that were found
+     * @return the markdown error string
+     */
+    public static String buildTextMethodNotFoundResponse(String methodName, String modulePath,
+        List<String> allMethodNames)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Error: Method '").append(methodName).append("' not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append("**Available methods** (").append(allMethodNames.size()).append("):\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String name : allMethodNames)
+        {
+            sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.toString();
+    }
+
+    /**
      * Reads all lines from an IFile with UTF-8 BOM detection.
      * BSL files in EDT are typically saved as UTF-8 with BOM.
      *

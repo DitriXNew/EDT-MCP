@@ -361,61 +361,17 @@ public class GoToDefinitionTool implements IMcpTool
         {
             List<String> allLines = BslModuleUtils.readFileLines(file);
 
-            int methodStart = -1;
-            int methodEnd = -1;
-            String matchedName = null;
-            boolean isFunction = false;
-            List<String> allMethodNames = new ArrayList<>();
-
-            for (int i = 0; i < allLines.size(); i++)
+            // Locate the method via the shared text-scan fallback.
+            BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(allLines, methodName);
+            if (!tm.found)
             {
-                java.util.regex.Matcher startMatcher = BslModuleUtils.METHOD_START_PATTERN.matcher(allLines.get(i));
-                if (startMatcher.find())
-                {
-                    String foundName = startMatcher.group(1);
-                    allMethodNames.add(foundName);
-
-                    if (foundName.equalsIgnoreCase(methodName))
-                    {
-                        methodStart = i;
-                        matchedName = foundName;
-                        isFunction = BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher(allLines.get(i)).find();
-                    }
-                }
-
-                if (methodStart >= 0 && methodEnd < 0)
-                {
-                    java.util.regex.Matcher endMatcher = BslModuleUtils.METHOD_END_PATTERN.matcher(allLines.get(i));
-                    if (endMatcher.find())
-                    {
-                        methodEnd = i;
-                        break;
-                    }
-                }
+                return BslModuleUtils.buildTextMethodNotFoundResponse(methodName, modulePath, tm.allMethodNames);
             }
 
-            if (methodStart < 0)
-            {
-                StringBuilder sb = new StringBuilder();
-                sb.append("Error: Method '").append(methodName).append("' not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                sb.append("**Available methods** (").append(allMethodNames.size()).append("):\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                for (String name : allMethodNames)
-                {
-                    sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                return sb.toString();
-            }
-
-            if (methodEnd < 0)
-            {
-                methodEnd = allLines.size() - 1;
-            }
-
-            // Include doc-comment
-            int docStart = findDocCommentStart(allLines, methodStart + 1) - 1;
-            methodStart = docStart;
-
-            String typeStr = isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
+            int methodStart = tm.startLine;
+            int methodEnd = tm.endLine;
+            String matchedName = tm.matchedName;
+            String typeStr = tm.isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
 
             // Find containing region
             String region = BslModuleUtils.findRegionForLine(allLines, methodStart + 1);

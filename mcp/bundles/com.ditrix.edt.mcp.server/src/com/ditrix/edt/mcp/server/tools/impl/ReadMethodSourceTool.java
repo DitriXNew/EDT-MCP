@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -231,69 +230,16 @@ public class ReadMethodSourceTool implements IMcpTool
         {
             List<String> allLines = BslModuleUtils.readFileLines(file);
 
-            // Find method by regex
-            int methodStart = -1;
-            int methodEnd = -1;
-            List<String> allMethodNames = new ArrayList<>();
-
-            for (int i = 0; i < allLines.size(); i++)
+            // Locate the method via the shared text-scan fallback.
+            BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(allLines, methodName);
+            if (!tm.found)
             {
-                Matcher startMatcher = BslModuleUtils.METHOD_START_PATTERN.matcher(allLines.get(i));
-                if (startMatcher.find())
-                {
-                    String foundName = startMatcher.group(1);
-                    allMethodNames.add(foundName);
-
-                    if (foundName.equalsIgnoreCase(methodName))
-                    {
-                        methodStart = i;
-                    }
-                }
-
-                if (methodStart >= 0 && methodEnd < 0)
-                {
-                    Matcher endMatcher = BslModuleUtils.METHOD_END_PATTERN.matcher(allLines.get(i));
-                    if (endMatcher.find())
-                    {
-                        methodEnd = i;
-                        break; // Method found — stop scanning
-                    }
-                }
+                return BslModuleUtils.buildTextMethodNotFoundResponse(methodName, modulePath, tm.allMethodNames);
             }
 
-            if (methodStart < 0)
-            {
-                // Method not found - list available methods
-                StringBuilder sb = new StringBuilder();
-                sb.append("Error: Method '").append(methodName).append("' not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                sb.append("**Available methods** (").append(allMethodNames.size()).append("):\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                for (String name : allMethodNames)
-                {
-                    sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                return sb.toString();
-            }
-
-            if (methodEnd < 0)
-            {
-                methodEnd = allLines.size() - 1;
-            }
-
-            // Include doc-comment block preceding the method keyword
-            int docStart = findDocCommentStart(allLines, methodStart + 1) - 1; // convert to 0-indexed
-            methodStart = docStart;
-
-            // Detect function/procedure keyword on the original method start line
-            boolean isFunction = false;
-            for (int i = methodStart; i <= methodEnd; i++)
-            {
-                if (BslModuleUtils.METHOD_START_PATTERN.matcher(allLines.get(i)).find())
-                {
-                    isFunction = BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher(allLines.get(i)).find();
-                    break;
-                }
-            }
-            String typeStr = isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
+            int methodStart = tm.startLine;
+            int methodEnd = tm.endLine;
+            String typeStr = tm.isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
 
             // Detect export flag
             boolean isExport = false;

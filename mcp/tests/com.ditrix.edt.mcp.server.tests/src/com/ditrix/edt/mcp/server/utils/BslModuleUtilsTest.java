@@ -7,7 +7,9 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import java.util.List;
 
@@ -167,5 +169,88 @@ public class BslModuleUtilsTest
     public void testExtractTextNullSourceIsNull()
     {
         assertNull(BslModuleUtils.extractDocCommentText(null, 5));
+    }
+
+    // ========== findMethodViaText / buildTextMethodNotFoundResponse ==========
+
+    @Test
+    public void testFindMethodViaTextLocatesFunctionWithDocComment()
+    {
+        List<String> lines = List.of(
+            "Procedure Alpha()",            // 0 //$NON-NLS-1$
+            "EndProcedure",                 // 1 //$NON-NLS-1$
+            "",                             // 2 //$NON-NLS-1$
+            "// Returns one.",              // 3 //$NON-NLS-1$
+            "Function Beta() Export",       // 4 //$NON-NLS-1$
+            "  Return 1;",                  // 5 //$NON-NLS-1$
+            "EndFunction");                 // 6 //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Beta"); //$NON-NLS-1$
+        assertTrue(tm.found);
+        assertTrue(tm.isFunction);
+        assertEquals("Beta", tm.matchedName); //$NON-NLS-1$
+        assertEquals(3, tm.startLine); // doc-comment at line 3 included (0-indexed)
+        assertEquals(6, tm.endLine);   // EndFunction
+        assertEquals(2, tm.allMethodNames.size());
+    }
+
+    @Test
+    public void testFindMethodViaTextProcedureNoDocComment()
+    {
+        List<String> lines = List.of(
+            "Procedure Alpha()",            // 0 //$NON-NLS-1$
+            "EndProcedure");                // 1 //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Alpha"); //$NON-NLS-1$
+        assertTrue(tm.found);
+        assertFalse(tm.isFunction);
+        assertEquals(0, tm.startLine);
+        assertEquals(1, tm.endLine);
+    }
+
+    @Test
+    public void testFindMethodViaTextCaseInsensitive()
+    {
+        List<String> lines = List.of(
+            "Procedure Alpha()",            //$NON-NLS-1$
+            "EndProcedure");                //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "alpha"); //$NON-NLS-1$
+        assertTrue(tm.found);
+        assertEquals("Alpha", tm.matchedName); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindMethodViaTextNotFoundCollectsNames()
+    {
+        List<String> lines = List.of(
+            "Procedure Alpha()",            //$NON-NLS-1$
+            "EndProcedure",                 //$NON-NLS-1$
+            "Function Beta()",              //$NON-NLS-1$
+            "EndFunction");                 //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Missing"); //$NON-NLS-1$
+        assertFalse(tm.found);
+        assertEquals(2, tm.allMethodNames.size());
+        assertEquals("Alpha", tm.allMethodNames.get(0)); //$NON-NLS-1$
+        assertEquals("Beta", tm.allMethodNames.get(1)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindMethodViaTextUnterminatedClampsToLastLine()
+    {
+        List<String> lines = List.of(
+            "Procedure Alpha()",            // 0 //$NON-NLS-1$
+            "  DoSomething();");            // 1 (no EndProcedure) //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Alpha"); //$NON-NLS-1$
+        assertTrue(tm.found);
+        assertEquals(1, tm.endLine);
+    }
+
+    @Test
+    public void testBuildTextMethodNotFoundResponse()
+    {
+        String r = BslModuleUtils.buildTextMethodNotFoundResponse(
+            "Foo", "CommonModules/X/Module.bsl", List.of("Alpha", "Beta")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue(r.contains("Method 'Foo' not found in CommonModules/X/Module.bsl")); //$NON-NLS-1$
+        assertTrue(r.contains("**Available methods** (2)")); //$NON-NLS-1$
+        assertTrue(r.contains("- Alpha")); //$NON-NLS-1$
+        assertTrue(r.contains("- Beta")); //$NON-NLS-1$
     }
 }
