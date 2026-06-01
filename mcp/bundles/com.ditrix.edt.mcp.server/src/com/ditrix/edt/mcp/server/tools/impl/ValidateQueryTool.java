@@ -17,7 +17,6 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.resource.ResourceSet;
@@ -37,6 +36,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to validate 1C:Enterprise query language (QL) text in the context of a project.
@@ -103,17 +103,17 @@ public class ValidateQueryTool implements IMcpTool
         }
         
         // Find the project
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
         {
             return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
-        if (!project.isOpen())
+        if (!ctx.isOpen())
         {
             return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
         }
-        
-        return validateQuery(project, queryText, dcsMode);
+
+        return validateQuery(ctx.project(), queryText, dcsMode);
     }
     
     /**

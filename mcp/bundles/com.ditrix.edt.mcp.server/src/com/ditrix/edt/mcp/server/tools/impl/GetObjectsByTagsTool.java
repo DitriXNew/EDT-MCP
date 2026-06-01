@@ -12,7 +12,6 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -22,6 +21,7 @@ import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
 import com.ditrix.edt.mcp.server.tags.model.TagStorage;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.google.gson.JsonArray;
@@ -105,12 +105,13 @@ public class GetObjectsByTagsTool implements IMcpTool
             }
         }
         
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
         {
             return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
-        
+        IProject project = ctx.project();
+
         try
         {
             return getObjectsByTags(project, tagNames, limit);
