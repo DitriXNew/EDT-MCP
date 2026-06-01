@@ -161,6 +161,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
   - add `contains:"Get"` → filter; add `offset:6` → pagination.
 - **Assert:** `success==true`, `totalProposals>0`, `returnedProposals==limit`, each proposal has `displayString`.
 - **Validated 2026‑06‑01:** PASS — totalProposals 1292, returned 6.
+- **Flakiness (card b3):** do NOT call this in parallel on the same file, and a rapid back‑to‑back call can spuriously return `totalProposals:0` (EDT content‑assist readiness, not the tool's formatting). Call serially; on `0`, retry once. Result JSON is built via `ToolResult` (card aQ); pagination/filter logic is unit‑tested in `GetContentAssistToolTest`.
 
 ### get_platform_documentation
 - **Type:** read · **Runnable on IRP:** full (no project needed)

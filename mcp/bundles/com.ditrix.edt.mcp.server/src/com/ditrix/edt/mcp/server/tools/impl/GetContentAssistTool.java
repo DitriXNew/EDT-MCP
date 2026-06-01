@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -38,8 +41,6 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 
 import io.github.furstenheim.CopyDown;
 
@@ -336,16 +337,10 @@ public class GetContentAssistTool implements IMcpTool
      * @param filePath file path for result
      * @return JSON string
      */
-    private String formatProposals(ICompletionProposal[] proposals, int maxProposals, int proposalOffset,
+    static String formatProposals(ICompletionProposal[] proposals, int maxProposals, int proposalOffset,
                                    String containsFilter, boolean extendedDocumentation,
                                    int line, int column, String filePath)
     {
-        JsonObject result = new JsonObject();
-        result.addProperty("success", true); //$NON-NLS-1$
-        result.addProperty("file", filePath); //$NON-NLS-1$
-        result.addProperty("line", line); //$NON-NLS-1$
-        result.addProperty("column", column); //$NON-NLS-1$
-        
         // Parse contains filter into lowercase parts
         String[] filterParts = null;
         if (containsFilter != null && !containsFilter.isEmpty())
@@ -356,18 +351,18 @@ public class GetContentAssistTool implements IMcpTool
                 filterParts[i] = filterParts[i].trim();
             }
         }
-        
-        JsonArray proposalsArray = new JsonArray();
+
+        List<Map<String, Object>> proposalList = new ArrayList<>();
         int count = 0;
         int skipped = 0;
         int filteredOut = 0;
-        
+
         if (proposals != null)
         {
             for (ICompletionProposal proposal : proposals)
             {
                 String displayString = proposal.getDisplayString();
-                
+
                 // Apply contains filter
                 if (filterParts != null)
                 {
@@ -387,23 +382,24 @@ public class GetContentAssistTool implements IMcpTool
                         continue;
                     }
                 }
-                
+
                 // Apply offset (skip first N matching proposals)
                 if (skipped < proposalOffset)
                 {
                     skipped++;
                     continue;
                 }
-                
+
                 // Check limit
                 if (count >= maxProposals)
                 {
                     break;
                 }
-                
-                JsonObject proposalObj = new JsonObject();
-                proposalObj.addProperty("displayString", displayString); //$NON-NLS-1$
-                
+
+                // LinkedHashMap to keep a stable, readable field order per proposal.
+                Map<String, Object> proposalObj = new LinkedHashMap<>();
+                proposalObj.put("displayString", displayString); //$NON-NLS-1$
+
                 // Only get documentation if extendedDocumentation is true
                 if (extendedDocumentation)
                 {
@@ -424,31 +420,34 @@ public class GetContentAssistTool implements IMcpTool
                     {
                         additionalInfo = proposal.getAdditionalProposalInfo();
                     }
-                    
+
                     if (additionalInfo != null && !additionalInfo.isEmpty())
                     {
                         // Strip HTML tags and CSS styles for cleaner output
                         String cleanInfo = cleanHtmlContent(additionalInfo);
                         if (!cleanInfo.isEmpty())
                         {
-                            proposalObj.addProperty("documentation", cleanInfo); //$NON-NLS-1$
+                            proposalObj.put("documentation", cleanInfo); //$NON-NLS-1$
                         }
                     }
                 }
-                
-                proposalsArray.add(proposalObj);
+
+                proposalList.add(proposalObj);
                 count++;
             }
         }
-        
+
         int totalProposals = proposals != null ? proposals.length : 0;
-        result.addProperty("totalProposals", totalProposals); //$NON-NLS-1$
-        result.addProperty("filteredOut", filteredOut); //$NON-NLS-1$
-        result.addProperty("skipped", skipped); //$NON-NLS-1$
-        result.addProperty("returnedProposals", count); //$NON-NLS-1$
-        result.add("proposals", proposalsArray); //$NON-NLS-1$
-        
-        return result.toString();
+        return ToolResult.success()
+            .put("file", filePath) //$NON-NLS-1$
+            .put("line", line) //$NON-NLS-1$
+            .put("column", column) //$NON-NLS-1$
+            .put("totalProposals", totalProposals) //$NON-NLS-1$
+            .put("filteredOut", filteredOut) //$NON-NLS-1$
+            .put("skipped", skipped) //$NON-NLS-1$
+            .put("returnedProposals", count) //$NON-NLS-1$
+            .put("proposals", proposalList) //$NON-NLS-1$
+            .toJson();
     }
     
     /**
@@ -457,7 +456,7 @@ public class GetContentAssistTool implements IMcpTool
      * @param html the HTML content
      * @return cleaned text in Markdown format
      */
-    private String cleanHtmlContent(String html)
+    private static String cleanHtmlContent(String html)
     {
         if (html == null || html.isEmpty())
         {

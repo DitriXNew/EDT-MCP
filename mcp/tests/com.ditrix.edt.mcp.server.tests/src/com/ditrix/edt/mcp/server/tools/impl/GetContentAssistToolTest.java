@@ -7,12 +7,16 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.Map;
 
+import org.eclipse.jface.text.contentassist.ICompletionProposal;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -108,5 +112,77 @@ public class GetContentAssistToolTest
         // without '>': ToolResult.toJson() (Gson) escapes '>' as > in JSON.
         String result = new GetContentAssistTool().execute(params);
         assertTrue(result.contains("Line and column must be")); //$NON-NLS-1$
+    }
+
+    // ==================== formatProposals (filter / offset / limit) ====================
+    // Pure result-shaping over a mocked proposal array. Result JSON is built by
+    // the shared ToolResult/Gson path (compact "key":value).
+
+    private static ICompletionProposal proposal(String displayString)
+    {
+        ICompletionProposal p = mock(ICompletionProposal.class);
+        when(p.getDisplayString()).thenReturn(displayString);
+        return p;
+    }
+
+    @Test
+    public void testFormatProposalsBasic()
+    {
+        ICompletionProposal[] props = {proposal("AddRow"), proposal("InsertRow"), proposal("CountRows")}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String json = GetContentAssistTool.formatProposals(props, 10, 0, null, false, 5, 2, "/P/src/Foo.bsl"); //$NON-NLS-1$
+        assertTrue(json.contains("\"success\":true")); //$NON-NLS-1$
+        assertTrue(json.contains("\"totalProposals\":3")); //$NON-NLS-1$
+        assertTrue(json.contains("\"returnedProposals\":3")); //$NON-NLS-1$
+        assertTrue(json.contains("\"filteredOut\":0")); //$NON-NLS-1$
+        assertTrue(json.contains("\"skipped\":0")); //$NON-NLS-1$
+        assertTrue(json.contains("\"line\":5")); //$NON-NLS-1$
+        assertTrue(json.contains("\"column\":2")); //$NON-NLS-1$
+        assertTrue(json.contains("\"displayString\":\"AddRow\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatProposalsLimit()
+    {
+        ICompletionProposal[] props = {proposal("A"), proposal("B"), proposal("C"), proposal("D")}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        String json = GetContentAssistTool.formatProposals(props, 2, 0, null, false, 1, 1, "/f"); //$NON-NLS-1$
+        assertTrue(json.contains("\"totalProposals\":4")); //$NON-NLS-1$
+        assertTrue(json.contains("\"returnedProposals\":2")); //$NON-NLS-1$
+        assertTrue(json.contains("\"displayString\":\"A\"")); //$NON-NLS-1$
+        assertFalse(json.contains("\"displayString\":\"C\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatProposalsOffset()
+    {
+        ICompletionProposal[] props = {proposal("A"), proposal("B"), proposal("C"), proposal("D")}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        String json = GetContentAssistTool.formatProposals(props, 10, 2, null, false, 1, 1, "/f"); //$NON-NLS-1$
+        assertTrue(json.contains("\"skipped\":2")); //$NON-NLS-1$
+        assertTrue(json.contains("\"returnedProposals\":2")); //$NON-NLS-1$
+        assertTrue(json.contains("\"displayString\":\"C\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"displayString\":\"D\"")); //$NON-NLS-1$
+        assertFalse(json.contains("\"displayString\":\"A\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatProposalsContainsFilter()
+    {
+        ICompletionProposal[] props = {proposal("GetName"), proposal("SetName"), proposal("GetValue")}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // case-insensitive substring filter on "get"
+        String json = GetContentAssistTool.formatProposals(props, 10, 0, "get", false, 1, 1, "/f"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(json.contains("\"filteredOut\":1")); //$NON-NLS-1$
+        assertTrue(json.contains("\"returnedProposals\":2")); //$NON-NLS-1$
+        assertTrue(json.contains("GetName")); //$NON-NLS-1$
+        assertTrue(json.contains("GetValue")); //$NON-NLS-1$
+        assertFalse(json.contains("SetName")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatProposalsEmpty()
+    {
+        String json = GetContentAssistTool.formatProposals(new ICompletionProposal[0], 10, 0, null, false, 1, 1, "/f"); //$NON-NLS-1$
+        assertTrue(json.contains("\"success\":true")); //$NON-NLS-1$
+        assertTrue(json.contains("\"totalProposals\":0")); //$NON-NLS-1$
+        assertTrue(json.contains("\"returnedProposals\":0")); //$NON-NLS-1$
+        assertTrue(json.contains("\"proposals\":[]")); //$NON-NLS-1$
     }
 }
