@@ -18,7 +18,6 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
-import org.eclipse.core.runtime.Path;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -218,7 +217,7 @@ public class WriteModuleSourceTool implements IMcpTool
         IProject project = ctx.project();
 
         // 5. Get file
-        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
         boolean fileExists = file.exists();
 
         // For non-replace modes, file must exist

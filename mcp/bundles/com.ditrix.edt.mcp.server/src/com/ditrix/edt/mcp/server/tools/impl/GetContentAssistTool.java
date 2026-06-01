@@ -14,9 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
-import org.eclipse.core.runtime.Path;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.contentassist.ContentAssistant;
@@ -39,6 +37,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 import io.github.furstenheim.CopyDown;
@@ -180,12 +179,11 @@ public class GetContentAssistTool implements IMcpTool
         IProject project = ctx.project();
         
         // Build the full path: project/src/filePath
-        IPath relativePath = new Path("src").append(filePath); //$NON-NLS-1$
-        IFile file = project.getFile(relativePath);
-        
+        IFile file = BslModuleUtils.resolveModuleFile(project, filePath);
+
         if (!file.exists())
         {
-            return ToolResult.error("File not found: " + relativePath.toString() + " in project " + projectName).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("File not found: " + file.getProjectRelativePath().toString() + " in project " + projectName).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         
         final IFile targetFile = file;

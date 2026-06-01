@@ -11,8 +11,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.IPath;
-import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.text.BadLocationException;
@@ -174,12 +172,11 @@ public class GetSymbolInfoTool implements IMcpTool
         IProject project = ctx.project();
 
         // Build the full path: project/src/filePath
-        IPath relativePath = new Path("src").append(filePath); //$NON-NLS-1$
-        IFile file = project.getFile(relativePath);
+        IFile file = BslModuleUtils.resolveModuleFile(project, filePath);
 
         if (!file.exists())
         {
-            return "Error: File not found: " + relativePath.toString() + //$NON-NLS-1$
+            return "Error: File not found: " + file.getProjectRelativePath().toString() + //$NON-NLS-1$
                    " in project " + projectName; //$NON-NLS-1$
         }
 
@@ -852,8 +849,7 @@ public class GetSymbolInfoTool implements IMcpTool
 
             // Read original file content to calculate correct offset
             // (readFileLines strips line terminators, so we read raw content instead)
-            IPath relativePath = new Path("src").append(filePath); //$NON-NLS-1$
-            IFile file = project.getFile(relativePath);
+            IFile file = BslModuleUtils.resolveModuleFile(project, filePath);
             String content = null;
             try (java.io.InputStream is = file.getContents())
             {

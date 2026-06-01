@@ -263,7 +263,7 @@ public class GoToDefinitionTool implements IMcpTool
         String typeStr = method instanceof Function ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
 
         // Read source from file
-        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
         List<String> allLines = null;
         try
         {
@@ -351,7 +351,7 @@ public class GoToDefinitionTool implements IMcpTool
     private String resolveMethodViaText(IProject project, String projectName, String modulePath,
                                          String methodName, boolean includeSource, String qualifiedPrefix)
     {
-        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
         if (!file.exists())
         {
             return "Error: Module not found: src/" + modulePath; //$NON-NLS-1$

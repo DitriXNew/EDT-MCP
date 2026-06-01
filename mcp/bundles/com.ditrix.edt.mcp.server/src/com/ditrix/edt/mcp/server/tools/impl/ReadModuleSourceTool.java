@@ -11,7 +11,6 @@ import java.util.Map;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.Path;
 
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -113,7 +112,7 @@ public class ReadModuleSourceTool implements IMcpTool
         IProject project = ctx.project();
 
         // Get file
-        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
         if (!file.exists())
         {
             return "Error: File not found: src/" + modulePath + //$NON-NLS-1$

@@ -18,6 +18,7 @@ import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
@@ -73,6 +74,24 @@ public final class BslModuleUtils
     public static final Pattern REGION_END_PATTERN = Pattern.compile(
         "^\\s*#(?:\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438|EndRegion)", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /**
+     * Resolves a module path (relative to the project's src/ folder) to an IFile.
+     * Centralizes the single src/ source-folder assumption that every module tool
+     * previously inlined as {@code project.getFile(new Path("src").append(path))}.
+     * <p>
+     * The returned file is NOT checked for existence; each caller keeps its own
+     * existence check and tool-specific error message.
+     *
+     * @param project    the EDT project
+     * @param modulePath path from src/, e.g. "CommonModules/MyModule/Module.bsl"
+     *                   (must NOT include a leading "src/")
+     * @return the IFile at {@code src/modulePath} (may not exist)
+     */
+    public static IFile resolveModuleFile(IProject project, String modulePath)
+    {
+        return project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+    }
 
     /**
      * Loads BSL Module EMF model via BmAwareResourceSetProvider.

@@ -14,7 +14,6 @@ import java.util.regex.Matcher;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.Path;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
@@ -158,7 +157,7 @@ public class ReadMethodSourceTool implements IMcpTool
         int endLine = BslModuleUtils.getEndLine(method);
 
         // Read file to get actual source lines (getText() may include preceding doc-comments)
-        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
         List<String> allLines;
         try
         {
@@ -222,7 +221,7 @@ public class ReadMethodSourceTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        IFile file = project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
         if (!file.exists())
         {
             return "Error: File not found: src/" + modulePath; //$NON-NLS-1$
