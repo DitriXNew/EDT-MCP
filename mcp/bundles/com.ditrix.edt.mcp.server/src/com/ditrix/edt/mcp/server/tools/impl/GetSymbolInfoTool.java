@@ -53,6 +53,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 
@@ -532,8 +533,7 @@ public class GetSymbolInfoTool implements IMcpTool
 
                     // Return at least token info
                     StringBuilder sb = new StringBuilder();
-                    sb.append("| Property | Value |\n"); //$NON-NLS-1$
-                    sb.append("|----------|-------|\n"); //$NON-NLS-1$
+                    sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
                     sb.append("| **Token** | `").append(leafNode.getText()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
                     sb.append("| **Grammar** | ").append(leafNode.getGrammarElement() != null //$NON-NLS-1$
                         ? leafNode.getGrammarElement().eClass().getName() : "-").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -578,8 +578,7 @@ public class GetSymbolInfoTool implements IMcpTool
     private String buildEObjectInfo(EObject element)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append("| Property | Value |\n"); //$NON-NLS-1$
-        sb.append("|----------|-------|\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
 
         if (element instanceof Method)
         {
@@ -886,8 +885,7 @@ public class GetSymbolInfoTool implements IMcpTool
             }
 
             StringBuilder sb = new StringBuilder();
-            sb.append("| Property | Value |\n"); //$NON-NLS-1$
-            sb.append("|----------|-------|\n"); //$NON-NLS-1$
+            sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
             sb.append("| **Token** | `").append(leafNode.getText()).append("` |\n"); //$NON-NLS-1$ //$NON-NLS-2$
             return sb.toString();
         }
