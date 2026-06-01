@@ -120,6 +120,16 @@ public class AbstractMetadataFormatterTest
     }
 
     @Test
+    public void testEscapeTableCellStripsCarriageReturn()
+    {
+        // A CRLF value must not leave a stray '\r' (which would break the table row);
+        // the '\n' becomes a space and the '\r' is removed entirely.
+        String out = f.escapeTableCell("a\r\nb"); //$NON-NLS-1$
+        assertEquals("a b", out); //$NON-NLS-1$
+        assertFalse(out.contains("\r")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAddTableRowEscapesEachCell()
     {
         StringBuilder sb = new StringBuilder();

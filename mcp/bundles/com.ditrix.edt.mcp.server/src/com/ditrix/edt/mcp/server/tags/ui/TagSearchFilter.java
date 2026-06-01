@@ -263,14 +263,7 @@ public class TagSearchFilter extends ViewerFilter {
             }
             
             String fqn = TagUtils.extractFqn(eObject);
-            
-            // Debug: log what we're checking
-            if (fqn != null && fqn.contains("AddDataProc")) {
-                Activator.logInfo("DEBUG: Checking " + fqn + " in project " + 
-                    (currentFilterProject != null ? currentFilterProject.getName() : "null") +
-                    ", projectFqns size: " + getMatchingFqnsForProject(currentFilterProject).size());
-            }
-            
+
             if (fqn != null) {
                 // Check if this FQN or any parent matches IN THIS PROJECT
                 boolean result = matchesFqnOrParentInProject(fqn, currentFilterProject);

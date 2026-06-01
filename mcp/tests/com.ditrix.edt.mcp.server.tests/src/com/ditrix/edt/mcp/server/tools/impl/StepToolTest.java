@@ -97,4 +97,32 @@ public class StepToolTest
         String result = new StepTool().execute(params);
         assertTrue(result.contains("stale threadId")); //$NON-NLS-1$
     }
+
+    // ==================== Timeout clamping (pure, no live debug session) ====================
+
+    @Test
+    public void testClampTimeoutNormalValuePassesThrough()
+    {
+        assertEquals(20, StepTool.clampTimeout(20));
+    }
+
+    @Test
+    public void testClampTimeoutAboveMaxIsCapped()
+    {
+        // Unbounded value would block a worker thread for hours -> capped to 600s.
+        assertEquals(600, StepTool.clampTimeout(999999));
+    }
+
+    @Test
+    public void testClampTimeoutAtMaxIsUnchanged()
+    {
+        assertEquals(600, StepTool.clampTimeout(600));
+    }
+
+    @Test
+    public void testClampTimeoutBelowOneIsRaisedToOne()
+    {
+        assertEquals(1, StepTool.clampTimeout(0));
+        assertEquals(1, StepTool.clampTimeout(-5));
+    }
 }

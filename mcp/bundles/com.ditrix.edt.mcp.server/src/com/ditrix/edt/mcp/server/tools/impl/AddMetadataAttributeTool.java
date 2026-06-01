@@ -105,6 +105,11 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             return ToolResult.error("attributeName is required. " + //$NON-NLS-1$
                 "Usage: {parentFqn: 'Catalog.Products', attributeName: 'Weight'}").toJson(); //$NON-NLS-1$
         }
+        if (!isValidIdentifier(attributeName))
+        {
+            return ToolResult.error("Invalid attribute name '" + attributeName + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
+                "A name must start with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
+        }
 
         return executeInternal(projectName, parentFqn, attributeName);
     }
@@ -211,6 +216,38 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             .put("attributeName", attributeName) //$NON-NLS-1$
             .put("message", "Attribute '" + attributeName + "' added successfully to " + normalizedParentFqn) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
+    }
+
+    /**
+     * Checks that a name is a valid 1C identifier: starts with a letter or
+     * underscore and contains only letters, digits and underscores.
+     * <p>
+     * Mirrors {@code CreateMetadataObjectTool.isValidIdentifier}; replicated here
+     * because that method is private to its tool and not yet extracted into a
+     * shared util. The two must stay in sync until the shared helper exists.
+     *
+     * @param name the candidate attribute name
+     * @return {@code true} if the name is a valid identifier
+     */
+    static boolean isValidIdentifier(String name)
+    {
+        if (name == null || name.isEmpty())
+        {
+            return false;
+        }
+        if (!Character.isLetter(name.charAt(0)) && name.charAt(0) != '_')
+        {
+            return false;
+        }
+        for (int i = 1; i < name.length(); i++)
+        {
+            char c = name.charAt(i);
+            if (!Character.isLetterOrDigit(c) && c != '_')
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean supportsAttributes(MdObject obj)

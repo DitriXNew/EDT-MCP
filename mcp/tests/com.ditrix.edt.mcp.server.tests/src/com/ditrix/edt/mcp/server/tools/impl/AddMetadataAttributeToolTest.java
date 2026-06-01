@@ -14,9 +14,9 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
 /**
  * Lightweight tests for {@link AddMetadataAttributeTool} that exercise tool
- * metadata and JSON schema without needing the Eclipse/EDT runtime. The
- * {@code execute()} path requires a live workbench and BM model, so it is
- * covered by the E2E suite instead.
+ * metadata, JSON schema and the pure identifier validation without needing the
+ * Eclipse/EDT runtime. The {@code execute()} path requires a live workbench and
+ * BM model, so it is covered by the E2E suite instead.
  * <p>
  * {@link #testResponseType()} also guards the refactoring that moved
  * {@code getResponseType()} into {@link com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool}: the tool
@@ -70,5 +70,33 @@ public class AddMetadataAttributeToolTest
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("parentFqn must be required", tail.contains("\"parentFqn\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("attributeName must be required", tail.contains("\"attributeName\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testValidIdentifierAccepted()
+    {
+        assertTrue(AddMetadataAttributeTool.isValidIdentifier("Weight")); //$NON-NLS-1$
+        assertTrue(AddMetadataAttributeTool.isValidIdentifier("_private")); //$NON-NLS-1$
+        assertTrue(AddMetadataAttributeTool.isValidIdentifier("Attr_1")); //$NON-NLS-1$
+        // Cyrillic letters are valid 1C identifier characters. The literal below
+        // uses unicode escapes per repo convention (rule 7) and spells the
+        // Russian word for "attribute" (Rekvizit).
+        assertTrue(AddMetadataAttributeTool.isValidIdentifier(
+            "\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInvalidIdentifierRejected()
+    {
+        assertFalse("name starting with a digit must be rejected", //$NON-NLS-1$
+            AddMetadataAttributeTool.isValidIdentifier("1Bad")); //$NON-NLS-1$
+        assertFalse("name with a space must be rejected", //$NON-NLS-1$
+            AddMetadataAttributeTool.isValidIdentifier("has space")); //$NON-NLS-1$
+        assertFalse("empty name must be rejected", //$NON-NLS-1$
+            AddMetadataAttributeTool.isValidIdentifier("")); //$NON-NLS-1$
+        assertFalse("null name must be rejected", //$NON-NLS-1$
+            AddMetadataAttributeTool.isValidIdentifier(null));
+        assertFalse("name with punctuation must be rejected", //$NON-NLS-1$
+            AddMetadataAttributeTool.isValidIdentifier("Bad-Name")); //$NON-NLS-1$
     }
 }

@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.groups.model;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -139,16 +140,41 @@ public class GroupStorage {
                 String oldPrefix = group.getFullPath();
                 group.setName(newName);
                 String newPrefix = group.getFullPath();
-                
+
                 for (Group g : groups) {
-                    if (g.getPath() != null && g.getPath().startsWith(oldPrefix)) {
-                        g.setPath(newPrefix + g.getPath().substring(oldPrefix.length()));
+                    if (g == group) {
+                        continue;
                     }
+                    g.setPath(rewritePathPrefix(g.getPath(), oldPrefix, newPrefix));
                 }
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Rewrites a stored group path when its parent group is renamed.
+     * Only rewrites a path that is exactly {@code oldPrefix} or that lives
+     * under {@code oldPrefix} (i.e. starts with {@code oldPrefix + "/"}),
+     * so renaming "Foo" never touches an unrelated "FooBar".
+     *
+     * @param path the path to rewrite (may be null)
+     * @param oldPrefix the old parent full path
+     * @param newPrefix the new parent full path
+     * @return the rewritten path, or the original path if it does not match
+     */
+    static String rewritePathPrefix(String path, String oldPrefix, String newPrefix) {
+        if (path == null || oldPrefix == null) {
+            return path;
+        }
+        if (path.equals(oldPrefix)) {
+            return newPrefix;
+        }
+        if (path.startsWith(oldPrefix + "/")) {
+            return newPrefix + path.substring(oldPrefix.length());
+        }
+        return path;
     }
     
     /**
@@ -177,14 +203,15 @@ public class GroupStorage {
             String oldPrefix = group.getFullPath();
             group.setName(newName);
             String newPrefix = group.getFullPath();
-            
+
             for (Group g : groups) {
-                if (g.getPath() != null && g.getPath().startsWith(oldPrefix)) {
-                    g.setPath(newPrefix + g.getPath().substring(oldPrefix.length()));
+                if (g == group) {
+                    continue;
                 }
+                g.setPath(rewritePathPrefix(g.getPath(), oldPrefix, newPrefix));
             }
         }
-        
+
         // Update description
         group.setDescription(description);
         return true;
@@ -251,12 +278,15 @@ public class GroupStorage {
      */
     public Set<String> getGroupedObjectsAtPath(String path) {
         Set<String> result = new HashSet<>();
+        if (path == null || path.isEmpty()) {
+            return result;
+        }
         for (Group group : groups) {
             String groupPath = group.getPath();
-            if (groupPath != null && groupPath.startsWith(path)) {
-                result.addAll(group.getChildren());
-            }
-            if (path.equals(groupPath)) {
+            // Match the path itself or anything strictly under it ("a/b" must
+            // not leak the sibling "a/bc"), guarding null group paths.
+            if (Objects.equals(groupPath, path)
+                || (groupPath != null && groupPath.startsWith(path + "/"))) {
                 result.addAll(group.getChildren());
             }
         }

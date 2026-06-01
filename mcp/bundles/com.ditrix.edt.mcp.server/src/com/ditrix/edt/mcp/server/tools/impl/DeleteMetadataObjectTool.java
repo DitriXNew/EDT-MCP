@@ -249,8 +249,11 @@ public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
         }
 
         String[] parts = fqn.split("\\."); //$NON-NLS-1$
-        if (parts.length < 2)
+        if (!isValidFqnArity(parts.length))
         {
+            // A malformed nested FQN (an odd trailing token) must NOT fall through
+            // to the parent object: that would delete a broader object than asked.
+            // Return the same "not found" outcome the caller already handles.
             return null;
         }
 
@@ -275,6 +278,23 @@ public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
             current = child;
         }
         return current;
+    }
+
+    /**
+     * Checks that an FQN's dot-separated part count is a valid arity.
+     * <p>
+     * A top-level FQN is {@code Type.Name} (2 parts); each nested level adds a
+     * complete {@code .ChildType.ChildName} pair. Any other count (notably an
+     * odd trailing token after the leading {@code Type.Name}) is malformed and
+     * must be rejected so a nested delete cannot silently fall back to the
+     * parent object.
+     *
+     * @param partCount number of dot-separated tokens in the FQN
+     * @return {@code true} for 2, 4, 6, ... parts; {@code false} otherwise
+     */
+    static boolean isValidFqnArity(int partCount)
+    {
+        return partCount >= 2 && (partCount - 2) % 2 == 0;
     }
 
     @SuppressWarnings("unchecked")

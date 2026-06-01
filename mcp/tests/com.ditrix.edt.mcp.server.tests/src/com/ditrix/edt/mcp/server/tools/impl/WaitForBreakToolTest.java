@@ -60,4 +60,32 @@ public class WaitForBreakToolTest
         assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"timeout\"")); //$NON-NLS-1$
     }
+
+    // ==================== Timeout clamping (pure, no live debug session) ====================
+
+    @Test
+    public void testClampTimeoutNormalValuePassesThrough()
+    {
+        assertEquals(45, WaitForBreakTool.clampTimeout(45));
+    }
+
+    @Test
+    public void testClampTimeoutAboveMaxIsCapped()
+    {
+        // Unbounded value would block a worker thread for hours -> capped to 600s.
+        assertEquals(600, WaitForBreakTool.clampTimeout(999999));
+    }
+
+    @Test
+    public void testClampTimeoutAtMaxIsUnchanged()
+    {
+        assertEquals(600, WaitForBreakTool.clampTimeout(600));
+    }
+
+    @Test
+    public void testClampTimeoutBelowOneIsRaisedToOne()
+    {
+        assertEquals(1, WaitForBreakTool.clampTimeout(0));
+        assertEquals(1, WaitForBreakTool.clampTimeout(-5));
+    }
 }

@@ -32,7 +32,6 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
-import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -99,7 +98,7 @@ public class GetProjectErrorsTool implements IMcpTool
             String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
             if (notReadyError != null)
             {
-                return ToolResult.error(notReadyError).toJson();
+                return "# Error\n\n" + notReadyError; //$NON-NLS-1$
             }
         }
         
@@ -332,7 +331,7 @@ public class GetProjectErrorsTool implements IMcpTool
                     String displayCheckId = error.checkId != null && !error.checkId.isEmpty() 
                         ? error.checkId 
                         : error.checkCode;
-                    md.append(" | `").append(displayCheckId).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
+                    md.append(" | `").append(MarkdownUtils.escapeForTable(displayCheckId)).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
                     
                     // Add documentation availability flag
                     md.append(" | ").append(error.hasDocumentation ? "true" : "false").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$

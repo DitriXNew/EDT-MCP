@@ -80,4 +80,43 @@ public class DeleteMetadataObjectToolTest
         String tail = schema.substring(requiredIdx);
         assertFalse("confirm must not be required", tail.contains("\"confirm\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    /** A valid top-level FQN is {@code Type.Name} (2 parts). */
+    @Test
+    public void testFqnArityTopLevelAccepted()
+    {
+        assertTrue("Type.Name (2 parts) must be a valid arity", //$NON-NLS-1$
+            DeleteMetadataObjectTool.isValidFqnArity(2));
+    }
+
+    /** A nested FQN adds complete pairs: {@code Type.Name.Sub.SubName} (4 parts). */
+    @Test
+    public void testFqnArityNestedPairAccepted()
+    {
+        assertTrue("Type.Name.Sub.SubName (4 parts) must be a valid arity", //$NON-NLS-1$
+            DeleteMetadataObjectTool.isValidFqnArity(4));
+        assertTrue("6 parts (two nested pairs) must be a valid arity", //$NON-NLS-1$
+            DeleteMetadataObjectTool.isValidFqnArity(6));
+    }
+
+    /**
+     * An odd trailing token after {@code Type.Name} is malformed and must be
+     * rejected, so a nested delete never silently falls back to the parent.
+     */
+    @Test
+    public void testFqnArityOddNestedRejected()
+    {
+        assertFalse("3 parts (dangling token) must be rejected", //$NON-NLS-1$
+            DeleteMetadataObjectTool.isValidFqnArity(3));
+        assertFalse("5 parts (dangling token) must be rejected", //$NON-NLS-1$
+            DeleteMetadataObjectTool.isValidFqnArity(5));
+    }
+
+    /** Fewer than 2 parts is never a valid FQN. */
+    @Test
+    public void testFqnArityTooShortRejected()
+    {
+        assertFalse(DeleteMetadataObjectTool.isValidFqnArity(0));
+        assertFalse(DeleteMetadataObjectTool.isValidFqnArity(1));
+    }
 }

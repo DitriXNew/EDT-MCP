@@ -88,7 +88,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         {
             return DASH;
         }
-        return value.replace("|", "\\|").replace("\n", " "); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        return value.replace("|", "\\|").replace("\r", "").replace("\n", " "); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
     }
     
     /**

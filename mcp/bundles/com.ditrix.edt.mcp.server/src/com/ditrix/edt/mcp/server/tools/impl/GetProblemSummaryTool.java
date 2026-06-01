@@ -175,7 +175,7 @@ public class GetProblemSummaryTool implements IMcpTool
                 for (Map.Entry<String, Map<MarkerSeverity, Integer>> entry : projectSummaries.entrySet())
                 {
                     Map<MarkerSeverity, Integer> counts = entry.getValue();
-                    int projectTotal = counts.values().stream().mapToInt(Integer::intValue).sum();
+                    int projectTotal = sumDisplayedSeverities(counts);
                     
                     md.append("| "); //$NON-NLS-1$
                     md.append(MarkdownUtils.escapeForTable(entry.getKey()));
@@ -208,5 +208,31 @@ public class GetProblemSummaryTool implements IMcpTool
         }
         
         return md.toString();
+    }
+
+    /**
+     * Sums only the six severities rendered as per-project columns
+     * (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL).
+     *
+     * <p>The per-project Total must equal the sum of the displayed columns, so
+     * {@link MarkerSeverity#NONE} (and any other non-displayed severity) is excluded.
+     * Summing {@code counts.values()} would also count NONE and make Total exceed the
+     * visible columns.</p>
+     *
+     * @param counts severity -&gt; count map for a single project (may omit some keys)
+     * @return the sum across the six displayed severity columns
+     */
+    static int sumDisplayedSeverities(Map<MarkerSeverity, Integer> counts)
+    {
+        if (counts == null)
+        {
+            return 0;
+        }
+        return counts.getOrDefault(MarkerSeverity.ERRORS, 0)
+            + counts.getOrDefault(MarkerSeverity.BLOCKER, 0)
+            + counts.getOrDefault(MarkerSeverity.CRITICAL, 0)
+            + counts.getOrDefault(MarkerSeverity.MAJOR, 0)
+            + counts.getOrDefault(MarkerSeverity.MINOR, 0)
+            + counts.getOrDefault(MarkerSeverity.TRIVIAL, 0);
     }
 }

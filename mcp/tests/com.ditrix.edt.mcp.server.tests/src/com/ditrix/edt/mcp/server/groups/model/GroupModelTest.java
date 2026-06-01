@@ -417,6 +417,132 @@ public class GroupModelTest
     }
 
     @Test
+    public void testStorageGetGroupedObjectsAtPathExcludesSiblingPrefix()
+    {
+        // A20/A10 regression: querying "a/b" must not leak objects from sibling "a/bc".
+        Group target = new Group("G", "a/b");
+        target.addChild("Catalog.Target");
+        Group sibling = new Group("S", "a/bc");
+        sibling.addChild("Catalog.Sibling");
+        storage.addGroup(target);
+        storage.addGroup(sibling);
+
+        Set<String> objects = storage.getGroupedObjectsAtPath("a/b");
+        assertTrue("Exact path match should be included", objects.contains("Catalog.Target"));
+        assertFalse("Sibling prefix path must be excluded", objects.contains("Catalog.Sibling"));
+    }
+
+    @Test
+    public void testStorageGetGroupedObjectsAtPathIncludesDescendants()
+    {
+        Group g1 = new Group("G1", "CommonModules");
+        g1.addChild("CommonModule.Direct");
+        Group g2 = new Group("G2", "CommonModules/Sub");
+        g2.addChild("CommonModule.Nested");
+        storage.addGroup(g1);
+        storage.addGroup(g2);
+
+        Set<String> objects = storage.getGroupedObjectsAtPath("CommonModules");
+        assertTrue(objects.contains("CommonModule.Direct"));
+        assertTrue("Descendant under path should be included", objects.contains("CommonModule.Nested"));
+    }
+
+    @Test
+    public void testStorageGetGroupedObjectsAtNullPathReturnsEmpty()
+    {
+        // A20 regression: null path must not throw and must return empty.
+        Group g = new Group("G", "CommonModules");
+        g.addChild("CommonModule.A");
+        storage.addGroup(g);
+
+        Set<String> objects = storage.getGroupedObjectsAtPath(null);
+        assertNotNull(objects);
+        assertTrue("Null path should return empty set", objects.isEmpty());
+    }
+
+    @Test
+    public void testStorageGetGroupedObjectsAtEmptyPathReturnsEmpty()
+    {
+        Group g = new Group("G", "CommonModules");
+        g.addChild("CommonModule.A");
+        storage.addGroup(g);
+
+        Set<String> objects = storage.getGroupedObjectsAtPath("");
+        assertNotNull(objects);
+        assertTrue("Empty path should return empty set", objects.isEmpty());
+    }
+
+    @Test
+    public void testStorageGetGroupedObjectsAtPathNullGroupPath()
+    {
+        // A20 regression: a group with a null path must not break the query.
+        Group rootGroup = new Group("Root", null);
+        rootGroup.addChild("Catalog.Root");
+        storage.addGroup(rootGroup);
+
+        Set<String> objects = storage.getGroupedObjectsAtPath("CommonModules");
+        assertNotNull(objects);
+        assertFalse(objects.contains("Catalog.Root"));
+    }
+
+    @Test
+    public void testStorageRenameGroupDoesNotClobberSiblingPrefix()
+    {
+        // A3 regression: renaming "Foo" must not rewrite the unrelated "FooBar".
+        Group foo = new Group("Foo", "Root");
+        Group fooChild = new Group("Child", "Root/Foo");
+        Group fooBar = new Group("Other", "Root/FooBar");
+        storage.addGroup(foo);
+        storage.addGroup(fooChild);
+        storage.addGroup(fooBar);
+
+        assertTrue(storage.renameGroup("Root/Foo", "Renamed"));
+
+        // Real descendant moves with the rename.
+        assertNotNull("Child of Foo should follow the rename",
+            storage.getGroupByFullPath("Root/Renamed/Child"));
+        // Sibling sharing only a raw prefix must be untouched.
+        assertNotNull("FooBar must NOT be clobbered by renaming Foo",
+            storage.getGroupByFullPath("Root/FooBar/Other"));
+        assertNull("FooBar must not be rewritten to Renamed-prefixed path",
+            storage.getGroupByFullPath("Root/RenamedBar/Other"));
+    }
+
+    @Test
+    public void testStorageUpdateGroupDoesNotClobberSiblingPrefix()
+    {
+        // A3 regression for updateGroup's rename branch.
+        Group foo = new Group("Foo", "Root");
+        Group fooChild = new Group("Child", "Root/Foo");
+        Group fooBar = new Group("Other", "Root/FooBar");
+        storage.addGroup(foo);
+        storage.addGroup(fooChild);
+        storage.addGroup(fooBar);
+
+        assertTrue(storage.updateGroup("Root/Foo", "Renamed", "desc"));
+
+        assertNotNull("Child of Foo should follow the rename",
+            storage.getGroupByFullPath("Root/Renamed/Child"));
+        assertNotNull("FooBar must NOT be clobbered by updating Foo",
+            storage.getGroupByFullPath("Root/FooBar/Other"));
+    }
+
+    @Test
+    public void testRewritePathPrefixOnlyMatchesExactOrUnder()
+    {
+        // Exact match → rewritten.
+        assertEquals("Root/New", GroupStorage.rewritePathPrefix("Root/Old", "Root/Old", "Root/New"));
+        // Strictly under the prefix → rewritten with suffix preserved.
+        assertEquals("Root/New/Child",
+            GroupStorage.rewritePathPrefix("Root/Old/Child", "Root/Old", "Root/New"));
+        // Sibling sharing a raw prefix → untouched.
+        assertEquals("Root/OldBar",
+            GroupStorage.rewritePathPrefix("Root/OldBar", "Root/Old", "Root/New"));
+        // Null path → returned as-is.
+        assertNull(GroupStorage.rewritePathPrefix(null, "Root/Old", "Root/New"));
+    }
+
+    @Test
     public void testStorageRenameObjectNotFound()
     {
         assertFalse(storage.renameObject("Missing", "NewName"));
