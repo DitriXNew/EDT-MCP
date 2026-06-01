@@ -283,10 +283,19 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put("fqn", fqn) //$NON-NLS-1$
             .put("metadataType", canonicalType) //$NON-NLS-1$
-            .put("name", name) //$NON-NLS-1$
+            .put("name", name); //$NON-NLS-1$
+        // Echo back the synonym actually written, so callers can confirm the
+        // localized name without a second get. synonymLanguage is the resolved
+        // language CODE (see MetadataLanguageUtils); both are non-null together.
+        if (synonymLanguage != null)
+        {
+            result.put("synonym", synonym) //$NON-NLS-1$
+                .put("language", synonymLanguage); //$NON-NLS-1$
+        }
+        return result
             .put("message", "Object '" + fqn + "' created successfully. " + //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 "Run get_project_errors to verify, or revalidate_objects if needed.") //$NON-NLS-1$
             .toJson();
