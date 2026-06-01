@@ -40,10 +40,6 @@ public class BuiltInToolTestCoverageTest
         "GetEdtVersionTool", //$NON-NLS-1$
         "ListProjectsTool", //$NON-NLS-1$
         "CleanProjectTool", //$NON-NLS-1$
-        "GetBookmarksTool", //$NON-NLS-1$
-        "GetTasksTool", //$NON-NLS-1$
-        "GetCheckDescriptionTool", //$NON-NLS-1$
-        "GetPlatformDocumentationTool", //$NON-NLS-1$
         "UpdateDatabaseTool", //$NON-NLS-1$
         "ListConfigurationsTool", //$NON-NLS-1$
         "GetFormLayoutSnapshotTool", //$NON-NLS-1$

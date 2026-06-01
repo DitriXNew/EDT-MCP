@@ -1,0 +1,75 @@
+/**
+ * MCP Server for EDT - Tests
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+
+package com.ditrix.edt.mcp.server.tools.impl;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import org.junit.Test;
+
+import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+
+/**
+ * Tests for {@link GetPlatformDocumentationTool}.
+ * <p>
+ * Covers tool metadata, the input schema, and the typeName required-argument
+ * validation that returns before any documentation lookup. Resolving platform
+ * documentation needs the bundled doc data / platform version and is covered by
+ * the E2E suite.
+ */
+public class GetPlatformDocumentationToolTest
+{
+    @Test
+    public void testName()
+    {
+        assertEquals("get_platform_documentation", new GetPlatformDocumentationTool().getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNameConstant()
+    {
+        assertEquals(GetPlatformDocumentationTool.NAME, new GetPlatformDocumentationTool().getName());
+    }
+
+    @Test
+    public void testResponseTypeMarkdown()
+    {
+        assertEquals(ResponseType.MARKDOWN, new GetPlatformDocumentationTool().getResponseType());
+    }
+
+    @Test
+    public void testDescriptionNotEmpty()
+    {
+        String desc = new GetPlatformDocumentationTool().getDescription();
+        assertNotNull(desc);
+        assertTrue(desc.length() > 0);
+    }
+
+    @Test
+    public void testSchemaDeclaresParameters()
+    {
+        String schema = new GetPlatformDocumentationTool().getInputSchema();
+        assertNotNull(schema);
+        assertTrue(schema.contains("\"typeName\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"category\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"memberName\"")); //$NON-NLS-1$
+    }
+
+    // ==================== Argument validation (no live access needed) ====================
+
+    @Test
+    public void testMissingTypeName()
+    {
+        Map<String, String> params = new HashMap<>();
+        String result = new GetPlatformDocumentationTool().execute(params);
+        assertTrue(result.contains("typeName is required")); //$NON-NLS-1$
+    }
+}
