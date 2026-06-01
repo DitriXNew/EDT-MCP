@@ -8,6 +8,9 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.*;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import org.junit.Test;
 
 /**
@@ -135,5 +138,119 @@ public class MarkdownUtilsTest
         String input = "\\*_`[]<>";
         String expected = "\\\\\\*\\_\\`\\[\\]\\<\\>";
         assertEquals(expected, MarkdownUtils.escapeMarkdown(input));
+    }
+
+    // ========== tableHeader ==========
+
+    @Test
+    public void testTableHeaderSingleColumn()
+    {
+        assertEquals("| Name |\n| --- |\n", MarkdownUtils.tableHeader("Name"));
+    }
+
+    @Test
+    public void testTableHeaderMultipleColumns()
+    {
+        assertEquals("| Name | Value |\n| --- | --- |\n",
+            MarkdownUtils.tableHeader("Name", "Value"));
+    }
+
+    @Test
+    public void testTableHeaderEscapesLabels()
+    {
+        assertEquals("| a \\| b | c |\n| --- | --- |\n",
+            MarkdownUtils.tableHeader("a | b", "c"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testTableHeaderNullThrows()
+    {
+        MarkdownUtils.tableHeader((String[]) null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testTableHeaderEmptyThrows()
+    {
+        MarkdownUtils.tableHeader();
+    }
+
+    // ========== tableRow ==========
+
+    @Test
+    public void testTableRowBasic()
+    {
+        assertEquals("| a | b |\n", MarkdownUtils.tableRow("a", "b"));
+    }
+
+    @Test
+    public void testTableRowNullCellRendersEmpty()
+    {
+        assertEquals("| a |  |\n", MarkdownUtils.tableRow("a", null));
+    }
+
+    /** The core bug this card fixes: a cell containing '|' must not break the table. */
+    @Test
+    public void testTableRowEscapesPipe()
+    {
+        String row = MarkdownUtils.tableRow("a | b", "c");
+        assertEquals("| a \\| b | c |\n", row);
+        // exactly 3 unescaped column delimiters (leading, middle, trailing) — the
+        // embedded pipe is escaped, so the row still has 2 logical columns.
+        assertEquals(3, countUnescapedPipes(row));
+    }
+
+    @Test
+    public void testTableRowEscapesNewline()
+    {
+        assertEquals("| line1 line2 | x |\n",
+            MarkdownUtils.tableRow("line1\nline2", "x"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testTableRowEmptyThrows()
+    {
+        MarkdownUtils.tableRow();
+    }
+
+    // ========== keyValueTable ==========
+
+    @Test
+    public void testKeyValueTablePreservesOrderAndEscapes()
+    {
+        Map<String, String> entries = new LinkedHashMap<>();
+        entries.put("Type", "Catalog");
+        entries.put("Path", "a|b");
+        String table = MarkdownUtils.keyValueTable("Property", "Value", entries);
+        assertEquals(
+            "| Property | Value |\n| --- | --- |\n| Type | Catalog |\n| Path | a\\|b |\n",
+            table);
+    }
+
+    @Test
+    public void testKeyValueTableEmptyMapIsHeaderOnly()
+    {
+        String table = MarkdownUtils.keyValueTable("K", "V", new LinkedHashMap<>());
+        assertEquals("| K | V |\n| --- | --- |\n", table);
+    }
+
+    @Test
+    public void testKeyValueTableNullMapIsHeaderOnly()
+    {
+        assertEquals("| K | V |\n| --- | --- |\n",
+            MarkdownUtils.keyValueTable("K", "V", null));
+    }
+
+    /** Counts column-delimiter pipes (a backslash-escaped pipe does not count). */
+    private static int countUnescapedPipes(String s)
+    {
+        int count = 0;
+        for (int i = 0; i < s.length(); i++)
+        {
+            if (s.charAt(i) == '|' && (i == 0 || s.charAt(i - 1) != '\\'))
+            {
+                count++;
+            }
+        }
+        return count;
     }
 }
