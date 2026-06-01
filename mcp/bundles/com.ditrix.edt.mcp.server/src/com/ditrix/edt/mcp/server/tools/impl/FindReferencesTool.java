@@ -90,7 +90,8 @@ public class FindReferencesTool implements IMcpTool
                 "(e.g. 'Catalog.Products', 'Document.SalesOrder', 'CommonModule.Common'). " + //$NON-NLS-1$
                 "Russian type names are also supported (e.g. '\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.\u041D\u043E\u043C\u0435\u043D\u043A\u043B\u0430\u0442\u0443\u0440\u0430')", true) //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
-                "Maximum number of results per category. Default: 100") //$NON-NLS-1$
+                "Result-size hint (default 100, max 500). Caps the overall number of " //$NON-NLS-1$
+                + "references collected before grouping at limit*10, not per category.") //$NON-NLS-1$
             .build();
     }
     
@@ -477,7 +478,7 @@ public class FindReferencesTool implements IMcpTool
             
             for (IBmCrossReference ref : refs)
             {
-                if (references.size() >= limit * 10) // Allow more before grouping limit
+                if (references.size() >= limit * 10) // overall cap (all categories) before grouping
                 {
                     break;
                 }

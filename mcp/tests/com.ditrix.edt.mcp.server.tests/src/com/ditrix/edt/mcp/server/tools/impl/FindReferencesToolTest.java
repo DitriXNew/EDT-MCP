@@ -70,6 +70,20 @@ public class FindReferencesToolTest
         assertTrue(schema.contains("\"objectFqn\"")); //$NON-NLS-1$
     }
 
+    /**
+     * The {@code limit} parameter caps the OVERALL number of collected references
+     * (at limit*10), not a per-category count. The schema description must say so,
+     * matching the actual runtime behavior. Asserts a delimiter-free ASCII substring.
+     */
+    @Test
+    public void testLimitSchemaDescribesOverallCap()
+    {
+        String schema = new FindReferencesTool().getInputSchema();
+        assertNotNull(schema);
+        assertTrue(schema.contains("overall")); //$NON-NLS-1$
+        assertTrue(schema.contains("not per category")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no workbench needed) ====================
 
     @Test

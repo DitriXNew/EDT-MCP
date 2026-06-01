@@ -593,46 +593,10 @@ public class GetModuleStructureTool implements IMcpTool
      */
     private String extractDocCommentFromLines(List<String> sourceLines, int methodStartLine)
     {
-        if (sourceLines == null || methodStartLine <= 1)
-        {
-            return null;
-        }
-        
-        List<String> commentLines = new ArrayList<>();
-        
-        // Scan backwards from line before method (convert to 0-based index)
-        for (int i = methodStartLine - 2; i >= 0; i--)
-        {
-            String line = sourceLines.get(i).trim();
-            
-            if (line.startsWith("//")) //$NON-NLS-1$
-            {
-                // Strip leading // and optional space
-                String commentText = line.substring(2);
-                if (commentText.startsWith(" ")) //$NON-NLS-1$
-                {
-                    commentText = commentText.substring(1);
-                }
-                commentLines.add(0, commentText);
-            }
-            else if (line.isEmpty())
-            {
-                // Skip empty lines between comment and method
-                continue;
-            }
-            else
-            {
-                // Hit non-comment, non-empty line → stop
-                break;
-            }
-        }
-        
-        if (commentLines.isEmpty())
-        {
-            return null;
-        }
-        
-        return String.join(" ", commentLines); //$NON-NLS-1$
+        // Delegate to the shared helper, which uses the ADJACENCY policy:
+        // the doc-comment block must be contiguous and immediately precede the
+        // declaration; a blank line ends the block.
+        return BslModuleUtils.extractDocCommentText(sourceLines, methodStartLine);
     }
 
     /**

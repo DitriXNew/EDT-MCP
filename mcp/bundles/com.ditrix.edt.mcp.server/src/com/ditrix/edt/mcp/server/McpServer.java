@@ -345,8 +345,8 @@ public class McpServer
      */
     private class McpHandler implements HttpHandler
     {
-        /** Event ID counter for SSE */
-        private long eventIdCounter = 0;
+        /** Event ID counter for SSE - AtomicLong for thread safety across concurrent SSE streams */
+        private final AtomicLong eventIdCounter = new AtomicLong(0);
         
         @Override
         public void handle(HttpExchange exchange) throws IOException
@@ -793,7 +793,7 @@ public class McpServer
             }
             
             // Build SSE message with event ID (per 2025-11-25 spec)
-            long eventId = ++eventIdCounter;
+            long eventId = eventIdCounter.incrementAndGet();
             StringBuilder sseMessage = new StringBuilder();
             sseMessage.append("event: message\n"); //$NON-NLS-1$
             sseMessage.append("id: ").append(eventId).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$

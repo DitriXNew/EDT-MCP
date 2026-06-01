@@ -663,18 +663,8 @@ public class GoToDefinitionTool implements IMcpTool
      */
     private int findDocCommentStart(List<String> allLines, int methodKeywordLine)
     {
-        if (methodKeywordLine <= 1)
-        {
-            return methodKeywordLine;
-        }
-
-        int idx = methodKeywordLine - 2; // 0-indexed, line before the keyword
-        while (idx >= 0 && allLines.get(idx).trim().startsWith("//")) //$NON-NLS-1$
-        {
-            idx--;
-        }
-
-        int docStart = idx + 2; // convert back to 1-based
-        return docStart < methodKeywordLine ? docStart : methodKeywordLine;
+        // Delegate to the shared ADJACENCY-policy helper (stop at first blank or
+        // non-comment line) so all read-tools share one boundary rule.
+        return BslModuleUtils.findDocCommentStartLine(allLines, methodKeywordLine);
     }
 }

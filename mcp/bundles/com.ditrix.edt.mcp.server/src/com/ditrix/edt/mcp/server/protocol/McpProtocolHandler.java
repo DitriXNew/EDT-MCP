@@ -50,7 +50,10 @@ public class McpProtocolHandler
      */
     public String processRequest(String requestBody)
     {
-        Object requestId = 1; // Default id
+        // Per JSON-RPC 2.0: when the id cannot be determined (parse error /
+        // invalid request) the error response id MUST be null. A real id from
+        // the parsed request overwrites this below.
+        Object requestId = null;
         
         try
         {
@@ -192,9 +195,12 @@ public class McpProtocolHandler
             signal = server.consumeUserSignal();
         }
         
-        // Check if plain text mode is enabled (Cursor compatibility)
-        boolean plainTextMode = Activator.getDefault().getPreferenceStore()
-            .getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
+        // Check if plain text mode is enabled (Cursor compatibility).
+        // Activator.getDefault() can be null during a shutdown race; in that
+        // case fall back to the safe default (structured content, not plain text).
+        boolean plainTextMode = Activator.getDefault() != null
+            && Activator.getDefault().getPreferenceStore()
+                .getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
         
         // Return response based on tool's declared response type
         switch (tool.getResponseType())

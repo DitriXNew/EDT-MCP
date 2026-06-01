@@ -214,6 +214,34 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testInvalidVersionDoesNotFabricateIdOne()
+    {
+        // Per JSON-RPC 2.0: a version-mismatch / invalid-request error whose id
+        // cannot be determined must NOT carry a fabricated id (e.g. 1) that could
+        // be mis-correlated to a pending request. The shared Gson omits the null
+        // id; emitting a strict "id":null is folded into the A9-wire e2e task.
+        String request = "{\"jsonrpc\":\"1.0\",\"method\":\"initialize\"}";
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNotNull(json.get("error"));
+        assertFalse("Undeterminable id must not be fabricated as 1",
+            json.has("id") && json.get("id").isJsonPrimitive() && json.get("id").getAsInt() == 1);
+    }
+
+    @Test
+    public void testValidRequestIdStillEchoedOnError()
+    {
+        // A request that carries a real id but an unknown method must echo that id.
+        String request = buildJsonRpcRequest(7, "unknown/method", null);
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNotNull(json.get("error"));
+        assertEquals("Real request id must be echoed back", 7, json.get("id").getAsInt());
+    }
+
+    @Test
     public void testInvalidJson()
     {
         String response = handler.processRequest("not valid json {{{");

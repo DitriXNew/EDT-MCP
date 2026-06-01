@@ -544,4 +544,78 @@ public final class BslModuleUtils
 
         return null;
     }
+
+    /**
+     * Finds the start line of the contiguous documentation-comment block that
+     * immediately precedes a method/declaration line.
+     *
+     * <p>Uses the ADJACENCY policy required by the 1C/EDT convention: a doc-comment
+     * must be contiguous and immediately precede the declaration. Scanning stops at
+     * the first blank line or first non-comment line (only consecutive lines whose
+     * trimmed content starts with "//" are part of the block).
+     *
+     * @param sourceLines all file lines (0-indexed list)
+     * @param declarationLine1Based 1-based line number of the declaration (method keyword)
+     * @return 1-based line number where the doc-comment block starts, or
+     *         {@code declarationLine1Based} if there is no adjacent comment
+     */
+    public static int findDocCommentStartLine(List<String> sourceLines, int declarationLine1Based)
+    {
+        if (sourceLines == null || declarationLine1Based <= 1)
+        {
+            return declarationLine1Based;
+        }
+
+        int idx = declarationLine1Based - 2; // 0-indexed, line before the declaration
+        while (idx >= 0 && sourceLines.get(idx).trim().startsWith("//")) //$NON-NLS-1$
+        {
+            idx--;
+        }
+
+        int docStart = idx + 2; // convert back to 1-based
+        return docStart < declarationLine1Based ? docStart : declarationLine1Based;
+    }
+
+    /**
+     * Extracts the documentation-comment text that immediately precedes a
+     * method/declaration line, using the ADJACENCY policy
+     * (see {@link #findDocCommentStartLine(List, int)}).
+     *
+     * <p>Each comment line is stripped of its leading "//" and one optional space,
+     * then the lines are joined with a single space. Returns {@code null} when there
+     * is no adjacent comment block.
+     *
+     * @param sourceLines all file lines (0-indexed list)
+     * @param declarationLine1Based 1-based line number of the declaration
+     * @return joined comment text, or {@code null} if there is no adjacent comment
+     */
+    public static String extractDocCommentText(List<String> sourceLines, int declarationLine1Based)
+    {
+        int docStart = findDocCommentStartLine(sourceLines, declarationLine1Based);
+        if (docStart >= declarationLine1Based)
+        {
+            return null;
+        }
+
+        List<String> commentLines = new ArrayList<>();
+        // docStart..declarationLine1Based-1 are the contiguous comment lines (1-based)
+        for (int line = docStart; line < declarationLine1Based; line++)
+        {
+            String text = sourceLines.get(line - 1).trim();
+            // Strip leading // and one optional space
+            String commentText = text.substring(2);
+            if (commentText.startsWith(" ")) //$NON-NLS-1$
+            {
+                commentText = commentText.substring(1);
+            }
+            commentLines.add(commentText);
+        }
+
+        if (commentLines.isEmpty())
+        {
+            return null;
+        }
+
+        return String.join(" ", commentLines); //$NON-NLS-1$
+    }
 }
