@@ -267,34 +267,29 @@ public class WriteModuleSourceTool implements IMcpTool
                     // Normalize oldSource
                     oldSource = oldSource.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-                    // Join original lines into single string for content-based search
-                    String currentContent = String.join("\n", originalLines); //$NON-NLS-1$
+                    // Read the raw file content (preserves the trailing newline that
+                    // writeFile always adds). Reconstructing it from originalLines via
+                    // String.join dropped that final newline, so an oldSource fragment
+                    // that ended at EOF (including the final newline) was reported
+                    // "not found".
+                    String currentContent = BslModuleUtils.readFileText(file).replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-                    // Find oldSource in current content
-                    int idx = currentContent.indexOf(oldSource);
-                    if (idx < 0)
+                    SearchReplaceResult sr = applySearchReplace(currentContent, oldSource, source);
+                    if (sr.occurrences == 0)
                     {
                         return "Error: oldSource not found in current file content. " + //$NON-NLS-1$
                             "The file may have changed since last read, or the oldSource text " + //$NON-NLS-1$
                             "does not match exactly. Please read the file again with read_module_source."; //$NON-NLS-1$
                     }
-
-                    // Check for multiple occurrences
-                    int secondIdx = currentContent.indexOf(oldSource, idx + 1);
-                    if (secondIdx >= 0)
+                    if (sr.occurrences > 1)
                     {
                         return "Error: oldSource found multiple times in the file (" + //$NON-NLS-1$
-                            countOccurrences(currentContent, oldSource) +
+                            sr.occurrences +
                             " occurrences). Provide a larger, more specific oldSource fragment " + //$NON-NLS-1$
                             "that matches exactly one location."; //$NON-NLS-1$
                     }
 
-                    // Perform replacement
-                    String newContent = currentContent.substring(0, idx)
-                        + source
-                        + currentContent.substring(idx + oldSource.length());
-
-                    newLines = splitSourceLines(newContent);
+                    newLines = splitSourceLines(sr.newContent);
                     break;
                 }
 
@@ -354,7 +349,7 @@ public class WriteModuleSourceTool implements IMcpTool
     /**
      * Counts the number of occurrences of a substring in a string.
      */
-    private int countOccurrences(String text, String search)
+    private static int countOccurrences(String text, String search)
     {
         int count = 0;
         int idx = 0;
@@ -364,6 +359,47 @@ public class WriteModuleSourceTool implements IMcpTool
             idx++;
         }
         return count;
+    }
+
+    /**
+     * Result of a pure content-based search/replace.
+     * {@code occurrences}: 0 = oldSource absent, 1 = replaced ({@code newContent}
+     * set), &gt;1 = ambiguous ({@code newContent} null).
+     */
+    static final class SearchReplaceResult
+    {
+        final int occurrences;
+        final String newContent;
+
+        SearchReplaceResult(int occurrences, String newContent)
+        {
+            this.occurrences = occurrences;
+            this.newContent = newContent;
+        }
+    }
+
+    /**
+     * Pure content-based search/replace used by MODE_SEARCH_REPLACE. Operating on
+     * the raw file content (which keeps the trailing newline) means an oldSource
+     * fragment that ends at EOF, including the final newline, is found. Returns
+     * occurrences=0 when absent and &gt;1 when ambiguous (newContent null in both),
+     * or 1 with the replaced content.
+     */
+    static SearchReplaceResult applySearchReplace(String currentContent, String oldSource, String newSource)
+    {
+        int idx = currentContent.indexOf(oldSource);
+        if (idx < 0)
+        {
+            return new SearchReplaceResult(0, null);
+        }
+        int secondIdx = currentContent.indexOf(oldSource, idx + 1);
+        if (secondIdx >= 0)
+        {
+            return new SearchReplaceResult(countOccurrences(currentContent, oldSource), null);
+        }
+        String newContent = currentContent.substring(0, idx) + newSource
+            + currentContent.substring(idx + oldSource.length());
+        return new SearchReplaceResult(1, newContent);
     }
 
     /**

@@ -618,4 +618,56 @@ public class WriteModuleSourceToolTest
         assertFalse(result.contains("oldSource is required")); //$NON-NLS-1$
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$
     }
+
+    // ============= applySearchReplace: pure content-replace (A14) =============
+
+    @Test
+    public void testApplySearchReplaceEofFragmentWithTrailingNewline()
+    {
+        // Regression (A14): an oldSource ending at EOF, including the file's final
+        // newline, must be found. Search now runs on the raw content (which keeps
+        // the trailing newline) instead of String.join(lines), which dropped it.
+        WriteModuleSourceTool.SearchReplaceResult r =
+            WriteModuleSourceTool.applySearchReplace("A\nB\n", "B\n", "C\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(1, r.occurrences);
+        assertEquals("A\nC\n", r.newContent); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testApplySearchReplaceMiddleFragment()
+    {
+        WriteModuleSourceTool.SearchReplaceResult r =
+            WriteModuleSourceTool.applySearchReplace("A\nB\nC\n", "B", "BB"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(1, r.occurrences);
+        assertEquals("A\nBB\nC\n", r.newContent); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testApplySearchReplaceNotFound()
+    {
+        WriteModuleSourceTool.SearchReplaceResult r =
+            WriteModuleSourceTool.applySearchReplace("A\nB\n", "ZZZ", "X"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(0, r.occurrences);
+        assertNull(r.newContent);
+    }
+
+    @Test
+    public void testApplySearchReplaceAmbiguous()
+    {
+        WriteModuleSourceTool.SearchReplaceResult r =
+            WriteModuleSourceTool.applySearchReplace("X\nX\n", "X\n", "Y\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("duplicate fragment must be reported ambiguous", r.occurrences > 1); //$NON-NLS-1$
+        assertNull(r.newContent);
+    }
+
+    @Test
+    public void testApplySearchReplacePreservesContentWithoutTrailingNewline()
+    {
+        // When the raw content has no trailing newline, replacing a non-EOF
+        // fragment leaves the rest intact.
+        WriteModuleSourceTool.SearchReplaceResult r =
+            WriteModuleSourceTool.applySearchReplace("A\nB", "A", "Z"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(1, r.occurrences);
+        assertEquals("Z\nB", r.newContent); //$NON-NLS-1$
+    }
 }
