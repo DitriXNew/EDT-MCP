@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to get tasks (TODO, FIXME, etc.) from the workspace.
@@ -121,11 +122,12 @@ public class GetTasksTool implements IMcpTool
             IProject[] projects;
             if (projectName != null && !projectName.isEmpty())
             {
-                IProject project = workspace.getRoot().getProject(projectName);
-                if (project == null || !project.exists())
+                ProjectContext ctx = ProjectContext.of(projectName);
+                if (!ctx.exists())
                 {
                     return "**Error:** Project not found: " + projectName; //$NON-NLS-1$
                 }
+                IProject project = ctx.project();
                 projects = new IProject[] { project };
             }
             else

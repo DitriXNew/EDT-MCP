@@ -11,8 +11,6 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
@@ -23,6 +21,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to get problem summary (counts by project and severity).
@@ -79,13 +78,11 @@ public class GetProblemSummaryTool implements IMcpTool
                 return "**Error:** IMarkerManager service is not available"; //$NON-NLS-1$
             }
             
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            
             // Validate project if specified
             if (projectName != null && !projectName.isEmpty())
             {
-                IProject project = workspace.getRoot().getProject(projectName);
-                if (project == null || !project.exists())
+                ProjectContext ctx = ProjectContext.of(projectName);
+                if (!ctx.exists())
                 {
                     return "**Error:** Project not found: " + projectName; //$NON-NLS-1$
                 }

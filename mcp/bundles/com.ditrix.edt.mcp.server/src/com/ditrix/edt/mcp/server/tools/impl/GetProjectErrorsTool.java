@@ -14,8 +14,6 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IProgressMonitor;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -35,6 +33,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -173,9 +172,7 @@ public class GetProjectErrorsTool implements IMcpTool
             
             final ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
             IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-            
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            
+
             // Parse severity filter
             MarkerSeverity severityFilter = null;
             if (severity != null && !severity.isEmpty())
@@ -195,8 +192,8 @@ public class GetProjectErrorsTool implements IMcpTool
             // Validate project if specified
             if (projectName != null && !projectName.isEmpty())
             {
-                IProject project = workspace.getRoot().getProject(projectName);
-                if (project == null || !project.exists())
+                ProjectContext ctx = ProjectContext.of(projectName);
+                if (!ctx.exists())
                 {
                     return "# Error\n\nProject not found: " + projectName; //$NON-NLS-1$
                 }

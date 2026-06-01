@@ -14,8 +14,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
@@ -41,6 +39,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 import io.github.furstenheim.CopyDown;
 
@@ -166,18 +165,19 @@ public class GetContentAssistTool implements IMcpTool
                                     int limit, int offset, String containsFilter, boolean extendedDocumentation)
     {
         // Find the project
-        IWorkspace workspace = ResourcesPlugin.getWorkspace();
-        IProject project = workspace.getRoot().getProject(projectName);
-        
-        if (project == null || !project.exists())
+        ProjectContext ctx = ProjectContext.of(projectName);
+
+        if (!ctx.exists())
         {
             return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
-        
-        if (!project.isOpen())
+
+        if (!ctx.isOpen())
         {
             return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
         }
+
+        IProject project = ctx.project();
         
         // Build the full path: project/src/filePath
         IPath relativePath = new Path("src").append(filePath); //$NON-NLS-1$
