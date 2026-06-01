@@ -36,6 +36,7 @@ import com._1c.g5.v8.dt.bsl.model.RegionPreprocessor;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
@@ -105,11 +106,11 @@ public class GetModuleStructureTool implements IMcpTool
 
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
         if (modulePath == null || modulePath.isEmpty())
         {
-            return "Error: modulePath is required. Example: 'CommonModules/MyModule/Module.bsl'"; //$NON-NLS-1$
+            return ToolResult.error("modulePath is required. Example: 'CommonModules/MyModule/Module.bsl'").toJson(); //$NON-NLS-1$
         }
 
         // Try EMF approach first (on UI thread)
@@ -135,8 +136,8 @@ public class GetModuleStructureTool implements IMcpTool
             return result;
         }
 
-        return "Error: BSL model is not available for '" + modulePath + "'\n" + //$NON-NLS-1$ //$NON-NLS-2$
-               "Make sure project '" + projectName + "' is open and fully indexed in EDT."; //$NON-NLS-1$ //$NON-NLS-2$
+        return ToolResult.error("BSL model is not available for '" + modulePath + "'\n" + //$NON-NLS-1$ //$NON-NLS-2$
+               "Make sure project '" + projectName + "' is open and fully indexed in EDT.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private String getStructureInternal(String projectName, String modulePath,
@@ -145,15 +146,15 @@ public class GetModuleStructureTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
         {
-            return "Error: BSL model is not available for '" + modulePath + "'\n" + //$NON-NLS-1$ //$NON-NLS-2$
-                   "Make sure project '" + projectName + "' is open and fully indexed in EDT."; //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("BSL model is not available for '" + modulePath + "'\n" + //$NON-NLS-1$ //$NON-NLS-2$
+                   "Make sure project '" + projectName + "' is open and fully indexed in EDT.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         // Load the source lines once: needed for accurate region end-line

@@ -40,6 +40,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.WebService;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -118,7 +119,7 @@ public class ListModulesTool implements IMcpTool
 
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
 
         if (metadataType == null || metadataType.isEmpty())
@@ -144,7 +145,7 @@ public class ListModulesTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error listing modules", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
 
@@ -157,7 +158,7 @@ public class ListModulesTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
@@ -175,13 +176,13 @@ public class ListModulesTool implements IMcpTool
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {
-            return "Error: Configuration provider not available"; //$NON-NLS-1$
+            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
         }
 
         Configuration config = configProvider.getConfiguration(project);
         if (config == null)
         {
-            return "Error: Could not get configuration for project: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
         }
 
         switch (type)
@@ -257,11 +258,11 @@ public class ListModulesTool implements IMcpTool
                     "HTTPServices", "Module.bsl", "Module", "HTTPService"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 break;
             default:
-                return "Error: Unknown metadata type: " + metadataType + //$NON-NLS-1$
+                return ToolResult.error("Unknown metadata type: " + metadataType + //$NON-NLS-1$
                        ". Supported: all, documents, catalogs, commonModules, informationRegisters, " + //$NON-NLS-1$
                        "accumulationRegisters, reports, dataProcessors, exchangePlans, " + //$NON-NLS-1$
                        "businessProcesses, tasks, constants, commonCommands, commonForms, " + //$NON-NLS-1$
-                       "webServices, httpServices"; //$NON-NLS-1$
+                       "webServices, httpServices").toJson(); //$NON-NLS-1$
         }
 
         return formatOutput(projectName, modules, limit, metadataType);

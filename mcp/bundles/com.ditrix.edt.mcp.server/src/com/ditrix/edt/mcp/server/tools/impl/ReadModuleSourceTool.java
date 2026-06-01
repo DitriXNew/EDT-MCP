@@ -15,6 +15,7 @@ import org.eclipse.core.resources.IProject;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
@@ -96,18 +97,18 @@ public class ReadModuleSourceTool implements IMcpTool
         // Validate required parameters
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
         if (modulePath == null || modulePath.isEmpty())
         {
-            return "Error: modulePath is required. Example: 'CommonModules/MyModule/Module.bsl'"; //$NON-NLS-1$
+            return ToolResult.error("modulePath is required. Example: 'CommonModules/MyModule/Module.bsl'").toJson(); //$NON-NLS-1$
         }
 
         // Get project
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
@@ -115,9 +116,9 @@ public class ReadModuleSourceTool implements IMcpTool
         IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
         if (!file.exists())
         {
-            return "Error: File not found: src/" + modulePath + //$NON-NLS-1$
+            return ToolResult.error("File not found: src/" + modulePath + //$NON-NLS-1$
                    ". Use format like 'CommonModules/ModuleName/Module.bsl' or " + //$NON-NLS-1$
-                   "'Documents/DocName/ObjectModule.bsl'"; //$NON-NLS-1$
+                   "'Documents/DocName/ObjectModule.bsl'").toJson(); //$NON-NLS-1$
         }
 
         try
@@ -160,7 +161,7 @@ public class ReadModuleSourceTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return "Error reading file: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Error reading file: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 

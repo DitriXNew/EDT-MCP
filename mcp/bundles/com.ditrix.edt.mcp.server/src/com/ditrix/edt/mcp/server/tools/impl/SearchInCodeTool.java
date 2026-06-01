@@ -25,6 +25,7 @@ import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -146,11 +147,11 @@ public class SearchInCodeTool implements IMcpTool
         // Validate required parameters
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
         if (query == null || query.isEmpty())
         {
-            return "Error: query is required"; //$NON-NLS-1$
+            return ToolResult.error("query is required").toJson(); //$NON-NLS-1$
         }
 
         // Normalize output mode
@@ -161,7 +162,7 @@ public class SearchInCodeTool implements IMcpTool
         outputMode = outputMode.toLowerCase();
         if (!MODE_FULL.equals(outputMode) && !MODE_COUNT.equals(outputMode) && !MODE_FILES.equals(outputMode))
         {
-            return "Error: outputMode must be 'full', 'count', or 'files'"; //$NON-NLS-1$
+            return ToolResult.error("outputMode must be 'full', 'count', or 'files'").toJson(); //$NON-NLS-1$
         }
 
         // Clamp limits
@@ -172,7 +173,7 @@ public class SearchInCodeTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
@@ -196,18 +197,18 @@ public class SearchInCodeTool implements IMcpTool
         }
         catch (PatternSyntaxException e)
         {
-            return "Error: Invalid regex pattern '" + query + "': " + e.getMessage(); //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Invalid regex pattern '" + query + "': " + e.getMessage()).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         // Resolve metadataType to folder prefix
         String metadataFolderPrefix = resolveMetadataFolder(metadataType);
         if (metadataType != null && !metadataType.isEmpty() && metadataFolderPrefix == null)
         {
-            return "Error: Unknown metadataType '" + metadataType + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Unknown metadataType '" + metadataType + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
                 "Supported: documents, catalogs, commonModules, informationRegisters, " + //$NON-NLS-1$
                 "accumulationRegisters, reports, dataProcessors, exchangePlans, " + //$NON-NLS-1$
                 "businessProcesses, tasks, constants, commonCommands, commonForms, " + //$NON-NLS-1$
-                "webServices, httpServices"; //$NON-NLS-1$
+                "webServices, httpServices").toJson(); //$NON-NLS-1$
         }
 
         // Search
@@ -224,12 +225,12 @@ public class SearchInCodeTool implements IMcpTool
             }
             else
             {
-                return "Error: src/ folder not found in project " + projectName; //$NON-NLS-1$
+                return ToolResult.error("src/ folder not found in project " + projectName).toJson(); //$NON-NLS-1$
             }
         }
         catch (CoreException e)
         {
-            return "Error searching project: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Failed to search project: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
 
         // Format output
