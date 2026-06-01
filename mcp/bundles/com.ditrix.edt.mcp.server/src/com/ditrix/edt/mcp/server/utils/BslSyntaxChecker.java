@@ -4,7 +4,7 @@
  * Licensed under AGPL-3.0-or-later
  */
 
-package com.ditrix.edt.mcp.server.tools.impl;
+package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;

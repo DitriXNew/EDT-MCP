@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 
 /**
  * Tool to create a new top-level metadata object (Catalog, Document, etc.).

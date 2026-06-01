@@ -15,6 +15,7 @@ import static org.junit.Assert.assertTrue;
 import org.eclipse.emf.common.util.BasicEMap;
 import org.eclipse.emf.common.util.EMap;
 import org.junit.Test;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 
 /**
  * Tests for {@link SubsystemUtils}.

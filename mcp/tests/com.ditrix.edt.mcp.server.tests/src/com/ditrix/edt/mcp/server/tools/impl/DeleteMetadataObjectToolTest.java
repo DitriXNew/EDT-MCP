@@ -19,7 +19,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * it is covered by the E2E suite instead.
  * <p>
  * {@link #testResponseType()} also guards the refactoring that moved
- * {@code getResponseType()} into {@link AbstractMetadataWriteTool}: the tool
+ * {@code getResponseType()} into {@link com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool}: the tool
  * must still report JSON.
  */
 public class DeleteMetadataObjectToolTest

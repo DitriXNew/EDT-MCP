@@ -54,6 +54,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
+import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 
 import io.github.furstenheim.CopyDown;
 

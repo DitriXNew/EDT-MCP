@@ -4,7 +4,7 @@
  * Licensed under AGPL-3.0-or-later
  */
 
-package com.ditrix.edt.mcp.server.tools.impl;
+package com.ditrix.edt.mcp.server.tools.base;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -87,7 +87,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         /** Non-null when resolution failed: a JSON error to return verbatim. */
         public String error;
 
-        boolean hasError()
+        public boolean hasError()
         {
             return error != null;
         }

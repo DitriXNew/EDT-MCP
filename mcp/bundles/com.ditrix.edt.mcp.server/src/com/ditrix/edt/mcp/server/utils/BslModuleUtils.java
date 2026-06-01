@@ -1,10 +1,10 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
  */
 
-package com.ditrix.edt.mcp.server.tools.impl;
+package com.ditrix.edt.mcp.server.utils;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;

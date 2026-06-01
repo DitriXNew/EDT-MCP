@@ -14,7 +14,8 @@ import java.util.List;
 
 import org.junit.Test;
 
-import com.ditrix.edt.mcp.server.tools.impl.BslSyntaxChecker.CheckResult;
+import com.ditrix.edt.mcp.server.utils.BslSyntaxChecker.CheckResult;
+import com.ditrix.edt.mcp.server.utils.BslSyntaxChecker;
 
 /**
  * Tests for {@link BslSyntaxChecker}.

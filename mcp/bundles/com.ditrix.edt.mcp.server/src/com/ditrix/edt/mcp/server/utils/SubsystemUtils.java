@@ -4,7 +4,7 @@
  * Licensed under AGPL-3.0-or-later
  */
 
-package com.ditrix.edt.mcp.server.tools.impl;
+package com.ditrix.edt.mcp.server.utils;
 
 import org.eclipse.emf.common.util.EMap;
 
@@ -16,7 +16,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 /**
  * Helpers shared between subsystem tools (list_subsystems, get_subsystem_content).
  */
-final class SubsystemUtils
+public final class SubsystemUtils
 {
     private SubsystemUtils()
     {
@@ -29,7 +29,7 @@ final class SubsystemUtils
      * {@link #getSynonymForLanguage} which already falls back to any non-empty
      * synonym entry.
      */
-    static String resolveLanguage(String explicit, Configuration config)
+    public static String resolveLanguage(String explicit, Configuration config)
     {
         // Delegate to the shared resolver (note the swapped argument order). This
         // also fixes the former getName() bug: the synonym map is keyed by the
@@ -43,7 +43,7 @@ final class SubsystemUtils
      * lookup and goes straight to the fallback. Returns empty string when nothing
      * is set.
      */
-    static String getSynonymForLanguage(EMap<String, String> synonyms, String language)
+    public static String getSynonymForLanguage(EMap<String, String> synonyms, String language)
     {
         return MetadataLanguageUtils.getSynonymForLanguage(synonyms == null ? null : synonyms.map(), language);
     }
@@ -59,7 +59,7 @@ final class SubsystemUtils
      * (e.g. <code>Подсистема.Продажи.Subsystem.Orders</code>). Subsystem name
      * matching is case-insensitive.</p>
      */
-    static Subsystem resolveByFqn(Configuration config, String fqn)
+    public static Subsystem resolveByFqn(Configuration config, String fqn)
     {
         if (config == null)
         {
@@ -93,7 +93,7 @@ final class SubsystemUtils
      *   <li>"Subsystem" → null (missing name)</li>
      * </ul>
      */
-    static String[] parseSubsystemPath(String fqn)
+    public static String[] parseSubsystemPath(String fqn)
     {
         if (fqn == null)
         {
@@ -127,7 +127,7 @@ final class SubsystemUtils
         return names;
     }
 
-    static boolean isSubsystemTypeToken(String token)
+    public static boolean isSubsystemTypeToken(String token)
     {
         if (token == null)
         {
