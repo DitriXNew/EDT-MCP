@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -36,9 +37,6 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
-
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 
 /**
  * Tool to validate 1C:Enterprise query language (QL) text in the context of a project.
@@ -267,7 +265,7 @@ public class ValidateQueryTool implements IMcpTool
             }
             
             // Build the result
-            return buildResult(queryText, issues, dcsMode);
+            return buildResult(issues, dcsMode);
         }
         catch (IOException e)
         {
@@ -302,62 +300,55 @@ public class ValidateQueryTool implements IMcpTool
     }
     
     /**
-     * Builds JSON result from validation issues.
-     * 
-     * @param queryText the original query text
+     * Builds the JSON result from validation issues, via the shared
+     * {@link ToolResult} builder (consistent with the tool's error paths and
+     * the rest of the server).
+     *
      * @param issues list of validation issues
      * @param dcsMode whether DCS mode was used
      * @return JSON result string
      */
-    private String buildResult(String queryText, List<QueryIssue> issues, boolean dcsMode)
+    static String buildResult(List<QueryIssue> issues, boolean dcsMode)
     {
-        JsonObject result = new JsonObject();
-        result.addProperty("success", true); //$NON-NLS-1$
-        result.addProperty("valid", issues.isEmpty()); //$NON-NLS-1$
-        result.addProperty("dcsMode", dcsMode); //$NON-NLS-1$
-        result.addProperty("errorCount", //$NON-NLS-1$
-            issues.stream().filter(i -> "ERROR".equals(i.severity)).count()); //$NON-NLS-1$
-        result.addProperty("warningCount", //$NON-NLS-1$
-            issues.stream().filter(i -> "WARNING".equals(i.severity)).count()); //$NON-NLS-1$
-        result.addProperty("infoCount", //$NON-NLS-1$
-            issues.stream().filter(i -> "INFO".equals(i.severity)).count()); //$NON-NLS-1$
-        
-        if (!issues.isEmpty())
+        List<Map<String, Object>> issueList = new ArrayList<>();
+        for (QueryIssue issue : issues)
         {
-            JsonArray issuesArray = new JsonArray();
-            for (QueryIssue issue : issues)
+            // LinkedHashMap to keep a stable, readable field order per issue.
+            Map<String, Object> issueObj = new LinkedHashMap<>();
+            issueObj.put("severity", issue.severity); //$NON-NLS-1$
+            issueObj.put("message", issue.message); //$NON-NLS-1$
+            if (issue.line > 0)
             {
-                JsonObject issueObj = new JsonObject();
-                issueObj.addProperty("severity", issue.severity); //$NON-NLS-1$
-                issueObj.addProperty("message", issue.message); //$NON-NLS-1$
-                if (issue.line > 0)
-                {
-                    issueObj.addProperty("line", issue.line); //$NON-NLS-1$
-                }
-                if (issue.column > 0)
-                {
-                    issueObj.addProperty("column", issue.column); //$NON-NLS-1$
-                }
-                if (issue.offset >= 0)
-                {
-                    issueObj.addProperty("offset", issue.offset); //$NON-NLS-1$
-                }
-                issuesArray.add(issueObj);
+                issueObj.put("line", issue.line); //$NON-NLS-1$
             }
-            result.add("issues", issuesArray); //$NON-NLS-1$
+            if (issue.column > 0)
+            {
+                issueObj.put("column", issue.column); //$NON-NLS-1$
+            }
+            if (issue.offset >= 0)
+            {
+                issueObj.put("offset", issue.offset); //$NON-NLS-1$
+            }
+            issueList.add(issueObj);
         }
-        else
-        {
-            result.add("issues", new JsonArray()); //$NON-NLS-1$
-        }
-        
-        return result.toString();
+
+        return ToolResult.success()
+            .put("valid", issues.isEmpty()) //$NON-NLS-1$
+            .put("dcsMode", dcsMode) //$NON-NLS-1$
+            .put("errorCount", //$NON-NLS-1$
+                issues.stream().filter(i -> "ERROR".equals(i.severity)).count()) //$NON-NLS-1$
+            .put("warningCount", //$NON-NLS-1$
+                issues.stream().filter(i -> "WARNING".equals(i.severity)).count()) //$NON-NLS-1$
+            .put("infoCount", //$NON-NLS-1$
+                issues.stream().filter(i -> "INFO".equals(i.severity)).count()) //$NON-NLS-1$
+            .put("issues", issueList) //$NON-NLS-1$
+            .toJson();
     }
     
     /**
      * Internal representation of a validation issue.
      */
-    private static class QueryIssue
+    static class QueryIssue
     {
         final String severity;
         final String message;
