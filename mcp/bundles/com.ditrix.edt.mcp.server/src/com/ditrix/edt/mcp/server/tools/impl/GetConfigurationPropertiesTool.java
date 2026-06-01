@@ -25,6 +25,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 
@@ -64,7 +65,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = params != null ? params.get("projectName") : null; //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         return getConfigurationProperties(projectName);
     }
     
