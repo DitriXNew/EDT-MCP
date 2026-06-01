@@ -528,6 +528,8 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 | 6 | `create_metadata_object` + `terminate_launch` absent from session tool registry (stale cached tools/list; server was down at start) | harness | re‑validate with a fresh MCP connection |
 | 7 | LanguageTool not installed → 3 translation tools unusable | env | install LanguageTool for happy paths |
 | 8 | IRP has no infobase/launch config → app/debug full flow not exercised | env | needs a project with an infobase + YAXUnit |
+| 9 | `get_module_structure` reported every region ending at EOF (and methods between sibling regions mis-assigned to the previous region) | **bug → FIXED** | card `b2` closed; region end matched in source by `#Region/#EndRegion` depth (validated live on AccountingServer) |
+| 10 | `validate_query` result built via raw Gson, bypassing `ToolResult` | **refactor** | card `aQ` (ValidateQuery part) — migrated to `ToolResult`, output preserved (validated live) |
 
 **Coverage:** 56 of 58 tools exercised live (read happy‑paths + write/destructive error‑paths). 2 (`create_metadata_object`, `terminate_launch`) pending a fresh connection. Happy paths for write/destructive/app/debug/translation tools require a sandbox project (+infobase / +LanguageTool / +approval) as noted per tool.
 
