@@ -31,3 +31,11 @@ description: How to manually e2e-test each EDT-MCP server tool against a live ED
 - Останов и инспекция: `wait_for_break`, `get_variables`, `evaluate_expression`, `step`, `resume`.
 
 > Полный валидированный проход (2026-06-02): set_breakpoint → debug_launch(update) → wait_for_break(hit) → get_variables → step over → get_variables → evaluate_expression → resume → remove_breakpoint. Детали по каждому — в его референсе.
+
+## Индекс — navigation / read (`references/navigation/`) — English
+
+Read-only инструменты навигации и чтения. Доки на английском (полный гайд для другого ИИ), каждый с реальным live-вызовом на `TestConfiguration`.
+- [SETUP](references/navigation/SETUP.md) — project ready (не `building`), индекс BSL построен, modulePath-адресация, UI-thread tools.
+- Workspace/listing: [list_projects](references/navigation/list_projects.md), [list_modules](references/navigation/list_modules.md).
+- Source: [read_module_source](references/navigation/read_module_source.md), [read_method_source](references/navigation/read_method_source.md), [get_module_structure](references/navigation/get_module_structure.md).
+- AST/refs: [go_to_definition](references/navigation/go_to_definition.md), [find_references](references/navigation/find_references.md), [get_method_call_hierarchy](references/navigation/get_method_call_hierarchy.md), [get_symbol_info](references/navigation/get_symbol_info.md), [get_content_assist](references/navigation/get_content_assist.md).
