@@ -622,6 +622,92 @@ public class WriteModuleSourceToolTest
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$
     }
 
+    // ============= Error shape: resolveModulePath failures are structured =============
+    // CLAUDE.md rule #8: the resolveModulePath failures (formerly bare "Error:"
+    // strings) must reach the client as a ToolResult.error JSON payload, i.e.
+    // {"success":false,"error":...}, not a bare string and not an "Error:" prefix.
+
+    private static void assertStructuredError(String result)
+    {
+        assertTrue("expected a structured JSON error object, got: " + result, //$NON-NLS-1$
+            result.startsWith("{")); //$NON-NLS-1$
+        assertTrue("expected success:false in: " + result, //$NON-NLS-1$
+            result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("expected an error field in: " + result, //$NON-NLS-1$
+            result.contains("\"error\"")); //$NON-NLS-1$
+        // The legacy bare-string sentinel must NOT leak to the client.
+        assertFalse("error payload must not start with the bare \"Error:\" sentinel: " + result, //$NON-NLS-1$
+            result.startsWith("Error:")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveInvalidFormatReturnsStructuredError()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "NoDot"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertStructuredError(tool.execute(params));
+    }
+
+    @Test
+    public void testResolveUnknownTypeReturnsStructuredError()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "UnknownType.Name"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertStructuredError(tool.execute(params));
+    }
+
+    @Test
+    public void testResolveUnknownModuleTypeReturnsStructuredError()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("moduleType", "UnknownModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertStructuredError(tool.execute(params));
+    }
+
+    @Test
+    public void testResolveFormModuleMissingFormNameReturnsStructuredError()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("moduleType", "FormModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertStructuredError(tool.execute(params));
+    }
+
+    @Test
+    public void testResolveCommandModuleMissingCommandNameReturnsStructuredError()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("moduleType", "CommandModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertStructuredError(tool.execute(params));
+    }
+
     // ============= applySearchReplace: pure content-replace (A14) =============
 
     @Test

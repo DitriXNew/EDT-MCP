@@ -193,11 +193,11 @@ public class WriteModuleSourceTool implements IMcpTool
                 return ToolResult.error("either modulePath or objectName is required").toJson(); //$NON-NLS-1$
             }
             String resolved = resolveModulePath(objectName, moduleType, formName, commandName);
-            if (resolved.startsWith("Error:")) //$NON-NLS-1$
+            if (isErrorJson(resolved))
             {
-                // resolveModulePath signals failure with an internal "Error:"-prefixed
-                // string; surface it through the structured error contract.
-                return ToolResult.error(resolved.substring("Error:".length()).trim()).toJson(); //$NON-NLS-1$
+                // resolveModulePath signals failure by returning a ready
+                // ToolResult.error(...).toJson() payload; surface it as-is.
+                return resolved;
             }
             modulePath = resolved;
         }
@@ -408,7 +408,22 @@ public class WriteModuleSourceTool implements IMcpTool
     }
 
     /**
+     * Returns {@code true} when the given resolver result is a structured error
+     * payload (a {@link ToolResult#error} JSON object) rather than a resolved
+     * module path. A resolved path is a plain {@code src/}-relative string, so it
+     * can never begin with the JSON object opener.
+     */
+    private static boolean isErrorJson(String resolverResult)
+    {
+        return resolverResult.startsWith("{"); //$NON-NLS-1$
+    }
+
+    /**
      * Resolves objectName + moduleType to a module file path relative to src/.
+     * On success returns the plain path; on failure returns a ready
+     * {@link ToolResult#error} JSON payload (detected by {@link #isErrorJson})
+     * so the error reaches the client through the structured error contract
+     * rather than a bare "Error:" string.
      */
     private String resolveModulePath(String objectName, String moduleType,
         String formName, String commandName)
@@ -417,8 +432,8 @@ public class WriteModuleSourceTool implements IMcpTool
         int dotIndex = objectName.indexOf('.'); //$NON-NLS-1$
         if (dotIndex <= 0 || dotIndex >= objectName.length() - 1)
         {
-            return "Error: objectName must be in format 'Type.Name' " + //$NON-NLS-1$
-                "(e.g. 'Document.MyDoc', 'CommonModule.MyModule')"; //$NON-NLS-1$
+            return ToolResult.error("objectName must be in format 'Type.Name' " + //$NON-NLS-1$
+                "(e.g. 'Document.MyDoc', 'CommonModule.MyModule')").toJson(); //$NON-NLS-1$
         }
 
         String typePart = objectName.substring(0, dotIndex);
@@ -428,14 +443,14 @@ public class WriteModuleSourceTool implements IMcpTool
         String englishType = MetadataTypeUtils.toEnglishSingular(typePart);
         if (englishType == null)
         {
-            return "Error: unknown metadata type: " + typePart; //$NON-NLS-1$
+            return ToolResult.error("unknown metadata type: " + typePart).toJson(); //$NON-NLS-1$
         }
 
         // Get directory name
         String dirName = MetadataTypeUtils.getDirectoryName(typePart);
         if (dirName == null)
         {
-            return "Error: metadata type '" + typePart + "' has no source directory"; //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("metadata type '" + typePart + "' has no source directory").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         // Determine default moduleType based on metadata type
@@ -481,7 +496,7 @@ public class WriteModuleSourceTool implements IMcpTool
                 }
                 if (formName == null || formName.isEmpty())
                 {
-                    return "Error: formName is required when moduleType=FormModule"; //$NON-NLS-1$
+                    return ToolResult.error("formName is required when moduleType=FormModule").toJson(); //$NON-NLS-1$
                 }
                 return dirName + "/" + namePart + "/Forms/" + formName + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
@@ -493,14 +508,14 @@ public class WriteModuleSourceTool implements IMcpTool
                 }
                 if (commandName == null || commandName.isEmpty())
                 {
-                    return "Error: commandName is required when moduleType=CommandModule"; //$NON-NLS-1$
+                    return ToolResult.error("commandName is required when moduleType=CommandModule").toJson(); //$NON-NLS-1$
                 }
                 return dirName + "/" + namePart + "/Commands/" + commandName + "/CommandModule.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
             default:
-                return "Error: unknown moduleType: " + moduleType + //$NON-NLS-1$
+                return ToolResult.error("unknown moduleType: " + moduleType + //$NON-NLS-1$
                     ". Allowed: ObjectModule, ManagerModule, FormModule, " + //$NON-NLS-1$
-                    "CommandModule, RecordSetModule, Module"; //$NON-NLS-1$
+                    "CommandModule, RecordSetModule, Module").toJson(); //$NON-NLS-1$
         }
     }
 
