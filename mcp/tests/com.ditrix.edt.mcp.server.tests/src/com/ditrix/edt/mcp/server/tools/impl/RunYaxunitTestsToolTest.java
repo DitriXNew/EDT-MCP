@@ -98,6 +98,9 @@ public class RunYaxunitTestsToolTest
         IMcpTool tool = new RunYaxunitTestsTool();
         String result = tool.execute(new HashMap<String, String>());
         assertNotNull(result);
-        assertTrue(result.contains("Error"));
+        // Genuine missing-arg failures now travel as the structured ToolResult.error
+        // JSON contract ({"success":false,"error":"..."}) rather than a markdown body.
+        assertTrue(result.contains("\"success\":false"));
+        assertTrue(result.toLowerCase().contains("required"));
     }
 }

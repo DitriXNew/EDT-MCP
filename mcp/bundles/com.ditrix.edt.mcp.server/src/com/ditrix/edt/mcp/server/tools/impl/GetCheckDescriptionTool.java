@@ -19,6 +19,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 
 /**
@@ -149,7 +150,7 @@ public class GetCheckDescriptionTool implements IMcpTool
         // Validate checkId parameter
         if (checkId == null || checkId.isEmpty())
         {
-            return "**Error:** checkId parameter is required"; //$NON-NLS-1$
+            return ToolResult.error("checkId parameter is required").toJson(); //$NON-NLS-1$
         }
         
         try
@@ -160,21 +161,21 @@ public class GetCheckDescriptionTool implements IMcpTool
             
             if (checksFolder == null || checksFolder.isEmpty())
             {
-                return "**Error:** Check descriptions folder is not configured.\n\n" + //$NON-NLS-1$
-                       "Please set it in Preferences -> MCP Server."; //$NON-NLS-1$
+                return ToolResult.error("Check descriptions folder is not configured.\n\n" + //$NON-NLS-1$
+                       "Please set it in Preferences -> MCP Server.").toJson(); //$NON-NLS-1$
             }
             
             Path folderPath = Paths.get(checksFolder);
             if (!Files.exists(folderPath) || !Files.isDirectory(folderPath))
             {
-                return "**Error:** Check descriptions folder does not exist: " + checksFolder; //$NON-NLS-1$
+                return ToolResult.error("Check descriptions folder does not exist: " + checksFolder).toJson(); //$NON-NLS-1$
             }
             
             // Find the documentation file
             Path checkFile = findCheckDocumentationFile(checkId);
             if (checkFile == null)
             {
-                return "**Error:** Check description not found for: " + checkId; //$NON-NLS-1$
+                return ToolResult.error("Check description not found for: " + checkId).toJson(); //$NON-NLS-1$
             }
             
             // Read and return file content directly (it's already Markdown)
@@ -183,12 +184,12 @@ public class GetCheckDescriptionTool implements IMcpTool
         catch (IOException e)
         {
             Activator.logError("Error reading check description for: " + checkId, e); //$NON-NLS-1$
-            return "**Error:** Failed to read check description: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Failed to read check description: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
         catch (Exception e)
         {
             Activator.logError("Error getting check description", e); //$NON-NLS-1$
-            return "**Error:** " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson();
         }
     }
 }

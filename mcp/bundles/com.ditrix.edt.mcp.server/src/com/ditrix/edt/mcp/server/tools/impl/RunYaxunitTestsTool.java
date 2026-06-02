@@ -37,6 +37,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.JUnitMarkdownFormatter;
 import com.ditrix.edt.mcp.server.utils.JUnitTestResults;
@@ -142,12 +143,12 @@ public class RunYaxunitTestsTool implements IMcpTool
         {
             if (projectName == null || projectName.isEmpty())
             {
-                return "**Error:** projectName is required (or pass launchConfigurationName)"; //$NON-NLS-1$
+                return ToolResult.error("projectName is required (or pass launchConfigurationName)").toJson(); //$NON-NLS-1$
             }
             if (applicationId == null || applicationId.isEmpty())
             {
-                return "**Error:** applicationId is required (or pass launchConfigurationName). " //$NON-NLS-1$
-                    + "Use get_applications or list_configurations."; //$NON-NLS-1$
+                return ToolResult.error("applicationId is required (or pass launchConfigurationName). " //$NON-NLS-1$
+                    + "Use get_applications or list_configurations.").toJson(); //$NON-NLS-1$
             }
         }
 
@@ -180,7 +181,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
             if (launchManager == null)
             {
-                return "**Error:** Launch manager is not available"; //$NON-NLS-1$
+                return ToolResult.error("Launch manager is not available").toJson(); //$NON-NLS-1$
             }
 
             ILaunchConfiguration matchingConfig = LaunchConfigUtils.resolveLaunchConfig(
@@ -189,16 +190,16 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 boolean hasName = configName != null && !configName.isEmpty();
                 return hasName
-                    ? "**Error:** Launch configuration not found: '" + configName + "'. " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "Use list_configurations to see what's available." //$NON-NLS-1$
+                    ? ToolResult.error("Launch configuration not found: '" + configName + "'. " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "Use list_configurations to see what's available.").toJson() //$NON-NLS-1$
                     : buildNoConfigError(launchManager,
                         launchManager.getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID),
                         projectName, applicationId);
             }
             if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(matchingConfig)))
             {
-                return "**Error:** Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
-                    + "' is not a runtime-client config — YAXUnit tests require one."; //$NON-NLS-1$
+                return ToolResult.error("Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
+                    + "' is not a runtime-client config — YAXUnit tests require one.").toJson(); //$NON-NLS-1$
             }
 
             // Derive effective project/application from the resolved config.
@@ -216,32 +217,32 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
             if (projectName == null || projectName.isEmpty())
             {
-                return "**Error:** Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
-                    + "' has no project attribute set"; //$NON-NLS-1$
+                return ToolResult.error("Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
+                    + "' has no project attribute set").toJson(); //$NON-NLS-1$
             }
 
             String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
             if (notReadyError != null)
             {
-                return "**Error:** " + notReadyError; //$NON-NLS-1$
+                return ToolResult.error(notReadyError).toJson();
             }
 
             ProjectContext ctx = ProjectContext.of(projectName);
             if (!ctx.exists())
             {
-                return "**Error:** Project not found: " + projectName; //$NON-NLS-1$
+                return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
             }
 
             if (!ctx.isOpen())
             {
-                return "**Error:** Project is closed: " + projectName; //$NON-NLS-1$
+                return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
             }
             IProject project = ctx.project();
 
             IApplicationManager appManager = Activator.getDefault().getApplicationManager();
             if (appManager == null)
             {
-                return "**Error:** IApplicationManager service is not available"; //$NON-NLS-1$
+                return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
             }
 
             if (applicationId != null && !applicationId.isEmpty())
@@ -251,15 +252,15 @@ public class RunYaxunitTestsTool implements IMcpTool
                     Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
                     if (!appOpt.isPresent())
                     {
-                        return "**Error:** Application not found: " + applicationId //$NON-NLS-1$
-                                + ". Use get_applications to get valid application IDs."; //$NON-NLS-1$
+                        return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
+                                + ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
                     }
                 }
                 catch (ApplicationException e)
                 {
                     Activator.logError("Error checking application", e); //$NON-NLS-1$
-                    return "**Error:** Failed to validate application: " + applicationId //$NON-NLS-1$
-                            + " (" + e.getMessage() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+                    return ToolResult.error("Failed to validate application: " + applicationId //$NON-NLS-1$
+                            + " (" + e.getMessage() + ")").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
 
@@ -281,8 +282,8 @@ public class RunYaxunitTestsTool implements IMcpTool
                     {
                         return readResults(junitXml);
                     }
-                    return "**Error:** Previous launch finished but no JUnit XML found in " //$NON-NLS-1$
-                            + reportDir + ". Make sure YAXUnit extension is installed."; //$NON-NLS-1$
+                    return ToolResult.error("Previous launch finished but no JUnit XML found in " //$NON-NLS-1$
+                            + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
                 }
                 String pollResult = pollLaunch(existing, reportDir, timeout, runKey);
                 if (pollResult != null)
@@ -336,12 +337,12 @@ public class RunYaxunitTestsTool implements IMcpTool
                             project, applicationId, appManager, terminateTimeout);
                         if (!preLaunch.isOk())
                         {
-                            return "**Error:** Pre-launch preparation failed: " //$NON-NLS-1$
+                            return ToolResult.error("Pre-launch preparation failed: " //$NON-NLS-1$
                                 + preLaunch.getError()
                                 + "\n\nIf the previous launch is stuck, call `terminate_launch` " //$NON-NLS-1$
                                 + "with `force=true` and retry. As a last resort, pass " //$NON-NLS-1$
                                 + "`updateBeforeLaunch=false` — but the EDT launch delegate may " //$NON-NLS-1$
-                                + "then pop a modal dialog that blocks the MCP call."; //$NON-NLS-1$
+                                + "then pop a modal dialog that blocks the MCP call.").toJson(); //$NON-NLS-1$
                         }
                     }
 
@@ -398,17 +399,17 @@ public class RunYaxunitTestsTool implements IMcpTool
         catch (CoreException e)
         {
             Activator.logError("Error running YAXUnit tests", e); //$NON-NLS-1$
-            return "**Error:** Launch failed: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Launch failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            return "**Error:** Test execution was interrupted"; //$NON-NLS-1$
+            return ToolResult.error("Test execution was interrupted").toJson(); //$NON-NLS-1$
         }
         catch (Exception e)
         {
             Activator.logError("Unexpected error running YAXUnit tests", e); //$NON-NLS-1$
-            return "**Error:** " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson();
         }
     }
 
@@ -435,9 +436,9 @@ public class RunYaxunitTestsTool implements IMcpTool
         File junitXml = findJunitXml(reportDir);
         if (junitXml == null)
         {
-            return "**Error:** No JUnit XML report found in " + reportDir //$NON-NLS-1$
+            return ToolResult.error("No JUnit XML report found in " + reportDir //$NON-NLS-1$
                     + ". Make sure YAXUnit extension is installed in the infobase " //$NON-NLS-1$
-                    + "and test configuration is correct."; //$NON-NLS-1$
+                    + "and test configuration is correct.").toJson(); //$NON-NLS-1$
         }
 
         return readResults(junitXml);
@@ -476,7 +477,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error parsing JUnit XML: " + junitXml, e); //$NON-NLS-1$
-            return "**Error:** Failed to parse test results: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Failed to parse test results: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 
@@ -704,7 +705,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             ILaunchConfigurationType configType, String projectName, String applicationId)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append("**Error:** No launch configuration found for project '"); //$NON-NLS-1$
+        sb.append("No launch configuration found for project '"); //$NON-NLS-1$
         sb.append(projectName);
         sb.append("' and application '"); //$NON-NLS-1$
         sb.append(applicationId);
@@ -726,7 +727,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
         }
 
-        return sb.toString();
+        return ToolResult.error(sb.toString()).toJson();
     }
 
     /**

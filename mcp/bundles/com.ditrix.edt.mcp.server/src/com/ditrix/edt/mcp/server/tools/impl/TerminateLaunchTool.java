@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -204,7 +205,7 @@ public class TerminateLaunchTool implements IMcpTool
             ILaunchManager launchManager = LaunchConfigUtils.getLaunchManager();
             if (launchManager == null)
             {
-                return "**Error:** Launch manager is not available."; //$NON-NLS-1$
+                return ToolResult.error("Launch manager is not available.").toJson(); //$NON-NLS-1$
             }
 
             List<ILaunch> targets = selectTargets(launchManager, configName, projectName,
@@ -242,7 +243,7 @@ public class TerminateLaunchTool implements IMcpTool
         catch (RuntimeException e)
         {
             Activator.logError("Error in terminate_launch", e); //$NON-NLS-1$
-            return "**Error:** " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson();
         }
     }
 
@@ -266,40 +267,40 @@ public class TerminateLaunchTool implements IMcpTool
 
         if (modeCount > 1)
         {
-            return "**Error:** Selection modes are mutually exclusive. " //$NON-NLS-1$
+            return ToolResult.error("Selection modes are mutually exclusive. " //$NON-NLS-1$
                 + "Choose ONE of: `launchConfigurationName`, " //$NON-NLS-1$
-                + "`projectName + applicationId`, or `all=true`."; //$NON-NLS-1$
+                + "`projectName + applicationId`, or `all=true`.").toJson(); //$NON-NLS-1$
         }
         // applicationId without all=true makes sense only paired with projectName.
         // When hasName is set, name fully determines the target — extras are ignored.
         if (hasAppId && !hasProject && !all && !hasName)
         {
-            return "**Error:** `applicationId` requires `projectName`."; //$NON-NLS-1$
+            return ToolResult.error("`applicationId` requires `projectName`.").toJson(); //$NON-NLS-1$
         }
         // applicationId is meaningless with all=true — that mode is project-scoped at best.
         if (hasAppId && all)
         {
-            return "**Error:** `applicationId` cannot be combined with `all=true`. " //$NON-NLS-1$
+            return ToolResult.error("`applicationId` cannot be combined with `all=true`. " //$NON-NLS-1$
                 + "Use `projectName + applicationId` for a single launch, or " //$NON-NLS-1$
-                + "`all=true` (optionally with `projectName`) for mass termination."; //$NON-NLS-1$
+                + "`all=true` (optionally with `projectName`) for mass termination.").toJson(); //$NON-NLS-1$
         }
         // projectName alone, without applicationId and without all=true, is ambiguous.
         if (hasProject && !hasAppId && !all && !hasName)
         {
-            return "**Error:** `projectName` alone is not a selection. " //$NON-NLS-1$
+            return ToolResult.error("`projectName` alone is not a selection. " //$NON-NLS-1$
                 + "Add `applicationId` for a single launch, or `all=true` " //$NON-NLS-1$
-                + "to terminate every live launch of that project."; //$NON-NLS-1$
+                + "to terminate every live launch of that project.").toJson(); //$NON-NLS-1$
         }
         if (modeCount == 0)
         {
-            return "**Error:** Provide exactly one of: `launchConfigurationName`, " //$NON-NLS-1$
-                + "`projectName + applicationId`, or `all=true`."; //$NON-NLS-1$
+            return ToolResult.error("Provide exactly one of: `launchConfigurationName`, " //$NON-NLS-1$
+                + "`projectName + applicationId`, or `all=true`.").toJson(); //$NON-NLS-1$
         }
         if (all && !confirm)
         {
-            return "**Error:** Confirmation required: pass `confirm=true` to terminate " //$NON-NLS-1$
+            return ToolResult.error("Confirmation required: pass `confirm=true` to terminate " //$NON-NLS-1$
                 + "ALL EDT-launched 1С instances. Use `list_configurations` first to see " //$NON-NLS-1$
-                + "what is currently running."; //$NON-NLS-1$
+                + "what is currently running.").toJson(); //$NON-NLS-1$
         }
         return null;
     }
