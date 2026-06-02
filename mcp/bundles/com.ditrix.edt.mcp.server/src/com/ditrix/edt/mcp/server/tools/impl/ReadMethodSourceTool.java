@@ -82,22 +82,15 @@ public class ReadMethodSourceTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        String err = JsonUtils.requireArguments(params, "projectName", "modulePath", "methodName"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (err != null)
+        {
+            return err;
+        }
+
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
         String methodName = JsonUtils.extractStringArgument(params, "methodName"); //$NON-NLS-1$
-
-        if (projectName == null || projectName.isEmpty())
-        {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-        if (modulePath == null || modulePath.isEmpty())
-        {
-            return ToolResult.error("modulePath is required").toJson(); //$NON-NLS-1$
-        }
-        if (methodName == null || methodName.isEmpty())
-        {
-            return ToolResult.error("methodName is required").toJson(); //$NON-NLS-1$
-        }
 
         // Try EMF approach first (on UI thread)
         AtomicReference<String> resultRef = new AtomicReference<>();

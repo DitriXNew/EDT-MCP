@@ -118,20 +118,16 @@ public class GetSymbolInfoTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        String err = JsonUtils.requireArguments(params, "projectName", "filePath"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
+        {
+            return err;
+        }
+
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
         String columnStr = JsonUtils.extractStringArgument(params, "column"); //$NON-NLS-1$
-
-        if (projectName == null || projectName.isEmpty())
-        {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-
-        if (filePath == null || filePath.isEmpty())
-        {
-            return ToolResult.error("filePath is required").toJson(); //$NON-NLS-1$
-        }
 
         int line;
         int column;

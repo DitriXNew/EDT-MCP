@@ -131,9 +131,10 @@ public class GetMetadataObjectsTool implements IMcpTool
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
 
         // Validate required parameter
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         // Set defaults

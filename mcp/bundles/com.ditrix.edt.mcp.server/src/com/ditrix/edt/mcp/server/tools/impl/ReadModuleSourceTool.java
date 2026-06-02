@@ -89,16 +89,18 @@ public class ReadModuleSourceTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        // Validate required parameters
+        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        if (err != null)
+        {
+            return err;
+        }
+
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
         int startLine = JsonUtils.extractIntArgument(params, "startLine", -1); //$NON-NLS-1$
         int endLine = JsonUtils.extractIntArgument(params, "endLine", -1); //$NON-NLS-1$
 
-        // Validate required parameters
-        if (projectName == null || projectName.isEmpty())
-        {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
         if (modulePath == null || modulePath.isEmpty())
         {
             return ToolResult.error("modulePath is required. Example: 'CommonModules/MyModule/Module.bsl'").toJson(); //$NON-NLS-1$

@@ -80,19 +80,17 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        String err = JsonUtils.requireArguments(params, "importPath", "projectName"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
+        {
+            return err;
+        }
+
         String importPathStr = JsonUtils.extractStringArgument(params, "importPath"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String projectNature = JsonUtils.extractStringArgument(params, "projectNature"); //$NON-NLS-1$
         String xmlVersion = JsonUtils.extractStringArgument(params, "xmlVersion"); //$NON-NLS-1$
 
-        if (importPathStr == null || importPathStr.isEmpty())
-        {
-            return ToolResult.error("importPath is required").toJson(); //$NON-NLS-1$
-        }
-        if (projectName == null || projectName.isEmpty())
-        {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
         // projectNature and xmlVersion are optional — pass null on empty
         if (projectNature != null && projectNature.isEmpty())
         {

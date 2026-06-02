@@ -98,19 +98,16 @@ public class GoToDefinitionTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        String err = JsonUtils.requireArguments(params, "projectName", "symbol"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
+        {
+            return err;
+        }
+
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String symbol = JsonUtils.extractStringArgument(params, "symbol"); //$NON-NLS-1$
         String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
         String includeSourceStr = JsonUtils.extractStringArgument(params, "includeSource"); //$NON-NLS-1$
-
-        if (projectName == null || projectName.isEmpty())
-        {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-        if (symbol == null || symbol.isEmpty())
-        {
-            return ToolResult.error("symbol is required").toJson(); //$NON-NLS-1$
-        }
 
         boolean includeSource = !"false".equalsIgnoreCase(includeSourceStr); //$NON-NLS-1$
 

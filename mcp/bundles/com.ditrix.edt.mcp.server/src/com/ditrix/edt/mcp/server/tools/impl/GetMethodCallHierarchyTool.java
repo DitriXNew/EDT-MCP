@@ -117,17 +117,10 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         String direction = JsonUtils.extractStringArgument(params, "direction"); //$NON-NLS-1$
         int limit = JsonUtils.extractIntArgument(params, "limit", 100); //$NON-NLS-1$
 
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArguments(params, "projectName", "modulePath", "methodName"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-        if (modulePath == null || modulePath.isEmpty())
-        {
-            return ToolResult.error("modulePath is required").toJson(); //$NON-NLS-1$
-        }
-        if (methodName == null || methodName.isEmpty())
-        {
-            return ToolResult.error("methodName is required").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         if (direction == null || direction.isEmpty())

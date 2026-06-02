@@ -74,6 +74,48 @@ public class JsonUtilsTest
         assertTrue(err.contains("objectFqn is required"));
     }
 
+    // --- requireArguments (variadic) ---
+
+    @Test
+    public void testRequireArgumentsAllPresentReturnsNull()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject");
+        params.put("modulePath", "CommonModules/M/Module.bsl");
+        params.put("methodName", "Foo");
+        assertNull(JsonUtils.requireArguments(params, "projectName", "modulePath", "methodName"));
+    }
+
+    @Test
+    public void testRequireArgumentsReturnsFirstMissingInOrder()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("methodName", "Foo");
+        // projectName and modulePath both missing; first in order (projectName) wins.
+        String err = JsonUtils.requireArguments(params, "projectName", "modulePath", "methodName");
+        assertNotNull(err);
+        assertTrue(err.contains("projectName is required"));
+        assertFalse(err.contains("modulePath"));
+    }
+
+    @Test
+    public void testRequireArgumentsBlankMiddleArgument()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject");
+        params.put("modulePath", "");
+        params.put("methodName", "Foo");
+        String err = JsonUtils.requireArguments(params, "projectName", "modulePath", "methodName");
+        assertNotNull(err);
+        assertTrue(err.contains("modulePath is required"));
+    }
+
+    @Test
+    public void testRequireArgumentsNoNamesReturnsNull()
+    {
+        assertNull(JsonUtils.requireArguments(new HashMap<>()));
+    }
+
     // --- extractBooleanArgument ---
 
     @Test

@@ -92,14 +92,10 @@ public class ValidateQueryTool implements IMcpTool
         String queryText = JsonUtils.extractStringArgument(params, "queryText"); //$NON-NLS-1$
         boolean dcsMode = JsonUtils.extractBooleanArgument(params, "dcsMode", false); //$NON-NLS-1$
         
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArguments(params, "projectName", "queryText"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-        
-        if (queryText == null || queryText.isEmpty())
-        {
-            return ToolResult.error("queryText is required").toJson(); //$NON-NLS-1$
+            return err;
         }
         
         // Find the project

@@ -82,9 +82,10 @@ public class EvaluateExpressionTool implements IMcpTool
         {
             return ToolResult.error("frameRef is required").toJson(); //$NON-NLS-1$
         }
-        if (expression == null || expression.isEmpty())
+        String err = JsonUtils.requireArgument(params, "expression"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("expression is required").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         DebugSessionRegistry registry = DebugSessionRegistry.get();

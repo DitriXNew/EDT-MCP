@@ -72,13 +72,10 @@ public class ExportConfigurationToXmlTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String outputPathStr = JsonUtils.extractStringArgument(params, "outputPath"); //$NON-NLS-1$
 
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArguments(params, "projectName", "outputPath"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-        if (outputPathStr == null || outputPathStr.isEmpty())
-        {
-            return ToolResult.error("outputPath is required").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         try

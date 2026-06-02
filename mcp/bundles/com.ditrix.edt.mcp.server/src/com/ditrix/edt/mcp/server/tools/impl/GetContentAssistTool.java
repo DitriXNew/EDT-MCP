@@ -111,16 +111,12 @@ public class GetContentAssistTool implements IMcpTool
         String containsFilter = JsonUtils.extractStringArgument(params, "contains"); //$NON-NLS-1$
         String extendedDocStr = JsonUtils.extractStringArgument(params, "extendedDocumentation"); //$NON-NLS-1$
         
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArguments(params, "projectName", "filePath"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
+            return err;
         }
-        
-        if (filePath == null || filePath.isEmpty())
-        {
-            return ToolResult.error("filePath is required").toJson(); //$NON-NLS-1$
-        }
-        
+
         int line;
         int column;
         try

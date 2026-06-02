@@ -145,13 +145,10 @@ public class SearchInCodeTool implements IMcpTool
         String outputMode = JsonUtils.extractStringArgument(params, "outputMode"); //$NON-NLS-1$
 
         // Validate required parameters
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArguments(params, "projectName", "query"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-        if (query == null || query.isEmpty())
-        {
-            return ToolResult.error("query is required").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         // Normalize output mode

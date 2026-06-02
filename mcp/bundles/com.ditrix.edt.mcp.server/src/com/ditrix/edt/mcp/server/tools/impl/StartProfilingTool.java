@@ -69,11 +69,12 @@ public class StartProfilingTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
-        if (applicationId == null || applicationId.isEmpty())
+        String err = JsonUtils.requireArgument(params, "applicationId"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("applicationId is required").toJson(); //$NON-NLS-1$
+            return err;
         }
+        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
 
         try
         {

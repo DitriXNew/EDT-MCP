@@ -135,11 +135,12 @@ public class GetPlatformDocumentationTool implements IMcpTool
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
         
         // Validate required parameter
-        if (typeName == null || typeName.isEmpty())
+        String err = JsonUtils.requireArgument(params, "typeName"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("typeName is required").toJson(); //$NON-NLS-1$
+            return err;
         }
-        
+
         // Set defaults
         if (category == null || category.isEmpty())
         {

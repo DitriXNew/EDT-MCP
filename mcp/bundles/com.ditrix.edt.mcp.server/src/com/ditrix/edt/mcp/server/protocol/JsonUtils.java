@@ -322,4 +322,36 @@ public final class JsonUtils
         }
         return null;
     }
+
+    /**
+     * Variadic form of {@link #requireArgument(Map, String)} for tools with
+     * several required arguments. Checks the names in order and returns the
+     * error for the FIRST missing/blank one (matching the behaviour of
+     * sequential {@code requireArgument} guards), or {@code null} when all are
+     * present. Usage:
+     * <pre>
+     * String err = JsonUtils.requireArguments(params, "projectName", "modulePath", "methodName");
+     * if (err != null) return err;
+     * </pre>
+     *
+     * @param params the params map
+     * @param argumentNames the required argument names, in check order
+     * @return the error JSON for the first missing argument, or {@code null} when all are present
+     */
+    public static String requireArguments(Map<String, String> params, String... argumentNames)
+    {
+        if (argumentNames == null)
+        {
+            return null;
+        }
+        for (String argumentName : argumentNames)
+        {
+            String err = requireArgument(params, argumentName);
+            if (err != null)
+            {
+                return err;
+            }
+        }
+        return null;
+    }
 }
