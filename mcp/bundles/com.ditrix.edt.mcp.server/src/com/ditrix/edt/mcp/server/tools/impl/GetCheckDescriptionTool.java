@@ -40,7 +40,9 @@ public class GetCheckDescriptionTool implements IMcpTool
     public String getDescription()
     {
         return "Get detailed description of an EDT check by its ID. " + //$NON-NLS-1$
-               "Returns markdown content with check explanation, examples, and how to fix."; //$NON-NLS-1$
+               "Returns markdown content with check explanation, examples, and how to fix. " + //$NON-NLS-1$
+               "Requires a configured check-descriptions folder (MCP preferences); " + //$NON-NLS-1$
+               "without it the tool returns a configuration error."; //$NON-NLS-1$
     }
     
     @Override

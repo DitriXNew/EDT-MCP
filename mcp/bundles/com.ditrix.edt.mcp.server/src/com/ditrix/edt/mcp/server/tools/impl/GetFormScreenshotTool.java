@@ -37,7 +37,9 @@ public class GetFormScreenshotTool implements IMcpTool
     public String getDescription()
     {
         return "Capture a screenshot of the active form WYSIWYG editor as PNG. " + //$NON-NLS-1$
-            "Can open and activate a form automatically by metadata FQN path."; //$NON-NLS-1$
+            "Can open and activate a form automatically by metadata FQN path. " + //$NON-NLS-1$
+            "Requires EDT launched with -DnativeFormBufferedLayoutRender=true; a blank/empty result " + //$NON-NLS-1$
+            "usually means that JVM flag is missing, not a bad call."; //$NON-NLS-1$
     }
 
     @Override

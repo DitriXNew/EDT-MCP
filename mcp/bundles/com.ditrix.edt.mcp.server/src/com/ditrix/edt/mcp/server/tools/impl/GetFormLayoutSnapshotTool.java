@@ -32,7 +32,9 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
     public String getDescription()
     {
         return "Return a YAML snapshot of the active form WYSIWYG layout: calculated bounds, " + //$NON-NLS-1$
-            "element types, and display-affecting properties. Can open and activate a form automatically."; //$NON-NLS-1$
+            "element types, and display-affecting properties. Can open and activate a form automatically. " + //$NON-NLS-1$
+            "Requires EDT launched with -DnativeFormBufferedLayoutRender=true; a blank/empty result " + //$NON-NLS-1$
+            "usually means that JVM flag is missing, not a bad call."; //$NON-NLS-1$
     }
 
     @Override

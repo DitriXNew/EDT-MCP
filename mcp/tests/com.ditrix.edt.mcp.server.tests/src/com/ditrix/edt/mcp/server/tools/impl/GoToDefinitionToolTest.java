@@ -92,6 +92,17 @@ public class GoToDefinitionToolTest
         assertTrue(result.contains("symbol is required")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testBareMethodNeedsModulePath()
+    {
+        // An unqualified method name (no dot) must be rejected without modulePath.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("symbol", "MyMethod"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GoToDefinitionTool().execute(params);
+        assertTrue(result.contains("modulePath is required")); //$NON-NLS-1$
+    }
+
     /**
      * A symbol written in the Russian dialect (Справочник.Товары) must pass
      * argument validation — it is a valid symbol, so the tool must NOT reject

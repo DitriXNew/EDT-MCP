@@ -50,7 +50,6 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     {
         return "Return LanguageTool metadata for a project: translation storages " //$NON-NLS-1$
              + "declared on the project and available translation provider IDs. " //$NON-NLS-1$
-             + "Wraps IProjectInformationApi. " //$NON-NLS-1$
              + "Requires EDT with LanguageTool installed. " //$NON-NLS-1$
              + "If the storages list is empty, the configuration has no dictionary " //$NON-NLS-1$
              + "storage attached yet. The user has to set this up in EDT manually " //$NON-NLS-1$

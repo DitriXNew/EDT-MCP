@@ -51,8 +51,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     {
         return "Import a configuration from a directory of XML files into a new " //$NON-NLS-1$
              + "EDT project (EDT menu: Import). The reverse of " //$NON-NLS-1$
-             + "export_configuration_to_xml. Wraps " //$NON-NLS-1$
-             + "IImportConfigurationFilesApi.importProject(Path, String, String, String)."; //$NON-NLS-1$
+             + "export_configuration_to_xml."; //$NON-NLS-1$
     }
 
     @Override

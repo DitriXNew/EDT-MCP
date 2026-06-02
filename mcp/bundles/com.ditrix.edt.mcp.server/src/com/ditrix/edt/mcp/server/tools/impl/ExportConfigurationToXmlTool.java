@@ -49,7 +49,7 @@ public class ExportConfigurationToXmlTool implements IMcpTool
     {
         return "Export an EDT configuration project to XML files (EDT menu: " //$NON-NLS-1$
              + "Export -> Configuration to XML Files). Equivalent of 1C platform " //$NON-NLS-1$
-             + "DumpConfigToFiles. Wraps IExportConfigurationFilesApi.exportProject(String, Path)."; //$NON-NLS-1$
+             + "DumpConfigToFiles."; //$NON-NLS-1$
     }
 
     @Override

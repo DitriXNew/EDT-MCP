@@ -55,10 +55,10 @@ public class GoToDefinitionTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Go to definition of a symbol. " + //$NON-NLS-1$
-               "Resolves 'ModuleName.MethodName' to source code and location. " + //$NON-NLS-1$
-               "Also resolves metadata FQNs like 'Catalog.Products'. " + //$NON-NLS-1$
-               "Supports Russian type names."; //$NON-NLS-1$
+        return "Go to definition of a symbol — the inverse of find_references. " + //$NON-NLS-1$
+               "Accepts three forms: 'ModuleName.MethodName' (qualified method), " + //$NON-NLS-1$
+               "'MethodName' (unqualified — also pass modulePath), and a metadata FQN " + //$NON-NLS-1$
+               "like 'Catalog.Products'. Supports Russian type names."; //$NON-NLS-1$
     }
 
     @Override
@@ -110,6 +110,14 @@ public class GoToDefinitionTool implements IMcpTool
         String includeSourceStr = JsonUtils.extractStringArgument(params, "includeSource"); //$NON-NLS-1$
 
         boolean includeSource = !"false".equalsIgnoreCase(includeSourceStr); //$NON-NLS-1$
+
+        // An unqualified method name (no dot) cannot be located without a module.
+        if (symbol != null && !symbol.contains(".") //$NON-NLS-1$
+            && (modulePath == null || modulePath.isEmpty()))
+        {
+            return ToolResult.error("modulePath is required for an unqualified method name like '" //$NON-NLS-1$
+                + symbol + "'. Or pass a qualified 'ModuleName.MethodName' or a metadata FQN like 'Catalog.Products'.").toJson(); //$NON-NLS-1$
+        }
 
         // Execute on UI thread (required for EDT API access)
         AtomicReference<String> resultRef = new AtomicReference<>();
