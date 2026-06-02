@@ -17,7 +17,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
@@ -55,6 +54,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to rename a metadata object or attribute with full refactoring support.
@@ -190,11 +190,12 @@ public class RenameMetadataObjectTool implements IMcpTool
         boolean confirm, java.util.Set<Integer> disableIndices, int maxResults)
     {
         // Get project
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
+        ProjectContext projectContext = ProjectContext.of(projectName);
+        if (!projectContext.exists())
         {
             return "Error: Project not found: " + projectName; //$NON-NLS-1$
         }
+        IProject project = projectContext.project();
 
         // Get configuration
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
@@ -424,7 +425,8 @@ public class RenameMetadataObjectTool implements IMcpTool
         }
 
         sb.append("> To execute, call with `confirm=true`.\n"); //$NON-NLS-1$
-        sb.append("> Use `disableIndices='1,2,3'` to skip specific change points (optional changes only).\n"); //$NON-NLS-1$
+        sb.append("> Use `disableIndices='1,2,3'` to skip change points by their `#` index " //$NON-NLS-1$
+            + "(optional only; one index may span several context rows - skipping it skips them all).\n"); //$NON-NLS-1$
 
         return sb.toString();
     }
@@ -530,6 +532,12 @@ public class RenameMetadataObjectTool implements IMcpTool
         }
         else
         {
+            // One index per leaf change - this MUST match the leaf numbering in
+            // walkLeafChanges()/applyDisableToChange() so a preview index stays a
+            // stable cross-call handle for disableIndices. A leaf may render as
+            // several display rows (multiple exact matches / text edits) or none
+            // (suppressed), but it always consumes exactly one index. (card A2)
+            int leafIndex = indexCounter[0]++;
             boolean hasExactMatches = exactMatches != null && !exactMatches.isEmpty();
             boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
             boolean isFullTextSearchChange = isFullTextSearchSourceFileChange(change);
@@ -549,7 +557,7 @@ public class RenameMetadataObjectTool implements IMcpTool
                     String exactFqn = exactMatch.fqn != null ? exactMatch.fqn : fqn;
                     String exactProject = exactMatch.project != null ? exactMatch.project : project;
                     result.add(new ChangePoint(
-                        indexCounter[0]++, "bslRef", exactFqn, exactProject, //$NON-NLS-1$
+                        leafIndex, "bslRef", exactFqn, exactProject, //$NON-NLS-1$
                         change.getName(), optional, change.isEnabled(), refactoringTitle,
                         exactMatch.lineNumber, exactMatch.columnNumber, exactMatch.codeContext, exactMatch.methodName));
                 }
@@ -588,7 +596,7 @@ public class RenameMetadataObjectTool implements IMcpTool
                                     matchedMethodName = findContainingMethodText(content, matchedLineNumber);
                                 }
                                 result.add(new ChangePoint(
-                                    indexCounter[0]++, "bslRef", fqn, project, //$NON-NLS-1$
+                                    leafIndex, "bslRef", fqn, project, //$NON-NLS-1$
                                     change.getName(), optional, change.isEnabled(), refactoringTitle,
                                     matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
                             }
@@ -637,7 +645,7 @@ public class RenameMetadataObjectTool implements IMcpTool
                                         matchedMethodName = findContainingMethodText(content, matchedLineNumber);
                                     }
                                     result.add(new ChangePoint(
-                                        indexCounter[0]++, "bslRef", fqn, project, //$NON-NLS-1$
+                                        leafIndex, "bslRef", fqn, project, //$NON-NLS-1$
                                         change.getName(), optional, change.isEnabled(), refactoringTitle,
                                         matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
                                 }
@@ -1620,6 +1628,28 @@ public class RenameMetadataObjectTool implements IMcpTool
      */
     private void applyDisableToChange(Change change, java.util.Set<Integer> disableIndices, int[] indexCounter)
     {
+        walkLeafChanges(change, indexCounter, (leaf, idx) -> {
+            if (disableIndices.contains(idx))
+            {
+                leaf.setEnabled(false);
+            }
+        });
+    }
+
+    /**
+     * Walks the LTK change tree in canonical order, invoking {@code leafConsumer}
+     * for every leaf (non-{@link CompositeChange}) change with its global index.
+     * Composites are recursed into but never assigned an index - this is the single
+     * source of truth for the change-point numbering. The preview side
+     * ({@link #collectFlatChanges}) MUST assign exactly one index per leaf in the
+     * same order, so that a preview {@code #index} maps back to the same leaf here
+     * when {@code disableIndices} is applied on execute. (card A2)
+     * <p>
+     * Package-visible and static so the leaf numbering can be unit-tested headless.
+     */
+    static void walkLeafChanges(Change change, int[] indexCounter,
+        java.util.function.ObjIntConsumer<Change> leafConsumer)
+    {
         if (change instanceof CompositeChange composite)
         {
             Change[] children = composite.getChildren();
@@ -1627,17 +1657,13 @@ public class RenameMetadataObjectTool implements IMcpTool
             {
                 for (Change child : children)
                 {
-                    applyDisableToChange(child, disableIndices, indexCounter);
+                    walkLeafChanges(child, indexCounter, leafConsumer);
                 }
             }
         }
         else
         {
-            int idx = indexCounter[0]++;
-            if (disableIndices.contains(idx))
-            {
-                change.setEnabled(false);
-            }
+            leafConsumer.accept(change, indexCounter[0]++);
         }
     }
 
