@@ -47,8 +47,12 @@ public class Activator extends AbstractUIPlugin
      */
     private final EdtServices services = new EdtServices();
 
-    /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
-    private IGroupService groupService;
+    /**
+     * Startup/shutdown orchestration (group service, tag filter, navigator
+     * toolbar, update checker scheduler). Owns the group service reference;
+     * the activator delegates {@link #getGroupService()} to it.
+     */
+    private final StartupOrchestrator orchestrator = new StartupOrchestrator();
 
     @Override
     public void start(BundleContext context) throws Exception
@@ -72,26 +76,10 @@ public class Activator extends AbstractUIPlugin
         // Initialize service trackers
         services.init(context);
 
-        // Create group service directly (not via OSGi DS to avoid circular references)
-        groupService = new com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl();
-        ((com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl) groupService).activate();
-        
-        // Initialize UI components only in non-headless mode
-        if (!isHeadless())
-        {
-            // Initialize filter manager to reset toggle state on startup
-            com.ditrix.edt.mcp.server.tags.ui.FilterByTagManager.getInstance();
-            
-            // Initialize navigator toolbar customizer to hide standard Collapse All button
-            org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
-                try {
-                    com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().initialize();
-                } catch (Exception e) {
-                    logError("Failed to initialize NavigatorToolbarCustomizer", e);
-                }
-            });
-        }
-        
+        // Run startup orchestration (group service + UI integrations) in the
+        // same order as before.
+        orchestrator.start(isHeadless());
+
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
 
@@ -106,42 +94,9 @@ public class Activator extends AbstractUIPlugin
         // Close service trackers
         services.dispose();
 
-        // Dispose UI components only in non-headless mode
-        if (!isHeadless())
-        {
-            // Dispose navigator toolbar customizer
-            try
-            {
-                org.eclipse.swt.widgets.Display display = org.eclipse.swt.widgets.Display.getDefault();
-                if (display != null && !display.isDisposed())
-                {
-                    display.syncExec(() -> {
-                        try
-                        {
-                            com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().dispose();
-                        }
-                        catch (Exception e)
-                        {
-                            // Ignore - workbench may be closing
-                        }
-                    });
-                }
-            }
-            catch (Exception e)
-            {
-                // Ignore - display may be disposed
-            }
-        }
-        
-        // Deactivate group service
-        if (groupService instanceof com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl impl)
-        {
-            impl.deactivate();
-        }
-        groupService = null;
-
-        // Stop update checker scheduler
-        UpdateChecker.getInstance().stopScheduler();
+        // Run shutdown orchestration (UI teardown + group service + update
+        // checker scheduler) in the same order as before.
+        orchestrator.stop(isHeadless());
 
         logInfo("EDT MCP Server plugin stopped"); //$NON-NLS-1$
         plugin = null;
@@ -401,7 +356,7 @@ public class Activator extends AbstractUIPlugin
      */
     public IGroupService getGroupService()
     {
-        return groupService;
+        return orchestrator.getGroupService();
     }
     
     /**
