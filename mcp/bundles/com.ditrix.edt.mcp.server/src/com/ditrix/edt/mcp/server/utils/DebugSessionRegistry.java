@@ -382,8 +382,12 @@ public final class DebugSessionRegistry
     }
 
     /**
-     * Returns all applicationIds (real or synthetic) that currently have an
-     * active, non-terminated debug launch in the Eclipse launch manager.
+     * Returns all applicationIds (real or synthetic) that currently have an active,
+     * non-terminated <b>debug-mode</b> launch in the Eclipse launch manager.
+     * <p>
+     * RUN-mode launches are deliberately excluded: they never produce a debug target
+     * or suspend events, so auto-resolving a debug operation onto a RUN launch could
+     * never succeed - it would resolve to a session that can never break. (audit A13)
      */
     public static List<String> listActiveApplicationIds()
     {
@@ -396,7 +400,7 @@ public final class DebugSessionRegistry
         ILaunchManager mgr = debugPlugin.getLaunchManager();
         for (ILaunch launch : mgr.getLaunches())
         {
-            if (launch.isTerminated())
+            if (!isActiveDebugLaunch(launch))
             {
                 continue;
             }
@@ -407,6 +411,57 @@ public final class DebugSessionRegistry
             }
         }
         return ids;
+    }
+
+    /**
+     * @param launch the launch to test
+     * @return {@code true} when the launch is non-terminated and was started in
+     *         {@link ILaunchManager#DEBUG_MODE} (not run mode). Package-visible and
+     *         static for headless unit testing.
+     */
+    static boolean isActiveDebugLaunch(ILaunch launch)
+    {
+        return launch != null
+            && !launch.isTerminated()
+            && ILaunchManager.DEBUG_MODE.equals(launch.getLaunchMode());
+    }
+
+    /**
+     * Returns the first active (non-terminated) {@link ILaunch} whose launch resolves
+     * to the given applicationId, <b>regardless of mode</b> (run or debug).
+     * <p>
+     * Unlike {@link #findActiveTarget}, this does not require a debug target, so it
+     * also detects a RUN-mode session (which carries no debug target). Used by
+     * debug_launch to avoid starting a second client over an already-running one.
+     * (audit A12)
+     *
+     * @param applicationId the application id (real or synthetic)
+     * @return the active launch, or {@code null} if none matches
+     */
+    public static ILaunch findActiveLaunch(String applicationId)
+    {
+        if (applicationId == null)
+        {
+            return null;
+        }
+        DebugPlugin debugPlugin = DebugPlugin.getDefault();
+        if (debugPlugin == null)
+        {
+            return null;
+        }
+        ILaunchManager mgr = debugPlugin.getLaunchManager();
+        for (ILaunch launch : mgr.getLaunches())
+        {
+            if (launch.isTerminated())
+            {
+                continue;
+            }
+            if (applicationId.equals(findApplicationIdFor(launch)))
+            {
+                return launch;
+            }
+        }
+        return null;
     }
 
     /**

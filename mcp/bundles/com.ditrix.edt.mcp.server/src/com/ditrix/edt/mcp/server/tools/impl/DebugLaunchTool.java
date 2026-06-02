@@ -12,6 +12,7 @@ import java.util.Optional;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.debug.core.DebugPlugin;
+import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchManager;
@@ -294,6 +295,31 @@ public class DebugLaunchTool implements IMcpTool
                 if (activeConfigName != null)
                 {
                     already.put("launchConfiguration", activeConfigName); //$NON-NLS-1$
+                }
+                return already.toJson();
+            }
+
+            // A non-terminated launch may exist for this application WITHOUT a debug
+            // target - e.g. it was started in RUN mode. findActiveTarget() (debug
+            // targets only) misses it, so without this guard debug_launch would start
+            // a SECOND client over the running one. (audit A12)
+            ILaunch activeLaunch = DebugSessionRegistry.findActiveLaunch(applicationId);
+            if (activeLaunch != null)
+            {
+                String runningMode = activeLaunch.getLaunchMode();
+                ILaunchConfiguration activeConfig = activeLaunch.getLaunchConfiguration();
+                ToolResult already = ToolResult.success()
+                    .put("project", projectName) //$NON-NLS-1$
+                    .put("applicationId", applicationId) //$NON-NLS-1$
+                    .put("attach", false) //$NON-NLS-1$
+                    .put("alreadyRunning", true) //$NON-NLS-1$
+                    .put("mode", runningMode) //$NON-NLS-1$
+                    .put("message", "Application is already running (mode: " + runningMode //$NON-NLS-1$ //$NON-NLS-2$
+                        + ") - skipped launch to avoid a second client over the running session. " //$NON-NLS-1$
+                        + "Call terminate_launch first to force a fresh session."); //$NON-NLS-1$
+                if (activeConfig != null)
+                {
+                    already.put("launchConfiguration", activeConfig.getName()); //$NON-NLS-1$
                 }
                 return already.toJson();
             }
