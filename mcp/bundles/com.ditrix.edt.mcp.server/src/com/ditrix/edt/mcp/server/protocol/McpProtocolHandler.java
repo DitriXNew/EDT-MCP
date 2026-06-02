@@ -58,22 +58,10 @@ public class McpProtocolHandler
         try
         {
             // Parse request using GsonProvider
-            JsonRpcRequest request = parseRequest(requestBody);
-            if (request != null && request.getId() != null)
+            JsonRpcRequest request = parse(requestBody);
+            if (request != null)
             {
-                requestId = request.getId();
-                // Gson deserializes JSON numbers into Object fields as Double.
-                // Normalize whole-number Doubles to Long so "id":0 serializes
-                // back as 0 (not 0.0), which is required for JSON-RPC ID matching.
-                if (requestId instanceof Double)
-                {
-                    double d = (Double) requestId;
-                    if (!Double.isInfinite(d) && d == Math.floor(d)
-                        && d >= Long.MIN_VALUE && d <= Long.MAX_VALUE)
-                    {
-                        requestId = ((Double) requestId).longValue();
-                    }
-                }
+                requestId = normalizeId(request.getId());
             }
             
             // Validate JSON-RPC version
@@ -123,9 +111,14 @@ public class McpProtocolHandler
     }
     
     /**
-     * Parses JSON-RPC request using GsonProvider.
+     * Parses a JSON-RPC request using GsonProvider. Shared by both the protocol
+     * dispatch path ({@link #processRequest}) and the transport's interruptible
+     * tool executor, so JSON id/name extraction lives in one place.
+     *
+     * @param requestBody the raw request body
+     * @return the parsed request, or {@code null} on a JSON syntax error
      */
-    private JsonRpcRequest parseRequest(String requestBody)
+    public JsonRpcRequest parse(String requestBody)
     {
         try
         {
@@ -136,6 +129,30 @@ public class McpProtocolHandler
             Activator.logError("Failed to parse JSON-RPC request", e); //$NON-NLS-1$
             return null;
         }
+    }
+
+    /**
+     * Normalizes a JSON-RPC request id. Gson deserializes JSON numbers into
+     * {@code Object} fields as {@link Double}; whole-number Doubles are converted
+     * to {@link Long} so {@code "id":0} serializes back as {@code 0} (not
+     * {@code 0.0}), which is required for JSON-RPC id matching. Strings, nulls,
+     * and non-whole numbers are returned unchanged.
+     *
+     * @param id the raw id from a parsed request (may be {@code null})
+     * @return the normalized id
+     */
+    public static Object normalizeId(Object id)
+    {
+        if (id instanceof Double)
+        {
+            double d = (Double) id;
+            if (!Double.isInfinite(d) && d == Math.floor(d)
+                && d >= Long.MIN_VALUE && d <= Long.MAX_VALUE)
+            {
+                return ((Double) id).longValue();
+            }
+        }
+        return id;
     }
     
     /**
