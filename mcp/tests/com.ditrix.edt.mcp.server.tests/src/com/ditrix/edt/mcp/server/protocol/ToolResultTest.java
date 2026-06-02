@@ -38,6 +38,20 @@ public class ToolResultTest
     }
 
     @Test
+    public void testErrorResultNullMessageStillCarriesErrorField()
+    {
+        // A null message (e.g. an exception with getMessage()==null) must not drop
+        // the "error" key: the default Gson omits null fields, so error(null) is
+        // coalesced to a non-null fallback so the contract always has a message.
+        String json = ToolResult.error(null).toJson();
+        JsonElement element = JsonParser.parseString(json);
+        assertFalse(element.getAsJsonObject().get("success").getAsBoolean());
+        assertTrue("error key must be present even for a null message",
+            element.getAsJsonObject().has("error"));
+        assertFalse(element.getAsJsonObject().get("error").isJsonNull());
+    }
+
+    @Test
     public void testPutString()
     {
         String json = ToolResult.success()

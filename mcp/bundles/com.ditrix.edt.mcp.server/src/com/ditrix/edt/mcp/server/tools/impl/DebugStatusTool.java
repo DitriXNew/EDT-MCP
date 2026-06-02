@@ -188,7 +188,7 @@ public class DebugStatusTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error in debug_status", e); //$NON-NLS-1$
-            return ToolResult.error("Error: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 }

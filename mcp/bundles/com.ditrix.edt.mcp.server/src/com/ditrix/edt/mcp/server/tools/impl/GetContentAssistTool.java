@@ -208,7 +208,7 @@ public class GetContentAssistTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error getting content assist", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error("Error: " + e.getMessage()).toJson()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson()); //$NON-NLS-1$
             }
         });
         

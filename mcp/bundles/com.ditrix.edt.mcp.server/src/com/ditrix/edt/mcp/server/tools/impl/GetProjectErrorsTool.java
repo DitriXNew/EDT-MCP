@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -97,7 +98,7 @@ public class GetProjectErrorsTool implements IMcpTool
             String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
             if (notReadyError != null)
             {
-                return "# Error\n\n" + notReadyError; //$NON-NLS-1$
+                return ToolResult.error(notReadyError).toJson();
             }
         }
         
@@ -167,7 +168,7 @@ public class GetProjectErrorsTool implements IMcpTool
             
             if (markerManager == null)
             {
-                return "# Error\n\nIMarkerManager service is not available"; //$NON-NLS-1$
+                return ToolResult.error("IMarkerManager service is not available").toJson(); //$NON-NLS-1$
             }
             
             final ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
@@ -195,7 +196,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 ProjectContext ctx = ProjectContext.of(projectName);
                 if (!ctx.exists())
                 {
-                    return "# Error\n\nProject not found: " + projectName; //$NON-NLS-1$
+                    return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
                 }
             }
             
@@ -355,7 +356,7 @@ public class GetProjectErrorsTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error getting project errors", e); //$NON-NLS-1$
-            return "# Error\n\nFailed to get project errors: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Failed to get project errors: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
     

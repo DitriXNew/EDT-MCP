@@ -41,7 +41,11 @@ public class ToolResult
     {
         ToolResult result = new ToolResult();
         result.data.put("success", false);
-        result.data.put("error", message);
+        // Always carry a non-null error message: the default Gson omits null fields,
+        // so error(null) would otherwise drop the "error" key entirely (e.g. an
+        // exception whose getMessage() is null, like a raw NPE). Tools pass
+        // e.getMessage() directly, so coalesce here once for the whole contract.
+        result.data.put("error", message != null ? message : "Unknown error"); //$NON-NLS-1$
         return result;
     }
     

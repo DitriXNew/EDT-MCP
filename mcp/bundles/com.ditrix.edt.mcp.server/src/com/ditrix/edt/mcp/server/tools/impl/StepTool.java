@@ -147,7 +147,7 @@ public class StepTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error in step", e); //$NON-NLS-1$
-            return ToolResult.error("Error: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 

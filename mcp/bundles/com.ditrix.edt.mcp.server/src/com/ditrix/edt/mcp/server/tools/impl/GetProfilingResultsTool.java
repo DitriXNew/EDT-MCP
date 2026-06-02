@@ -212,7 +212,7 @@ public class GetProfilingResultsTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error in get_profiling_results", e); //$NON-NLS-1$
-            return ToolResult.error("Error: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 }
