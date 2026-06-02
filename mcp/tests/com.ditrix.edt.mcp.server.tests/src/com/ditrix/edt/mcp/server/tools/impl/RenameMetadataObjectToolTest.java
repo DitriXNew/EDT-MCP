@@ -27,7 +27,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * <p>
  * This is a cascade/destructive refactoring tool. The tests only exercise the
  * projectName/objectFqn/newName required-argument sentinels, which all return
- * (as bare {@code "Error: ..."} strings) before {@code PlatformUI.getWorkbench()}
+ * (as {@link com.ditrix.edt.mcp.server.protocol.ToolResult#error} JSON payloads)
+ * before {@code PlatformUI.getWorkbench()}
  * and before any refactoring is computed or applied — so no rename ever runs.
  * The actual cascade is covered by the E2E suite (and must be run on a test
  * configuration).

@@ -47,6 +47,7 @@ import com._1c.g5.v8.dt.metadata.mdtype.MdTypeSet;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypes;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -123,11 +124,11 @@ public class FindReferencesTool implements IMcpTool
         // Validate required parameters
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
         if (objectFqn == null || objectFqn.isEmpty())
         {
-            return "Error: objectFqn is required"; //$NON-NLS-1$
+            return ToolResult.error("objectFqn is required").toJson(); //$NON-NLS-1$
         }
         
         int limit = 100;
@@ -157,7 +158,7 @@ public class FindReferencesTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error finding references", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
         
@@ -176,7 +177,7 @@ public class FindReferencesTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
         
@@ -184,26 +185,26 @@ public class FindReferencesTool implements IMcpTool
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {
-            return "Error: Configuration provider not available"; //$NON-NLS-1$
+            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
         }
         
         Configuration config = configProvider.getConfiguration(project);
         if (config == null)
         {
-            return "Error: Could not get configuration for project: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
         }
         
         // Get BM model manager
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
-            return "Error: BM model manager not available"; //$NON-NLS-1$
+            return ToolResult.error("BM model manager not available").toJson(); //$NON-NLS-1$
         }
         
         IBmModel bmModel = bmModelManager.getModel(project);
         if (bmModel == null)
         {
-            return "Error: BM model not available for project: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
         }
         
         // Find target object by FQN
@@ -214,13 +215,15 @@ public class FindReferencesTool implements IMcpTool
             String[] dotParts = objectFqn.split("\\."); //$NON-NLS-1$
             if (dotParts.length > 2)
             {
-                return "Error: Object not found: " + objectFqn + ".\n" //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Note: find_references only supports top-level metadata objects " //$NON-NLS-1$
+                // Genuine unsupported-input error (sub-object FQN): surface it through
+                // the structured contract, keeping the guidance in the message.
+                return ToolResult.error("Object not found: " + objectFqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "find_references only supports top-level metadata objects " //$NON-NLS-1$
                     + "(e.g. 'Catalog.DataAreas', 'Document.SalesOrder', 'CommonModule.Saas'). " //$NON-NLS-1$
                     + "Sub-objects such as attributes, forms, commands and tabular sections " //$NON-NLS-1$
-                    + "are not supported (e.g. 'Catalog.DataAreas.Attribute.DataAreaStatus' is invalid)."; //$NON-NLS-1$
+                    + "are not supported (e.g. 'Catalog.DataAreas.Attribute.DataAreaStatus' is invalid).").toJson(); //$NON-NLS-1$
             }
-            return "Error: Object not found: " + objectFqn; //$NON-NLS-1$
+            return ToolResult.error("Object not found: " + objectFqn).toJson(); //$NON-NLS-1$
         }
         
         // Collect all references
@@ -234,7 +237,7 @@ public class FindReferencesTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error executing BM task", e); //$NON-NLS-1$
-            return "Error executing search: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Error executing search: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
         
         // Format output

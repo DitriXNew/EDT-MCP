@@ -20,6 +20,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -92,12 +93,12 @@ public class GetMetadataDetailsTool implements IMcpTool
         // Validate required parameters
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
-        
+
         if (objectFqns == null || objectFqns.isEmpty())
         {
-            return "Error: objectFqns is required (array of FQNs like 'Catalog.Products')"; //$NON-NLS-1$
+            return ToolResult.error("objectFqns is required (array of FQNs like 'Catalog.Products')").toJson(); //$NON-NLS-1$
         }
         
         boolean full = "true".equalsIgnoreCase(fullStr); //$NON-NLS-1$
@@ -118,7 +119,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error getting metadata details", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
         
@@ -135,7 +136,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
         
@@ -143,13 +144,13 @@ public class GetMetadataDetailsTool implements IMcpTool
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {
-            return "Error: Configuration provider not available"; //$NON-NLS-1$
+            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
         }
-        
+
         Configuration config = configProvider.getConfiguration(project);
         if (config == null)
         {
-            return "Error: Could not get configuration for project: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
         }
         
         // Determine language CODE for synonyms (the synonym map is keyed by code,

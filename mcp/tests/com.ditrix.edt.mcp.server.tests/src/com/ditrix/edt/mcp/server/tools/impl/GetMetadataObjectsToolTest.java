@@ -70,6 +70,11 @@ public class GetMetadataObjectsToolTest
     {
         Map<String, String> params = new HashMap<>();
         String result = new GetMetadataObjectsTool().execute(params);
+        // Genuine errors now return a ToolResult.error JSON payload (success=false,
+        // error=<message>). "projectName is required" has no delimiter characters,
+        // so Gson does not unicode-escape it and the substring survives verbatim.
         assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(result.contains("\"error\"")); //$NON-NLS-1$
     }
 }

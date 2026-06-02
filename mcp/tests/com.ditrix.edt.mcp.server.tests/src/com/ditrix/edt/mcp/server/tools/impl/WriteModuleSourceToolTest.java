@@ -275,7 +275,9 @@ public class WriteModuleSourceToolTest
         params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
-        assertTrue(result.contains("must not contain '..'")); //$NON-NLS-1$
+        // Delimiter-free substring: the message is now wrapped in JSON and Gson
+        // escapes the apostrophes around '..' as a unicode escape.
+        assertTrue(result.contains("must not contain")); //$NON-NLS-1$
     }
 
     // ==================== .bsl extension validation ====================
@@ -307,7 +309,8 @@ public class WriteModuleSourceToolTest
         params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
-        assertTrue(result.contains("must be in format 'Type.Name'")); //$NON-NLS-1$
+        // Delimiter-free substring (Gson escapes the apostrophes in 'Type.Name').
+        assertTrue(result.contains("must be in format")); //$NON-NLS-1$
     }
 
     @Test

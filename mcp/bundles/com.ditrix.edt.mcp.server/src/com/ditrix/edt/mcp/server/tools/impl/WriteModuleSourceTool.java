@@ -21,6 +21,7 @@ import org.eclipse.core.resources.IResource;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -147,15 +148,15 @@ public class WriteModuleSourceTool implements IMcpTool
         // 2. Validate required parameters
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
         if (source == null)
         {
-            return "Error: source is required"; //$NON-NLS-1$
+            return ToolResult.error("source is required").toJson(); //$NON-NLS-1$
         }
         if (source.length() > MAX_SOURCE_LENGTH)
         {
-            return "Error: source exceeds maximum allowed length (" + MAX_SOURCE_LENGTH + " characters)"; //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("source exceeds maximum allowed length (" + MAX_SOURCE_LENGTH + " characters)").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         // Default mode
@@ -168,8 +169,8 @@ public class WriteModuleSourceTool implements IMcpTool
         if (!MODE_REPLACE.equals(mode) && !MODE_APPEND.equals(mode)
             && !MODE_SEARCH_REPLACE.equals(mode))
         {
-            return "Error: invalid mode '" + mode + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
-                "Allowed: searchReplace, replace, append"; //$NON-NLS-1$
+            return ToolResult.error("invalid mode '" + mode + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
+                "Allowed: searchReplace, replace, append").toJson(); //$NON-NLS-1$
         }
 
         // Validate oldSource for searchReplace mode
@@ -177,7 +178,7 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             if (oldSource == null || oldSource.isEmpty())
             {
-                return "Error: oldSource is required for searchReplace mode"; //$NON-NLS-1$
+                return ToolResult.error("oldSource is required for searchReplace mode").toJson(); //$NON-NLS-1$
             }
         }
 
@@ -186,12 +187,14 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             if (objectName == null || objectName.isEmpty())
             {
-                return "Error: either modulePath or objectName is required"; //$NON-NLS-1$
+                return ToolResult.error("either modulePath or objectName is required").toJson(); //$NON-NLS-1$
             }
             String resolved = resolveModulePath(objectName, moduleType, formName, commandName);
             if (resolved.startsWith("Error:")) //$NON-NLS-1$
             {
-                return resolved;
+                // resolveModulePath signals failure with an internal "Error:"-prefixed
+                // string; surface it through the structured error contract.
+                return ToolResult.error(resolved.substring("Error:".length()).trim()).toJson(); //$NON-NLS-1$
             }
             modulePath = resolved;
         }
@@ -199,20 +202,20 @@ public class WriteModuleSourceTool implements IMcpTool
         // Validate modulePath: prevent path traversal
         if (modulePath.contains("..")) //$NON-NLS-1$
         {
-            return "Error: modulePath must not contain '..'"; //$NON-NLS-1$
+            return ToolResult.error("modulePath must not contain '..'").toJson(); //$NON-NLS-1$
         }
 
         // Validate modulePath: only .bsl files allowed
         if (!modulePath.endsWith(".bsl")) //$NON-NLS-1$
         {
-            return "Error: only .bsl module files can be written"; //$NON-NLS-1$
+            return ToolResult.error("only .bsl module files can be written").toJson(); //$NON-NLS-1$
         }
 
         // 4. Validate project
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
@@ -223,8 +226,8 @@ public class WriteModuleSourceTool implements IMcpTool
         // For non-replace modes, file must exist
         if (!fileExists && !MODE_REPLACE.equals(mode))
         {
-            return "Error: File not found: src/" + modulePath + //$NON-NLS-1$
-                ". Only 'replace' mode can create new files."; //$NON-NLS-1$
+            return ToolResult.error("File not found: src/" + modulePath + //$NON-NLS-1$
+                ". Only 'replace' mode can create new files.").toJson(); //$NON-NLS-1$
         }
 
         try
@@ -276,16 +279,16 @@ public class WriteModuleSourceTool implements IMcpTool
                     SearchReplaceResult sr = applySearchReplace(currentContent, oldSource, source);
                     if (sr.occurrences == 0)
                     {
-                        return "Error: oldSource not found in current file content. " + //$NON-NLS-1$
+                        return ToolResult.error("oldSource not found in current file content. " + //$NON-NLS-1$
                             "The file may have changed since last read, or the oldSource text " + //$NON-NLS-1$
-                            "does not match exactly. Please read the file again with read_module_source."; //$NON-NLS-1$
+                            "does not match exactly. Please read the file again with read_module_source.").toJson(); //$NON-NLS-1$
                     }
                     if (sr.occurrences > 1)
                     {
-                        return "Error: oldSource found multiple times in the file (" + //$NON-NLS-1$
+                        return ToolResult.error("oldSource found multiple times in the file (" + //$NON-NLS-1$
                             sr.occurrences +
                             " occurrences). Provide a larger, more specific oldSource fragment " + //$NON-NLS-1$
-                            "that matches exactly one location."; //$NON-NLS-1$
+                            "that matches exactly one location.").toJson(); //$NON-NLS-1$
                     }
 
                     newLines = splitSourceLines(sr.newContent);
@@ -293,7 +296,7 @@ public class WriteModuleSourceTool implements IMcpTool
                 }
 
                 default:
-                    return "Error: unsupported mode: " + mode; //$NON-NLS-1$
+                    return ToolResult.error("unsupported mode: " + mode).toJson(); //$NON-NLS-1$
             }
 
             // 8. BSL syntax check
@@ -303,14 +306,14 @@ public class WriteModuleSourceTool implements IMcpTool
                 if (!checkResult.isValid())
                 {
                     StringBuilder sb = new StringBuilder();
-                    sb.append("Error: BSL syntax check failed. Write blocked.\n\n"); //$NON-NLS-1$
-                    sb.append("**Errors:**\n"); //$NON-NLS-1$
+                    sb.append("BSL syntax check failed. Write blocked.\n\n"); //$NON-NLS-1$
+                    sb.append("Errors:\n"); //$NON-NLS-1$
                     for (String error : checkResult.getErrors())
                     {
                         sb.append("- ").append(error).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                     sb.append("\nPass skipSyntaxCheck=true to force write."); //$NON-NLS-1$
-                    return sb.toString();
+                    return ToolResult.error(sb.toString()).toJson();
                 }
             }
 
@@ -341,7 +344,7 @@ public class WriteModuleSourceTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return "Error writing file: " + e.getMessage(); //$NON-NLS-1$
+            return ToolResult.error("Failed to write file: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 

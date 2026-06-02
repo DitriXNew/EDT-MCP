@@ -221,10 +221,15 @@ public class GetSymbolInfoTool implements IMcpTool
             return ToolResult.error("Could not get symbol info").toJson(); //$NON-NLS-1$
         }
 
-        // Wrap result with frontmatter (skip for error messages)
+        // Wrap result with frontmatter (skip for error messages). The
+        // workbench/editor/document failures bubble up here as internal "Error:"
+        // sentinel strings (set by executeOnUiThread and the syncExec catch block,
+        // and used above to trigger the EMF fallback); convert them to the
+        // structured ToolResult.error contract at this single boundary so the
+        // protocol's isJsonErrorPayload diversion delivers them as isError JSON.
         if (result.startsWith("Error:")) //$NON-NLS-1$
         {
-            return result;
+            return ToolResult.error(result.substring("Error:".length()).trim()).toJson(); //$NON-NLS-1$
         }
 
         FrontMatter fm = FrontMatter.create()

@@ -51,6 +51,7 @@ import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
@@ -153,19 +154,19 @@ public class RenameMetadataObjectTool implements IMcpTool
 
         if (projectName == null || projectName.isEmpty())
         {
-            return "Error: projectName is required. " + //$NON-NLS-1$
-                "Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}"; //$NON-NLS-1$
+            return ToolResult.error("projectName is required. " + //$NON-NLS-1$
+                "Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}").toJson(); //$NON-NLS-1$
         }
         if (objectFqn == null || objectFqn.isEmpty())
         {
-            return "Error: objectFqn is required. " + //$NON-NLS-1$
+            return ToolResult.error("objectFqn is required. " + //$NON-NLS-1$
                 "Examples: 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount', " + //$NON-NLS-1$
-                "'Catalog.Products.TabularSection.Prices'"; //$NON-NLS-1$
+                "'Catalog.Products.TabularSection.Prices'").toJson(); //$NON-NLS-1$
         }
         if (newName == null || newName.isEmpty())
         {
-            return "Error: newName is required. " + //$NON-NLS-1$
-                "Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}"; //$NON-NLS-1$
+            return ToolResult.error("newName is required. " + //$NON-NLS-1$
+                "Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}").toJson(); //$NON-NLS-1$
         }
 
         final java.util.Set<Integer> finalDisableIndices = disableIndices;
@@ -179,7 +180,7 @@ public class RenameMetadataObjectTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error in rename_metadata_object", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
 
@@ -193,7 +194,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         ProjectContext projectContext = ProjectContext.of(projectName);
         if (!projectContext.exists())
         {
-            return "Error: Project not found: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
         }
         IProject project = projectContext.project();
 
@@ -201,19 +202,19 @@ public class RenameMetadataObjectTool implements IMcpTool
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {
-            return "Error: Configuration provider not available"; //$NON-NLS-1$
+            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
         }
         Configuration config = configProvider.getConfiguration(project);
         if (config == null)
         {
-            return "Error: Could not get configuration for project: " + projectName; //$NON-NLS-1$
+            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
         }
 
         // Get refactoring service
         IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();
         if (refactoringService == null)
         {
-            return "Error: IMdRefactoringService not available"; //$NON-NLS-1$
+            return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
         }
 
         // Normalize and find the object
@@ -221,17 +222,17 @@ public class RenameMetadataObjectTool implements IMcpTool
         MdObject targetObject = resolveObject(config, objectFqn);
         if (targetObject == null)
         {
-            return "Error: Object not found: " + objectFqn + ". " + //$NON-NLS-1$
+            return ToolResult.error("Object not found: " + objectFqn + ". " + //$NON-NLS-1$
                 "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
                 "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
-                "Supported child types: Attribute, TabularSection, Dimension, Resource."; //$NON-NLS-1$
+                "Supported child types: Attribute, TabularSection, Dimension, Resource.").toJson(); //$NON-NLS-1$
         }
 
         // Create refactoring (returns collection because it may also rename in extension projects)
         Collection<IRefactoring> refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
         if (refactorings == null || refactorings.isEmpty())
         {
-            return "Error: Failed to create rename refactoring for: " + objectFqn; //$NON-NLS-1$
+            return ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$
         }
 
         if (!confirm)

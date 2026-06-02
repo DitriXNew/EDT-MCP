@@ -42,6 +42,7 @@ import org.eclipse.emf.ecore.resource.ResourceSet;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -136,7 +137,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
         // Validate required parameter
         if (typeName == null || typeName.isEmpty())
         {
-            return "Error: typeName is required"; //$NON-NLS-1$
+            return ToolResult.error("typeName is required").toJson(); //$NON-NLS-1$
         }
         
         // Set defaults
@@ -176,8 +177,8 @@ public class GetPlatformDocumentationTool implements IMcpTool
             case CATEGORY_BUILTIN:
                 return getBuiltinFunctionDocumentation(typeName, useRussian);
             default:
-                return "Error: Unknown category '" + category + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
-                       "Supported: 'type', 'builtin'"; //$NON-NLS-1$
+                return ToolResult.error("Unknown category '" + category + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
+                       "Supported: 'type', 'builtin'").toJson(); //$NON-NLS-1$
         }
     }
     
@@ -200,7 +201,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error getting type documentation", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
         
@@ -249,7 +250,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
         
         if (typeProvider == null)
         {
-            return "Error: Could not get type provider. Make sure EDT workspace is open."; //$NON-NLS-1$
+            return ToolResult.error("Could not get type provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
         }
         
         // Find type by iterating through all type descriptions
@@ -788,7 +789,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error getting builtin function documentation", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
         
@@ -812,7 +813,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
         
         if (methodProvider == null)
         {
-            return "Error: Could not get method provider. Make sure EDT workspace is open."; //$NON-NLS-1$
+            return ToolResult.error("Could not get method provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
         }
         
         // Get ResourceSet for resolving proxies

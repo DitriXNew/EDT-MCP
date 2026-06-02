@@ -1125,8 +1125,13 @@ A practical example of this loop is automating the translation of an actively-de
 ### Output Formats
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description`, all LanguageTool tools - return Markdown as EmbeddedResource with `mimeType: text/markdown`
-- **JSON tools**: `get_configuration_properties`, `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml` - return JSON with `structuredContent`
+- **YAML tools**: `get_configuration_properties` - returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/markdown`)
+- **JSON tools**: `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml` - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
+
+#### Error contract
+
+Whatever a tool's normal output format above, it reports a **failure** the same way: a JSON payload `{"success": false, "error": "<message>"}` that the server delivers as a structured tool error (`isError: true`) regardless of the declared response type. The `error` field is always present (a `null` exception message is coalesced to `Unknown error`) and the message carries no redundant `Error:` prefix. A client detects failure via `isError` / `success: false` and reads `error` for the reason — no markdown parsing required. Success and purely *informational* results (for example "No references found", or a not-found accompanied by a list of valid alternatives) stay in the tool's natural format.
 
 </details>
 
