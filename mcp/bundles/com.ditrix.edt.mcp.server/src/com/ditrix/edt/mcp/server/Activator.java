@@ -6,8 +6,6 @@
 
 package com.ditrix.edt.mcp.server;
 
-import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.Status;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.osgi.framework.BundleContext;
 import org.osgi.util.tracker.ServiceTracker;
@@ -25,6 +23,7 @@ import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
+import com.ditrix.edt.mcp.server.utils.Log;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
@@ -689,10 +688,7 @@ public class Activator extends AbstractUIPlugin
      */
     public static void logInfo(String message)
     {
-        if (plugin != null)
-        {
-            plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, message));
-        }
+        Log.info(message);
     }
     
     /**
@@ -703,11 +699,7 @@ public class Activator extends AbstractUIPlugin
      */
     public static void logDebug(String message)
     {
-        // Disabled by default - enable by uncommenting the body below for troubleshooting
-        // if (plugin != null)
-        // {
-        //     plugin.getLog().log(new Status(IStatus.INFO, PLUGIN_ID, "[DEBUG] " + message));
-        // }
+        Log.debug(message);
     }
 
     /**
@@ -717,10 +709,7 @@ public class Activator extends AbstractUIPlugin
      */
     public static void logWarning(String message)
     {
-        if (plugin != null)
-        {
-            plugin.getLog().log(new Status(IStatus.WARNING, PLUGIN_ID, message));
-        }
+        Log.warning(message);
     }
 
     /**
@@ -731,10 +720,7 @@ public class Activator extends AbstractUIPlugin
      */
     public static void logError(String message, Throwable e)
     {
-        if (plugin != null)
-        {
-            plugin.getLog().log(new Status(IStatus.ERROR, PLUGIN_ID, message, e));
-        }
+        Log.error(message, e);
     }
 
     /**
