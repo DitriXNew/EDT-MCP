@@ -281,6 +281,21 @@ class TestRunner:
                 return {}
         return {}
 
+    def _json_text(self, resp: dict) -> str:
+        """Searchable text for a JSON-responseType tool. Such tools carry their
+        payload in structuredContent and put only a "Done"/"Error" placeholder in
+        the content text, so assert against the structured message/error/name/
+        action fields (plus the content placeholder as a fallback)."""
+        data = self._parse_json_result(resp)
+        parts = []
+        if isinstance(data, dict):
+            for key in ("message", "error", "name", "attributeName", "action", "type"):
+                value = data.get(key)
+                if value is not None:
+                    parts.append(str(value))
+        parts.append(self._get_result_text(resp))
+        return " ".join(parts)
+
     # ──────────────────────────────────────────────────────────────────────
     # Protocol Tests
     # ──────────────────────────────────────────────────────────────────────
@@ -563,7 +578,7 @@ class TestRunner:
             })
             try:
                 self._assert_success(resp, f"[cleanup delete {fqn}]")
-                text = self._get_result_text(resp)
+                text = self._json_text(resp)
                 if not self._is_delete_cleanup_ok(text):
                     errors.append(
                         f"{fqn}: unexpected delete response: {text[:300]}")
@@ -627,7 +642,7 @@ class TestRunner:
             except AssertionError as e:
                 errors.append(str(e))
                 return False
-            text = self._get_result_text(resp)
+            text = self._json_text(resp)
             if self._is_clean_project_ok(resp, text):
                 print("  clean_project OK")
                 return True
@@ -681,7 +696,7 @@ class TestRunner:
             "comment": comment,
         })
         self._assert_success(resp, f"[create {metadata_type}]")
-        text = self._get_result_text(resp)
+        text = self._json_text(resp)
         assert (name in text or "already exists" in text), \
             f"Unexpected create result for {metadata_type}: {text}"
 
@@ -793,7 +808,7 @@ class TestRunner:
             "language": "en",
         })
         self._assert_success(resp, "[create with language]")
-        text = self._get_result_text(resp)
+        text = self._json_text(resp)
         assert (name in text or "already exists" in text), \
             f"Unexpected create result: {text}"
 
@@ -831,7 +846,7 @@ class TestRunner:
             "comment": comment,
         })
         self._assert_success(resp, "[create cyrillic synonym]")
-        text = self._get_result_text(resp)
+        text = self._json_text(resp)
         assert (name in text or "already exists" in text), \
             f"Unexpected create result: {text}"
 
@@ -883,7 +898,7 @@ class TestRunner:
             "attributeName": attr,
         })
         self._assert_success(resp, "[add_metadata_attribute]")
-        text = self._get_result_text(resp)
+        text = self._json_text(resp)
         assert ("added successfully" in text or "already exists" in text), \
             f"Unexpected add result: {text}"
 
@@ -917,7 +932,7 @@ class TestRunner:
             "objectFqn": target_fqn,
         })
         self._assert_success(preview, "[delete preview]")
-        ptext = self._get_result_text(preview)
+        ptext = self._json_text(preview)
         assert "preview" in ptext.lower(), \
             f"Expected a preview action, got:\n{ptext}"
 
@@ -928,7 +943,7 @@ class TestRunner:
             "confirm": True,
         })
         self._assert_success(resp, "[delete execute]")
-        text = self._get_result_text(resp)
+        text = self._json_text(resp)
         assert ("executed" in text.lower() or "completed" in text.lower()), \
             f"Unexpected delete result: {text}"
 
