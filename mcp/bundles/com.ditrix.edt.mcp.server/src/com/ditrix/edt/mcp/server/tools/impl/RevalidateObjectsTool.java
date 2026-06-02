@@ -20,8 +20,6 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
@@ -31,6 +29,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -265,42 +264,38 @@ public class RevalidateObjectsTool implements IMcpTool
             normalizedFqns.add(MetadataTypeUtils.normalizeFqn(fqn));
         }
 
-        bmModel.executeReadonlyTask(new AbstractBmTask<Void>("RevalidateObjectsLookup") //$NON-NLS-1$
+        BmTransactions.<Void>read(bmModel, "RevalidateObjectsLookup", (tx, pm) -> //$NON-NLS-1$
         {
-            @Override
-            public Void execute(IBmTransaction tx, IProgressMonitor pm)
+            for (int i = 0; i < normalizedFqns.size(); i++)
             {
-                for (int i = 0; i < normalizedFqns.size(); i++)
-                {
-                    String normalizedFqn = normalizedFqns.get(i);
-                    String originalFqn = originalFqns.get(i);
+                String normalizedFqn = normalizedFqns.get(i);
+                String originalFqn = originalFqns.get(i);
 
-                    IBmObject obj = tx.getTopObjectByFqn(normalizedFqn);
-                    if (obj != null)
+                IBmObject obj = tx.getTopObjectByFqn(normalizedFqn);
+                if (obj != null)
+                {
+                    // Use bmGetId() - returns Long which is accepted by scheduleValidation
+                    long bmId = obj.bmGetId();
+                    if (bmId > 0)
                     {
-                        // Use bmGetId() - returns Long which is accepted by scheduleValidation
-                        long bmId = obj.bmGetId();
-                        if (bmId > 0)
-                        {
-                            Activator.logInfo("Found object: " + originalFqn + " -> bmId: " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
-                            objectsToValidate.add(Long.valueOf(bmId));
-                            found.add(originalFqn);
-                        }
-                        else
-                        {
-                            // Object found but has invalid ID (transient object)
-                            Activator.logInfo("Object has invalid bmId: " + originalFqn + " -> " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
-                            skippedNullUri.add(originalFqn);
-                        }
+                        Activator.logInfo("Found object: " + originalFqn + " -> bmId: " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
+                        objectsToValidate.add(Long.valueOf(bmId));
+                        found.add(originalFqn);
                     }
                     else
                     {
-                        Activator.logInfo("Object not found: " + originalFqn + " (normalized: " + normalizedFqn + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                        notFound.add(originalFqn);
+                        // Object found but has invalid ID (transient object)
+                        Activator.logInfo("Object has invalid bmId: " + originalFqn + " -> " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
+                        skippedNullUri.add(originalFqn);
                     }
                 }
-                return null;
+                else
+                {
+                    Activator.logInfo("Object not found: " + originalFqn + " (normalized: " + normalizedFqn + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    notFound.add(originalFqn);
+                }
             }
+            return null;
         });
         
         // Schedule validation if we found objects

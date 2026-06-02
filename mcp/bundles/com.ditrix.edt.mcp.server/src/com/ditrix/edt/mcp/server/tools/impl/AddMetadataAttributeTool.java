@@ -10,12 +10,9 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.emf.common.util.EList;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.AccountingRegister;
@@ -38,6 +35,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
@@ -200,40 +198,36 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
         final String normalizedParentFqn = parentFqn;
         try
         {
-            bmModel.execute(new AbstractBmTask<Void>("AddMetadataAttribute") //$NON-NLS-1$
+            BmTransactions.<Void>write(bmModel, "AddMetadataAttribute", (tx, pm) -> //$NON-NLS-1$
             {
-                @Override
-                public Void execute(IBmTransaction tx, IProgressMonitor pm)
+                MdObject parent = (MdObject) tx.getObjectById(parentBmId);
+                if (parent == null)
                 {
-                    MdObject parent = (MdObject) tx.getObjectById(parentBmId);
-                    if (parent == null)
-                    {
-                        throw new RuntimeException("Parent object not found in transaction"); //$NON-NLS-1$
-                    }
-
-                    // Check if attribute with this name already exists
-                    if (hasAttribute(parent, attributeName))
-                    {
-                        throw new RuntimeException("Attribute already exists: " + attributeName); //$NON-NLS-1$
-                    }
-
-                    // Create and add attribute
-                    MdObject newAttribute = createAttribute(parent);
-                    if (newAttribute == null)
-                    {
-                        throw new RuntimeException(
-                            "Cannot create attribute for: " + parent.eClass().getName()); //$NON-NLS-1$
-                    }
-                    newAttribute.setName(attributeName);
-                    if (synonym != null && !synonym.isEmpty())
-                    {
-                        newAttribute.getSynonym().put(synonymLanguage, synonym);
-                    }
-                    newAttribute.setUuid(UUID.randomUUID());
-
-                    addAttribute(parent, newAttribute);
-                    return null;
+                    throw new RuntimeException("Parent object not found in transaction"); //$NON-NLS-1$
                 }
+
+                // Check if attribute with this name already exists
+                if (hasAttribute(parent, attributeName))
+                {
+                    throw new RuntimeException("Attribute already exists: " + attributeName); //$NON-NLS-1$
+                }
+
+                // Create and add attribute
+                MdObject newAttribute = createAttribute(parent);
+                if (newAttribute == null)
+                {
+                    throw new RuntimeException(
+                        "Cannot create attribute for: " + parent.eClass().getName()); //$NON-NLS-1$
+                }
+                newAttribute.setName(attributeName);
+                if (synonym != null && !synonym.isEmpty())
+                {
+                    newAttribute.getSynonym().put(synonymLanguage, synonym);
+                }
+                newAttribute.setUuid(UUID.randomUUID());
+
+                addAttribute(parent, newAttribute);
+                return null;
             });
         }
         catch (Exception e)
