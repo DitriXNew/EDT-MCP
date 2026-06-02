@@ -11,9 +11,9 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.dt.refactoring.core.IBmRefactoringOperation;
 import com._1c.g5.v8.dt.refactoring.core.IDeleteRefactoringContributor;
+import com._1c.g5.v8.dt.refactoring.core.IRefactoringOperation;
+import com._1c.g5.v8.dt.refactoring.core.IRefactoringPostProcessor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringOperationDescriptor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
@@ -72,38 +72,41 @@ public class GroupDeleteRefactoringContributor implements IDeleteRefactoringCont
     }
     
     /**
-     * Operation that removes an object from a group during refactoring.
+     * Operation that removes an object from a group after it is deleted.
+     * <p>
+     * Mirrors {@code TagDeleteOperation}: the YAML group-storage mutation must run in
+     * {@link #postProcess()} (after the BM transaction commits), NOT in
+     * {@link #perform()} inside the transaction. Doing it inside the transaction means
+     * a rolled-back delete would still strip the object from the group YAML, diverging
+     * the group storage from the model. (audit A11)
      */
-    private static class GroupObjectRemoveOperation implements IBmRefactoringOperation {
-        
+    private static class GroupObjectRemoveOperation implements IRefactoringOperation, IRefactoringPostProcessor {
+
         private final IProject project;
         private final String fqn;
         private final String groupPath;
-        
-        @SuppressWarnings("unused")
-        private IBmTransaction transaction;
-        
+
         public GroupObjectRemoveOperation(IProject project, String fqn, String groupPath) {
             this.project = project;
             this.fqn = fqn;
             this.groupPath = groupPath;
         }
-        
+
         @Override
         public void perform() {
+            // Do nothing during the BM transaction - YAML changes go in postProcess().
+        }
+
+        @Override
+        public void postProcess() {
             IGroupService groupService = Activator.getGroupServiceStatic();
-            
+
             // Remove the object from the group
             boolean removed = groupService.removeObjectFromGroup(project, fqn);
-            
+
             if (removed) {
                 Activator.logInfo("Removed deleted object from group " + groupPath + ": " + fqn);
             }
-        }
-        
-        @Override
-        public void setActiveTransaction(IBmTransaction transaction) {
-            this.transaction = transaction;
         }
     }
 }
