@@ -58,6 +58,20 @@ public class AddMetadataAttributeToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"parentFqn\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"attributeName\"")); //$NON-NLS-1$
+        // Optional synonym/language for writing a localized display name.
+        assertTrue(schema.contains("\"synonym\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"language\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSynonymAndLanguageAreOptional()
+    {
+        String schema = new AddMetadataAttributeTool().getInputSchema();
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue("schema must declare required array", requiredIdx >= 0); //$NON-NLS-1$
+        String tail = schema.substring(requiredIdx);
+        assertFalse("synonym must NOT be required", tail.contains("\"synonym\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("language must NOT be required", tail.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

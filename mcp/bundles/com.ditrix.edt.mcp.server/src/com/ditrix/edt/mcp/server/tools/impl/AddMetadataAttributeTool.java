@@ -38,6 +38,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 
@@ -79,6 +80,12 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
                 "programmatic Name (not the synonym / display name).", true) //$NON-NLS-1$
             .stringProperty("attributeName", //$NON-NLS-1$
                 "Name for the new attribute (required)", true) //$NON-NLS-1$
+            .stringProperty("synonym", //$NON-NLS-1$
+                "Optional synonym (display name) for the attribute. Set for the configuration " + //$NON-NLS-1$
+                "default language unless 'language' is specified.") //$NON-NLS-1$
+            .stringProperty("language", //$NON-NLS-1$
+                "Language code for the synonym (e.g. 'ru', 'en'). " + //$NON-NLS-1$
+                "If not specified, uses the configuration default language.") //$NON-NLS-1$
             .build();
     }
 
@@ -88,6 +95,8 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String parentFqn = JsonUtils.extractStringArgument(params, "parentFqn"); //$NON-NLS-1$
         String attributeName = JsonUtils.extractStringArgument(params, "attributeName"); //$NON-NLS-1$
+        String synonym = JsonUtils.extractStringArgument(params, "synonym"); //$NON-NLS-1$
+        String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
 
         if (projectName == null || projectName.isEmpty())
         {
@@ -111,10 +120,11 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
                 "A name must start with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
 
-        return executeInternal(projectName, parentFqn, attributeName);
+        return executeInternal(projectName, parentFqn, attributeName, synonym, language);
     }
 
-    private String executeInternal(String projectName, String parentFqn, String attributeName)
+    private String executeInternal(String projectName, String parentFqn, String attributeName,
+        String synonym, String language)
     {
         // Get project and configuration
         ProjectContext ctx = resolveProjectAndConfig(projectName);
@@ -169,6 +179,23 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
         }
         long parentBmId = ((IBmObject) parentObject).bmGetId();
 
+        // Resolve synonym language (only required when a synonym is supplied).
+        // Keyed by the language CODE, never the language NAME (see MetadataLanguageUtils).
+        final String synonymLanguage;
+        if (synonym != null && !synonym.isEmpty())
+        {
+            synonymLanguage = MetadataLanguageUtils.resolveLanguageCode(config, language);
+            if (synonymLanguage == null)
+            {
+                return ToolResult.error("Cannot determine a language code for the synonym " + //$NON-NLS-1$
+                    "in this configuration. Specify 'language' explicitly (e.g. 'en' or 'ru').").toJson(); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            synonymLanguage = null;
+        }
+
         // Execute write task
         final String normalizedParentFqn = parentFqn;
         try
@@ -198,6 +225,10 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
                             "Cannot create attribute for: " + parent.eClass().getName()); //$NON-NLS-1$
                     }
                     newAttribute.setName(attributeName);
+                    if (synonym != null && !synonym.isEmpty())
+                    {
+                        newAttribute.getSynonym().put(synonymLanguage, synonym);
+                    }
                     newAttribute.setUuid(UUID.randomUUID());
 
                     addAttribute(parent, newAttribute);
@@ -211,9 +242,18 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to add attribute: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put("parentFqn", normalizedParentFqn) //$NON-NLS-1$
-            .put("attributeName", attributeName) //$NON-NLS-1$
+            .put("attributeName", attributeName); //$NON-NLS-1$
+        // Echo back the synonym actually written so callers can confirm the localized
+        // name without a second get. synonymLanguage is the resolved language CODE
+        // (see MetadataLanguageUtils); both are non-null together.
+        if (synonymLanguage != null)
+        {
+            result.put("synonym", synonym) //$NON-NLS-1$
+                .put("language", synonymLanguage); //$NON-NLS-1$
+        }
+        return result
             .put("message", "Attribute '" + attributeName + "' added successfully to " + normalizedParentFqn) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
     }
