@@ -188,7 +188,7 @@ public final class FrontMatter
      * @param value the string value to escape
      * @return YAML-safe scalar representation
      */
-    static String escapeYamlValue(String value)
+    public static String escapeYamlValue(String value)
     {
         if (value == null)
         {

@@ -38,9 +38,18 @@ public class GetConfigurationPropertiesToolTest
     }
 
     @Test
-    public void testResponseTypeJson()
+    public void testResponseTypeMarkdown()
     {
-        assertEquals(ResponseType.JSON, new GetConfigurationPropertiesTool().getResponseType());
+        // Switched from JSON to MARKDOWN: the tool now emits a human-readable YAML
+        // body (errors still travel as structured JSON via the protocol diversion).
+        assertEquals(ResponseType.MARKDOWN, new GetConfigurationPropertiesTool().getResponseType());
+    }
+
+    @Test
+    public void testResultFileNameIsYaml()
+    {
+        assertEquals("configuration-properties.yaml", //$NON-NLS-1$
+            new GetConfigurationPropertiesTool().getResultFileName(new java.util.HashMap<>()));
     }
 
     @Test

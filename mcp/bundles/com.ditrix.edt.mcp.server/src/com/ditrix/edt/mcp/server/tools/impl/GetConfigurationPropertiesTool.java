@@ -7,7 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 
 /**
  * Tool to get 1C:Enterprise configuration properties.
@@ -59,7 +60,16 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        return ResponseType.JSON;
+        // Human-readable YAML body (errors still travel as structured JSON via the
+        // protocol's isJsonErrorPayload diversion). See card
+        // get-configuration-properties-yaml-output.
+        return ResponseType.MARKDOWN;
+    }
+
+    @Override
+    public String getResultFileName(Map<String, String> params)
+    {
+        return "configuration-properties.yaml"; //$NON-NLS-1$
     }
     
     @Override
@@ -168,55 +178,46 @@ public class GetConfigurationPropertiesTool implements IMcpTool
                 return ToolResult.error("Configuration object not available").toJson(); //$NON-NLS-1$
             }
 
-            // Build result using ToolResult
-            ToolResult result = ToolResult.success()
-                .put("name", configuration.getName()) //$NON-NLS-1$
-                .put("synonym", toLocalizedMap(configuration.getSynonym())) //$NON-NLS-1$
-                .put("comment", configuration.getComment()); //$NON-NLS-1$
-            
-            // Script variant
+            // Build a human-readable YAML body. Null scalars and empty localized
+            // maps are omitted so the output stays clean (the old JSON path emitted
+            // empty objects like copyright:{}). Errors still go through
+            // ToolResult.error(...).toJson() above and are delivered as structured
+            // JSON via the protocol diversion, independent of this MARKDOWN body.
+            StringBuilder yaml = new StringBuilder();
+            appendScalar(yaml, "name", configuration.getName()); //$NON-NLS-1$
+            appendMap(yaml, "synonym", toLocalizedMap(configuration.getSynonym())); //$NON-NLS-1$
+            appendScalar(yaml, "comment", configuration.getComment()); //$NON-NLS-1$
+
             if (configuration.getScriptVariant() != null)
             {
-                result.put("scriptVariant", configuration.getScriptVariant().toString()); //$NON-NLS-1$
+                appendScalar(yaml, "scriptVariant", configuration.getScriptVariant().toString()); //$NON-NLS-1$
             }
-            
-            // Default run mode
             if (configuration.getDefaultRunMode() != null)
             {
-                result.put("defaultRunMode", configuration.getDefaultRunMode().toString()); //$NON-NLS-1$
+                appendScalar(yaml, "defaultRunMode", configuration.getDefaultRunMode().toString()); //$NON-NLS-1$
             }
-            
-            // Data lock control mode
             if (configuration.getDataLockControlMode() != null)
             {
-                result.put("dataLockControlMode", configuration.getDataLockControlMode().toString()); //$NON-NLS-1$
+                appendScalar(yaml, "dataLockControlMode", configuration.getDataLockControlMode().toString()); //$NON-NLS-1$
             }
-            
-            // Compatibility mode
             if (configuration.getCompatibilityMode() != null)
             {
-                result.put("compatibilityMode", configuration.getCompatibilityMode().toString()); //$NON-NLS-1$
+                appendScalar(yaml, "compatibilityMode", configuration.getCompatibilityMode().toString()); //$NON-NLS-1$
             }
-            
-            // Modal use mode
             if (configuration.getModalityUseMode() != null)
             {
-                result.put("modalityUseMode", configuration.getModalityUseMode().toString()); //$NON-NLS-1$
+                appendScalar(yaml, "modalityUseMode", configuration.getModalityUseMode().toString()); //$NON-NLS-1$
             }
-            
-            // Interface compatibility mode
             if (configuration.getInterfaceCompatibilityMode() != null)
             {
-                result.put("interfaceCompatibilityMode", configuration.getInterfaceCompatibilityMode().toString()); //$NON-NLS-1$
+                appendScalar(yaml, "interfaceCompatibilityMode", configuration.getInterfaceCompatibilityMode().toString()); //$NON-NLS-1$
             }
-            
-            // Object autonumeration mode
             if (configuration.getObjectAutonumerationMode() != null)
             {
-                result.put("objectAutonumerationMode", configuration.getObjectAutonumerationMode().toString()); //$NON-NLS-1$
+                appendScalar(yaml, "objectAutonumerationMode", configuration.getObjectAutonumerationMode().toString()); //$NON-NLS-1$
             }
-            
-            // Use purposes (array of purposes)
+
+            // Use purposes (list)
             List<String> usePurposes = new ArrayList<>();
             if (configuration.getUsePurposes() != null)
             {
@@ -225,29 +226,28 @@ public class GetConfigurationPropertiesTool implements IMcpTool
                     usePurposes.add(purpose.toString());
                 }
             }
-            result.put("usePurposes", usePurposes); //$NON-NLS-1$
-            
-            // Localized fields
-            result.put("briefInformation", toLocalizedMap(configuration.getBriefInformation())); //$NON-NLS-1$
-            result.put("detailedInformation", toLocalizedMap(configuration.getDetailedInformation())); //$NON-NLS-1$
-            result.put("vendor", configuration.getVendor()); //$NON-NLS-1$
-            result.put("version", configuration.getVersion()); //$NON-NLS-1$
-            result.put("copyright", toLocalizedMap(configuration.getCopyright())); //$NON-NLS-1$
-            result.put("vendorInformationAddress", toLocalizedMap(configuration.getVendorInformationAddress())); //$NON-NLS-1$
-            result.put("configurationInformationAddress", toLocalizedMap(configuration.getConfigurationInformationAddress())); //$NON-NLS-1$
-            
-            // Default language
+            appendList(yaml, "usePurposes", usePurposes); //$NON-NLS-1$
+
+            // Localized / vendor fields (empty maps omitted)
+            appendMap(yaml, "briefInformation", toLocalizedMap(configuration.getBriefInformation())); //$NON-NLS-1$
+            appendMap(yaml, "detailedInformation", toLocalizedMap(configuration.getDetailedInformation())); //$NON-NLS-1$
+            appendScalar(yaml, "vendor", configuration.getVendor()); //$NON-NLS-1$
+            appendScalar(yaml, "version", configuration.getVersion()); //$NON-NLS-1$
+            appendMap(yaml, "copyright", toLocalizedMap(configuration.getCopyright())); //$NON-NLS-1$
+            appendMap(yaml, "vendorInformationAddress", toLocalizedMap(configuration.getVendorInformationAddress())); //$NON-NLS-1$
+            appendMap(yaml, "configurationInformationAddress", toLocalizedMap(configuration.getConfigurationInformationAddress())); //$NON-NLS-1$
+
+            // Default language: report the language CODE (ru/en — the synonym map key)
+            // plus its human-readable name.
             if (configuration.getDefaultLanguage() != null)
             {
-                // Synonym map is keyed by the language CODE (ru/en), not the name.
-                result.put("defaultLanguage", configuration.getDefaultLanguage().getLanguageCode()); //$NON-NLS-1$
-                result.put("defaultLanguageName", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
+                appendScalar(yaml, "defaultLanguage", configuration.getDefaultLanguage().getLanguageCode()); //$NON-NLS-1$
+                appendScalar(yaml, "defaultLanguageName", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
             }
-            
-            // Project name
-            result.put("projectName", configProject.getProject().getName()); //$NON-NLS-1$
-            
-            return result.toJson();
+
+            appendScalar(yaml, "projectName", configProject.getProject().getName()); //$NON-NLS-1$
+
+            return yaml.toString();
         }
         catch (Exception e)
         {
@@ -257,12 +257,62 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     }
     
     /**
-     * Converts EMap to regular Map for JSON serialization.
+     * Appends {@code key: value} when the value is non-null and non-empty; omits
+     * the line otherwise. Scalar values are YAML-escaped via the shared
+     * {@link FrontMatter#escapeYamlValue}.
+     */
+    private static void appendScalar(StringBuilder sb, String key, String value)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return;
+        }
+        sb.append(key).append(": ").append(FrontMatter.escapeYamlValue(value)).append('\n'); //$NON-NLS-1$
+    }
+
+    /**
+     * Appends a nested {@code key:} block with one indented {@code code: value}
+     * entry per map item. Omits the whole block when the map is null or empty, so
+     * empty localized fields (e.g. an unset copyright) do not clutter the output.
+     */
+    private static void appendMap(StringBuilder sb, String key, Map<String, String> map)
+    {
+        if (map == null || map.isEmpty())
+        {
+            return;
+        }
+        sb.append(key).append(":\n"); //$NON-NLS-1$
+        for (Map.Entry<String, String> entry : map.entrySet())
+        {
+            sb.append("  ").append(FrontMatter.escapeYamlValue(entry.getKey())) //$NON-NLS-1$
+              .append(": ").append(FrontMatter.escapeYamlValue(entry.getValue())).append('\n'); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Appends a {@code key:} block with one {@code - item} per element. Omits the
+     * whole block when the list is null or empty.
+     */
+    private static void appendList(StringBuilder sb, String key, List<String> items)
+    {
+        if (items == null || items.isEmpty())
+        {
+            return;
+        }
+        sb.append(key).append(":\n"); //$NON-NLS-1$
+        for (String item : items)
+        {
+            sb.append("  - ").append(FrontMatter.escapeYamlValue(item)).append('\n'); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Converts EMap to an ordered Map (insertion order preserved for stable YAML).
      */
     @SuppressWarnings("rawtypes")
     private static Map<String, String> toLocalizedMap(EMap localizedString)
     {
-        Map<String, String> map = new HashMap<>();
+        Map<String, String> map = new LinkedHashMap<>();
         if (localizedString != null)
         {
             for (Object entry : localizedString)
