@@ -150,7 +150,7 @@ public class GetCheckDescriptionTool implements IMcpTool
         // Validate checkId parameter
         if (checkId == null || checkId.isEmpty())
         {
-            return ToolResult.error("checkId parameter is required").toJson(); //$NON-NLS-1$
+            return ToolResult.error("checkId is required").toJson(); //$NON-NLS-1$
         }
         
         try

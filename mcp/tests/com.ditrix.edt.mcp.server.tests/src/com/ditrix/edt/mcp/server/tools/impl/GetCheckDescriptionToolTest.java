@@ -69,6 +69,6 @@ public class GetCheckDescriptionToolTest
     {
         Map<String, String> params = new HashMap<>();
         String result = new GetCheckDescriptionTool().execute(params);
-        assertTrue(result.contains("checkId parameter is required")); //$NON-NLS-1$
+        assertTrue(result.contains("checkId is required")); //$NON-NLS-1$
     }
 }

@@ -68,6 +68,6 @@ public class GetTagsToolTest
     {
         Map<String, String> params = new HashMap<>();
         String result = new GetTagsTool().execute(params);
-        assertTrue(result.contains("Project name is required")); //$NON-NLS-1$
+        assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
     }
 }

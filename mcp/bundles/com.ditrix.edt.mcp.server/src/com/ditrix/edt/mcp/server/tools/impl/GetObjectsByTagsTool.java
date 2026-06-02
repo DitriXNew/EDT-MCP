@@ -73,9 +73,10 @@ public class GetObjectsByTagsTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String tagsJson = JsonUtils.extractStringArgument(params, "tags"); //$NON-NLS-1$
 
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("Project name is required").toJson(); //$NON-NLS-1$
+            return err;
         }
         
         // Check if project is ready for operations
