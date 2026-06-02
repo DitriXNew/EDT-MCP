@@ -63,6 +63,18 @@ public class GetPlatformDocumentationToolTest
         assertTrue(schema.contains("\"memberName\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testSchemaClosedVocabulariesAreEnums()
+    {
+        // category, memberType and language are closed vocabularies and are
+        // advertised as JSON Schema enums.
+        String schema = new GetPlatformDocumentationTool().getInputSchema();
+        assertTrue(schema.contains("\"enum\":[\"type\",\"builtin\"]")); //$NON-NLS-1$
+        assertTrue(schema.contains(
+            "\"enum\":[\"method\",\"property\",\"constructor\",\"event\",\"all\"]")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"enum\":[\"en\",\"ru\"]")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live access needed) ====================
 
     @Test
@@ -71,5 +83,20 @@ public class GetPlatformDocumentationToolTest
         Map<String, String> params = new HashMap<>();
         String result = new GetPlatformDocumentationTool().execute(params);
         assertTrue(result.contains("typeName is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInvalidMemberTypeRejected()
+    {
+        // typeName is supplied so validation passes the required-argument gate and
+        // reaches the memberType check, which runs before any live doc lookup.
+        Map<String, String> params = new HashMap<>();
+        params.put("typeName", "ValueTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("memberType", "field"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GetPlatformDocumentationTool().execute(params);
+        // Delimiter-free substrings only (Gson HTML-escapes apostrophes / '>=').
+        assertTrue(result.contains("memberType must be one of")); //$NON-NLS-1$
+        assertTrue(result.contains("method")); //$NON-NLS-1$
+        assertTrue(result.contains("property")); //$NON-NLS-1$
     }
 }

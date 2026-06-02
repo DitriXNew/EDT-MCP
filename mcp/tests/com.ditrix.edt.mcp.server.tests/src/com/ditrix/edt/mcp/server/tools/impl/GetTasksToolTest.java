@@ -11,6 +11,9 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -60,6 +63,30 @@ public class GetTasksToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"filePath\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"priority\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSchemaPriorityIsEnum()
+    {
+        // priority is a closed vocabulary, so it is advertised as a JSON Schema enum.
+        String schema = new GetTasksTool().getInputSchema();
+        assertTrue(schema.contains("\"enum\":[\"high\",\"normal\",\"low\"]")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInvalidPriorityRejected()
+    {
+        // An out-of-set priority is rejected up front (before any live workspace
+        // access), so the validation branch is reachable headlessly.
+        Map<String, String> params = new HashMap<>();
+        params.put("priority", "urgent"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GetTasksTool().execute(params);
+        // Delimiter-free substrings only: Gson HTML-escapes apostrophes / '>=' in
+        // JSON tool output, but "priority must be one of" and the bare values are safe.
+        assertTrue(result.contains("priority must be one of")); //$NON-NLS-1$
+        assertTrue(result.contains("high")); //$NON-NLS-1$
+        assertTrue(result.contains("normal")); //$NON-NLS-1$
+        assertTrue(result.contains("low")); //$NON-NLS-1$
     }
 
     // --- taskKey dedup helper (A4: a BSL TODO/FIXME surfacing under both the

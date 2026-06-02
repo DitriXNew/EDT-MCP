@@ -49,9 +49,10 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
                 "Examples: 'Catalog.Products.Forms.ItemForm', 'Document.SalesOrder.Forms.DocumentForm', " + //$NON-NLS-1$
                 "'CommonForm.MyForm'. If not specified, uses the currently active form editor.") //$NON-NLS-1$
             .booleanProperty("refresh", "Force WYSIWYG refresh before snapshot (default: true)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("mode", "Output mode: 'compact' (default) or 'full'. Compact returns only " + //$NON-NLS-1$ //$NON-NLS-2$
+            .enumProperty("mode", "Output mode: 'compact' (default) or 'full'. Compact returns only " + //$NON-NLS-1$ //$NON-NLS-2$
                 "visual elements with positive bounds and selected display properties. Full returns all layout nodes " + //$NON-NLS-1$
-                "and all non-containment properties.") //$NON-NLS-1$
+                "and all non-containment properties.", //$NON-NLS-1$
+                "compact", "full") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 

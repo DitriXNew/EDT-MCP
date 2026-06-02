@@ -17,7 +17,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
@@ -302,6 +304,35 @@ public class GetProjectErrorsToolTest
         assertNull(error);
         assertEquals(0, shown[0]);
         assertEquals(0, filteredOut[0]);
+    }
+
+    // ========== severity enum (schema + validation) ==========
+
+    @Test
+    public void testSeverityEnumMatchesMarkerSeverityValues()
+    {
+        // The schema enum AND the validation set must EXACTLY match what
+        // MarkerSeverity.valueOf accepts (all 7 constants incl. NONE) so no
+        // previously-accepted value is rejected by the new out-of-set guard.
+        String schema = new GetProjectErrorsTool().getInputSchema();
+        assertTrue(schema.contains("\"enum\"")); //$NON-NLS-1$
+        for (MarkerSeverity s : MarkerSeverity.values())
+        {
+            assertTrue("schema enum is missing " + s.name(), //$NON-NLS-1$
+                schema.contains("\"" + s.name() + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("SEVERITY_VALUES is missing " + s.name(), //$NON-NLS-1$
+                GetProjectErrorsTool.SEVERITY_VALUES.contains(s.name()));
+        }
+    }
+
+    @Test
+    public void testInvalidSeverityRejected()
+    {
+        // Validation runs before any project/BM access, so this is headless-safe.
+        Map<String, String> params = new HashMap<>();
+        params.put("severity", "NOTASEVERITY"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GetProjectErrorsTool().execute(params);
+        assertTrue(result.contains("severity must be one of")); //$NON-NLS-1$
     }
 
     // ========== helpers ==========

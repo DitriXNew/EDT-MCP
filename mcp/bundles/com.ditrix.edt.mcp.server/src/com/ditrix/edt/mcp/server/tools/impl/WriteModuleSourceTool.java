@@ -83,9 +83,10 @@ public class WriteModuleSourceTool implements IMcpTool
                 "'DataProcessor.MyProcessor'. " + //$NON-NLS-1$
                 "Supports Russian names (e.g. 'Документ.МойДок'). " + //$NON-NLS-1$
                 "Alternative to modulePath.") //$NON-NLS-1$
-            .stringProperty("moduleType", //$NON-NLS-1$
+            .enumProperty("moduleType", //$NON-NLS-1$
                 "Module type (used with objectName): ObjectModule (default), " + //$NON-NLS-1$
-                "ManagerModule, FormModule, CommandModule, RecordSetModule.") //$NON-NLS-1$
+                "ManagerModule, FormModule, CommandModule, RecordSetModule, Module.", //$NON-NLS-1$
+                "ObjectModule", "ManagerModule", "FormModule", "CommandModule", "RecordSetModule", "Module") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
             .stringProperty("source", //$NON-NLS-1$
                 "BSL source code to write (required). " + //$NON-NLS-1$
                 "For replace: complete module content. " + //$NON-NLS-1$
@@ -95,9 +96,10 @@ public class WriteModuleSourceTool implements IMcpTool
                 "Existing code to find and replace (required for searchReplace mode). " + //$NON-NLS-1$
                 "Must match exactly one location in the file. " + //$NON-NLS-1$
                 "Proves that you have read the current file content.") //$NON-NLS-1$
-            .stringProperty("mode", //$NON-NLS-1$
+            .enumProperty("mode", //$NON-NLS-1$
                 "Write mode: 'searchReplace' (find oldSource and replace with source, default), " + //$NON-NLS-1$
-                "'replace' (replace entire file), 'append' (add to end).") //$NON-NLS-1$
+                "'replace' (replace entire file), 'append' (add to end).", //$NON-NLS-1$
+                "searchReplace", "replace", "append") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .stringProperty("formName", //$NON-NLS-1$
                 "Form name, required when moduleType=FormModule " + //$NON-NLS-1$
                 "(e.g. 'ItemForm').") //$NON-NLS-1$

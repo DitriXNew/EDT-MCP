@@ -82,8 +82,9 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
             .stringProperty("methodName", //$NON-NLS-1$
                 "Name of the procedure/function (case-insensitive, required)", true) //$NON-NLS-1$
-            .stringProperty("direction", //$NON-NLS-1$
-                "Direction: 'callers' (who calls this method, default) or 'callees' (what this method calls)") //$NON-NLS-1$
+            .enumProperty("direction", //$NON-NLS-1$
+                "Direction: 'callers' (who calls this method, default) or 'callees' (what this method calls)", //$NON-NLS-1$
+                "callers", "callees") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("limit", //$NON-NLS-1$
                 "Maximum number of results. Default: 100, max: 500") //$NON-NLS-1$
             .build();

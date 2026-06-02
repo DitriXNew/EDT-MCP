@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.protocol;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -68,8 +69,51 @@ public class JsonSchemaBuilder
     }
     
     /**
+     * Adds a string property restricted to a closed set of values (a JSON Schema
+     * {@code enum}). Only use this when {@code execute()} accepts exactly the given
+     * values — never for a bilingual or open-ended vocabulary (a metadata TYPE
+     * token, a synonym, a free-form name).
+     *
+     * @param name property name
+     * @param description property description
+     * @param values the closed set of accepted values
+     * @return this builder
+     */
+    public JsonSchemaBuilder enumProperty(String name, String description, String... values)
+    {
+        return enumProperty(name, description, false, values);
+    }
+
+    /**
+     * Adds a string property restricted to a closed set of values (a JSON Schema
+     * {@code enum}). Only use this when {@code execute()} accepts exactly the given
+     * values — never for a bilingual or open-ended vocabulary (a metadata TYPE
+     * token, a synonym, a free-form name).
+     *
+     * @param name property name
+     * @param description property description
+     * @param required whether property is required
+     * @param values the closed set of accepted values
+     * @return this builder
+     */
+    public JsonSchemaBuilder enumProperty(String name, String description, boolean required, String... values)
+    {
+        Map<String, Object> prop = new LinkedHashMap<>();
+        prop.put("type", "string"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.put("description", description); //$NON-NLS-1$
+        prop.put("enum", Arrays.asList(values)); //$NON-NLS-1$
+        properties.put(name, prop);
+
+        if (required)
+        {
+            this.required.add(name);
+        }
+        return this;
+    }
+
+    /**
      * Adds an integer property to the schema.
-     * 
+     *
      * @param name property name
      * @param description property description
      * @return this builder

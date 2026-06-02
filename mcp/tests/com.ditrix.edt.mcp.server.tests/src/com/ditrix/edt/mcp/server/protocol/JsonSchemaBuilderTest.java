@@ -86,6 +86,33 @@ public class JsonSchemaBuilderTest
     }
 
     @Test
+    public void testEnumProperty()
+    {
+        String schema = JsonSchemaBuilder.object()
+            .enumProperty("kind", "Step kind", "over", "into", "out")
+            .build();
+
+        assertTrue(schema.contains("\"kind\""));
+        assertTrue(schema.contains("\"type\":\"string\""));
+        assertTrue(schema.contains("\"description\":\"Step kind\""));
+        // The closed value set is emitted under the "enum" key.
+        assertTrue(schema.contains("\"enum\":[\"over\",\"into\",\"out\"]"));
+        // Not required by default.
+        assertTrue(schema.contains("\"required\":[]"));
+    }
+
+    @Test
+    public void testRequiredEnumProperty()
+    {
+        String schema = JsonSchemaBuilder.object()
+            .enumProperty("kind", "Step kind", true, "over", "into", "out")
+            .build();
+
+        assertTrue(schema.contains("\"enum\":[\"over\",\"into\",\"out\"]"));
+        assertTrue(schema.contains("\"required\":[\"kind\"]"));
+    }
+
+    @Test
     public void testMultipleProperties()
     {
         String schema = JsonSchemaBuilder.object()

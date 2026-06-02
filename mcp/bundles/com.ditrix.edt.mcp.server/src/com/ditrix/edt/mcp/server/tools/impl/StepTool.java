@@ -49,7 +49,8 @@ public class StepTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .integerProperty("threadId", "Thread id from wait_for_break (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("kind", "Step kind: over, into, out (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .enumProperty("kind", "Step kind: over, into, out (required)", true, //$NON-NLS-1$ //$NON-NLS-2$
+                "over", "into", "out") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .integerProperty("timeout", "Wait window in seconds (default: 30)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }

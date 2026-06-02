@@ -31,6 +31,10 @@ public class GetPlatformDocumentationTool implements IMcpTool
     /** Member type constant */
     private static final String MEMBER_ALL = "all"; //$NON-NLS-1$
 
+    /** Closed set of values accepted by the {@code memberType} filter parameter. */
+    static final java.util.List<String> MEMBER_TYPE_VALUES =
+        java.util.Arrays.asList("method", "property", "constructor", "event", "all"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+
     @Override
     public String getName()
     {
@@ -52,21 +56,24 @@ public class GetPlatformDocumentationTool implements IMcpTool
             .stringProperty("typeName", //$NON-NLS-1$
                 "Type or symbol name (e.g. 'ValueTable', 'Array', 'Structure'). " + //$NON-NLS-1$
                 "Supports both English and Russian names.", true) //$NON-NLS-1$
-            .stringProperty("category", //$NON-NLS-1$
+            .enumProperty("category", //$NON-NLS-1$
                 "Category: 'type' (platform types like ValueTable), " + //$NON-NLS-1$
-                "'builtin' (built-in functions). Default: 'type'") //$NON-NLS-1$
+                "'builtin' (built-in functions). Default: 'type'", //$NON-NLS-1$
+                "type", "builtin") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("memberName", //$NON-NLS-1$
                 "Filter by member name (method/property). Supports partial match. " + //$NON-NLS-1$
                 "Example: 'Add', 'Insert', 'Count'") //$NON-NLS-1$
-            .stringProperty("memberType", //$NON-NLS-1$
+            .enumProperty("memberType", //$NON-NLS-1$
                 "Filter by member type: 'method', 'property', 'constructor', 'event', 'all'. " + //$NON-NLS-1$
-                "Default: 'all'") //$NON-NLS-1$
+                "Default: 'all'", //$NON-NLS-1$
+                "method", "property", "constructor", "event", "all") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name to determine platform version. Optional.") //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
                 "Maximum number of results to return. Default: 50") //$NON-NLS-1$
-            .stringProperty("language", //$NON-NLS-1$
-                "Output language: 'en' (English) or 'ru' (Russian). Default: 'en'") //$NON-NLS-1$
+            .enumProperty("language", //$NON-NLS-1$
+                "Output language: 'en' (English) or 'ru' (Russian). Default: 'en'", //$NON-NLS-1$
+                "en", "ru") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -112,6 +119,12 @@ public class GetPlatformDocumentationTool implements IMcpTool
         if (memberType == null || memberType.isEmpty())
         {
             memberType = MEMBER_ALL;
+        }
+        else if (!MEMBER_TYPE_VALUES.contains(memberType.toLowerCase()))
+        {
+            // Reject an out-of-set memberType instead of silently matching no members.
+            return ToolResult.error("memberType must be one of: " //$NON-NLS-1$
+                + String.join(", ", MEMBER_TYPE_VALUES)).toJson(); //$NON-NLS-1$
         }
         if (language == null || language.isEmpty())
         {

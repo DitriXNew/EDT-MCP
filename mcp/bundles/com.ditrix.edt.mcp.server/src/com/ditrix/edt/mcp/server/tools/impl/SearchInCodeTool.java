@@ -100,10 +100,11 @@ public class SearchInCodeTool implements IMcpTool
                 "'exchangePlans', 'businessProcesses', 'tasks', 'constants', " + //$NON-NLS-1$
                 "'commonCommands', 'commonForms', 'webServices', 'httpServices'. " + //$NON-NLS-1$
                 "More precise than fileMask.") //$NON-NLS-1$
-            .stringProperty("outputMode", //$NON-NLS-1$
+            .enumProperty("outputMode", //$NON-NLS-1$
                 "Output mode: 'full' (matches with context, default), " + //$NON-NLS-1$
                 "'count' (only total count, fast), " + //$NON-NLS-1$
-                "'files' (file list with match counts, no context)") //$NON-NLS-1$
+                "'files' (file list with match counts, no context)", //$NON-NLS-1$
+                "full", "count", "files") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .build();
     }
 

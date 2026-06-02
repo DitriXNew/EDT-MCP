@@ -69,9 +69,10 @@ public class ListConfigurationsTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("type", //$NON-NLS-1$
+            .enumProperty("type", //$NON-NLS-1$
                 "Filter: 'attach' (RemoteRuntime + LocalRuntime), 'client' (RuntimeClient), " //$NON-NLS-1$
-                    + "or 'all' (default — any 1C/EDT launch config)") //$NON-NLS-1$
+                    + "or 'all' (default — any 1C/EDT launch config)", //$NON-NLS-1$
+                "attach", "client", "all") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .stringProperty("projectName", "Optional project name filter") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }

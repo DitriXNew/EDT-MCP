@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -36,7 +37,10 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
 public class GetTasksTool implements IMcpTool
 {
     public static final String NAME = "get_tasks"; //$NON-NLS-1$
-    
+
+    /** Closed set of priority filter values accepted by the {@code priority} parameter. */
+    static final List<String> PRIORITY_VALUES = Arrays.asList("high", "normal", "low"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
     // Task marker types
     private static final String TASK_MARKER_TYPE = "org.eclipse.core.resources.taskmarker"; //$NON-NLS-1$
     private static final String XTEXT_TASK_MARKER_TYPE = "org.eclipse.xtext.ui.task"; //$NON-NLS-1$
@@ -60,7 +64,8 @@ public class GetTasksTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "Filter by project name (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("filePath", "Filter by file path substring (optional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("priority", "Filter by priority: high, normal, low (optional)") //$NON-NLS-1$ //$NON-NLS-2$
+            .enumProperty("priority", "Filter by priority (optional)", //$NON-NLS-1$ //$NON-NLS-2$
+                "high", "normal", "low") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .integerProperty("limit", "Maximum number of results (default: 100, max: 1000)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -71,6 +76,15 @@ public class GetTasksTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
         String priority = JsonUtils.extractStringArgument(params, "priority"); //$NON-NLS-1$
+
+        // Reject an out-of-set priority instead of silently ignoring the filter.
+        // Validated here (before any live workspace access) so it is headless-testable.
+        if (priority != null && !priority.isEmpty()
+            && !PRIORITY_VALUES.contains(priority.toLowerCase()))
+        {
+            return ToolResult.error("priority must be one of: " //$NON-NLS-1$
+                + String.join(", ", PRIORITY_VALUES)).toJson(); //$NON-NLS-1$
+        }
 
         int defaultLimit = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
