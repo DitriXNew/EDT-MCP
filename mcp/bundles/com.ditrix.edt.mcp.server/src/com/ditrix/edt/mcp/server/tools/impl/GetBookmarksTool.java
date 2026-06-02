@@ -25,6 +25,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -69,7 +70,7 @@ public class GetBookmarksTool implements IMcpTool
             .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
 
         int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
-        limit = Math.min(Math.max(1, limit), 1000);
+        limit = Pagination.clampLimit(limit, 1000);
 
         return getBookmarks(projectName, filePath, limit);
     }

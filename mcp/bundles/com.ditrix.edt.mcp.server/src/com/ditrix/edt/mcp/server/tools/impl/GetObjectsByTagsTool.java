@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.tags.model.TagStorage;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -71,8 +72,7 @@ public class GetObjectsByTagsTool implements IMcpTool
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String tagsJson = JsonUtils.extractStringArgument(params, "tags"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
-        
+
         if (projectName == null || projectName.isEmpty())
         {
             return ToolResult.error("Project name is required").toJson(); //$NON-NLS-1$
@@ -92,19 +92,9 @@ public class GetObjectsByTagsTool implements IMcpTool
             return ToolResult.error("Tags array is required. Example: [\"Important\", \"NeedsReview\"]").toJson(); //$NON-NLS-1$
         }
         
-        int limit = 100;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min(Integer.parseInt(limitStr), 1000);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
-        
+        int limit = JsonUtils.extractIntArgument(params, "limit", 100); //$NON-NLS-1$
+        limit = Pagination.clampLimit(limit, 1000);
+
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {

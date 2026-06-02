@@ -45,6 +45,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -127,7 +128,7 @@ public class ListModulesTool implements IMcpTool
             metadataType = "all"; //$NON-NLS-1$
         }
 
-        limit = Math.min(Math.max(1, limit), 1000);
+        limit = Pagination.clampLimit(limit, 1000);
 
         AtomicReference<String> resultRef = new AtomicReference<>();
         final String mdType = metadataType;

@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 
@@ -107,7 +108,7 @@ public class ListSubsystemsTool implements IMcpTool
         int defaultLimit = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
         int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
-        limit = Math.min(Math.max(1, limit), 1000);
+        limit = Pagination.clampLimit(limit, 1000);
 
         AtomicReference<String> resultRef = new AtomicReference<>();
         final String filter = nameFilter;

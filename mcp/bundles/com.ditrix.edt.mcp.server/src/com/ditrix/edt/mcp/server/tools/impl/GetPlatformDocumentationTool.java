@@ -45,6 +45,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -131,7 +132,6 @@ public class GetPlatformDocumentationTool implements IMcpTool
         String memberName = JsonUtils.extractStringArgument(params, "memberName"); //$NON-NLS-1$
         String memberType = JsonUtils.extractStringArgument(params, "memberType"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
         
         // Validate required parameter
@@ -154,19 +154,9 @@ public class GetPlatformDocumentationTool implements IMcpTool
             language = "en"; //$NON-NLS-1$
         }
         
-        int limit = 50;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min((int) Double.parseDouble(limitStr), 200);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
-        
+        int limit = JsonUtils.extractIntArgument(params, "limit", 50); //$NON-NLS-1$
+        limit = Pagination.clampLimit(limit, 200);
+
         boolean useRussian = "ru".equalsIgnoreCase(language); //$NON-NLS-1$
         
         // Execute based on category

@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -140,7 +141,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             return ToolResult.error("direction must be 'callers' or 'callees'").toJson(); //$NON-NLS-1$
         }
 
-        limit = Math.min(Math.max(1, limit), 500);
+        limit = Pagination.clampLimit(limit, 500);
 
         AtomicReference<String> resultRef = new AtomicReference<>();
         final String dir = direction;
