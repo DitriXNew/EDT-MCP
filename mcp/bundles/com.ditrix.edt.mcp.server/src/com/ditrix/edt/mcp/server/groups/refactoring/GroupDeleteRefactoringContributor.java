@@ -7,106 +7,47 @@
 package com.ditrix.edt.mcp.server.groups.refactoring;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.emf.ecore.EObject;
-import org.eclipse.emf.ecore.EStructuralFeature;
-
-import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.dt.refactoring.core.IDeleteRefactoringContributor;
-import com._1c.g5.v8.dt.refactoring.core.IRefactoringOperation;
-import com._1c.g5.v8.dt.refactoring.core.IRefactoringPostProcessor;
-import com._1c.g5.v8.dt.refactoring.core.RefactoringOperationDescriptor;
-import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
-import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
-import com.ditrix.edt.mcp.server.tags.TagUtils;
+import com.ditrix.edt.mcp.server.refactoring.AbstractObjectDeleteRefactoringContributor;
 
 /**
  * Refactoring contributor that removes objects from groups when they are deleted.
  * Listens to EDT's refactoring framework and removes FQNs from YAML storage accordingly.
+ *
+ * <p>Thin subclass of {@link AbstractObjectDeleteRefactoringContributor}: the shared base
+ * supplies the LTK participant wiring and the {@code perform()}/{@code postProcess()}
+ * transaction split. The YAML group-storage mutation runs in {@code postProcess()} (after
+ * the BM transaction commits), NOT in {@code perform()} inside the transaction; otherwise a
+ * rolled-back delete would still strip the object from the group YAML, diverging the group
+ * storage from the model (commit {@code 7ddc2da}, audit A11). This class only binds the
+ * group-storage specifics.</p>
  */
-public class GroupDeleteRefactoringContributor implements IDeleteRefactoringContributor {
-    
+public class GroupDeleteRefactoringContributor extends AbstractObjectDeleteRefactoringContributor {
+
     @Override
-    public RefactoringOperationDescriptor createParticipatingOperation(EObject object, 
-            RefactoringSettings settings, RefactoringStatus status) {
-        
-        if (object == null || !(object instanceof IBmObject bmObject)) {
-            return null;
-        }
-        
-        String fqn = TagUtils.extractFqn(bmObject);
-        if (fqn == null || fqn.isEmpty()) {
-            return null;
-        }
-        
-        // Get the project for this object
-        IProject project = TagUtils.extractProject(object);
-        if (project == null) {
-            return null;
-        }
-        
+    protected boolean hasAssociation(IProject project, String fqn) {
         IGroupService groupService = Activator.getGroupServiceStatic();
-        
+
         // Check if this object is in any group
         Group group = groupService.findGroupForObject(project, fqn);
-        
-        if (group == null) {
-            // Object is not in any group, nothing to do
-            return null;
-        }
-        
-        // Create an operation to remove the object from the group
-        return new RefactoringOperationDescriptor(
-            new GroupObjectRemoveOperation(project, fqn, group.getFullPath()));
+        return group != null;
     }
-    
+
     @Override
-    public RefactoringOperationDescriptor createCleanReferenceOperation(IBmObject targetObject, 
-            IBmObject referencingObject, EStructuralFeature feature, 
-            RefactoringSettings settings, RefactoringStatus status) {
-        // We don't need to clean references
-        return null;
+    protected boolean performRemove(IProject project, String fqn) {
+        return Activator.getGroupServiceStatic().removeObjectFromGroup(project, fqn);
     }
-    
-    /**
-     * Operation that removes an object from a group after it is deleted.
-     * <p>
-     * Mirrors {@code TagDeleteOperation}: the YAML group-storage mutation must run in
-     * {@link #postProcess()} (after the BM transaction commits), NOT in
-     * {@link #perform()} inside the transaction. Doing it inside the transaction means
-     * a rolled-back delete would still strip the object from the group YAML, diverging
-     * the group storage from the model. (audit A11)
-     */
-    private static class GroupObjectRemoveOperation implements IRefactoringOperation, IRefactoringPostProcessor {
 
-        private final IProject project;
-        private final String fqn;
-        private final String groupPath;
-
-        public GroupObjectRemoveOperation(IProject project, String fqn, String groupPath) {
-            this.project = project;
-            this.fqn = fqn;
-            this.groupPath = groupPath;
-        }
-
-        @Override
-        public void perform() {
-            // Do nothing during the BM transaction - YAML changes go in postProcess().
-        }
-
-        @Override
-        public void postProcess() {
-            IGroupService groupService = Activator.getGroupServiceStatic();
-
-            // Remove the object from the group
-            boolean removed = groupService.removeObjectFromGroup(project, fqn);
-
-            if (removed) {
-                Activator.logInfo("Removed deleted object from group " + groupPath + ": " + fqn);
-            }
-        }
+    @Override
+    protected String removeLogMessage(IProject project, String fqn) {
+        // Resolve the group path while the membership still exists (this runs at
+        // descriptor-creation time, before the removal in postProcess()).
+        IGroupService groupService = Activator.getGroupServiceStatic();
+        Group group = groupService.findGroupForObject(project, fqn);
+        String groupPath = group != null ? group.getFullPath() : null;
+        return "Removed deleted object from group " + groupPath + ": " + fqn;
     }
 }
