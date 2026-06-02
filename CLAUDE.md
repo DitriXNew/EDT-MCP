@@ -79,6 +79,21 @@ This is a Maven/Tycho project under `mcp/`. **A local build is available** — u
 
 ---
 
+## 🔁 Live e2e / redeploy loop (validate runtime + schema against a running MCP)
+
+Build + unit tests prove Java logic; **runtime behaviour, the `tools/list` schema, and the MCP wire contract are only proven against a live EDT + running MCP server** (`:8765`). Anything that changes a tool's schema, description, response, or behaviour must be live-checked, not just built. The loop is encapsulated in a redeploy script (e.g. `edt-redeploy.ps1`) — its paths are environment-specific, do NOT hardcode them into committed files.
+
+1. **Test against a non-elevated COPY of EDT**, never the `Program Files` install (that one is elevated → swap/relaunch triggers UAC). Copy EDT once into a writable folder + use a dedicated workspace; always redeploy/relaunch that copy.
+2. **Per change:** `compile.sh` → **kill EDT** (`taskkill /IM 1cedt.exe /T /F`; also `1cv8.exe` if an infobase is running) → **swap** the freshly built bundle jar into `<edt-copy>/plugins/` AND patch `configuration/org.eclipse.equinox.simpleconfigurator/bundles.info` (Tycho stamps a new qualifier each build, so the jar filename changes) → **relaunch with `-clean`** (forces OSGi to reload) → wait for `:8765` → run live checks → on completion, kill EDT (and the infobase).
+3. **The redeploy script exits 1 even on success** — the real signal is the log line `MCP server UP on 8765`. Do not treat exit 1 as failure.
+4. **Redeploy WITHOUT a `-Build` flag only swaps the LAST built jar** — run `compile.sh` first (or pass `-Build`), else you ship stale code.
+5. **Tycho p2 qualifier collision is real (hit 2026-06-03):** two builds can produce the SAME bundle qualifier and the p2 repository then ships a STALE cached jar even though compilation was fresh. **Verify the DEPLOYED jar actually contains your change** — `unzip -p <jar> path/To/Class.class | grep <new-literal>` (a plain `grep` on the `.jar` is useless: it's a compressed zip). If stale: **commit first** (changes the jgit qualifier) then rebuild, or clear the tycho/p2 cache.
+6. **Infobase-dependent tools** (debug / run / YAXUnit / profiling): start the infobase (or a `debug_launch`) before those checks; terminate it and EDT when done.
+7. **Testing token auth:** set `mcpAuthToken` in the workspace prefs (`<workspace>/.metadata/.plugins/org.eclipse.core.runtime/.settings/com.ditrix.edt.mcp.server.prefs`) and relaunch (the token is read per-request), probe with `Authorization: Bearer <token>`, then restore an empty token + relaunch so the dev server returns to no-auth.
+8. **Inspect real payloads with `Invoke-RestMethod`** (PowerShell), not `curl` (curl mangles nested JSON quoting). JSON-responseType tools put data in `result.structuredContent`, while `content[0].text` is just a `Done`/`Error` placeholder.
+
+---
+
 ## 🤖 For agents (specifically)
 
 - **Verify the class/method/helper actually exists** before referencing or calling it. During the review, agents invented non-existent classes — `grep`/`Read` before asserting.
