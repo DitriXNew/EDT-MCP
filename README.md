@@ -188,7 +188,7 @@ All 58 tools are organized into 9 semantic groups:
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
-| **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `get_profiling_results` |
+| **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
 | **Refactoring** | Metadata create, rename, delete, add attributes | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
@@ -357,8 +357,9 @@ Add to `claude_desktop_config.json`:
 | `resume` | Resume a suspended thread (or all threads of a debug target) |
 | `evaluate_expression` | Evaluate a BSL expression in the context of a suspended frame |
 | `debug_status` | Report active debug launches: mode, suspend state, thread count, top frame |
-| `start_profiling` | Toggle performance measurement (замер производительности) on the active debug target |
-| `get_profiling_results` | Get profiling results: per-module, per-line call counts, timing and coverage |
+| `start_profiling` | Start performance measurement (замер производительности) on the active debug target (start-only, idempotent) |
+| `stop_profiling` | Stop performance measurement on the active debug target (idempotent; benign when not active) |
+| `get_profiling_results` | Get profiling results: per-module, per-line call counts, timing and coverage; reports whether profiling is currently active |
 | `get_form_layout_snapshot` | Return YAML with calculated WYSIWYG form element bounds, types, and display properties (`mode`: compact/full) |
 | `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
 | `list_modules` | List all BSL modules in a project with module type and parent object |

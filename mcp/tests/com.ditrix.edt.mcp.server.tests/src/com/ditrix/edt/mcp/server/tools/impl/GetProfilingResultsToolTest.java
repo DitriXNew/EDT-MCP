@@ -59,5 +59,15 @@ public class GetProfilingResultsToolTest
         assertNotNull(schema);
         assertTrue(schema.contains("\"moduleFilter\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"minFrequency\"")); //$NON-NLS-1$
+        // applicationId surfaces the on/off profiling state for a specific session.
+        assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionMentionsActiveState()
+    {
+        // The tool surfaces whether profiling is currently active so a client can
+        // tell a stop is pending; the description must advertise it.
+        assertTrue(new GetProfilingResultsTool().getDescription().contains("active")); //$NON-NLS-1$
     }
 }

@@ -59,6 +59,7 @@ import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
 import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
 import com.ditrix.edt.mcp.server.tools.impl.StepTool;
+import com.ditrix.edt.mcp.server.tools.impl.StopProfilingTool;
 import com.ditrix.edt.mcp.server.tools.impl.TerminateLaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.TranslateConfigurationTool;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool;
@@ -137,6 +138,7 @@ public final class BuiltInToolRegistrar
         registry.register(new DebugYaxunitTestsTool());
         registry.register(new DebugStatusTool());
         registry.register(new StartProfilingTool());
+        registry.register(new StopProfilingTool());
         registry.register(new GetProfilingResultsTool());
 
         // BSL code analysis tools

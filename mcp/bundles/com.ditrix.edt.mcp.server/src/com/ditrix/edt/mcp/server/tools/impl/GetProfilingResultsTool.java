@@ -50,7 +50,9 @@ public class GetProfilingResultsTool implements IMcpTool
     {
         return "Get profiling (performance measurement) results after a debug session. " //$NON-NLS-1$
             + "Returns per-module, per-line data: call count, timing, percentage. " //$NON-NLS-1$
-            + "Optionally filter by module name. Call after start_profiling + test run."; //$NON-NLS-1$
+            + "Also reports whether profiling is currently active (pass applicationId to check a " //$NON-NLS-1$
+            + "specific session). Optionally filter by module name. " //$NON-NLS-1$
+            + "Call after start_profiling + test run (and stop_profiling to finalize collection)."; //$NON-NLS-1$
     }
 
     @Override
@@ -59,6 +61,9 @@ public class GetProfilingResultsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty("moduleFilter", "Optional substring filter on module name") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("minFrequency", "Only include lines called at least N times (default: 1)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", //$NON-NLS-1$
+                "Optional debug session id. When set, the response reports whether profiling is " //$NON-NLS-1$
+                    + "currently active (on/off) for that session.") //$NON-NLS-1$
             .build();
     }
 
@@ -73,6 +78,13 @@ public class GetProfilingResultsTool implements IMcpTool
     {
         String moduleFilter = JsonUtils.extractStringArgument(params, "moduleFilter"); //$NON-NLS-1$
         int minFrequency = JsonUtils.extractIntArgument(params, "minFrequency", 1); //$NON-NLS-1$
+        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        // On/off state from the shared profiling state (single source of truth in
+        // StartProfilingTool). When no applicationId is given we surface whether any
+        // session is profiling so a client can still tell that a stop is pending.
+        boolean profilingActive = applicationId != null && !applicationId.isEmpty()
+            ? StartProfilingTool.isProfilingActive(applicationId)
+            : StartProfilingTool.isAnyProfilingActive();
 
         try
         {
@@ -107,6 +119,7 @@ public class GetProfilingResultsTool implements IMcpTool
             {
                 return ToolResult.success()
                     .put("count", 0) //$NON-NLS-1$
+                    .put("profilingActive", profilingActive) //$NON-NLS-1$
                     .put("message", "No profiling results available. " //$NON-NLS-1$ //$NON-NLS-2$
                         + "Make sure you called start_profiling before running the test.") //$NON-NLS-1$
                     .toJson();
@@ -206,6 +219,7 @@ public class GetProfilingResultsTool implements IMcpTool
 
             return ToolResult.success()
                 .put("count", resultSummaries.size()) //$NON-NLS-1$
+                .put("profilingActive", profilingActive) //$NON-NLS-1$
                 .put("results", resultSummaries) //$NON-NLS-1$
                 .toJson();
         }

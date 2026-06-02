@@ -8,6 +8,9 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.osgi.framework.Bundle;
@@ -20,14 +23,23 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 
 /**
- * Toggles 1C performance measurement (замер производительности) on the active
+ * Starts 1C performance measurement (замер производительности) on the active
  * debug target. Once enabled, every executed BSL line is tracked with call count
- * and timing. Call {@code get_profiling_results} after the test finishes to
- * retrieve which code was covered.
+ * and timing. Call {@code stop_profiling} to stop, and
+ * {@code get_profiling_results} after the test finishes to retrieve which code
+ * was covered.
  *
  * <p>Uses reflection to access {@code IProfilingService} via
  * {@code ServiceAccess.get()} from the {@code com._1c.g5.wiring} bundle,
  * and {@code IProfileTarget.toggleProfiling()} on the debug target.
+ *
+ * <p><b>Determinism.</b> The underlying EDT API ({@code IProfilingService})
+ * exposes only a single {@code toggleProfiling(target)} primitive and no public
+ * "is profiling active" query, so the on/off state is tracked here — keyed by
+ * {@code applicationId} — as the single source of truth shared with
+ * {@code stop_profiling} and {@code get_profiling_results}. {@code start_profiling}
+ * is start-only and idempotent: calling it while profiling is already active does
+ * not toggle profiling off — it returns an "already profiling" result instead.
  */
 public class StartProfilingTool implements IMcpTool
 {
@@ -36,6 +48,58 @@ public class StartProfilingTool implements IMcpTool
     private static final String WIRING_BUNDLE = "com._1c.g5.wiring"; //$NON-NLS-1$
     private static final String DEBUG_CORE_BUNDLE = "com._1c.g5.v8.dt.debug.core"; //$NON-NLS-1$
     private static final String PROFILING_CORE_BUNDLE = "com._1c.g5.v8.dt.profiling.core"; //$NON-NLS-1$
+
+    /**
+     * Shared on/off state, keyed by {@code applicationId}. The EDT profiling
+     * service keeps its per-target state internally with no public getter, so this
+     * set mirrors it for the application ids we drive via start/stop. It is the
+     * single source of truth reused by {@link StopProfilingTool} and
+     * {@link GetProfilingResultsTool} — do not add a parallel state holder.
+     */
+    private static final Set<String> ACTIVE_APPLICATION_IDS = ConcurrentHashMap.newKeySet();
+
+    /**
+     * @param applicationId the application id of a debug session
+     * @return {@code true} when profiling is currently marked active for the given id
+     */
+    public static boolean isProfilingActive(String applicationId)
+    {
+        return applicationId != null && ACTIVE_APPLICATION_IDS.contains(applicationId);
+    }
+
+    /**
+     * @return {@code true} when profiling is currently marked active for at least
+     *         one application id (used to surface a global on/off hint when no
+     *         specific id is supplied).
+     */
+    public static boolean isAnyProfilingActive()
+    {
+        return !ACTIVE_APPLICATION_IDS.isEmpty();
+    }
+
+    /** Marks profiling active for the given application id. Package-visible for the stop tool. */
+    static void markActive(String applicationId)
+    {
+        if (applicationId != null)
+        {
+            ACTIVE_APPLICATION_IDS.add(applicationId);
+        }
+    }
+
+    /** Marks profiling inactive for the given application id. Package-visible for the stop tool. */
+    static void markInactive(String applicationId)
+    {
+        if (applicationId != null)
+        {
+            ACTIVE_APPLICATION_IDS.remove(applicationId);
+        }
+    }
+
+    /** For tests only — drops all tracked profiling state. */
+    static void clearStateForTests()
+    {
+        ACTIVE_APPLICATION_IDS.clear();
+    }
 
     @Override
     public String getName()
@@ -46,9 +110,10 @@ public class StartProfilingTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Toggle performance measurement (замер производительности) on the active debug target. " //$NON-NLS-1$
+        return "Start performance measurement (замер производительности) on the active debug target. " //$NON-NLS-1$
             + "Enables line-level profiling: call counts and timing for every executed BSL line. " //$NON-NLS-1$
-            + "Call get_profiling_results after the test finishes to see which code was covered. " //$NON-NLS-1$
+            + "Start-only and idempotent: if profiling is already active for this applicationId it stays on. " //$NON-NLS-1$
+            + "Call stop_profiling to stop, then get_profiling_results to see which code was covered. " //$NON-NLS-1$
             + "Requires an active debug session (debug_launch or debug_yaxunit_tests)."; //$NON-NLS-1$
     }
 
@@ -78,6 +143,20 @@ public class StartProfilingTool implements IMcpTool
 
         try
         {
+            // Start-only: if we already track profiling as active for this id, do
+            // NOT toggle (toggling would silently switch profiling OFF). Return an
+            // idempotent "already profiling" result instead.
+            if (isProfilingActive(applicationId))
+            {
+                return ToolResult.success()
+                    .put("active", true) //$NON-NLS-1$
+                    .put("started", false) //$NON-NLS-1$
+                    .put("applicationId", applicationId) //$NON-NLS-1$
+                    .put("message", "Profiling is already active for this applicationId. " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "Run your test, then call stop_profiling and get_profiling_results.") //$NON-NLS-1$
+                    .toJson();
+            }
+
             // Find active debug target
             IDebugTarget target = DebugSessionRegistry.findActiveTarget(applicationId);
             if (target == null)
@@ -139,17 +218,22 @@ public class StartProfilingTool implements IMcpTool
             }
 
             // IProfilingService.toggleProfiling(IProfileTarget) — generates UUID
-            // internally, registers it in targets map, sends to debug server.
+            // internally, registers it in targets map, sends to debug server. Since
+            // we only call this when our state says profiling is OFF, this toggle
+            // deterministically switches it ON.
             Method toggleProfiling = profilingServiceClass.getMethod("toggleProfiling", profileTargetClass); //$NON-NLS-1$
             toggleProfiling.invoke(profilingService, profileTarget);
 
-            Activator.logInfo("Profiling toggled via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
+            markActive(applicationId);
+
+            Activator.logInfo("Profiling started via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
 
             return ToolResult.success()
-                .put("toggled", true) //$NON-NLS-1$
+                .put("active", true) //$NON-NLS-1$
+                .put("started", true) //$NON-NLS-1$
                 .put("applicationId", applicationId) //$NON-NLS-1$
-                .put("message", "Profiling toggled (on↔off). This is a toggle — calling again " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "will switch profiling off. Run your test, then call get_profiling_results.") //$NON-NLS-1$
+                .put("message", "Profiling started. Run your test, then call stop_profiling " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "and get_profiling_results.") //$NON-NLS-1$
                 .toJson();
         }
         catch (Exception e)
