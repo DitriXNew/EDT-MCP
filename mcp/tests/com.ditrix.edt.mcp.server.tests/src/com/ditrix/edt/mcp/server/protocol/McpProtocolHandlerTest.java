@@ -328,6 +328,16 @@ public class McpProtocolHandlerTest
         JsonObject result = json.getAsJsonObject("result");
         assertFalse("success result must not carry isError", result.has("isError"));
         assertEquals(7, result.getAsJsonObject("structuredContent").get("value").getAsInt());
+
+        // The content fallback must carry a bounded, non-empty digest derived
+        // from the structuredContent (NOT the opaque "Done"), so a spec-compliant
+        // client that reads content[0].text still sees something meaningful.
+        String contentText = result.getAsJsonArray("content").get(0)
+            .getAsJsonObject().get("text").getAsString();
+        assertFalse("content fallback must not be empty", contentText.isEmpty());
+        assertNotEquals("content fallback must not be the opaque \"Done\"", "Done", contentText);
+        assertTrue("digest must be bounded", contentText.length() <= 500);
+        assertTrue("digest should reference the structured key", contentText.contains("value"));
     }
 
     @Test
