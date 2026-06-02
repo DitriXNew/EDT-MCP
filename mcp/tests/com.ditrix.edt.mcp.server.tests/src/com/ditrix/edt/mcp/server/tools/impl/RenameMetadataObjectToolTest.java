@@ -21,6 +21,7 @@ import org.eclipse.ltk.core.refactoring.NullChange;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.rename.MetadataRenameService;
 
 /**
  * Tests for {@link RenameMetadataObjectTool}.
@@ -127,7 +128,7 @@ public class RenameMetadataObjectToolTest
         List<String> visitedNames = new ArrayList<>();
         List<Integer> visitedIndices = new ArrayList<>();
         int[] counter = {0};
-        RenameMetadataObjectTool.walkLeafChanges(root, counter, (leaf, idx) -> {
+        MetadataRenameService.walkLeafChanges(root, counter, (leaf, idx) -> {
             visitedNames.add(leaf.getName());
             visitedIndices.add(idx);
         });
@@ -144,7 +145,7 @@ public class RenameMetadataObjectToolTest
         Change leaf = new NullChange("only"); //$NON-NLS-1$
         int[] counter = {0};
         List<Integer> indices = new ArrayList<>();
-        RenameMetadataObjectTool.walkLeafChanges(leaf, counter, (c, idx) -> indices.add(idx));
+        MetadataRenameService.walkLeafChanges(leaf, counter, (c, idx) -> indices.add(idx));
         assertEquals(List.of(0), indices);
         assertEquals(1, counter[0]);
     }
@@ -155,7 +156,7 @@ public class RenameMetadataObjectToolTest
         CompositeChange empty = new CompositeChange("empty"); //$NON-NLS-1$
         int[] counter = {0};
         int[] visits = {0};
-        RenameMetadataObjectTool.walkLeafChanges(empty, counter, (c, idx) -> visits[0]++);
+        MetadataRenameService.walkLeafChanges(empty, counter, (c, idx) -> visits[0]++);
         assertEquals(0, visits[0]);
         assertEquals(0, counter[0]);
     }
