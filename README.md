@@ -179,11 +179,11 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 58 tools are organized into 9 semantic groups:
+All 60 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
-| **Core / Project** | EDT version, project listing, configuration, validation, XML export/import | `get_edt_version`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml` |
+| **Core / Project** | EDT version, server self-diagnosis, project listing, configuration, validation, XML export/import | `get_edt_version`, `get_server_status`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml` |
 | **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 58 tools enabled (default) |
+| **All Tools** | All 60 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -319,6 +319,7 @@ Add to `claude_desktop_config.json`:
 | Tool | Description |
 |------|-------------|
 | `get_edt_version` | Returns current EDT version |
+| `get_server_status` | Self-diagnosis snapshot: port, protocol/plugin/EDT version, enabled/total tool counts, plainTextMode, checksFolderConfigured, form-render JVM flags, authEnabled (no secrets) |
 | `list_projects` | Lists workspace projects with properties |
 | `get_configuration_properties` | Gets 1C configuration properties |
 | `get_project_errors` | Returns EDT problems with severity/checkId/objects filters |
@@ -1127,7 +1128,7 @@ A practical example of this loop is automating the translation of an actively-de
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description`, all LanguageTool tools - return Markdown as EmbeddedResource with `mimeType: text/markdown`
 - **YAML tools**: `get_configuration_properties` - returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`)
-- **JSON tools**: `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml` - return JSON with `structuredContent`
+- **JSON tools**: `get_server_status`, `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml` - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
 
 #### Error contract
