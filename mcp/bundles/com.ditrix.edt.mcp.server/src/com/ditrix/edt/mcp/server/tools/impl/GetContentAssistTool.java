@@ -28,8 +28,10 @@ import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.ide.IDE;
+import org.eclipse.xtext.resource.XtextResource;
 import org.eclipse.xtext.ui.editor.XtextEditor;
 import org.eclipse.xtext.ui.editor.XtextSourceViewer;
+import org.eclipse.xtext.ui.editor.model.IXtextDocument;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
@@ -49,7 +51,20 @@ import io.github.furstenheim.CopyDown;
 public class GetContentAssistTool implements IMcpTool
 {
     public static final String NAME = "get_content_assist"; //$NON-NLS-1$
-    
+
+    /**
+     * Maximum total time (ms) to wait for the Xtext editor/resource to become ready before
+     * computing content assist. Bounded so the call can never block forever; on timeout the
+     * tool returns a ToolResult.error so the caller can retry instead of seeing an empty success.
+     */
+    private static final long READINESS_TIMEOUT_MS = 1500L;
+
+    /**
+     * Delay (ms) between readiness polls. The UI event loop is pumped between polls so the
+     * Xtext reconciler (which loads/parses the resource) can make progress.
+     */
+    private static final long READINESS_POLL_DELAY_MS = 50L;
+
     @Override
     public String getName()
     {
@@ -288,7 +303,18 @@ public class GetContentAssistTool implements IMcpTool
         }
         
         XtextSourceViewer xtextSourceViewer = (XtextSourceViewer) sourceViewer;
-        
+
+        // DEFENSIVE readiness guard: on a rapid/cold call the editor's Xtext resource may not yet be
+        // parsed/linked (the reconciler runs asynchronously), and content assist would then return an
+        // empty proposal list. Wait briefly (bounded) for the resource to load+parse before computing.
+        // If it never becomes ready, return an error so the caller retries instead of getting an empty
+        // success that looks like "no proposals".
+        if (!waitForResourceReadiness(xtextSourceViewer))
+        {
+            return ToolResult.error(
+                "Xtext editor not ready for content assist (resource still loading). Please retry.").toJson(); //$NON-NLS-1$
+        }
+
         // Get content assist processor
         // We need to get it from the content assistant that's configured in the viewer
         ContentAssistant contentAssistant = (ContentAssistant) xtextSourceViewer.getContentAssistant();
@@ -316,12 +342,95 @@ public class GetContentAssistTool implements IMcpTool
         }
         
         ICompletionProposal[] proposals = processor.computeCompletionProposals(sourceViewer, offset);
-        
+
         // Format results
         return formatProposals(proposals, maxProposals, proposalOffset, containsFilter, extendedDocumentation,
                                line, column, file.getFullPath().toString());
     }
-    
+
+    /**
+     * Bounded, best-effort wait for the editor's Xtext resource to be loaded and parsed so content
+     * assist can produce proposals. Runs on the UI thread (the caller is inside Display.syncExec):
+     * polls readiness, pumping the UI event loop between polls so the asynchronous reconciler can
+     * make progress. Never blocks forever - capped by {@link #READINESS_TIMEOUT_MS}.
+     *
+     * @param viewer the Xtext source viewer of the open editor
+     * @return true if the resource became ready within the timeout, false otherwise
+     */
+    private boolean waitForResourceReadiness(XtextSourceViewer viewer)
+    {
+        IXtextDocument document = viewer.getXtextDocument();
+        if (document == null)
+        {
+            // No Xtext document available; let the caller proceed and surface any downstream error.
+            return true;
+        }
+
+        Display display = viewer.getTextWidget() != null ? viewer.getTextWidget().getDisplay() : Display.getCurrent();
+        long deadline = System.currentTimeMillis() + READINESS_TIMEOUT_MS;
+
+        while (true)
+        {
+            if (isResourceReady(document))
+            {
+                return true;
+            }
+
+            if (System.currentTimeMillis() >= deadline)
+            {
+                return false;
+            }
+
+            // Pump pending UI events so the reconciler/loader can advance, then sleep briefly.
+            if (display != null)
+            {
+                while (display.readAndDispatch())
+                {
+                    // drain queued events
+                }
+            }
+
+            try
+            {
+                Thread.sleep(READINESS_POLL_DELAY_MS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                // Stop waiting; let the readiness check decide the final answer.
+                return isResourceReady(document);
+            }
+        }
+    }
+
+    /**
+     * Checks whether the Xtext resource backing the document is loaded and has parsed content.
+     * Uses a non-blocking read access: if the resource is not yet available (state null or read
+     * lock not grantable) the default {@code false} is returned, which is treated as "not ready".
+     *
+     * @param document the Xtext document of the open editor
+     * @return true if the resource is loaded and has at least one root element
+     */
+    private boolean isResourceReady(IXtextDocument document)
+    {
+        try
+        {
+            Boolean ready = document.tryReadOnly((XtextResource resource) -> {
+                if (resource == null || !resource.isLoaded())
+                {
+                    return Boolean.FALSE;
+                }
+                return Boolean.valueOf(!resource.getContents().isEmpty());
+            }, () -> Boolean.FALSE);
+            return Boolean.TRUE.equals(ready);
+        }
+        catch (Exception e)
+        {
+            // Treat any read failure as "not ready yet" so we keep polling within the bound.
+            return false;
+        }
+    }
+
     /**
      * Formats completion proposals as JSON.
      * 
