@@ -61,7 +61,7 @@ public class GetObjectsByTagsTool implements IMcpTool
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringArrayProperty("tags", //$NON-NLS-1$
                 "Array of tag names to filter by (e.g. ['Important', 'NeedsReview']). " + //$NON-NLS-1$
-                "Returns objects that have ANY of these tags. Required.") //$NON-NLS-1$
+                "Returns objects that have ANY of these tags. Required.", true) //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
                 "Maximum number of objects to return per tag. Default: 100") //$NON-NLS-1$
             .build();

@@ -45,8 +45,10 @@ public class GetSymbolInfoTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "EDT project name", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("modulePath", //$NON-NLS-1$
+                "BSL module path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (canonical; alias: filePath)") //$NON-NLS-1$
             .stringProperty("filePath", //$NON-NLS-1$
-                "BSL file path from src/, e.g. 'CommonModules/MyModule/Module.bsl'", true) //$NON-NLS-1$
+                "Deprecated alias for modulePath") //$NON-NLS-1$
             .integerProperty("line", "Line number (1-based)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("column", "Column number (1-based)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -70,14 +72,23 @@ public class GetSymbolInfoTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, "projectName", "filePath"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
         }
 
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
+        // Canonical modulePath; accept the deprecated filePath alias for back-compat.
+        String filePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        if (filePath == null || filePath.isEmpty())
+        {
+            filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
+        }
+        if (filePath == null || filePath.isEmpty())
+        {
+            return ToolResult.error("modulePath is required (or the deprecated alias filePath)").toJson(); //$NON-NLS-1$
+        }
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
         String columnStr = JsonUtils.extractStringArgument(params, "column"); //$NON-NLS-1$
 

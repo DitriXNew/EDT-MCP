@@ -12,7 +12,7 @@
 ```
 get_symbol_info(
   projectName="TestConfiguration",
-  filePath="Configuration/ManagedApplicationModule.bsl",
+  modulePath="Configuration/ManagedApplicationModule.bsl",
   line=7, column=2)        # the "Greeting" in: Greeting = "Debug e2e OK";
 ```
 
@@ -53,7 +53,7 @@ Other table `Kind`s the fallback can emit: `Parameter`, `StaticFeatureAccess`, `
 - **UI-thread + editor.** Runs on `Display.syncExec`; avoid hammering this concurrently with other UI-thread tools (`get_form_screenshot`, `get_content_assist`). A blank/odd result is often an editor/render-mode issue, not a code bug.
 - **Annotation-hover quirk (observed live).** At some positions the configured hover is the annotation hover, and the tool returns its raw `toString()`, e.g. `com._1c.g5.v8.dt.bsl.ui.hover.BslAnnotationWithQuickFixesHover$BslAnnotationInfo@46df7d9b` (seen at `line=6,col=11` = `OnStart` decl, and `line=10,col=2` = `Message(`). This is a non-fatal, low-value payload — point the position at an identifier read inside a body (like `line=7,col=2`) for the type hover instead.
 - **Empty-position pre-check.** Whitespace, end-of-line, and inside a `//` comment return the literal `No symbol at this position.` (verified at `line=3,col=5`, inside `//TODO`). Comment detection ignores `//` inside string literals. If hover/EObject both find nothing on a real token you get `No symbol found at this position.`.
-- **Structured error contract.** Failures arrive as `{success:false, error:"…"}` with `isError:true` (the harness/protocol diverts a JSON error payload). The tool also converts its internal `"Error: …"` sentinels (no workbench/page, editor failures, position out of bounds, not a BSL Xtext editor) into that same `ToolResult.error` JSON at one boundary. Concrete errors: `projectName is required`, `filePath is required`, `Invalid line or column number`, `Line and column must be >= 1`, `Project not found: …`, `Project is closed: …`, `File not found: … in project …`, `Could not get symbol info`.
+- **Structured error contract.** Failures arrive as `{success:false, error:"…"}` with `isError:true` (the harness/protocol diverts a JSON error payload). The tool also converts its internal `"Error: …"` sentinels (no workbench/page, editor failures, position out of bounds, not a BSL Xtext editor) into that same `ToolResult.error` JSON at one boundary. Concrete errors: `projectName is required`, `modulePath is required` (deprecated alias `filePath` still accepted), `Invalid line or column number`, `Line and column must be >= 1`, `Project not found: …`, `Project is closed: …`, `File not found: … in project …`, `Could not get symbol info`.
 - **Flaky output channel.** The result text sometimes drops to a bare `Error`/`Done` instead of the real payload (this happened here on the file-not-found probe). Do NOT retry-spam — re-verify from the EDT log `D:\WS\EDT\.metadata\.log` (full request/response) and `git status`.
-- **`line`/`column` are 1-based** and parsed leniently (`33` or `33.0` both accepted). `filePath` is `src/`-relative (the canonical module param; resolved via `BslModuleUtils.resolveModuleFile`).
+- **`line`/`column` are 1-based** and parsed leniently (`33` or `33.0` both accepted). `modulePath` is `src/`-relative (canonical; deprecated alias `filePath`; resolved via `BslModuleUtils.resolveModuleFile`).
 - **Bilingual.** The hover text language (e.g. "Variable"/"Parameter", platform doc) follows EDT's UI locale, not a tool arg. Object NAMEs in BSL are programmatic (never translated); only platform TYPE tokens/keywords are dialect-aware.

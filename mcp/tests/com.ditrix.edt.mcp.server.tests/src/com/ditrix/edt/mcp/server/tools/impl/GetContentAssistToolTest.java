@@ -65,7 +65,8 @@ public class GetContentAssistToolTest
         String schema = new GetContentAssistTool().getInputSchema();
         assertNotNull(schema);
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"filePath\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"modulePath\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"filePath\"")); //$NON-NLS-1$ deprecated alias
         assertTrue(schema.contains("\"line\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"column\"")); //$NON-NLS-1$
     }
@@ -86,7 +87,7 @@ public class GetContentAssistToolTest
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new GetContentAssistTool().execute(params);
-        assertTrue(result.contains("filePath is required")); //$NON-NLS-1$
+        assertTrue(result.contains("modulePath is required")); //$NON-NLS-1$
     }
 
     @Test
