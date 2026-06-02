@@ -255,6 +255,24 @@ public class McpProtocolHandler
                 }
                 String fileName = tool.getResultFileName(params);
                 return buildToolCallResourceResponse(result, "text/markdown", fileName, requestId); //$NON-NLS-1$
+            case YAML:
+                // Same delivery as MARKDOWN (error diversion, signal append, plain
+                // text fallback) but the embedded resource advertises a YAML
+                // mimeType so it agrees with the .yaml resource URI and the body.
+                if (isJsonErrorPayload(result))
+                {
+                    return buildToolCallJsonResponse(result, requestId);
+                }
+                if (signal != null)
+                {
+                    result = result + "\n\n---\n# USER SIGNAL: " + signal.getMessage();
+                }
+                if (plainTextMode)
+                {
+                    return buildToolCallTextResponse(result, requestId);
+                }
+                String yamlFileName = tool.getResultFileName(params);
+                return buildToolCallResourceResponse(result, "text/yaml", yamlFileName, requestId); //$NON-NLS-1$
             case IMAGE:
                 // Images always returned as embedded resource (ignore plain text mode)
                 // For images, user signals are ignored

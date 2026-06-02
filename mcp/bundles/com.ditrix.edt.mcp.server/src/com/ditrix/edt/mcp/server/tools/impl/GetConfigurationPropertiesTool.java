@@ -60,10 +60,11 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        // Human-readable YAML body (errors still travel as structured JSON via the
-        // protocol's isJsonErrorPayload diversion). See card
-        // get-configuration-properties-yaml-output.
-        return ResponseType.MARKDOWN;
+        // Human-readable YAML body delivered as a YAML embedded resource, so the
+        // response type, the .yaml resource URI and the body's mimeType all agree
+        // (errors still travel as structured JSON via the protocol's
+        // isJsonErrorPayload diversion). See card get-configuration-properties-yaml-output.
+        return ResponseType.YAML;
     }
 
     @Override
@@ -182,7 +183,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
             // maps are omitted so the output stays clean (the old JSON path emitted
             // empty objects like copyright:{}). Errors still go through
             // ToolResult.error(...).toJson() above and are delivered as structured
-            // JSON via the protocol diversion, independent of this MARKDOWN body.
+            // JSON via the protocol diversion, independent of this YAML body.
             StringBuilder yaml = new StringBuilder();
             appendScalar(yaml, "name", configuration.getName()); //$NON-NLS-1$
             appendMap(yaml, "synonym", toLocalizedMap(configuration.getSynonym())); //$NON-NLS-1$

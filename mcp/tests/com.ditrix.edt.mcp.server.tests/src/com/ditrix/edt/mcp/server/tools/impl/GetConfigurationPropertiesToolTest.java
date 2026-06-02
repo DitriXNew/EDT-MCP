@@ -38,11 +38,13 @@ public class GetConfigurationPropertiesToolTest
     }
 
     @Test
-    public void testResponseTypeMarkdown()
+    public void testResponseTypeYaml()
     {
-        // Switched from JSON to MARKDOWN: the tool now emits a human-readable YAML
-        // body (errors still travel as structured JSON via the protocol diversion).
-        assertEquals(ResponseType.MARKDOWN, new GetConfigurationPropertiesTool().getResponseType());
+        // The tool emits a human-readable YAML body, so the response type is YAML
+        // (the protocol maps it to a text/yaml resource that agrees with the .yaml
+        // file name). Errors still travel as structured JSON via the protocol
+        // diversion. A MARKDOWN type would mis-advertise the body as text/markdown.
+        assertEquals(ResponseType.YAML, new GetConfigurationPropertiesTool().getResponseType());
     }
 
     @Test
@@ -50,6 +52,16 @@ public class GetConfigurationPropertiesToolTest
     {
         assertEquals("configuration-properties.yaml", //$NON-NLS-1$
             new GetConfigurationPropertiesTool().getResultFileName(new java.util.HashMap<>()));
+    }
+
+    @Test
+    public void testResponseTypeAndFileNameAgreeOnYaml()
+    {
+        // The three metadata pieces must agree: a YAML response type, a .yaml
+        // resource URI, and (via the protocol) a YAML mimeType.
+        GetConfigurationPropertiesTool tool = new GetConfigurationPropertiesTool();
+        assertEquals(ResponseType.YAML, tool.getResponseType());
+        assertTrue(tool.getResultFileName(new java.util.HashMap<>()).endsWith(".yaml")); //$NON-NLS-1$
     }
 
     @Test

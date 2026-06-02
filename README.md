@@ -1125,7 +1125,7 @@ A practical example of this loop is automating the translation of an actively-de
 ### Output Formats
 
 - **Markdown tools**: `list_projects`, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description`, all LanguageTool tools - return Markdown as EmbeddedResource with `mimeType: text/markdown`
-- **YAML tools**: `get_configuration_properties` - returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/markdown`)
+- **YAML tools**: `get_configuration_properties` - returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`)
 - **JSON tools**: `clean_project`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml` - return JSON with `structuredContent`
 - **Text tools**: `get_edt_version` - return plain text
 

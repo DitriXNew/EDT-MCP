@@ -27,6 +27,8 @@ public interface IMcpTool
         JSON,
         /** Markdown response returned as EmbeddedResource with mimeType */
         MARKDOWN,
+        /** YAML response returned as EmbeddedResource with a text/yaml mimeType */
+        YAML,
         /** Image response returned as EmbeddedResource with image/* mimeType */
         IMAGE
     }

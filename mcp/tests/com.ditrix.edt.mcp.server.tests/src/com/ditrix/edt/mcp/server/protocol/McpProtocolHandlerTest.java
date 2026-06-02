@@ -361,6 +361,22 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testYamlDeliveredAsResourceWithYamlMimeType()
+    {
+        // A YAML-responseType tool is delivered as an embedded resource whose
+        // mimeType agrees with the YAML body (text/yaml), not text/markdown.
+        registry.register(new StubTypedTool("yaml_ok", "key: value\n", IMcpTool.ResponseType.YAML)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String response = handler.processRequest(buildToolCallRequest(1, "yaml_ok", null)); //$NON-NLS-1$
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertFalse("normal yaml must not carry isError", result.has("isError")); //$NON-NLS-1$
+        assertEquals("resource",
+            result.getAsJsonArray("content").get(0).getAsJsonObject().get("type").getAsString());
+        assertTrue("yaml resource must advertise text/yaml", response.contains("text/yaml")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("yaml resource must not be text/markdown", response.contains("text/markdown")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testTextErrorPayloadDeliveredAsJsonError()
     {
         registry.register(new StubTypedTool("txt_fail",
