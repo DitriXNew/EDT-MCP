@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.tools;
 
 import java.util.Map;
 
+import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
+
 /**
  * Interface for MCP tool implementations.
  * Each tool provides a specific capability to MCP clients.
@@ -84,5 +86,18 @@ public interface IMcpTool
     default String getResultFileName(Map<String, String> params)
     {
         return getName() + ".md"; //$NON-NLS-1$
+    }
+
+    /**
+     * Returns the MCP behavioral annotations (hints) for this tool, included in
+     * the {@code tools/list} response. Default is {@code null}, which lets the
+     * central {@code ToolAnnotationClassifier} derive the hints from the tool
+     * name. Override to provide explicit annotations for a specific tool.
+     *
+     * @return the tool annotations, or {@code null} to use the central classifier
+     */
+    default ToolAnnotations getAnnotations()
+    {
+        return null;
     }
 }

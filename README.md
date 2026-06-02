@@ -1133,6 +1133,19 @@ A practical example of this loop is automating the translation of an actively-de
 
 Whatever a tool's normal output format above, it reports a **failure** the same way: a JSON payload `{"success": false, "error": "<message>"}` that the server delivers as a structured tool error (`isError: true`) regardless of the declared response type. The `error` field is always present (a `null` exception message is coalesced to `Unknown error`) and the message carries no redundant `Error:` prefix. A client detects failure via `isError` / `success: false` and reads `error` for the reason — no markdown parsing required. Success and purely *informational* results (for example "No references found", or a not-found accompanied by a list of valid alternatives) stay in the tool's natural format.
 
+#### Tool annotations
+
+Every tool in the `tools/list` response carries an `annotations` object with the standard MCP behavioral hints, so a client can reason about a tool's effect before calling it. The hints are derived centrally from the tool name (a tool may override them):
+
+| Hint | Meaning | When set |
+|------|---------|----------|
+| `readOnlyHint` | The tool does not modify the workspace | `true` for `get_*` / `list_*` / `read_*` / `search_*` / `find_*` / `validate_*`; `false` for write and destructive tools |
+| `idempotentHint` | Repeating the call has no additional effect | `true` for the read-only tools above |
+| `destructiveHint` | The tool may perform a destructive or irreversible update | `true` for `delete_metadata_object`, `clean_project`, `update_database`, `rename_metadata_object`, `import_configuration_from_xml` |
+| `openWorldHint` | The tool interacts with an external/open world | always `false` — the server operates only on the local EDT workspace |
+
+Only hints that apply are emitted; unset hints are omitted from the JSON. Tools that write but are not destructive (for example `write_module_source`, `create_metadata_object`) carry `readOnlyHint: false` and `destructiveHint: false`.
+
 </details>
 
 ## API Endpoints

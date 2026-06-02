@@ -377,7 +377,12 @@ public class McpProtocolHandler
         {
             // Parse inputSchema from JSON string to JsonElement
             JsonElement schema = JsonParser.parseString(tool.getInputSchema());
-            result.addTool(tool.getName(), tool.getDescription(), schema);
+            // A tool may supply explicit annotations; otherwise the central
+            // classifier derives the MCP behavioral hints from the tool name.
+            Object annotations = tool.getAnnotations() != null
+                ? tool.getAnnotations()
+                : ToolAnnotationClassifier.classify(tool.getName());
+            result.addTool(tool.getName(), tool.getDescription(), schema, annotations);
         }
         
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));
