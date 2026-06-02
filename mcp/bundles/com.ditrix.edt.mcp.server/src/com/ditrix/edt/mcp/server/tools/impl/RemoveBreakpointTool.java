@@ -45,7 +45,8 @@ public class RemoveBreakpointTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .integerProperty("breakpointId", "Marker id returned by set_breakpoint") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("projectName", "EDT project name (when looking up by coordinates)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("module", "EDT module path or absolute path (when looking up by coordinates)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("modulePath", "EDT module path or absolute path (when looking up by coordinates)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("module", "Legacy alias for modulePath (deprecated)") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("lineNumber", "1-based line number (when looking up by coordinates)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -61,7 +62,11 @@ public class RemoveBreakpointTool implements IMcpTool
     {
         long breakpointId = JsonUtils.extractLongArgument(params, "breakpointId", -1L); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String module = JsonUtils.extractStringArgument(params, "module"); //$NON-NLS-1$
+        // modulePath is the canonical parameter; "module" is a legacy alias.
+        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String module = (modulePath != null && !modulePath.isEmpty())
+            ? modulePath
+            : JsonUtils.extractStringArgument(params, "module"); //$NON-NLS-1$
         int lineNumber = JsonUtils.extractIntArgument(params, "lineNumber", -1); //$NON-NLS-1$
 
         try
@@ -75,7 +80,7 @@ public class RemoveBreakpointTool implements IMcpTool
             {
                 if (module == null || module.isEmpty() || lineNumber < 1)
                 {
-                    return ToolResult.error("Provide either breakpointId or module+lineNumber").toJson(); //$NON-NLS-1$
+                    return ToolResult.error("Provide either breakpointId or modulePath+lineNumber").toJson(); //$NON-NLS-1$
                 }
                 IFile file = BreakpointUtils.resolveModuleFile(projectName, module);
                 if (file == null || !file.exists())

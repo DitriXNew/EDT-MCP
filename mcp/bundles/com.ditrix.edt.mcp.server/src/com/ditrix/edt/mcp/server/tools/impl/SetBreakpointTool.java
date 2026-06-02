@@ -51,9 +51,10 @@ public class SetBreakpointTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name (required when module is module-relative)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("module", //$NON-NLS-1$
-                "Module identifier — EDT module path (CommonModules/Foo/Module.bsl) or absolute file path (required)", true) //$NON-NLS-1$
+            .stringProperty("projectName", "EDT project name (required when modulePath is module-relative)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("modulePath", //$NON-NLS-1$
+                "Module identifier — EDT module path (CommonModules/Foo/Module.bsl) or absolute file path (required)") //$NON-NLS-1$
+            .stringProperty("module", "Legacy alias for modulePath (deprecated)") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("lineNumber", "1-based line number (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -68,12 +69,17 @@ public class SetBreakpointTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String module = JsonUtils.extractStringArgument(params, "module"); //$NON-NLS-1$
+        // modulePath is the canonical parameter; "module" is a legacy alias kept for
+        // one release. Both resolve through the same BreakpointUtils resolver.
+        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String module = (modulePath != null && !modulePath.isEmpty())
+            ? modulePath
+            : JsonUtils.extractStringArgument(params, "module"); //$NON-NLS-1$
         int lineNumber = JsonUtils.extractIntArgument(params, "lineNumber", -1); //$NON-NLS-1$
 
         if (module == null || module.isEmpty())
         {
-            return ToolResult.error("module is required").toJson(); //$NON-NLS-1$
+            return ToolResult.error("modulePath is required").toJson(); //$NON-NLS-1$
         }
         if (lineNumber < 1)
         {
@@ -84,7 +90,7 @@ public class SetBreakpointTool implements IMcpTool
         if (modulePathStyle && (projectName == null || projectName.isEmpty()))
         {
             return ToolResult.error(
-                    "projectName is required when module is given as an EDT module path").toJson(); //$NON-NLS-1$
+                    "projectName is required when modulePath is given as an EDT module path").toJson(); //$NON-NLS-1$
         }
 
         if (modulePathStyle)
@@ -112,6 +118,7 @@ public class SetBreakpointTool implements IMcpTool
                 + (degraded ? " (degraded — marker-only)" : "")); //$NON-NLS-1$ //$NON-NLS-2$
             ToolResult res = ToolResult.success()
                 .put("breakpointId", markerId) //$NON-NLS-1$
+                .put("modulePath", module) //$NON-NLS-1$
                 .put("module", module) //$NON-NLS-1$
                 .put("resolvedFile", file.getFullPath().toString()) //$NON-NLS-1$
                 .put("lineNumber", lineNumber); //$NON-NLS-1$

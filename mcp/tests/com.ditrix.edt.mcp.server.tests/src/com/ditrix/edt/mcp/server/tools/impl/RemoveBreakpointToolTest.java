@@ -60,7 +60,8 @@ public class RemoveBreakpointToolTest
         assertNotNull(schema);
         assertTrue(schema.contains("\"breakpointId\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"module\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"modulePath\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"module\"")); // legacy alias //$NON-NLS-1$
         assertTrue(schema.contains("\"lineNumber\"")); //$NON-NLS-1$
     }
 
@@ -72,6 +73,6 @@ public class RemoveBreakpointToolTest
         // no breakpointId (defaults to -1), no module/lineNumber coordinates
         Map<String, String> params = new HashMap<>();
         String result = new RemoveBreakpointTool().execute(params);
-        assertTrue(result.contains("Provide either breakpointId or module+lineNumber")); //$NON-NLS-1$
+        assertTrue(result.contains("Provide either breakpointId or modulePath+lineNumber")); //$NON-NLS-1$
     }
 }

@@ -59,7 +59,8 @@ public class SetBreakpointToolTest
         String schema = new SetBreakpointTool().getInputSchema();
         assertNotNull(schema);
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"module\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"modulePath\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"module\"")); // legacy alias //$NON-NLS-1$
         assertTrue(schema.contains("\"lineNumber\"")); //$NON-NLS-1$
     }
 
@@ -71,7 +72,7 @@ public class SetBreakpointToolTest
         Map<String, String> params = new HashMap<>();
         params.put("lineNumber", "10"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new SetBreakpointTool().execute(params);
-        assertTrue(result.contains("module is required")); //$NON-NLS-1$
+        assertTrue(result.contains("modulePath is required")); //$NON-NLS-1$
     }
 
     @Test
@@ -90,10 +91,22 @@ public class SetBreakpointToolTest
     public void testModuleRelativePathRequiresProjectName()
     {
         Map<String, String> params = new HashMap<>();
-        // a module-relative (non-absolute) path with no projectName
+        // a module-relative (non-absolute) path with no projectName, via the legacy 'module' alias
         params.put("module", "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("lineNumber", "10"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new SetBreakpointTool().execute(params);
-        assertTrue(result.contains("projectName is required when module is given as an EDT module path")); //$NON-NLS-1$
+        assertTrue(result.contains("projectName is required when modulePath is given as an EDT module path")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testModulePathPrimaryIsRead()
+    {
+        Map<String, String> params = new HashMap<>();
+        // canonical 'modulePath' (module-relative) with no projectName reaches the same
+        // projectName-required guard, proving modulePath is read as the primary param.
+        params.put("modulePath", "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("lineNumber", "10"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBreakpointTool().execute(params);
+        assertTrue(result.contains("projectName is required when modulePath is given as an EDT module path")); //$NON-NLS-1$
     }
 }
