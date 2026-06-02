@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -23,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -161,31 +163,52 @@ public class GetMetadataDetailsTool implements IMcpTool
         
         StringBuilder sb = new StringBuilder();
         sb.append("# Metadata Details: ").append(projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        
+
+        // Per-object outcomes are split into two channels so a structural client
+        // can tell a failed object from data: successfully resolved objects render
+        // as data in the body, while failures are collected and emitted as a
+        // dedicated, clearly-delimited machine-readable table at the end. A
+        // per-object failure is NOT a whole-call failure, so it stays in this
+        // success body (the top-level ToolResult.error channel above is reserved
+        // for whole-call failures such as a missing project or configuration).
+        List<String[]> failures = new ArrayList<>();
+
         // Process each FQN
         for (String fqn : objectFqns)
         {
-            String details = formatObjectDetails(config, fqn, full, effectiveLanguage);
-            sb.append(details);
+            MdObject mdObject = resolveObject(config, fqn);
+            if (mdObject == null)
+            {
+                failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
+                continue;
+            }
+            sb.append(MetadataFormatterRegistry.format(mdObject, full, effectiveLanguage));
             sb.append("\n---\n\n"); //$NON-NLS-1$
         }
-        
+
+        if (!failures.isEmpty())
+        {
+            sb.append(formatFailures(failures));
+        }
+
         return sb.toString();
     }
-    
+
     /**
-     * Formats details for a single metadata object.
+     * Resolves a single FQN to its metadata object, or {@code null} when the FQN
+     * is malformed or the object does not exist. A {@code null} result is a
+     * per-object failure (recorded in the machine-readable failures table), never
+     * a whole-call failure.
      */
-    private String formatObjectDetails(Configuration config, String fqn,
-                                        boolean full, String language)
+    private MdObject resolveObject(Configuration config, String fqn)
     {
         // Parse FQN: Type.Name
         String[] parts = fqn.split("\\."); //$NON-NLS-1$
         if (parts.length < 2)
         {
-            return "**Error:** Invalid FQN: " + fqn + ". Expected format: Type.Name (e.g. Catalog.Products)\n"; //$NON-NLS-1$ //$NON-NLS-2$
+            return null;
         }
-        
+
         String mdType = parts[0];
         String mdName = parts[1];
 
@@ -196,15 +219,41 @@ public class GetMetadataDetailsTool implements IMcpTool
             mdType = normalized;
         }
 
-        // Find the object
-        MdObject mdObject = MetadataTypeUtils.findObject(config, mdType, mdName);
-        if (mdObject == null)
-        {
-            return "**Error:** Object not found: " + fqn + "\n"; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        
-        // Use the new formatter registry
-        return MetadataFormatterRegistry.format(mdObject, full, language);
+        return MetadataTypeUtils.findObject(config, mdType, mdName);
     }
-    
+
+    /**
+     * Builds the machine-readable reason for a FQN that {@link #resolveObject}
+     * could not resolve. The reason becomes data in the failures table, never
+     * prose mixed into the data body.
+     */
+    String describeResolutionFailure(String fqn)
+    {
+        String[] parts = fqn.split("\\."); //$NON-NLS-1$
+        if (parts.length < 2)
+        {
+            return "Invalid FQN. Expected format: Type.Name (e.g. Catalog.Products)"; //$NON-NLS-1$
+        }
+        return "Object not found"; //$NON-NLS-1$
+    }
+
+    /**
+     * Renders the per-object failures as a dedicated, clearly-delimited
+     * machine-readable section. Every cell goes through the shared table builder,
+     * so an FQN or reason containing '|' or a newline cannot break the table. The
+     * heading marker {@code ## Errors} lets a structural client locate failed
+     * objects without scraping prose out of the data body.
+     */
+    String formatFailures(List<String[]> failures)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Errors\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("FQN", "Status", "Reason")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String[] failure : failures)
+        {
+            sb.append(MarkdownUtils.tableRow(failure[0], "ERROR", failure[1])); //$NON-NLS-1$
+        }
+        return sb.toString();
+    }
+
 }
