@@ -39,3 +39,11 @@ Read-only инструменты навигации и чтения. Доки н
 - Workspace/listing: [list_projects](references/navigation/list_projects.md), [list_modules](references/navigation/list_modules.md).
 - Source: [read_module_source](references/navigation/read_module_source.md), [read_method_source](references/navigation/read_method_source.md), [get_module_structure](references/navigation/get_module_structure.md).
 - AST/refs: [go_to_definition](references/navigation/go_to_definition.md), [find_references](references/navigation/find_references.md), [get_method_call_hierarchy](references/navigation/get_method_call_hierarchy.md), [get_symbol_info](references/navigation/get_symbol_info.md), [get_content_assist](references/navigation/get_content_assist.md).
+
+## Индекс — metadata-read (`references/metadata-read/`) — English
+
+Read-only чтение модели конфигурации (объекты, детали, свойства, подсистемы, теги). Английский, каждый с реальным live-вызовом на `TestConfiguration`.
+- Объекты: [get_metadata_objects](references/metadata-read/get_metadata_objects.md), [get_metadata_details](references/metadata-read/get_metadata_details.md).
+- Конфигурация: [get_configuration_properties](references/metadata-read/get_configuration_properties.md) (теперь YAML).
+- Подсистемы: [list_subsystems](references/metadata-read/list_subsystems.md), [get_subsystem_content](references/metadata-read/get_subsystem_content.md).
+- Теги: [get_tags](references/metadata-read/get_tags.md), [get_objects_by_tags](references/metadata-read/get_objects_by_tags.md).
