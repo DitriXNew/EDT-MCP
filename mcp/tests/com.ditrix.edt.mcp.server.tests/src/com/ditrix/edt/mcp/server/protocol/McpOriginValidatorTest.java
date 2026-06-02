@@ -82,4 +82,16 @@ public class McpOriginValidatorTest
     {
         assertFalse(McpOriginValidator.isValidOrigin(""));
     }
+
+    @Test
+    public void testLookAlikeHostRejected()
+    {
+        // A naive startsWith check accepted these look-alikes; exact-host matching
+        // (prefix exactly, or prefix immediately followed by ':') must reject them.
+        assertFalse(McpOriginValidator.isValidOrigin("http://localhost.attacker.com"));
+        assertFalse(McpOriginValidator.isValidOrigin("http://127.0.0.1.attacker.com"));
+        assertFalse(McpOriginValidator.isValidOrigin("https://localhost.evil.example"));
+        assertFalse(McpOriginValidator.isValidOrigin("http://localhostx"));
+        assertFalse(McpOriginValidator.isValidOrigin("http://127.0.0.1.attacker.com:8765"));
+    }
 }

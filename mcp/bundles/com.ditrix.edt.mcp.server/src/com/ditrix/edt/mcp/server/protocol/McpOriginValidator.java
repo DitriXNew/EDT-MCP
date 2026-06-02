@@ -37,12 +37,28 @@ public final class McpOriginValidator
      */
     public static boolean isValidOrigin(String origin)
     {
-        return origin.startsWith("http://localhost") || //$NON-NLS-1$
-               origin.startsWith("http://127.0.0.1") || //$NON-NLS-1$
-               origin.startsWith("https://localhost") || //$NON-NLS-1$
-               origin.startsWith("https://127.0.0.1") || //$NON-NLS-1$
+        return isLoopbackHost(origin, "http://localhost") || //$NON-NLS-1$
+               isLoopbackHost(origin, "http://127.0.0.1") || //$NON-NLS-1$
+               isLoopbackHost(origin, "https://localhost") || //$NON-NLS-1$
+               isLoopbackHost(origin, "https://127.0.0.1") || //$NON-NLS-1$
                origin.startsWith("file://") || //$NON-NLS-1$
                origin.equals("null") || //$NON-NLS-1$ // Local HTML files send "null" as origin
                origin.startsWith("vscode-webview://"); //$NON-NLS-1$
+    }
+
+    /**
+     * Exact host match: the origin must be exactly {@code prefix} (scheme://host)
+     * or {@code prefix} immediately followed by {@code ':'} (a port). This rejects
+     * look-alike hosts such as {@code http://localhost.attacker.com} that a naive
+     * {@code startsWith} would accept. An {@code Origin} header carries no path
+     * component, so no {@code '/'} handling is required.
+     *
+     * @param origin the Origin header value (non-null)
+     * @param prefix the scheme://host prefix to match exactly
+     * @return true if the origin is exactly the prefix or the prefix + port
+     */
+    private static boolean isLoopbackHost(String origin, String prefix)
+    {
+        return origin.equals(prefix) || origin.startsWith(prefix + ":"); //$NON-NLS-1$
     }
 }

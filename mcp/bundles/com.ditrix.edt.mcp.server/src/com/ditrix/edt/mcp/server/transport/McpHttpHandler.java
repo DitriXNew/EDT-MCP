@@ -60,6 +60,27 @@ public class McpHttpHandler implements HttpHandler
         // SSE GET streams are offloaded to a dedicated pool so they never
         // occupy threads in the main request pool or block the dispatcher.
         String method = exchange.getRequestMethod();
+
+        // Optional shared-token auth — applies to every method, including SSE GET.
+        // No-op when PREF_AUTH_TOKEN is empty (default), preserving prior behavior.
+        if (!HttpTransport.isAuthorized(exchange))
+        {
+            try
+            {
+                HttpTransport.sendResponse(exchange, 401, JsonUtils.buildJsonRpcError(
+                    McpConstants.ERROR_INVALID_REQUEST, "Unauthorized", null)); //$NON-NLS-1$
+            }
+            catch (IOException ignored)
+            {
+                // client already gone
+            }
+            finally
+            {
+                exchange.close();
+            }
+            return;
+        }
+
         if ("GET".equals(method)) //$NON-NLS-1$
         {
             handleSseInDedicatedPool(exchange);

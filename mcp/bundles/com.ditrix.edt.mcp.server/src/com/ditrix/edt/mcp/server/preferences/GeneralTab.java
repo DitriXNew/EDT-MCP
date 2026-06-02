@@ -47,6 +47,8 @@ public class GeneralTab
     private Spinner portSpinner;
     private Button autoStartCheck;
     private Text checksFolderText;
+    private Button allowRemoteCheck;
+    private Text authTokenText;
     private Button plainTextCheck;
     private Button showTagsCheck;
     private Combo tagStyleCombo;
@@ -112,6 +114,22 @@ public class GeneralTab
         GridData autoStartGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         autoStartGd.horizontalSpan = 3;
         autoStartCheck.setLayoutData(autoStartGd);
+
+        // Allow remote (non-loopback) access — security
+        allowRemoteCheck = new Button(composite, SWT.CHECK);
+        allowRemoteCheck.setText("Allow remote (non-loopback) access — set an auth token below"); //$NON-NLS-1$
+        allowRemoteCheck.setSelection(store.getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS));
+        GridData allowRemoteGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+        allowRemoteGd.horizontalSpan = 3;
+        allowRemoteCheck.setLayoutData(allowRemoteGd);
+
+        // Auth token (empty = authentication disabled)
+        createLabel("Auth token (empty = no auth):"); //$NON-NLS-1$
+        authTokenText = new Text(composite, SWT.BORDER | SWT.PASSWORD);
+        authTokenText.setText(store.getString(PreferenceConstants.PREF_AUTH_TOKEN));
+        GridData authTokenGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        authTokenGd.horizontalSpan = 2;
+        authTokenText.setLayoutData(authTokenGd);
 
         // Checks folder
         createLabel("Check descriptions folder:"); //$NON-NLS-1$
@@ -379,6 +397,8 @@ public class GeneralTab
         store.setValue(PreferenceConstants.PREF_AUTO_START, autoStartCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_CHECKS_FOLDER, checksFolderText.getText());
         store.setValue(PreferenceConstants.PREF_PLAIN_TEXT_MODE, plainTextCheck.getSelection());
+        store.setValue(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS, allowRemoteCheck.getSelection());
+        store.setValue(PreferenceConstants.PREF_AUTH_TOKEN, authTokenText.getText());
         store.setValue(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR, showTagsCheck.getSelection());
 
         int styleIdx = tagStyleCombo.getSelectionIndex();
@@ -403,6 +423,8 @@ public class GeneralTab
         autoStartCheck.setSelection(PreferenceConstants.DEFAULT_AUTO_START);
         checksFolderText.setText(PreferenceConstants.DEFAULT_CHECKS_FOLDER);
         plainTextCheck.setSelection(PreferenceConstants.DEFAULT_PLAIN_TEXT_MODE);
+        allowRemoteCheck.setSelection(PreferenceConstants.DEFAULT_ALLOW_REMOTE_ACCESS);
+        authTokenText.setText(PreferenceConstants.DEFAULT_AUTH_TOKEN);
         showTagsCheck.setSelection(PreferenceConstants.DEFAULT_TAGS_SHOW_IN_NAVIGATOR);
 
         // Find index for default style

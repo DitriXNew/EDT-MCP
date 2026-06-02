@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -15,6 +16,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.tools.BuiltInToolRegistrar;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
@@ -88,7 +90,36 @@ public class McpServer
         // Increase max response time to allow large responses (10 minutes)
         System.setProperty("sun.net.httpserver.maxRspTime", "600"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        server = HttpServer.create(new InetSocketAddress(port), 0);
+        // Bind to loopback only by default: the tool surface includes arbitrary-BSL
+        // (evaluate_expression) and destructive tools, so it must not be reachable
+        // from the network unless explicitly opted in. Set PREF_ALLOW_REMOTE_ACCESS
+        // to expose on all interfaces (pair it with PREF_AUTH_TOKEN).
+        boolean allowRemote = false;
+        Activator activator = Activator.getDefault();
+        if (activator != null)
+        {
+            allowRemote = activator.getPreferenceStore()
+                .getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS);
+        }
+        InetSocketAddress bindAddress = allowRemote
+            ? new InetSocketAddress(port)
+            : new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
+        server = HttpServer.create(bindAddress, 0);
+        Activator.logInfo("MCP Server binding to " //$NON-NLS-1$
+            + (allowRemote ? "all interfaces (remote access enabled)" : "loopback only") //$NON-NLS-1$ //$NON-NLS-2$
+            + " on port " + port); //$NON-NLS-1$
+        if (allowRemote)
+        {
+            String authToken = activator != null
+                ? activator.getPreferenceStore().getString(PreferenceConstants.PREF_AUTH_TOKEN)
+                : ""; //$NON-NLS-1$
+            if (authToken == null || authToken.isEmpty())
+            {
+                Activator.logWarning("SECURITY: MCP server is bound to all interfaces with NO auth token. " //$NON-NLS-1$
+                    + "Any host that can reach this port can invoke every tool (including arbitrary BSL). " //$NON-NLS-1$
+                    + "Set an auth token in MCP preferences."); //$NON-NLS-1$
+            }
+        }
 
         // MCP endpoints. The transport handlers read the live executors and
         // execution state back through this server instance.
