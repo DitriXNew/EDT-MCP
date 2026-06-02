@@ -74,6 +74,29 @@ public class JsonUtilsTest
         assertTrue(err.contains("objectFqn is required"));
     }
 
+    // --- requireArgument(Map, String, detail) ---
+
+    @Test
+    public void testRequireArgumentWithDetailPresentReturnsNull()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("modulePath", "CommonModules/M/Module.bsl");
+        assertNull(JsonUtils.requireArgument(params, "modulePath",
+            ". Example: CommonModules/MyModule/Module.bsl"));
+    }
+
+    @Test
+    public void testRequireArgumentWithDetailMissingAppendsDetail()
+    {
+        String err = JsonUtils.requireArgument(new HashMap<>(), "modulePath",
+            ". Example: CommonModules/MyModule/Module.bsl");
+        assertNotNull(err);
+        assertTrue(err.contains("\"success\":false"));
+        // Canonical text plus the verbatim detail suffix (both delimiter-free here).
+        assertTrue(err.contains("modulePath is required"));
+        assertTrue(err.contains("Example: CommonModules/MyModule/Module.bsl"));
+    }
+
     // --- requireArguments (variadic) ---
 
     @Test

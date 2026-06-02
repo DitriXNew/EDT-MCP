@@ -109,9 +109,10 @@ public class GetModuleStructureTool implements IMcpTool
         {
             return err;
         }
-        if (modulePath == null || modulePath.isEmpty())
+        err = JsonUtils.requireArgument(params, "modulePath", ". Example: 'CommonModules/MyModule/Module.bsl'"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
         {
-            return ToolResult.error("modulePath is required. Example: 'CommonModules/MyModule/Module.bsl'").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         // Try EMF approach first (on UI thread)

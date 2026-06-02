@@ -104,9 +104,10 @@ public class GetSubsystemContentTool implements IMcpTool
         String subsystemFqn = JsonUtils.extractStringArgument(params, "subsystemFqn"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
 
-        if (subsystemFqn == null || subsystemFqn.isEmpty())
+        err = JsonUtils.requireArgument(params, "subsystemFqn", " (e.g. 'Subsystem.Sales')"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
         {
-            return ToolResult.error("subsystemFqn is required (e.g. 'Subsystem.Sales')").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         boolean recursive = JsonUtils.extractBooleanArgument(params, "recursive", false); //$NON-NLS-1$

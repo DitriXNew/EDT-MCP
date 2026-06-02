@@ -324,6 +324,28 @@ public final class JsonUtils
     }
 
     /**
+     * Variant of {@link #requireArgument(Map, String)} for tools that append a
+     * usage hint after the canonical "<name> is required" text. The {@code detail}
+     * is concatenated VERBATIM (it must include its own leading separator, e.g.
+     * ". Example: ..." or " (e.g. ...)"), so the produced message is identical to
+     * the previous inline guard.
+     *
+     * @param params the params map
+     * @param argumentName the required argument name
+     * @param detail the exact suffix to append after "<name> is required" (may be empty)
+     * @return the error JSON to return, or {@code null} when the argument is present
+     */
+    public static String requireArgument(Map<String, String> params, String argumentName, String detail)
+    {
+        String value = extractStringArgument(params, argumentName);
+        if (value == null || value.isEmpty())
+        {
+            return ToolResult.error(argumentName + " is required" + (detail == null ? "" : detail)).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
+    }
+
+    /**
      * Variadic form of {@link #requireArgument(Map, String)} for tools with
      * several required arguments. Checks the names in order and returns the
      * error for the FIRST missing/blank one (matching the behaviour of

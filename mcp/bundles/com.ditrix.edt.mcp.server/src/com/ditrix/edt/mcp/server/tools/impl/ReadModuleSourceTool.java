@@ -101,9 +101,10 @@ public class ReadModuleSourceTool implements IMcpTool
         int startLine = JsonUtils.extractIntArgument(params, "startLine", -1); //$NON-NLS-1$
         int endLine = JsonUtils.extractIntArgument(params, "endLine", -1); //$NON-NLS-1$
 
-        if (modulePath == null || modulePath.isEmpty())
+        err = JsonUtils.requireArgument(params, "modulePath", ". Example: 'CommonModules/MyModule/Module.bsl'"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
         {
-            return ToolResult.error("modulePath is required. Example: 'CommonModules/MyModule/Module.bsl'").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         // Get project

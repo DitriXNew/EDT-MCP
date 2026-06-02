@@ -120,21 +120,24 @@ public class RenameMetadataObjectTool implements IMcpTool
             }
         }
 
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArgument(params, "projectName", //$NON-NLS-1$
+            ". Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required. " + //$NON-NLS-1$
-                "Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}").toJson(); //$NON-NLS-1$
+            return err;
         }
-        if (objectFqn == null || objectFqn.isEmpty())
+        err = JsonUtils.requireArgument(params, "objectFqn", //$NON-NLS-1$
+            ". Examples: 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount', " //$NON-NLS-1$
+            + "'Catalog.Products.TabularSection.Prices'"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("objectFqn is required. " + //$NON-NLS-1$
-                "Examples: 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount', " + //$NON-NLS-1$
-                "'Catalog.Products.TabularSection.Prices'").toJson(); //$NON-NLS-1$
+            return err;
         }
-        if (newName == null || newName.isEmpty())
+        err = JsonUtils.requireArgument(params, "newName", //$NON-NLS-1$
+            ". Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("newName is required. " + //$NON-NLS-1$
-                "Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         final java.util.Set<Integer> finalDisableIndices = disableIndices;

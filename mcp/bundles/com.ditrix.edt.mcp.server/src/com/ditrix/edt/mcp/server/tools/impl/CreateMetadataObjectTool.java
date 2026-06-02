@@ -106,20 +106,23 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
         String comment = JsonUtils.extractStringArgument(params, "comment"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
 
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArgument(params, "projectName", //$NON-NLS-1$
+            ". Usage: {projectName: 'MyProject', metadataType: 'Catalog', name: 'Products'}"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required. " + //$NON-NLS-1$
-                "Usage: {projectName: 'MyProject', metadataType: 'Catalog', name: 'Products'}").toJson(); //$NON-NLS-1$
+            return err;
         }
-        if (metadataType == null || metadataType.isEmpty())
+        err = JsonUtils.requireArgument(params, "metadataType", //$NON-NLS-1$
+            ". Supported: " + SUPPORTED_TYPES_LIST + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        if (err != null)
         {
-            return ToolResult.error("metadataType is required. " + //$NON-NLS-1$
-                "Supported: " + SUPPORTED_TYPES_LIST + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            return err;
         }
-        if (name == null || name.isEmpty())
+        err = JsonUtils.requireArgument(params, "name", //$NON-NLS-1$
+            ". Usage: {metadataType: 'Catalog', name: 'Products'}"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("name is required. " + //$NON-NLS-1$
-                "Usage: {metadataType: 'Catalog', name: 'Products'}").toJson(); //$NON-NLS-1$
+            return err;
         }
         if (!isValidIdentifier(name))
         {

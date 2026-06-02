@@ -82,17 +82,19 @@ public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
         String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
 
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArgument(params, "projectName", //$NON-NLS-1$
+            ". Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products'}"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required. " + //$NON-NLS-1$
-                "Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products'}").toJson(); //$NON-NLS-1$
+            return err;
         }
-        if (objectFqn == null || objectFqn.isEmpty())
+        err = JsonUtils.requireArgument(params, "objectFqn", //$NON-NLS-1$
+            ". Examples: 'Catalog.Products' (delete whole catalog), " //$NON-NLS-1$
+            + "'Document.SalesOrder.Attribute.Amount' (delete attribute), " //$NON-NLS-1$
+            + "'Catalog.Products.TabularSection.Prices' (delete tabular section)"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("objectFqn is required. " + //$NON-NLS-1$
-                "Examples: 'Catalog.Products' (delete whole catalog), " + //$NON-NLS-1$
-                "'Document.SalesOrder.Attribute.Amount' (delete attribute), " + //$NON-NLS-1$
-                "'Catalog.Products.TabularSection.Prices' (delete tabular section)").toJson(); //$NON-NLS-1$
+            return err;
         }
 
         return executeInternal(projectName, objectFqn, confirm);

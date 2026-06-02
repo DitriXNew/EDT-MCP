@@ -96,21 +96,24 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
         String synonym = JsonUtils.extractStringArgument(params, "synonym"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
 
-        if (projectName == null || projectName.isEmpty())
+        String err = JsonUtils.requireArgument(params, "projectName", //$NON-NLS-1$
+            ". Usage: {projectName: 'MyProject', parentFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("projectName is required. " + //$NON-NLS-1$
-                "Usage: {projectName: 'MyProject', parentFqn: 'Catalog.Products', attributeName: 'Weight'}").toJson(); //$NON-NLS-1$
+            return err;
         }
-        if (parentFqn == null || parentFqn.isEmpty())
+        err = JsonUtils.requireArgument(params, "parentFqn", //$NON-NLS-1$
+            ". Examples: 'Catalog.Products', 'Document.SalesOrder'. " //$NON-NLS-1$
+            + "Usage: {parentFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("parentFqn is required. " + //$NON-NLS-1$
-                "Examples: 'Catalog.Products', 'Document.SalesOrder'. " + //$NON-NLS-1$
-                "Usage: {parentFqn: 'Catalog.Products', attributeName: 'Weight'}").toJson(); //$NON-NLS-1$
+            return err;
         }
-        if (attributeName == null || attributeName.isEmpty())
+        err = JsonUtils.requireArgument(params, "attributeName", //$NON-NLS-1$
+            ". Usage: {parentFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
+        if (err != null)
         {
-            return ToolResult.error("attributeName is required. " + //$NON-NLS-1$
-                "Usage: {parentFqn: 'Catalog.Products', attributeName: 'Weight'}").toJson(); //$NON-NLS-1$
+            return err;
         }
         if (!isValidIdentifier(attributeName))
         {
