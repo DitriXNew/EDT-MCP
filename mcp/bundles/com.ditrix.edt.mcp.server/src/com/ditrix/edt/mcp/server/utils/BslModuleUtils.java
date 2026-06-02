@@ -11,6 +11,7 @@ import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -20,6 +21,7 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
@@ -109,6 +111,24 @@ public final class BslModuleUtils
      */
     public static IFile resolveModuleFile(IProject project, String modulePath)
     {
+        if (modulePath == null || modulePath.isEmpty())
+        {
+            return null;
+        }
+        // Absolute filesystem path: resolve by location among workspace files,
+        // independent of the project. This is the single module resolver that
+        // accepts BOTH a src/-relative path and an absolute path (the form the
+        // debug tools pass); BreakpointUtils.resolveModuleFile delegates here.
+        if (looksLikeAbsolutePath(modulePath))
+        {
+            IFile[] files = ResourcesPlugin.getWorkspace().getRoot()
+                .findFilesForLocationURI(new File(modulePath).toURI());
+            return files.length > 0 ? files[0] : null;
+        }
+        if (project == null)
+        {
+            return null;
+        }
         IFile inSourceFolder = project.getFile(new Path(SOURCE_FOLDER).append(modulePath));
         if (inSourceFolder.exists())
         {
@@ -133,6 +153,29 @@ public final class BslModuleUtils
             Activator.logError("Error scanning project folders for module " + modulePath, e); //$NON-NLS-1$
         }
         return inSourceFolder;
+    }
+
+    /**
+     * Heuristic: a string is treated as an absolute filesystem path if it starts
+     * with a slash, a backslash, or matches a Windows drive prefix like {@code C:}.
+     * Used by {@link #resolveModuleFile(IProject, String)} to accept both
+     * src/-relative and absolute module paths.
+     *
+     * @param s the candidate path
+     * @return true if it looks like an absolute path
+     */
+    public static boolean looksLikeAbsolutePath(String s)
+    {
+        if (s == null || s.isEmpty())
+        {
+            return false;
+        }
+        char c0 = s.charAt(0);
+        if (c0 == '/' || c0 == '\\')
+        {
+            return true;
+        }
+        return s.length() >= 2 && s.charAt(1) == ':';
     }
 
     /**

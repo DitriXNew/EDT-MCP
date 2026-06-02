@@ -99,51 +99,34 @@ public final class BreakpointUtils
         {
             return null;
         }
-        if (looksLikeAbsolutePath(module))
+        // Single shared module resolver (BslModuleUtils.resolveModuleFile) handles
+        // BOTH an absolute filesystem path and a src/-relative path. For the
+        // absolute case the project is not needed (resolution is by location);
+        // for the src/-relative case resolve the project and pass it through.
+        IProject project = null;
+        if (!BslModuleUtils.looksLikeAbsolutePath(module))
         {
-            // Find IFile by location among workspace files
-            IFile[] files = ResourcesPlugin.getWorkspace().getRoot()
-                .findFilesForLocationURI(new java.io.File(module).toURI());
-            if (files.length > 0)
+            if (projectName == null || projectName.isEmpty())
             {
-                return files[0];
+                return null;
             }
-            return null;
+            project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+            if (project == null || !project.exists())
+            {
+                return null;
+            }
         }
-        if (projectName == null || projectName.isEmpty())
-        {
-            return null;
-        }
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
-        {
-            return null;
-        }
-        // Delegate to the shared resolver instead of re-inlining the src/ assumption:
-        // single source-folder seam, resilient to non-"src" layouts. (audit A27)
         return BslModuleUtils.resolveModuleFile(project, module);
     }
 
     /**
      * Heuristic: a string is treated as an absolute path if it starts with a slash,
-     * a backslash, or matches a Windows drive prefix like {@code C:}.
+     * a backslash, or matches a Windows drive prefix like {@code C:}. Delegates to
+     * the single implementation in {@link BslModuleUtils#looksLikeAbsolutePath(String)}.
      */
     public static boolean looksLikeAbsolutePath(String s)
     {
-        if (s == null || s.isEmpty())
-        {
-            return false;
-        }
-        char c0 = s.charAt(0);
-        if (c0 == '/' || c0 == '\\')
-        {
-            return true;
-        }
-        if (s.length() >= 2 && s.charAt(1) == ':')
-        {
-            return true;
-        }
-        return false;
+        return BslModuleUtils.looksLikeAbsolutePath(s);
     }
 
     /**
