@@ -14,9 +14,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.IProgressMonitor;
 
-import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
@@ -32,6 +30,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -268,14 +267,9 @@ public class GetProjectErrorsTool implements IMcpTool
                 
                 if (bmModel != null)
                 {
-                    bmModel.executeReadonlyTask(new AbstractBmTask<Void>("CollectProjectErrors") //$NON-NLS-1$
-                    {
-                        @Override
-                        public Void execute(IBmTransaction transaction, IProgressMonitor monitor)
-                        {
-                            collector.run();
-                            return null;
-                        }
+                    BmTransactions.<Void>read(bmModel, "CollectProjectErrors", (tx, pm) -> { //$NON-NLS-1$
+                        collector.run();
+                        return null;
                     });
                 }
                 else
