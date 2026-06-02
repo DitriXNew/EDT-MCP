@@ -86,8 +86,10 @@ public class SearchInCodeTool implements IMcpTool
                 "Case-sensitive search. Default: false") //$NON-NLS-1$
             .booleanProperty("isRegex", //$NON-NLS-1$
                 "Treat query as regular expression. Default: false") //$NON-NLS-1$
-            .integerProperty("maxResults", //$NON-NLS-1$
+            .integerProperty("limit", //$NON-NLS-1$
                 "Maximum number of matches to return with context. Default: 100, max: 500") //$NON-NLS-1$
+            .integerProperty("maxResults", //$NON-NLS-1$
+                "Deprecated alias for 'limit' (Maximum number of matches). Default: 100, max: 500") //$NON-NLS-1$
             .integerProperty("contextLines", //$NON-NLS-1$
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
             .stringProperty("fileMask", //$NON-NLS-1$
@@ -139,7 +141,10 @@ public class SearchInCodeTool implements IMcpTool
             .getParameterValue(NAME, "maxResults", DEFAULT_MAX_RESULTS); //$NON-NLS-1$
         int configuredContextLines = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, "contextLines", DEFAULT_CONTEXT_LINES); //$NON-NLS-1$
-        int maxResults = JsonUtils.extractIntArgument(params, "maxResults", configuredMaxResults); //$NON-NLS-1$
+        // Canonical param is "limit" (consistent with other paginated tools);
+        // "maxResults" is kept as a deprecated alias (precedence: limit, then maxResults).
+        int maxResultsAlias = JsonUtils.extractIntArgument(params, "maxResults", configuredMaxResults); //$NON-NLS-1$
+        int maxResults = JsonUtils.extractIntArgument(params, "limit", maxResultsAlias); //$NON-NLS-1$
         int contextLines = JsonUtils.extractIntArgument(params, "contextLines", configuredContextLines); //$NON-NLS-1$
         String fileMask = JsonUtils.extractStringArgument(params, "fileMask"); //$NON-NLS-1$
         String metadataType = JsonUtils.extractStringArgument(params, "metadataType"); //$NON-NLS-1$
@@ -164,7 +169,7 @@ public class SearchInCodeTool implements IMcpTool
         }
 
         // Clamp limits
-        maxResults = Math.min(Math.max(1, maxResults), ABSOLUTE_MAX_RESULTS);
+        maxResults = Pagination.clampLimit(maxResults, ABSOLUTE_MAX_RESULTS);
         contextLines = Math.min(Math.max(0, contextLines), MAX_CONTEXT_LINES);
 
         // Get project
