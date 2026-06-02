@@ -829,15 +829,10 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             
             // Execute readonly task to get object by FQN
             final String targetFqn = fqn;
-            org.eclipse.emf.ecore.EObject targetObject = (org.eclipse.emf.ecore.EObject) bmModel.executeReadonlyTask(
-                new com._1c.g5.v8.bm.integration.AbstractBmTask<com._1c.g5.v8.bm.core.IBmObject>("Get object by FQN") {
-                    @Override
-                    public com._1c.g5.v8.bm.core.IBmObject execute(
-                            com._1c.g5.v8.bm.core.IBmTransaction transaction, 
-                            org.eclipse.core.runtime.IProgressMonitor progressMonitor) {
-                        return transaction.getTopObjectByFqn(targetFqn);
-                    }
-                });
+            org.eclipse.emf.ecore.EObject targetObject = (org.eclipse.emf.ecore.EObject)
+                com.ditrix.edt.mcp.server.utils.BmTransactions.<com._1c.g5.v8.bm.core.IBmObject>read(
+                    bmModel, "Get object by FQN",
+                    (transaction, progressMonitor) -> transaction.getTopObjectByFqn(targetFqn));
             
             if (targetObject != null) {
                 // Open in editor using EDT's OpenHelper

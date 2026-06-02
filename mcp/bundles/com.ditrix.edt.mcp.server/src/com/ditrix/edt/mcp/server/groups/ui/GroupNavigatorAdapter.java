@@ -13,7 +13,6 @@ import java.util.Objects;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IAdaptable;
-import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.resource.ImageDescriptor;
@@ -21,13 +20,12 @@ import org.eclipse.ui.model.WorkbenchAdapter;
 import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
 
 /**
  * Navigator adapter for virtual folder groups.
@@ -141,32 +139,28 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
                 return null;
             }
             
-            return bmModel.executeReadonlyTask(
-                new AbstractBmTask<EObject>("Resolve FQN to EObject") {
-                    @Override
-                    public EObject execute(IBmTransaction transaction, IProgressMonitor progressMonitor) {
-                        String[] parts = fqn.split("\\.");
-                        if (parts.length < 2) {
-                            return null;
-                        }
-                        
-                        // Build top-level FQN (first two parts: Type.Name)
-                        String topFqn = parts[0] + "." + parts[1];
-                        IBmObject topObject = transaction.getTopObjectByFqn(topFqn);
-                        
-                        if (topObject == null) {
-                            return null;
-                        }
-                        
-                        // If it's a top-level object, return it
-                        if (parts.length == 2) {
-                            return (EObject) topObject;
-                        }
-                        
-                        // Otherwise resolve nested object
-                        return resolveNestedObject((EObject) topObject, parts, 2);
-                    }
-                });
+            return BmTransactions.<EObject>read(bmModel, "Resolve FQN to EObject", (transaction, progressMonitor) -> {
+                String[] parts = fqn.split("\\.");
+                if (parts.length < 2) {
+                    return null;
+                }
+
+                // Build top-level FQN (first two parts: Type.Name)
+                String topFqn = parts[0] + "." + parts[1];
+                IBmObject topObject = transaction.getTopObjectByFqn(topFqn);
+
+                if (topObject == null) {
+                    return null;
+                }
+
+                // If it's a top-level object, return it
+                if (parts.length == 2) {
+                    return (EObject) topObject;
+                }
+
+                // Otherwise resolve nested object
+                return resolveNestedObject((EObject) topObject, parts, 2);
+            });
         } catch (Exception e) {
             Activator.logError("Failed to resolve FQN: " + fqn, e);
             return null;

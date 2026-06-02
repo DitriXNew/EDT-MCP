@@ -13,12 +13,9 @@ import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
-import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.common.EObjectTrie;
 import com._1c.g5.v8.dt.common.IEObjectTrie;
@@ -28,6 +25,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
 import com.ditrix.edt.mcp.server.tags.model.TagStorage;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
 
 import org.eclipse.xtext.naming.QualifiedName;
 
@@ -150,11 +148,9 @@ public class TagTrieStateProvider implements INavigatorContentProviderStateProvi
         }
         
         try {
-            return bmModel.executeReadonlyTask(new AbstractBmTask<EObjectTrie>("Build tag search Trie") {
-                @Override
-                public EObjectTrie execute(IBmTransaction transaction, IProgressMonitor monitor) {
+            return BmTransactions.<EObjectTrie>read(bmModel, "Build tag search Trie", (transaction, monitor) -> {
                     EObjectTrie trie = new EObjectTrie();
-                    
+
                     for (String fqn : matchingFqns) {
                         try {
                             // FQN format: TypeName.ObjectName or TypeName.ObjectName.SubTypeName.SubName
@@ -233,7 +229,6 @@ public class TagTrieStateProvider implements INavigatorContentProviderStateProvi
                     }
                     
                     return trie;
-                }
             });
         } catch (Exception e) {
             Activator.logError("Error building Trie", e);
