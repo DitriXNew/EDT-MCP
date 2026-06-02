@@ -25,6 +25,7 @@ import java.util.Set;
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
@@ -306,6 +307,172 @@ public class GetProjectErrorsToolTest
         assertEquals(0, filteredOut[0]);
     }
 
+    // ========== resolveBslModulePath (pure URI parsing) ==========
+
+    @Test
+    public void testResolveBslModulePathFromPlatformUri()
+    {
+        // platform:/resource/<Project>/src/<modulePath>.bsl -> <modulePath>.bsl
+        assertEquals("CommonModules/MyModule/Module.bsl", //$NON-NLS-1$
+            GetProjectErrorsTool.resolveBslModulePath(
+                "platform:/resource/MyProject/src/CommonModules/MyModule/Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveBslModulePathStripsFragment()
+    {
+        // The EMF problem URI carries an object fragment after '#'; it must be trimmed.
+        assertEquals("Documents/SalesOrder/ObjectModule.bsl", //$NON-NLS-1$
+            GetProjectErrorsTool.resolveBslModulePath(
+                "platform:/resource/Proj/src/Documents/SalesOrder/ObjectModule.bsl#/0/@methods.1")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveBslModulePathNullWhenNotBsl()
+    {
+        // A non-.bsl resource (e.g. a metadata MDO file) is not a module location.
+        assertNull(GetProjectErrorsTool.resolveBslModulePath(
+            "platform:/resource/Proj/src/Catalogs/Products/Products.mdo")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveBslModulePathNullWhenNoSrcSegment()
+    {
+        // A .bsl path that is not under the source folder yields no usable modulePath.
+        assertNull(GetProjectErrorsTool.resolveBslModulePath(
+            "platform:/resource/Proj/build/Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveBslModulePathNullWhenNotPlatformResource()
+    {
+        // A non platform:/resource URI cannot be turned into a src-relative module path.
+        assertNull(GetProjectErrorsTool.resolveBslModulePath(
+            "file:/C:/tmp/src/Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveBslModulePathNullForNullOrEmpty()
+    {
+        assertNull(GetProjectErrorsTool.resolveBslModulePath(null));
+        assertNull(GetProjectErrorsTool.resolveBslModulePath("")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveBslModulePathNullForGarbage()
+    {
+        // An unparseable / unrelated string must never be guessed into a path.
+        assertNull(GetProjectErrorsTool.resolveBslModulePath("not a uri at all")); //$NON-NLS-1$
+    }
+
+    // ========== populateModuleLocation (extraInfo -> ErrorInfo) ==========
+
+    @Test
+    public void testPopulateModuleLocationSetsPathAndLine()
+    {
+        Marker marker = mock(Marker.class);
+        when(marker.getExtraInfo()).thenReturn(extraInfo(
+            "platform:/resource/Proj/src/CommonModules/MyModule/Module.bsl#/0", "42")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ErrorInfo error = new ErrorInfo();
+        GetProjectErrorsTool.populateModuleLocation(marker, error);
+
+        assertEquals("CommonModules/MyModule/Module.bsl", error.modulePath); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(42), error.line);
+    }
+
+    @Test
+    public void testPopulateModuleLocationNullExtraInfo()
+    {
+        Marker marker = mock(Marker.class);
+        when(marker.getExtraInfo()).thenReturn(null);
+
+        ErrorInfo error = new ErrorInfo();
+        GetProjectErrorsTool.populateModuleLocation(marker, error);
+
+        assertNull(error.modulePath);
+        assertNull(error.line);
+    }
+
+    @Test
+    public void testPopulateModuleLocationNonBslUriLeavesBothNull()
+    {
+        // A metadata (non-BSL) marker resolves to no module location even if a line exists.
+        Marker marker = mock(Marker.class);
+        when(marker.getExtraInfo()).thenReturn(extraInfo(
+            "platform:/resource/Proj/src/Catalogs/Products/Products.mdo", "7")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ErrorInfo error = new ErrorInfo();
+        GetProjectErrorsTool.populateModuleLocation(marker, error);
+
+        assertNull(error.modulePath);
+        assertNull(error.line);
+    }
+
+    @Test
+    public void testPopulateModuleLocationPathWithoutLine()
+    {
+        // A BSL marker may carry a uriToProblem but no line; path is set, line stays null.
+        Marker marker = mock(Marker.class);
+        when(marker.getExtraInfo()).thenReturn(extraInfo(
+            "platform:/resource/Proj/src/CommonModules/MyModule/Module.bsl", null)); //$NON-NLS-1$
+
+        ErrorInfo error = new ErrorInfo();
+        GetProjectErrorsTool.populateModuleLocation(marker, error);
+
+        assertEquals("CommonModules/MyModule/Module.bsl", error.modulePath); //$NON-NLS-1$
+        assertNull(error.line);
+    }
+
+    @Test
+    public void testPopulateModuleLocationDropsNonPositiveLine()
+    {
+        // A 0 / negative line is not a usable 1-based locator; keep the path, drop the line.
+        Marker marker = mock(Marker.class);
+        when(marker.getExtraInfo()).thenReturn(extraInfo(
+            "platform:/resource/Proj/src/CommonModules/MyModule/Module.bsl", "0")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ErrorInfo error = new ErrorInfo();
+        GetProjectErrorsTool.populateModuleLocation(marker, error);
+
+        assertEquals("CommonModules/MyModule/Module.bsl", error.modulePath); //$NON-NLS-1$
+        assertNull(error.line);
+    }
+
+    // ========== buildIfMatches: structural locator end-to-end ==========
+
+    @Test
+    public void testBuildIfMatchesPopulatesLocatorForBslMarker()
+    {
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("CommonModule.MyModule"); //$NON-NLS-1$
+        when(marker.getExtraInfo()).thenReturn(extraInfo(
+            "platform:/resource/Proj/src/CommonModules/MyModule/Module.bsl#/0", "13")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), null, new int[]{0}, new int[]{0});
+
+        assertNotNull(error);
+        assertEquals("CommonModules/MyModule/Module.bsl", error.modulePath); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(13), error.line);
+    }
+
+    @Test
+    public void testBuildIfMatchesLeavesLocatorNullForMetadataMarker()
+    {
+        // A marker without BSL extraInfo (e.g. a metadata-object marker) gets no locator.
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Products"); //$NON-NLS-1$
+        // getExtraInfo() is left unstubbed -> returns null -> no locator.
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), null, new int[]{0}, new int[]{0});
+
+        assertNotNull(error);
+        assertNull(error.modulePath);
+        assertNull(error.line);
+    }
+
     // ========== severity enum (schema + validation) ==========
 
     @Test
@@ -377,5 +544,38 @@ public class GetProjectErrorsToolTest
         Set<String> set = new HashSet<>();
         set.add(value);
         return set;
+    }
+
+    /**
+     * Builds an {@link IExtraInfoMap} carrying the raw marker keys the structural locator
+     * reads: {@code uriToProblem} and {@code line}. Mirrors how EDT stores them as strings
+     * on the marker, so {@code StandardExtraInfo.TEXT_*.get(...)} parses them the same way at
+     * runtime. A null value leaves that key unset.
+     *
+     * @param uriToProblem the EMF problem URI string, or null to omit it
+     * @param line the 1-based line as a string, or null to omit it
+     */
+    private static IExtraInfoMap extraInfo(String uriToProblem, String line)
+    {
+        ExtraInfoMap map = new ExtraInfoMap();
+        if (uriToProblem != null)
+        {
+            map.put("uriToProblem", uriToProblem); //$NON-NLS-1$
+        }
+        if (line != null)
+        {
+            map.put("line", line); //$NON-NLS-1$
+        }
+        return map;
+    }
+
+    /**
+     * Minimal {@link IExtraInfoMap} backed by a {@link HashMap}. {@code IExtraInfoMap} is an
+     * interface of default methods over {@code Map<String, String>}, so delegating the map
+     * behaviour to {@link HashMap} is enough for the locator helpers under test.
+     */
+    private static final class ExtraInfoMap extends HashMap<String, String> implements IExtraInfoMap
+    {
+        private static final long serialVersionUID = 1L;
     }
 }

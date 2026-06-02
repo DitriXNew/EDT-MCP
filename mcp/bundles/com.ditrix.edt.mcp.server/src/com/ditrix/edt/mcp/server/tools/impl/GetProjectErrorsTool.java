@@ -15,13 +15,16 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.emf.common.util.URI;
 
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
+import com._1c.g5.v8.dt.validation.marker.StandardExtraInfo;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 
@@ -32,6 +35,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
@@ -73,6 +77,7 @@ public class GetProjectErrorsTool implements IMcpTool
     {
         return "Get detailed configuration problems from EDT. " + //$NON-NLS-1$
                "Returns check code, description, object location, severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL, NONE). " + //$NON-NLS-1$
+               "For problems that point at a BSL module, also returns a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
                "Can filter by specific objects using FQN (e.g. 'Document.SalesOrder', 'Catalog.Products'). " + //$NON-NLS-1$
                "Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура')."; //$NON-NLS-1$
     }
@@ -325,23 +330,27 @@ public class GetProjectErrorsTool implements IMcpTool
                 }
                 md.append("\n\n"); //$NON-NLS-1$
                 
-                // Build table matching EDT's Configuration Problems view
-                md.append("| Description | Location | Check code | Has docs |\n"); //$NON-NLS-1$
-                md.append("|-------------|----------|------------|----------|\n"); //$NON-NLS-1$
-                
+                // Build table matching EDT's Configuration Problems view, plus a structural
+                // locator (Module path + Line) that feeds read_module_source / set_breakpoint.
+                // Built via the shared MarkdownUtils table builder so every cell is escaped.
+                md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
+                    "Module path", "Line", "Check code", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
                 for (ErrorInfo error : errors)
                 {
-                    md.append("| ").append(MarkdownUtils.escapeForTable(error.message)); //$NON-NLS-1$
-                    md.append(" | ").append(MarkdownUtils.escapeForTable(error.objectPresentation)); //$NON-NLS-1$
-                    
                     // Show symbolic check ID if available, otherwise show check code
-                    String displayCheckId = error.checkId != null && !error.checkId.isEmpty() 
-                        ? error.checkId 
+                    String displayCheckId = error.checkId != null && !error.checkId.isEmpty()
+                        ? error.checkId
                         : error.checkCode;
-                    md.append(" | `").append(MarkdownUtils.escapeForTable(displayCheckId)).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
-                    
-                    // Add documentation availability flag
-                    md.append(" | ").append(error.hasDocumentation ? "true" : "false").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    // Wrap the check code in backticks; tableRow escapes the cell, so do NOT
+                    // pre-escape here (double-escaping would mangle a pipe in the id).
+                    String checkCell = "`" + (displayCheckId != null ? displayCheckId : "") + "`"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    String modulePathCell = error.modulePath != null ? error.modulePath : ""; //$NON-NLS-1$
+                    String lineCell = error.line != null ? error.line.toString() : ""; //$NON-NLS-1$
+
+                    md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
+                        modulePathCell, lineCell, checkCell,
+                        error.hasDocumentation ? "true" : "false")); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
             
@@ -454,6 +463,12 @@ public class GetProjectErrorsTool implements IMcpTool
         error.hasDocumentation = symbolicCheckId != null && !symbolicCheckId.isEmpty()
             && GetCheckDescriptionTool.hasCheckDocumentation(symbolicCheckId);
         error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
+
+        // Structural locator: for a marker that points at a BSL text position the
+        // module path + 1-based line live in the marker's own extraInfo map (no model
+        // read), so they are safe to read regardless of the transaction boundary. Both
+        // stay null for markers that do not resolve to a BSL module location.
+        populateModuleLocation(marker, error);
         if (presentationResolved)
         {
             error.objectPresentation = objectPresentation;
@@ -519,6 +534,98 @@ public class GetProjectErrorsTool implements IMcpTool
     }
     
     /**
+     * Populates the structural BSL locator ({@code modulePath} + {@code line}) on the
+     * {@link ErrorInfo} when the marker points at a position inside a BSL module, leaving
+     * both {@code null} otherwise.
+     *
+     * <p>The locator is read straight from the marker's {@link Marker#getExtraInfo()} map —
+     * {@link StandardExtraInfo#TEXT_URI_TO_PROBLEM} (the EMF platform URI of the problem) and
+     * {@link StandardExtraInfo#TEXT_LINE} (1-based line). EDT fills these for text/Xtext
+     * issues (e.g. BSL editor markers; see {@code BmAwareResourceValidatorListener}). Because
+     * the values are plain strings already stored on the marker, reading them touches NO
+     * model state and is therefore safe with respect to the BM read-transaction boundary.</p>
+     *
+     * <p>The module path is only set when the URI genuinely resolves to a {@code .bsl} module
+     * under the source folder, so it matches the {@code modulePath} shape accepted by
+     * {@code read_module_source} / {@code set_breakpoint}. The line is only set when the path
+     * is set, so a caller never gets a line without a module to apply it to.</p>
+     */
+    static void populateModuleLocation(Marker marker, ErrorInfo error)
+    {
+        IExtraInfoMap extraInfo = marker.getExtraInfo();
+        if (extraInfo == null)
+        {
+            return;
+        }
+
+        String uriToProblem = extraInfo.get(StandardExtraInfo.TEXT_URI_TO_PROBLEM);
+        String modulePath = resolveBslModulePath(uriToProblem);
+        if (modulePath == null)
+        {
+            // No BSL module location: leave both null rather than inventing a path.
+            return;
+        }
+        error.modulePath = modulePath;
+
+        Integer line = extraInfo.get(StandardExtraInfo.TEXT_LINE);
+        if (line != null && line.intValue() >= 1)
+        {
+            error.line = line;
+        }
+    }
+
+    /**
+     * Derives a source-folder-relative BSL module path (the shape
+     * {@code read_module_source} / {@code set_breakpoint} accept, e.g.
+     * {@code "CommonModules/MyModule/Module.bsl"}) from an EMF problem URI string, or
+     * {@code null} when the URI is absent, unparseable, or does not point at a {@code .bsl}
+     * module under the source folder.
+     *
+     * <p>The URI is a platform resource URI like
+     * {@code platform:/resource/<Project>/src/<modulePath>.bsl#<fragment>}. The fragment is
+     * trimmed and the {@code <Project>/src/} prefix is stripped via
+     * {@link BslModuleUtils#extractModulePath(String)} (the single source of truth for the
+     * {@code /src/} assumption). A URI whose platform path contains no {@code /src/} segment,
+     * or whose file extension is not {@code bsl}, yields {@code null} — never a guessed path.</p>
+     */
+    static String resolveBslModulePath(String uriToProblem)
+    {
+        if (uriToProblem == null || uriToProblem.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            URI uri = URI.createURI(uriToProblem).trimFragment();
+            // Only BSL module problems carry a path read_module_source/set_breakpoint can use.
+            if (!"bsl".equalsIgnoreCase(uri.fileExtension())) //$NON-NLS-1$
+            {
+                return null;
+            }
+            // platform:/resource/<Project>/src/<modulePath>.bsl -> <Project>/src/<modulePath>.bsl
+            String platformString = uri.isPlatformResource() ? uri.toPlatformString(true) : null;
+            if (platformString == null || platformString.isEmpty())
+            {
+                return null;
+            }
+            // extractModulePath returns the part after "/src/"; require the segment to be
+            // present so we never hand back a project-relative or unrelated path.
+            String marker = "/" + BslModuleUtils.SOURCE_FOLDER + "/"; //$NON-NLS-1$ //$NON-NLS-2$
+            if (!platformString.contains(marker))
+            {
+                return null;
+            }
+            String modulePath = BslModuleUtils.extractModulePath(platformString);
+            return modulePath != null && !modulePath.isEmpty() ? modulePath : null;
+        }
+        catch (Exception e)
+        {
+            // A malformed URI is not actionable as a locator; fall back to no location.
+            return null;
+        }
+    }
+
+    /**
      * Helper class to store error info.
      */
     static class ErrorInfo
@@ -528,5 +635,7 @@ public class GetProjectErrorsTool implements IMcpTool
         String message;
         String objectPresentation;
         boolean hasDocumentation;  // Whether documentation exists for this check
+        String modulePath;         // Source-folder-relative BSL module path, or null
+        Integer line;              // 1-based line inside the module, or null
     }
 }
