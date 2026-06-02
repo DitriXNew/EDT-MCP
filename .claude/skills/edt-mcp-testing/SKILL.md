@@ -47,3 +47,9 @@ Read-only чтение модели конфигурации (объекты, д
 - Конфигурация: [get_configuration_properties](references/metadata-read/get_configuration_properties.md) (теперь YAML).
 - Подсистемы: [list_subsystems](references/metadata-read/list_subsystems.md), [get_subsystem_content](references/metadata-read/get_subsystem_content.md).
 - Теги: [get_tags](references/metadata-read/get_tags.md), [get_objects_by_tags](references/metadata-read/get_objects_by_tags.md).
+
+## Индекс — query / problems / misc (read-only) — English
+
+- **query** (`references/query/`): [validate_query](references/query/validate_query.md) (диалект-aware, `valid:false` ≠ failure).
+- **problems** (`references/problems/`): [get_project_errors](references/problems/get_project_errors.md), [get_problem_summary](references/problems/get_problem_summary.md), [get_check_description](references/problems/get_check_description.md) (читает `<checkId>.md` из настраиваемой папки; фича OFF по умолчанию; checkId санитизируется — dotted-коды не резолвятся).
+- **misc** (`references/misc/`): [get_edt_version](references/misc/get_edt_version.md) (TEXT, liveness-проба), [get_platform_documentation](references/misc/get_platform_documentation.md), [get_bookmarks](references/misc/get_bookmarks.md), [get_tasks](references/misc/get_tasks.md), [get_applications](references/misc/get_applications.md).
