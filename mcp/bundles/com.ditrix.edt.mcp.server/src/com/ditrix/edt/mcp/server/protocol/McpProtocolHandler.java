@@ -21,6 +21,7 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolCallResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolsListResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.Log;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
@@ -32,6 +33,13 @@ import com.google.gson.JsonSyntaxException;
  */
 public class McpProtocolHandler
 {
+    /**
+     * A tools/call slower than this (wall-clock, ms) is logged at WARNING so an
+     * operator can spot it in the EDT log without enabling debug. Failed calls are
+     * also logged at WARNING regardless of duration.
+     */
+    static final long SLOW_TOOL_CALL_MS = 5000L;
+
     private final McpToolRegistry toolRegistry;
     
     /**
@@ -190,11 +198,15 @@ public class McpProtocolHandler
             server.setCurrentToolName(tool.getName());
         }
         
-        // Execute tool
-        String result;
+        // Execute tool, timing the call so each tools/call gets exactly one
+        // completion log line (success or failure) carrying name + duration + outcome.
+        String result = null;
+        long startNanos = System.nanoTime();
+        boolean threw = true;
         try
         {
             result = tool.execute(params);
+            threw = false;
         }
         finally
         {
@@ -203,6 +215,13 @@ public class McpProtocolHandler
             {
                 server.setCurrentToolName(null);
             }
+
+            long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;
+            // A thrown exception (escaping execute, contract violation) counts as an
+            // error outcome; otherwise reuse the same JSON-error detection the
+            // response path uses so the logged outcome matches the wire isError.
+            boolean isError = threw || isJsonErrorPayload(result);
+            logToolCallCompletion(tool.getName(), elapsedMs, isError);
         }
         
         // Check if user sent a signal during execution
@@ -299,6 +318,58 @@ public class McpProtocolHandler
         }
     }
     
+    /**
+     * Emits the single per-call completion log line. Routed to WARNING when the
+     * outcome is an error or the call was slow (so an operator sees it without
+     * enabling debug), INFO otherwise. The line content is produced by the pure
+     * {@link #formatCompletionLine(String, long, boolean)} so it can be unit-tested.
+     *
+     * @param toolName the tool name
+     * @param elapsedMs wall-clock duration in milliseconds
+     * @param isError whether the call ended in an error outcome
+     */
+    private void logToolCallCompletion(String toolName, long elapsedMs, boolean isError)
+    {
+        String line = formatCompletionLine(toolName, elapsedMs, isError);
+        if (isWarnWorthy(elapsedMs, isError))
+        {
+            Log.warning(line);
+        }
+        else
+        {
+            Log.info(line);
+        }
+    }
+
+    /**
+     * Pure classifier: a completion is logged at WARNING when it failed or when it
+     * exceeded {@link #SLOW_TOOL_CALL_MS}. Exposed (package-private) for testing.
+     *
+     * @param elapsedMs wall-clock duration in milliseconds
+     * @param isError whether the call ended in an error outcome
+     * @return {@code true} if the completion should be logged at WARNING
+     */
+    static boolean isWarnWorthy(long elapsedMs, boolean isError)
+    {
+        return isError || elapsedMs >= SLOW_TOOL_CALL_MS;
+    }
+
+    /**
+     * Pure formatter for the per-call completion log line. Kept side-effect-free so
+     * the content (tool name, duration, outcome) is unit-testable without a live log.
+     *
+     * @param toolName the tool name (may be {@code null})
+     * @param elapsedMs wall-clock duration in milliseconds
+     * @param isError whether the call ended in an error outcome
+     * @return the formatted completion line
+     */
+    static String formatCompletionLine(String toolName, long elapsedMs, boolean isError)
+    {
+        return "Completed tools/call: " + toolName //$NON-NLS-1$
+            + " in " + elapsedMs + "ms" //$NON-NLS-1$ //$NON-NLS-2$
+            + ", outcome=" + (isError ? "error" : "ok"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
     /**
      * Adds user signal to a JSON result string using Gson for proper JSON handling.
      */

@@ -398,6 +398,61 @@ public class McpProtocolHandlerTest
             result.has("isError") && result.get("isError").getAsBoolean());
     }
 
+    // === Per-call completion log line (pure helpers) ===
+
+    @Test
+    public void testCompletionLineCarriesNameDurationAndOkOutcome()
+    {
+        String line = McpProtocolHandler.formatCompletionLine("list_projects", 12, false);
+        assertTrue("must reference the tool name", line.contains("list_projects"));
+        assertTrue("must carry the duration in ms", line.contains("12ms"));
+        assertTrue("a non-error outcome must read ok", line.contains("outcome=ok"));
+        assertFalse("a non-error outcome must not read error", line.contains("outcome=error"));
+    }
+
+    @Test
+    public void testCompletionLineReflectsErrorOutcome()
+    {
+        String line = McpProtocolHandler.formatCompletionLine("write_module_source", 3, true);
+        assertTrue("must reference the tool name", line.contains("write_module_source"));
+        assertTrue("must carry the duration in ms", line.contains("3ms"));
+        assertTrue("an error outcome must read error", line.contains("outcome=error"));
+    }
+
+    @Test
+    public void testCompletionLineToleratesNullToolName()
+    {
+        // Defensive: a null tool name must not throw while formatting the line.
+        String line = McpProtocolHandler.formatCompletionLine(null, 0, false);
+        assertNotNull(line);
+        assertTrue("zero duration is still rendered", line.contains("0ms"));
+    }
+
+    @Test
+    public void testWarnWorthyOnError()
+    {
+        // An error outcome is warn-worthy even when the call was fast.
+        assertTrue("a fast error must still warn", McpProtocolHandler.isWarnWorthy(1, true));
+    }
+
+    @Test
+    public void testWarnWorthyOnSlowSuccess()
+    {
+        // A success at/over the slow threshold is warn-worthy.
+        assertTrue("at the threshold must warn",
+            McpProtocolHandler.isWarnWorthy(McpProtocolHandler.SLOW_TOOL_CALL_MS, false));
+        assertTrue("over the threshold must warn",
+            McpProtocolHandler.isWarnWorthy(McpProtocolHandler.SLOW_TOOL_CALL_MS + 1, false));
+    }
+
+    @Test
+    public void testNotWarnWorthyOnFastSuccess()
+    {
+        // A fast success is logged at INFO, not WARNING.
+        assertFalse("a fast success must not warn",
+            McpProtocolHandler.isWarnWorthy(McpProtocolHandler.SLOW_TOOL_CALL_MS - 1, false));
+    }
+
     // === Helpers ===
 
     private String buildJsonRpcRequest(Object id, String method, String paramsJson)
