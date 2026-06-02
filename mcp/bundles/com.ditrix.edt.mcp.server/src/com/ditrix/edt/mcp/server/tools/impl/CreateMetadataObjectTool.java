@@ -12,14 +12,12 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
@@ -32,6 +30,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
@@ -232,49 +231,40 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
 
         try
         {
-            bmModel.execute(new AbstractBmTask<Void>("CreateMetadataObject") //$NON-NLS-1$
+            // Mutation MUST run inside a write transaction (CLAUDE.md don't #1);
+            // BmTransactions.write makes that boundary explicit at the call site.
+            BmTransactions.<Void>write(bmModel, "CreateMetadataObject", (tx, pm) -> //$NON-NLS-1$
             {
-                @Override
-                @SuppressWarnings("unchecked")
-                public Void execute(IBmTransaction tx, IProgressMonitor pm)
+                Configuration cfg = (Configuration)tx.getObjectById(configBmId);
+                if (cfg == null)
                 {
-                    Configuration cfg = (Configuration)tx.getObjectById(configBmId);
-                    if (cfg == null)
-                    {
-                        throw new RuntimeException("Configuration not found in transaction"); //$NON-NLS-1$
-                    }
-
-                    MdObject newObject = (MdObject)factory.create(eClass, version);
-                    if (newObject == null)
-                    {
-                        throw new RuntimeException("Factory returned null for type: " + eClass.getName()); //$NON-NLS-1$
-                    }
-
-                    newObject.setName(name);
-                    if (synonym != null && !synonym.isEmpty())
-                    {
-                        newObject.getSynonym().put(synonymLanguage, synonym);
-                    }
-                    if (comment != null && !comment.isEmpty())
-                    {
-                        newObject.setComment(comment);
-                    }
-
-                    // Register as a BM top object so EDT persists it into its own .mdo file
-                    tx.attachTopObject((IBmObject)newObject, fqn);
-
-                    // Add to the configuration collection
-                    Object collection = cfg.eGet(cfg.eClass().getEStructuralFeature(refName));
-                    if (!(collection instanceof EList))
-                    {
-                        throw new RuntimeException("Configuration feature '" + refName //$NON-NLS-1$
-                            + "' is not a list"); //$NON-NLS-1$
-                    }
-                    ((EList<MdObject>)collection).add(newObject);
-
-                    factory.fillDefaultReferences(newObject);
-                    return null;
+                    throw new RuntimeException("Configuration not found in transaction"); //$NON-NLS-1$
                 }
+
+                MdObject newObject = (MdObject)factory.create(eClass, version);
+                if (newObject == null)
+                {
+                    throw new RuntimeException("Factory returned null for type: " + eClass.getName()); //$NON-NLS-1$
+                }
+
+                newObject.setName(name);
+                if (synonym != null && !synonym.isEmpty())
+                {
+                    newObject.getSynonym().put(synonymLanguage, synonym);
+                }
+                if (comment != null && !comment.isEmpty())
+                {
+                    newObject.setComment(comment);
+                }
+
+                // Register as a BM top object so EDT persists it into its own .mdo file
+                tx.attachTopObject((IBmObject)newObject, fqn);
+
+                // Add to the configuration collection
+                addToConfigurationCollection(cfg, refName, newObject);
+
+                factory.fillDefaultReferences(newObject);
+                return null;
             });
         }
         catch (Exception e)
@@ -306,6 +296,28 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
         // Delegates to the shared resolver so reads and writes agree on the same
         // language CODE key (see MetadataLanguageUtils).
         return MetadataLanguageUtils.resolveLanguageCode(config, language);
+    }
+
+    /**
+     * Adds the freshly created object to the Configuration's collection for its
+     * metadata type. Kept as a separate method so the unchecked cast to the typed
+     * {@link EList} (the EMF feature is reflectively typed via {@code eGet}) lives
+     * in one {@code @SuppressWarnings} place, leaving the write lambda clean.
+     *
+     * @param cfg the configuration re-fetched inside the transaction
+     * @param refName the structural feature name for the type collection
+     * @param newObject the object to add
+     */
+    @SuppressWarnings("unchecked")
+    private static void addToConfigurationCollection(Configuration cfg, String refName, MdObject newObject)
+    {
+        Object collection = cfg.eGet(cfg.eClass().getEStructuralFeature(refName));
+        if (!(collection instanceof EList))
+        {
+            throw new RuntimeException("Configuration feature '" + refName //$NON-NLS-1$
+                + "' is not a list"); //$NON-NLS-1$
+        }
+        ((EList<MdObject>)collection).add(newObject);
     }
 
     private static boolean isValidIdentifier(String name)
