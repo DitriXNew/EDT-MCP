@@ -110,6 +110,12 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             // the AI agent gets a clear error instead of an opaque API
             // exception.
             Path importPath = Paths.get(importPathStr).toAbsolutePath().normalize();
+            boolean outsideWorkspace = isOutsideWorkspace(importPath);
+            if (outsideWorkspace)
+            {
+                Activator.logWarning("import_configuration_from_xml: importPath is OUTSIDE the EDT workspace: " //$NON-NLS-1$
+                    + importPath + " (trusted-caller-only — see README Security & trust model)."); //$NON-NLS-1$
+            }
             if (!Files.exists(importPath))
             {
                 return ToolResult.error(
@@ -166,11 +172,16 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                 created.refreshLocal(IResource.DEPTH_INFINITE, monitor);
             }
 
-            return ToolResult.success()
+            ToolResult result = ToolResult.success()
                 .put("importPath", importPath.toString()) //$NON-NLS-1$
                 .put("project", projectName) //$NON-NLS-1$
-                .put("message", "Configuration imported from XML files.") //$NON-NLS-1$ //$NON-NLS-2$
-                .toJson();
+                .put("message", "Configuration imported from XML files."); //$NON-NLS-1$ //$NON-NLS-2$
+            if (outsideWorkspace)
+            {
+                result.put("securityNote", //$NON-NLS-1$
+                    "importPath is outside the EDT workspace; ensure the caller is trusted."); //$NON-NLS-1$
+            }
+            return result.toJson();
         }
         catch (InvocationTargetException e)
         {
@@ -187,6 +198,31 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         {
             Activator.logError("Unexpected error in import_configuration_from_xml", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
+        }
+    }
+
+    /**
+     * Returns true if {@code path} is not under the Eclipse workspace root.
+     * Used to flag (not block) configuration imports from external locations.
+     * Deliberately fails OPEN (returns false on any uncertainty): this is an
+     * advisory-only check, so a false negative merely omits a warning and never
+     * rejects a legitimate import.
+     */
+    private static boolean isOutsideWorkspace(Path path)
+    {
+        try
+        {
+            org.eclipse.core.runtime.IPath loc = ResourcesPlugin.getWorkspace().getRoot().getLocation();
+            if (loc == null)
+            {
+                return false;
+            }
+            Path wsRoot = loc.toFile().toPath().toAbsolutePath().normalize();
+            return !path.startsWith(wsRoot);
+        }
+        catch (Exception e)
+        {
+            return false; // cannot determine — do not flag
         }
     }
 }
