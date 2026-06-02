@@ -522,6 +522,20 @@ class TestRunner:
         "DataProcessor",
     ]
 
+    # Russian (singular) type token for each created type, sourced verbatim from
+    # the resolver's own map (MetadataTypeUtils.MetadataTypeInfo). Used to assert
+    # that 'EnglishToken.Name' and 'РусскийТокен.Name' resolve to the same object.
+    _RU_TYPE_TOKEN = {
+        "Catalog": "Справочник",
+        "Document": "Документ",
+        "InformationRegister": "РегистрСведений",
+        "AccumulationRegister": "РегистрНакопления",
+        "Enum": "Перечисление",
+        "CommonModule": "ОбщийМодуль",
+        "Report": "Отчет",
+        "DataProcessor": "Обработка",
+    }
+
     @classmethod
     def e2e_artifact_fqns(cls) -> list[str]:
         """FQNs created or touched by metadata-write E2E tests (deterministic names)."""
@@ -693,6 +707,20 @@ class TestRunner:
         # not prove the key is correct — inspect the full synonym map instead, where
         # full=true renders it as a "| <language> | <value> |" table.
         self._assert_synonym_language_code(fqn, synonym)
+
+        # 4. Bilingual TYPE-token identity for this created type: addressing the
+        # same object by its English token ("Document.X") and its Russian one
+        # ("Документ.X") must resolve to the same object and render byte-identically
+        # (the object NAME is programmatic; only the TYPE token is bilingual). This
+        # extends test_metadata_bilingual_type_token (Catalog only) across every
+        # created type, so the resolver's whole EN/RU type map is exercised e2e.
+        ru_token = self._RU_TYPE_TOKEN.get(metadata_type)
+        if ru_token:
+            self._assert_type_token_identity(
+                "get_metadata_details",
+                {"projectName": self.config.project, "objectFqns": [fqn]},
+                {"projectName": self.config.project,
+                 "objectFqns": [ru_token + "." + name]})
 
     # A 1C language code: short ISO-like code, optionally with a region suffix
     # (e.g. "en", "ru", "en_US", "zh-Hans"). The Language object's *name*
