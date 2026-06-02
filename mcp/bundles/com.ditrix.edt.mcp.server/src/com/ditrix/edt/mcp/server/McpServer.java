@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
+import com.ditrix.edt.mcp.server.protocol.McpOriginValidator;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.tools.BuiltInToolRegistrar;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
@@ -873,27 +874,10 @@ public class McpServer
     }
 
     /**
-     * Validates Origin header for security.
-     * Allows localhost origins, file:// origins, and "null" (for local file HTML).
-     * 
-     * @param origin the Origin header value
-     * @return true if origin is allowed
-     */
-    private static boolean isValidOrigin(String origin)
-    {
-        return origin.startsWith("http://localhost") || //$NON-NLS-1$
-               origin.startsWith("http://127.0.0.1") || //$NON-NLS-1$
-               origin.startsWith("https://localhost") || //$NON-NLS-1$
-               origin.startsWith("https://127.0.0.1") || //$NON-NLS-1$
-               origin.startsWith("file://") || //$NON-NLS-1$
-               origin.equals("null") || //$NON-NLS-1$ // Local HTML files send "null" as origin
-               origin.startsWith("vscode-webview://"); //$NON-NLS-1$
-    }
-
-    /**
      * Adds CORS headers to the HTTP exchange if Origin is present.
-     * Validates the origin and returns false if it's not allowed.
-     * 
+     * Validates the origin (via {@link McpOriginValidator}) and returns false
+     * if it's not allowed.
+     *
      * @param exchange the HTTP exchange
      * @return true if origin is allowed (or absent), false if origin is invalid
      */
@@ -902,7 +886,7 @@ public class McpServer
         String origin = exchange.getRequestHeaders().getFirst("Origin"); //$NON-NLS-1$
         if (origin != null)
         {
-            if (!isValidOrigin(origin))
+            if (!McpOriginValidator.isValidOrigin(origin))
             {
                 return false;
             }
