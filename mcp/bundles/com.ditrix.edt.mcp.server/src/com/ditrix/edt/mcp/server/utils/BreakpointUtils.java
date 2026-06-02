@@ -15,7 +15,6 @@ import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
-import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.IBreakpointManager;
@@ -120,7 +119,9 @@ public final class BreakpointUtils
         {
             return null;
         }
-        return project.getFile(new Path("src").append(module)); //$NON-NLS-1$
+        // Delegate to the shared resolver instead of re-inlining the src/ assumption:
+        // single source-folder seam, resilient to non-"src" layouts. (audit A27)
+        return BslModuleUtils.resolveModuleFile(project, module);
     }
 
     /**

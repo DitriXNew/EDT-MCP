@@ -17,7 +17,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
@@ -76,21 +79,60 @@ public final class BslModuleUtils
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
-     * Resolves a module path (relative to the project's src/ folder) to an IFile.
-     * Centralizes the single src/ source-folder assumption that every module tool
-     * previously inlined as {@code project.getFile(new Path("src").append(path))}.
+     * The EDT source-folder name. EDT lays a configuration out under
+     * {@code <project>/src/...} and uses the same name internally (its own
+     * {@code SRC_FOLDER_NAME} constant). Kept here as the single source of truth for
+     * the assumption that the module tools previously inlined as the literal
+     * {@code "src"}.
+     */
+    public static final String SOURCE_FOLDER = "src"; //$NON-NLS-1$
+
+    /**
+     * Resolves a module path (relative to the project's source folder) to an IFile.
+     * Centralizes the source-folder assumption that every module tool previously
+     * inlined as {@code project.getFile(new Path("src").append(path))}.
      * <p>
-     * The returned file is NOT checked for existence; each caller keeps its own
+     * Resolution tries {@link #SOURCE_FOLDER} ({@code src/}) first - the EDT
+     * convention - and, only if nothing exists there, falls back to scanning the
+     * project's other top-level folders, so a project laid out under a non-standard
+     * source folder still resolves. When the module is found nowhere, the
+     * conventional {@code src/} handle is returned so the caller's own
+     * "file not found" message points at the expected location.
+     * <p>
+     * The returned file is NOT guaranteed to exist; each caller keeps its own
      * existence check and tool-specific error message.
      *
      * @param project    the EDT project
-     * @param modulePath path from src/, e.g. "CommonModules/MyModule/Module.bsl"
-     *                   (must NOT include a leading "src/")
-     * @return the IFile at {@code src/modulePath} (may not exist)
+     * @param modulePath path from the source folder, e.g.
+     *                   "CommonModules/MyModule/Module.bsl" (no leading "src/")
+     * @return the resolved IFile (may not exist)
      */
     public static IFile resolveModuleFile(IProject project, String modulePath)
     {
-        return project.getFile(new Path("src").append(modulePath)); //$NON-NLS-1$
+        IFile inSourceFolder = project.getFile(new Path(SOURCE_FOLDER).append(modulePath));
+        if (inSourceFolder.exists())
+        {
+            return inSourceFolder;
+        }
+        try
+        {
+            for (IResource member : project.members())
+            {
+                if (member.getType() == IResource.FOLDER && !SOURCE_FOLDER.equals(member.getName()))
+                {
+                    IFile candidate = ((IFolder) member).getFile(new Path(modulePath));
+                    if (candidate.exists())
+                    {
+                        return candidate;
+                    }
+                }
+            }
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Error scanning project folders for module " + modulePath, e); //$NON-NLS-1$
+        }
+        return inSourceFolder;
     }
 
     /**
@@ -140,7 +182,7 @@ public final class BslModuleUtils
         }
 
         // Use createPlatformResourceURI for proper encoding (handles Cyrillic paths)
-        URI uri = URI.createPlatformResourceURI(project.getName() + "/src/" + modulePath, true); //$NON-NLS-1$
+        URI uri = URI.createPlatformResourceURI(project.getName() + "/" + SOURCE_FOLDER + "/" + modulePath, true); //$NON-NLS-1$ //$NON-NLS-2$
         Activator.logInfo("Loading BSL module: " + uri.toString()); //$NON-NLS-1$
 
         try
@@ -456,10 +498,11 @@ public final class BslModuleUtils
             return "Unknown module"; //$NON-NLS-1$
         }
 
-        int srcIdx = path.indexOf("/src/"); //$NON-NLS-1$
+        String marker = "/" + SOURCE_FOLDER + "/"; //$NON-NLS-1$ //$NON-NLS-2$
+        int srcIdx = path.indexOf(marker);
         if (srcIdx >= 0)
         {
-            return path.substring(srcIdx + 5);
+            return path.substring(srcIdx + marker.length());
         }
 
         return path;

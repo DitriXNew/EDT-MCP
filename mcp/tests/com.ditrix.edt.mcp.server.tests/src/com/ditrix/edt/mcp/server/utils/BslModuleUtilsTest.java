@@ -9,10 +9,19 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.IPath;
 import org.junit.Test;
 
 /**
@@ -252,5 +261,59 @@ public class BslModuleUtilsTest
         assertTrue(r.contains("**Available methods** (2)")); //$NON-NLS-1$
         assertTrue(r.contains("- Alpha")); //$NON-NLS-1$
         assertTrue(r.contains("- Beta")); //$NON-NLS-1$
+    }
+
+    // ========== resolveModuleFile source-folder resolution (A27) ==========
+    //
+    // "src" is the EDT convention (and EDT's own SRC_FOLDER_NAME), so it is tried
+    // first; resolution only scans other top-level folders when the module is not
+    // under src/, and returns the conventional src/ handle when found nowhere.
+
+    @Test
+    public void testResolveModuleFileUsesSrcWhenPresent()
+    {
+        IProject project = mock(IProject.class);
+        IFile srcFile = mock(IFile.class);
+        when(project.getFile(any(IPath.class))).thenReturn(srcFile);
+        when(srcFile.exists()).thenReturn(true);
+
+        IFile result = BslModuleUtils.resolveModuleFile(project, "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$
+
+        assertSame("must resolve under src/ when the file exists there", srcFile, result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveModuleFileFallsBackToOtherTopLevelFolder() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IFile srcFile = mock(IFile.class);
+        when(project.getFile(any(IPath.class))).thenReturn(srcFile);
+        when(srcFile.exists()).thenReturn(false);
+
+        IFolder otherFolder = mock(IFolder.class);
+        when(otherFolder.getType()).thenReturn(IResource.FOLDER);
+        when(otherFolder.getName()).thenReturn("source"); //$NON-NLS-1$
+        IFile candidate = mock(IFile.class);
+        when(otherFolder.getFile(any(IPath.class))).thenReturn(candidate);
+        when(candidate.exists()).thenReturn(true);
+        when(project.members()).thenReturn(new IResource[] {otherFolder});
+
+        IFile result = BslModuleUtils.resolveModuleFile(project, "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$
+
+        assertSame("must fall back to the non-src folder holding the module", candidate, result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveModuleFileReturnsSrcHandleWhenNotFoundAnywhere() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IFile srcFile = mock(IFile.class);
+        when(project.getFile(any(IPath.class))).thenReturn(srcFile);
+        when(srcFile.exists()).thenReturn(false);
+        when(project.members()).thenReturn(new IResource[0]);
+
+        IFile result = BslModuleUtils.resolveModuleFile(project, "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$
+
+        assertSame("must return the conventional src/ handle when nothing matches", srcFile, result); //$NON-NLS-1$
     }
 }
