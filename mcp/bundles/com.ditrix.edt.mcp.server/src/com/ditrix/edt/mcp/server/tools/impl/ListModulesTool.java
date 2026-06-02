@@ -580,10 +580,7 @@ public class ListModulesTool implements IMcpTool
         int total = modules.size();
         int shown = Math.min(total, limit);
         sb.append("**Total:** ").append(total).append(" modules"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (shown < total)
-        {
-            sb.append(" (showing ").append(shown).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        sb.append(Pagination.truncationNotice(shown, total));
         sb.append("\n\n"); //$NON-NLS-1$
 
         if (modules.isEmpty())

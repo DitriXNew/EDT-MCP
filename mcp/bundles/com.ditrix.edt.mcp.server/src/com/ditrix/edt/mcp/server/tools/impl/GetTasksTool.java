@@ -163,7 +163,7 @@ public class GetTasksTool implements IMcpTool
             md.append("**Found:** ").append(tasks.size()).append(" tasks"); //$NON-NLS-1$ //$NON-NLS-2$
             if (tasks.size() >= limit)
             {
-                md.append(" (limit: ").append(limit).append(", more available)"); //$NON-NLS-1$ //$NON-NLS-2$
+                md.append(Pagination.limitReachedNotice(limit));
             }
             md.append("\n\n"); //$NON-NLS-1$
             

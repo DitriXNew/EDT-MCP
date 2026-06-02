@@ -307,7 +307,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 md.append("**Found:** ").append(errors.size()); //$NON-NLS-1$
                 if (errors.size() >= limit)
                 {
-                    md.append("+ (limited to ").append(limit).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
+                    md.append(Pagination.limitReachedNotice(limit));
                 }
                 md.append("\n\n"); //$NON-NLS-1$
                 

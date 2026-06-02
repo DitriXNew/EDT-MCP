@@ -568,10 +568,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         sb.append("## Call Hierarchy: ").append(modulePath).append(" :: ").append(methodName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         sb.append("**Direction:** Callers (who calls this method)\n"); //$NON-NLS-1$
         sb.append("**Total references found:** ").append(totalReferences); //$NON-NLS-1$
-        if (callers.size() < totalReferences)
-        {
-            sb.append(" (showing first ").append(callers.size()).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        sb.append(Pagination.truncationNotice(callers.size(), totalReferences));
         sb.append("\n\n"); //$NON-NLS-1$
 
         if (callers.isEmpty())
@@ -606,10 +603,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         sb.append("## Call Hierarchy: ").append(modulePath).append(" :: ").append(methodName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         sb.append("**Direction:** Callees (what this method calls)\n"); //$NON-NLS-1$
         sb.append("**Total calls found:** ").append(totalInvocations); //$NON-NLS-1$
-        if (callees.size() < totalInvocations)
-        {
-            sb.append(" (showing first ").append(callees.size()).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        sb.append(Pagination.truncationNotice(callees.size(), totalInvocations));
         sb.append("\n\n"); //$NON-NLS-1$
 
         if (callees.isEmpty())

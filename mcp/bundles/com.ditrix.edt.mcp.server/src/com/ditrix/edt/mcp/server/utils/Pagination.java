@@ -44,4 +44,36 @@ public final class Pagination
     {
         return Math.min(Math.max(1, rawLimit), maxLimit);
     }
+
+    /**
+     * Canonical truncation notice for a tool that knows the true total. Append it
+     * after the count header (e.g. {@code "**Total:** " + total + " modules"}).
+     * Returns {@code " (showing <shown> of <total>)"} when the result was
+     * truncated, or an empty string when everything is shown.
+     *
+     * @param shown the number of items actually rendered
+     * @param total the true total number of items
+     * @return the notice text (empty when {@code total <= shown})
+     */
+    public static String truncationNotice(int shown, int total)
+    {
+        if (total > shown)
+        {
+            return " (showing " + shown + " of " + total + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        return ""; //$NON-NLS-1$
+    }
+
+    /**
+     * Canonical truncation notice for a tool that caps collection at the limit
+     * and therefore does NOT know the true total (only that the limit was hit).
+     * Append it after the count header when the cap was reached.
+     *
+     * @param limit the limit that was reached
+     * @return the notice text
+     */
+    public static String limitReachedNotice(int limit)
+    {
+        return " (showing first " + limit + ", limit reached; pass a higher limit for more)"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

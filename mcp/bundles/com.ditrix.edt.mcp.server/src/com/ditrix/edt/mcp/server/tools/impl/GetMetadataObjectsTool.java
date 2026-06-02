@@ -301,10 +301,7 @@ public class GetMetadataObjectsTool implements IMcpTool
             sb.append("**Filter:** ").append(metadataType).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         sb.append("**Total:** ").append(total).append(" objects"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (shown < total)
-        {
-            sb.append(" (showing ").append(shown).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        sb.append(Pagination.truncationNotice(shown, total));
         sb.append("\n\n"); //$NON-NLS-1$
         
         if (objects.isEmpty())

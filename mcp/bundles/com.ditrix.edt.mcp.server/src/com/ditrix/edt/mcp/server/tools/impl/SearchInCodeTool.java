@@ -29,6 +29,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -314,10 +315,7 @@ public class SearchInCodeTool implements IMcpTool
 
         sb.append("**Total:** ").append(totalMatches); //$NON-NLS-1$
         sb.append(" matches in ").append(totalFiles).append(" files"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (shownMatches < totalMatches)
-        {
-            sb.append(" (showing first ").append(shownMatches).append(")"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        sb.append(Pagination.truncationNotice(shownMatches, totalMatches));
         sb.append("\n"); //$NON-NLS-1$
 
         if (collector.skippedFiles > 0)

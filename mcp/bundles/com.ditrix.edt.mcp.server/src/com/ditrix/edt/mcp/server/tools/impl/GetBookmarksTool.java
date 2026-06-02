@@ -164,7 +164,7 @@ public class GetBookmarksTool implements IMcpTool
             md.append("**Found:** ").append(bookmarks.size()).append(" bookmarks"); //$NON-NLS-1$ //$NON-NLS-2$
             if (bookmarks.size() >= limit)
             {
-                md.append(" (limit: ").append(limit).append(", more available)"); //$NON-NLS-1$ //$NON-NLS-2$
+                md.append(Pagination.limitReachedNotice(limit));
             }
             md.append("\n\n"); //$NON-NLS-1$
             

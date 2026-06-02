@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -77,5 +78,31 @@ public class PaginationTest
     {
         assertEquals(100, Pagination.DEFAULT_LIMIT);
         assertEquals(1000, Pagination.MAX_LIMIT);
+    }
+
+    // ========== truncationNotice (known total) ==========
+
+    @Test
+    public void testTruncationNoticeWhenTruncated()
+    {
+        assertEquals(" (showing 50 of 200)", Pagination.truncationNotice(50, 200));
+    }
+
+    @Test
+    public void testTruncationNoticeEmptyWhenAllShown()
+    {
+        assertEquals("", Pagination.truncationNotice(200, 200));
+        assertEquals("", Pagination.truncationNotice(200, 150));
+    }
+
+    // ========== limitReachedNotice (capped, unknown total) ==========
+
+    @Test
+    public void testLimitReachedNoticeMentionsLimitAndIsActionable()
+    {
+        String notice = Pagination.limitReachedNotice(100);
+        assertTrue(notice.contains("100"));
+        assertTrue(notice.contains("limit reached"));
+        assertTrue(notice.contains("higher limit"));
     }
 }
