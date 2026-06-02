@@ -19,9 +19,9 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * <p>
  * Takes no parameters and reads the version from system properties / the OSGi
  * platform, so there is no argument-validation branch. The headless surface is
- * the static contract (the tool uses the {@code IMcpTool} default MARKDOWN
- * response type); the resolved version is environment-dependent and covered by
- * the E2E suite.
+ * the static contract (the tool returns a plain {@link ResponseType#TEXT} body,
+ * a bare version string); the resolved version is environment-dependent and
+ * covered by the E2E suite.
  */
 public class GetEdtVersionToolTest
 {
@@ -38,9 +38,9 @@ public class GetEdtVersionToolTest
     }
 
     @Test
-    public void testResponseTypeMarkdown()
+    public void testResponseTypeText()
     {
-        assertEquals(ResponseType.MARKDOWN, new GetEdtVersionTool().getResponseType());
+        assertEquals(ResponseType.TEXT, new GetEdtVersionTool().getResponseType());
     }
 
     @Test
@@ -49,6 +49,14 @@ public class GetEdtVersionToolTest
         String desc = new GetEdtVersionTool().getDescription();
         assertNotNull(desc);
         assertTrue(desc.length() > 0);
+    }
+
+    @Test
+    public void testDescriptionMentionsVersionAndUnknownFallback()
+    {
+        String desc = new GetEdtVersionTool().getDescription().toLowerCase();
+        assertTrue(desc.contains("version")); //$NON-NLS-1$
+        assertTrue(desc.contains("unknown")); //$NON-NLS-1$
     }
 
     @Test

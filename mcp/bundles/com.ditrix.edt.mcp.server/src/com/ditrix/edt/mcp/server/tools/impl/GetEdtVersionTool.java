@@ -31,9 +31,16 @@ public class GetEdtVersionTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get 1C:EDT version"; //$NON-NLS-1$
+        return "Returns the running 1C:EDT version as a plain version string." //$NON-NLS-1$
+            + " Returns \"Unknown\" when the version cannot be determined."; //$NON-NLS-1$
     }
-    
+
+    @Override
+    public ResponseType getResponseType()
+    {
+        return ResponseType.TEXT;
+    }
+
     @Override
     public String getInputSchema()
     {
