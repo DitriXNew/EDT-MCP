@@ -117,32 +117,25 @@ public class FindReferencesTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        // Validate required parameters via the shared guard (canonical reference
+        // for the broader required-guard migration).
+        String missing = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        if (missing != null)
+        {
+            return missing;
+        }
+        missing = JsonUtils.requireArgument(params, "objectFqn"); //$NON-NLS-1$
+        if (missing != null)
+        {
+            return missing;
+        }
+
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
-        String limitStr = JsonUtils.extractStringArgument(params, "limit"); //$NON-NLS-1$
         
-        // Validate required parameters
-        if (projectName == null || projectName.isEmpty())
-        {
-            return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
-        }
-        if (objectFqn == null || objectFqn.isEmpty())
-        {
-            return ToolResult.error("objectFqn is required").toJson(); //$NON-NLS-1$
-        }
-        
-        int limit = 100;
-        if (limitStr != null && !limitStr.isEmpty())
-        {
-            try
-            {
-                limit = Math.min((int) Double.parseDouble(limitStr), 500);
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default
-            }
-        }
+        // Shared typed accessor (handles the "42.0" form and invalid/missing -> default),
+        // replacing the inline Double.parseDouble. Default 100, upper clamp 500 preserved.
+        int limit = Math.min(JsonUtils.extractIntArgument(params, "limit", 100), 500); //$NON-NLS-1$
         
         // Execute on UI thread
         AtomicReference<String> resultRef = new AtomicReference<>();

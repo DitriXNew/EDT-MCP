@@ -44,6 +44,36 @@ public class JsonUtilsTest
         assertNull(JsonUtils.extractStringArgument(params, "otherKey"));
     }
 
+    // --- requireArgument ---
+
+    @Test
+    public void testRequireArgumentPresentReturnsNull()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject");
+        assertNull(JsonUtils.requireArgument(params, "projectName"));
+    }
+
+    @Test
+    public void testRequireArgumentMissingReturnsErrorJson()
+    {
+        String err = JsonUtils.requireArgument(new HashMap<>(), "projectName");
+        assertNotNull(err);
+        // Structured error payload; "projectName is required" is delimiter-free.
+        assertTrue(err.contains("\"success\":false"));
+        assertTrue(err.contains("projectName is required"));
+    }
+
+    @Test
+    public void testRequireArgumentEmptyReturnsErrorJson()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("objectFqn", "");
+        String err = JsonUtils.requireArgument(params, "objectFqn");
+        assertNotNull(err);
+        assertTrue(err.contains("objectFqn is required"));
+    }
+
     // --- extractBooleanArgument ---
 
     @Test

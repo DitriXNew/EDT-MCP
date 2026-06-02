@@ -296,4 +296,30 @@ public final class JsonUtils
             return defaultValue;
         }
     }
+
+    /**
+     * Shared required-argument guard. Returns a structured error payload
+     * ({@code {"success":false,"error":"<name> is required"}}) when the named
+     * argument is missing or blank, or {@code null} when it is present. Usage:
+     * <pre>
+     * String err = JsonUtils.requireArgument(params, "projectName");
+     * if (err != null) return err;
+     * </pre>
+     * The error is recognised by the protocol's {@code isJsonErrorPayload}
+     * diversion and delivered as a structured {@code isError} regardless of the
+     * tool's normal response type, so this works for MARKDOWN/TEXT/JSON tools alike.
+     *
+     * @param params the params map
+     * @param argumentName the required argument name
+     * @return the error JSON to return, or {@code null} when the argument is present
+     */
+    public static String requireArgument(Map<String, String> params, String argumentName)
+    {
+        String value = extractStringArgument(params, argumentName);
+        if (value == null || value.isEmpty())
+        {
+            return ToolResult.error(argumentName + " is required").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
 }
