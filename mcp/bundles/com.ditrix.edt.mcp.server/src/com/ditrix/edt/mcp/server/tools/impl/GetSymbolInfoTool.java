@@ -66,8 +66,11 @@ public class GetSymbolInfoTool implements IMcpTool
 {
     public static final String NAME = "get_symbol_info"; //$NON-NLS-1$
 
-    // Dummy URI with .bsl extension used to look up the BSL IResourceServiceProvider from Xtext registry
-    private static final URI BSL_LOOKUP_URI = URI.createURI("dummy.bsl"); //$NON-NLS-1$
+    // Dummy URI with a .bsl extension, used to look up the BSL IResourceServiceProvider
+    // from the Xtext registry. The registry keys on the file extension, not the path, so
+    // this reuses the single shared constant in BslModuleUtils (FindReferencesTool uses
+    // the same one) rather than re-declaring a local copy.
+    private static final URI BSL_LOOKUP_URI = BslModuleUtils.BSL_LOOKUP_URI;
 
     // Lazy-initialized CopyDown instance for HTML-to-Markdown conversion (thread-confined to UI thread)
     private CopyDown copyDown; //$NON-NLS-1$
