@@ -514,6 +514,92 @@ public class McpProtocolHandlerTest
             McpProtocolHandler.isWarnWorthy(McpProtocolHandler.SLOW_TOOL_CALL_MS - 1, false));
     }
 
+    // === Per-call error log line (pure helpers) ===
+
+    @Test
+    public void testErrorLogLineCarriesNameAndMessage()
+    {
+        String line = McpProtocolHandler.formatErrorLogLine("write_module_source", "module not found");
+        assertTrue("must reference the tool name", line.contains("write_module_source"));
+        assertTrue("must carry the error message", line.contains("module not found"));
+    }
+
+    @Test
+    public void testErrorLogLineToleratesNullMessage()
+    {
+        // A thrown exception can leave no payload (null message); the line must still
+        // render with the tool name and a placeholder instead of throwing.
+        String line = McpProtocolHandler.formatErrorLogLine("list_projects", null);
+        assertNotNull(line);
+        assertTrue("must reference the tool name", line.contains("list_projects"));
+        assertTrue("a missing message renders a placeholder", line.contains("(no message)"));
+    }
+
+    @Test
+    public void testErrorLogLineToleratesEmptyMessage()
+    {
+        // An empty error string is treated like a missing message.
+        String line = McpProtocolHandler.formatErrorLogLine("list_projects", "");
+        assertNotNull(line);
+        assertTrue("an empty message renders a placeholder", line.contains("(no message)"));
+    }
+
+    @Test
+    public void testExtractErrorMessageFromErrorPayload()
+    {
+        // A ToolResult.error payload carries the human-readable cause in "error".
+        String msg = McpProtocolHandler.extractErrorMessage(
+            "{\"success\":false,\"error\":\"module not found\"}");
+        assertEquals("module not found", msg);
+    }
+
+    @Test
+    public void testExtractErrorMessageFromObjectError()
+    {
+        // A structured (object) error is preserved as its JSON text, not dropped.
+        String msg = McpProtocolHandler.extractErrorMessage(
+            "{\"success\":false,\"error\":{\"code\":42,\"detail\":\"boom\"}}");
+        assertNotNull(msg);
+        assertTrue("structured error must retain its detail", msg.contains("boom"));
+        assertTrue("structured error must retain its code", msg.contains("42"));
+    }
+
+    @Test
+    public void testExtractErrorMessageNullForSuccessPayload()
+    {
+        // A success payload has no error field => no message to extract.
+        assertNull("a success payload yields no error message",
+            McpProtocolHandler.extractErrorMessage("{\"value\":7}"));
+    }
+
+    @Test
+    public void testExtractErrorMessageNullForNullAndEmpty()
+    {
+        // A thrown execute can leave no payload at all; tolerate null/empty.
+        assertNull("null payload yields no message",
+            McpProtocolHandler.extractErrorMessage(null));
+        assertNull("empty payload yields no message",
+            McpProtocolHandler.extractErrorMessage(""));
+    }
+
+    @Test
+    public void testExtractErrorMessageNullForNonJson()
+    {
+        // A non-JSON / non-object result (e.g. markdown) is not an error payload.
+        assertNull("markdown text yields no error message",
+            McpProtocolHandler.extractErrorMessage("# Title"));
+        assertNull("a JSON array is not an error object",
+            McpProtocolHandler.extractErrorMessage("[1,2,3]"));
+    }
+
+    @Test
+    public void testExtractErrorMessageNullForNullErrorValue()
+    {
+        // An explicit null error value yields no message.
+        assertNull("a null error value yields no message",
+            McpProtocolHandler.extractErrorMessage("{\"success\":false,\"error\":null}"));
+    }
+
     // === Helpers ===
 
     private String buildJsonRpcRequest(Object id, String method, String paramsJson)

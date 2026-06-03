@@ -223,6 +223,14 @@ public class McpProtocolHandler
             // error outcome; otherwise reuse the same JSON-error detection the
             // response path uses so the logged outcome matches the wire isError.
             boolean isError = threw || isJsonErrorPayload(result);
+            // On a tool-level failure the error payload is diverted into an isError
+            // response and would otherwise leave no server-side trace of WHY it
+            // failed. Log the extracted message once (WARNING) alongside the
+            // outcome=error completion line so an operator can see the cause.
+            if (isError)
+            {
+                Log.warning(formatErrorLogLine(tool.getName(), extractErrorMessage(result)));
+            }
             logToolCallCompletion(tool.getName(), elapsedMs, isError);
         }
         
@@ -370,6 +378,76 @@ public class McpProtocolHandler
         return "Completed tools/call: " + toolName //$NON-NLS-1$
             + " in " + elapsedMs + "ms" //$NON-NLS-1$ //$NON-NLS-2$
             + ", outcome=" + (isError ? "error" : "ok"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * Pure formatter for the per-call error log line emitted (once, at WARNING) when
+     * a tools/call ends in an error outcome. Carries the tool name plus the error
+     * message extracted from the diverted payload so an operator can see WHY a call
+     * failed (the completion line only records {@code outcome=error}). Kept
+     * side-effect-free so its content is unit-testable without a live log.
+     *
+     * @param toolName the tool name (may be {@code null})
+     * @param errorMessage the extracted error message (may be {@code null} or empty)
+     * @return the formatted error line
+     */
+    static String formatErrorLogLine(String toolName, String errorMessage)
+    {
+        String detail = (errorMessage == null || errorMessage.isEmpty())
+            ? "(no message)" //$NON-NLS-1$
+            : errorMessage;
+        return "Failed tools/call: " + toolName + " - " + detail; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Pure extractor of a human-readable error message from a tool result payload.
+     * Reads the {@code error} field of a {@code ToolResult.error} JSON payload
+     * (string error, or an object/array error rendered back to its JSON text);
+     * returns {@code null} when the payload is not a JSON object, has no usable
+     * {@code error} field, or cannot be parsed (e.g. a thrown exception left no
+     * payload). Never throws. Does not handle secrets: tool error messages must not
+     * embed the auth token, which is enforced at the source, not here.
+     *
+     * @param result the tool result string (may be {@code null})
+     * @return the extracted error message, or {@code null} if none is available
+     */
+    static String extractErrorMessage(String result)
+    {
+        if (result == null || result.isEmpty())
+        {
+            return null;
+        }
+
+        try
+        {
+            JsonElement element = JsonParser.parseString(result);
+            if (!element.isJsonObject())
+            {
+                return null;
+            }
+
+            com.google.gson.JsonObject obj = element.getAsJsonObject();
+            if (!obj.has("error")) //$NON-NLS-1$
+            {
+                return null;
+            }
+
+            JsonElement error = obj.get("error"); //$NON-NLS-1$
+            if (error.isJsonNull())
+            {
+                return null;
+            }
+            if (error.isJsonPrimitive())
+            {
+                return error.getAsString();
+            }
+            // An object/array error: keep the structured detail as its JSON text.
+            return error.toString();
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
     }
 
     /**
