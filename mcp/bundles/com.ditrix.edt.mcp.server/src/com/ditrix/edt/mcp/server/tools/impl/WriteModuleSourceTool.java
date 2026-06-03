@@ -61,7 +61,13 @@ public class WriteModuleSourceTool implements IMcpTool
         return "Write BSL source code to 1C metadata object modules. " + //$NON-NLS-1$
             "Modes: searchReplace (find oldSource and replace with source, default), " + //$NON-NLS-1$
             "replace (replace entire file), append (add to end). " + //$NON-NLS-1$
-            "Specify modulePath or objectName + moduleType. " + //$NON-NLS-1$
+            "Target the module EITHER by modulePath OR by objectName (these are " + //$NON-NLS-1$
+            "mutually exclusive — pass exactly one, never both, never neither). " + //$NON-NLS-1$
+            "Conditional parameters (each required only in its case): " + //$NON-NLS-1$
+            "moduleType only with objectName (ignored/rejected with modulePath); " + //$NON-NLS-1$
+            "oldSource only for mode=searchReplace (required there); " + //$NON-NLS-1$
+            "formName only for moduleType=FormModule (required there, except CommonForm); " + //$NON-NLS-1$
+            "commandName only for moduleType=CommandModule (required there, except CommonCommand). " + //$NON-NLS-1$
             "Automatically checks BSL syntax (balanced Procedure/EndProcedure, " + //$NON-NLS-1$
             "Function/EndFunction, If/EndIf, etc.) before writing — " + //$NON-NLS-1$
             "blocks write on errors. Pass skipSyntaxCheck=true to force."; //$NON-NLS-1$
@@ -197,13 +203,33 @@ public class WriteModuleSourceTool implements IMcpTool
             }
         }
 
-        // 3. Resolve modulePath
-        if (modulePath == null || modulePath.isEmpty())
+        // 3. Resolve the module target. modulePath and objectName form an exclusive
+        // OR (a flat Map schema cannot express XOR, so it is enforced here): exactly
+        // one must be given. moduleType is a decorator on the objectName path only —
+        // it is meaningless with an explicit modulePath, so flag it instead of
+        // silently ignoring it. formName/commandName are validated deeper in
+        // resolveModulePath (they depend on the resolved moduleType).
+        boolean hasModulePath = modulePath != null && !modulePath.isEmpty();
+        boolean hasObjectName = objectName != null && !objectName.isEmpty();
+        boolean hasModuleType = moduleType != null && !moduleType.isEmpty();
+
+        if (hasModulePath && hasObjectName)
         {
-            if (objectName == null || objectName.isEmpty())
-            {
-                return ToolResult.error("either modulePath or objectName is required").toJson(); //$NON-NLS-1$
-            }
+            return ToolResult.error("modulePath and objectName are mutually exclusive; " + //$NON-NLS-1$
+                "pass only one (modulePath for a direct path, or objectName to resolve it)").toJson(); //$NON-NLS-1$
+        }
+        if (!hasModulePath && !hasObjectName)
+        {
+            return ToolResult.error("either modulePath or objectName is required").toJson(); //$NON-NLS-1$
+        }
+        if (hasModulePath && hasModuleType)
+        {
+            return ToolResult.error("moduleType applies only with objectName; " + //$NON-NLS-1$
+                "it is meaningless with an explicit modulePath, so drop one of them").toJson(); //$NON-NLS-1$
+        }
+
+        if (!hasModulePath)
+        {
             String resolved = resolveModulePath(objectName, moduleType, formName, commandName);
             if (isErrorJson(resolved))
             {

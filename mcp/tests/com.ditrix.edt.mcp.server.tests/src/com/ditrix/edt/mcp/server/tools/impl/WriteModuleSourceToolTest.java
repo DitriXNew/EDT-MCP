@@ -52,6 +52,27 @@ public class WriteModuleSourceToolTest
         assertFalse(tool.getDescription().isEmpty());
     }
 
+    /**
+     * The XOR / conditional-requiredness contract (which a flat Map schema cannot
+     * express) must be discoverable upfront from the description, not only via a
+     * runtime error. Assert the mutually-exclusive modulePath/objectName rule and
+     * the conditional params are named.
+     */
+    @Test
+    public void testDescriptionDocumentsXorAndConditionalRules()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        String desc = tool.getDescription();
+        // XOR pair is named (the central rule).
+        assertTrue(desc.contains("modulePath")); //$NON-NLS-1$
+        assertTrue(desc.contains("objectName")); //$NON-NLS-1$
+        // Conditional params are each documented with their condition.
+        assertTrue(desc.contains("moduleType")); //$NON-NLS-1$
+        assertTrue(desc.contains("oldSource")); //$NON-NLS-1$
+        assertTrue(desc.contains("formName")); //$NON-NLS-1$
+        assertTrue(desc.contains("commandName")); //$NON-NLS-1$
+    }
+
     @Test
     public void testInputSchemaContainsRequiredParameters()
     {
@@ -160,6 +181,124 @@ public class WriteModuleSourceToolTest
 
         String result = tool.execute(params);
         assertTrue(result.contains("either modulePath or objectName is required")); //$NON-NLS-1$
+    }
+
+    // ============= XOR / conditional-requiredness (one precise error each) =============
+    // A flat Map schema cannot express XOR, so each violation must return ONE error
+    // naming the exact conflicting/missing param. Substrings stay delimiter-free per
+    // the Gson HTML-escape contract (no < > & = or apostrophe), which Gson would
+    // unicode-escape in the JSON error payload.
+
+    @Test
+    public void testExecuteBothModulePathAndObjectName()
+    {
+        // Both targeting params given — the XOR is violated; the error must name BOTH.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue("both modulePath and objectName must be rejected", //$NON-NLS-1$
+            result.contains("mutually exclusive")); //$NON-NLS-1$
+        assertTrue(result.contains("modulePath")); //$NON-NLS-1$
+        assertTrue(result.contains("objectName")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExecuteModuleTypeWithModulePath()
+    {
+        // moduleType decorates objectName resolution only — with an explicit
+        // modulePath it is meaningless and was silently ignored; now it is rejected
+        // with a precise error naming moduleType.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("moduleType", "ManagerModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue("moduleType with modulePath must be rejected", //$NON-NLS-1$
+            result.contains("moduleType applies only with objectName")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExecuteSearchReplaceMissingOldSourceConditional()
+    {
+        // oldSource is conditionally required ONLY for mode=searchReplace; the error
+        // names oldSource and the mode that needs it.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "searchReplace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("oldSource is required for searchReplace")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExecuteFormModuleMissingFormNameConditional()
+    {
+        // formName is conditionally required ONLY for moduleType=FormModule; the error
+        // names formName and the moduleType that needs it.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("moduleType", "FormModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        // Names the exact missing param + its moduleType condition. "FormModule"
+        // appears verbatim (no delimiter chars); the surrounding message has no
+        // < > & = or apostrophe so it survives Gson HTML-escaping intact.
+        assertTrue(result.contains("formName is required")); //$NON-NLS-1$
+        assertTrue(result.contains("FormModule")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExecuteCommandModuleMissingCommandNameConditional()
+    {
+        // commandName is conditionally required ONLY for moduleType=CommandModule.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("moduleType", "CommandModule"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("commandName is required")); //$NON-NLS-1$
+        assertTrue(result.contains("CommandModule")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExecuteBothModulePathAndObjectNameReturnsStructuredError()
+    {
+        // The XOR-conflict error reaches the client through the structured contract,
+        // not a bare string or "Error:" prefix.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", "Document.MyDoc"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue("expected a structured JSON error object, got: " + result, //$NON-NLS-1$
+            result.startsWith("{")); //$NON-NLS-1$
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+        assertFalse(result.startsWith("Error:")); //$NON-NLS-1$
     }
 
     // ==================== Source length limit ====================
