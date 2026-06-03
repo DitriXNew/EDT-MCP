@@ -48,26 +48,65 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Return LanguageTool metadata for a project: translation storages " //$NON-NLS-1$
-             + "declared on the project and available translation provider IDs. " //$NON-NLS-1$
+        return "Return LanguageTool metadata for a project: the translation storages " //$NON-NLS-1$
+             + "declared on it and the available translation provider IDs. Use it to " //$NON-NLS-1$
+             + "check whether a dictionary storage is attached before translating; an " //$NON-NLS-1$
+             + "empty storages list means none is attached yet (set up manually in EDT). " //$NON-NLS-1$
              + "Requires EDT with LanguageTool installed. " //$NON-NLS-1$
-             + "If the storages list is empty, the configuration has no dictionary " //$NON-NLS-1$
-             + "storage attached yet. The user has to set this up in EDT manually " //$NON-NLS-1$
-             + "(no MCP tool for it): create a plain Eclipse project (File -> New -> " //$NON-NLS-1$
-             + "Project -> General -> Project), then attach it to the configuration " //$NON-NLS-1$
-             + "via the configuration project's properties (Translation settings). " //$NON-NLS-1$
-             + "Do NOT use any '1C:Enterprise -> Dependent translation project' " //$NON-NLS-1$
-             + "wizard — the dictionary storage project must be a plain Eclipse " //$NON-NLS-1$
-             + "project, and the configuration itself can also act as its own " //$NON-NLS-1$
-             + "storage if no separate Eclipse project is desired."; //$NON-NLS-1$
+             + "Full parameters and examples: call get_tool_guide('get_translation_project_info')."; //$NON-NLS-1$
     }
 
     @Override
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "Project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "Reports the LanguageTool (translation) setup for one EDT project so you can " //$NON-NLS-1$
+            + "decide whether translation is configured before calling other translation tools " //$NON-NLS-1$
+            + "(e.g. `generate_translation_strings`, `translate_configuration`). Output is " //$NON-NLS-1$
+            + "Markdown with a `## Storages` list and a `## Translation providers` list, plus " //$NON-NLS-1$
+            + "front-matter counts (`storagesCount`, `providersCount`).\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- Before translating: confirm a dictionary storage is attached and which " //$NON-NLS-1$
+            + "providers (Google, Microsoft, Yandex, history, etc.) are available.\n" //$NON-NLS-1$
+            + "- To diagnose why a translation tool reports no storage: an empty " //$NON-NLS-1$
+            + "`## Storages` list means the configuration has no dictionary storage attached " //$NON-NLS-1$
+            + "yet.\n\n" //$NON-NLS-1$
+
+            + "## Parameter details\n" //$NON-NLS-1$
+            + "- `projectName` (required) - the EDT project name. Must be an open EDT project; " //$NON-NLS-1$
+            + "an unknown or closed name returns `Project not found or closed`, and a plain " //$NON-NLS-1$
+            + "(non-EDT) project returns `Not an EDT project`.\n\n" //$NON-NLS-1$
+
+            + "## Storage IDs\n" //$NON-NLS-1$
+            + "Storage IDs look like `edit:default`, `dictionary:common-camelcase`, " //$NON-NLS-1$
+            + "`dictionary:common`, `context:model`, `context:interface`. The exact set " //$NON-NLS-1$
+            + "depends on what is attached to the configuration.\n\n" //$NON-NLS-1$
+
+            + "## Attaching a storage (manual, no MCP tool)\n" //$NON-NLS-1$
+            + "If the storages list is empty, a storage must be set up by the user in EDT - " //$NON-NLS-1$
+            + "there is no MCP tool for it:\n" //$NON-NLS-1$
+            + "1. Create a plain Eclipse project (File -> New -> Project -> General -> Project).\n" //$NON-NLS-1$
+            + "2. Attach it to the configuration via the configuration project's properties " //$NON-NLS-1$
+            + "(Translation settings).\n\n" //$NON-NLS-1$
+            + "The configuration itself can also act as its own storage if no separate " //$NON-NLS-1$
+            + "Eclipse project is desired.\n\n" //$NON-NLS-1$
+
+            + "## Gotchas\n" //$NON-NLS-1$
+            + "- Do NOT use any '1C:Enterprise -> Dependent translation project' wizard - the " //$NON-NLS-1$
+            + "dictionary storage project must be a plain Eclipse project.\n" //$NON-NLS-1$
+            + "- Requires EDT with LanguageTool installed; without it the tool returns " //$NON-NLS-1$
+            + "`LanguageTool IProjectInformationApi is not available`.\n\n" //$NON-NLS-1$
+
+            + "## Example\n" //$NON-NLS-1$
+            + "`{projectName: \"MyConfiguration\"}`\n"; //$NON-NLS-1$
     }
 
     @Override

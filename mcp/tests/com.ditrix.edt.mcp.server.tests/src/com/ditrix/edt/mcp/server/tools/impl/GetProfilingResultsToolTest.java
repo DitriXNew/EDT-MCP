@@ -70,4 +70,23 @@ public class GetProfilingResultsToolTest
         // tell a stop is pending; the description must advertise it.
         assertTrue(new GetProfilingResultsTool().getDescription().contains("active")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testDescriptionPointsToGuide()
+    {
+        // The slim description must point clients to the on-demand guide channel.
+        assertTrue(new GetProfilingResultsTool().getDescription().contains("get_tool_guide")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        // Exhaustive parameter/output detail moved out of the always-loaded
+        // description/schema into the on-demand guide; verify it landed there.
+        String guide = new GetProfilingResultsTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        assertTrue(guide.contains("minFrequency")); //$NON-NLS-1$
+        assertTrue(guide.contains("profilingActive")); //$NON-NLS-1$
+    }
 }

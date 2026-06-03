@@ -84,6 +84,23 @@ public class FindReferencesToolTest
         assertTrue(schema.contains("not per category")); //$NON-NLS-1$
     }
 
+    /**
+     * The exhaustive detail (limit*10 overall cap, result categories, ru/en type
+     * token, synonym-vs-Name resolution) moved out of the always-loaded
+     * description/schema and into the on-demand guide. Assert the guide is
+     * non-empty and still carries a couple of the migrated keywords, proving the
+     * detail moved rather than vanished.
+     */
+    @Test
+    public void testGuideNotEmptyAndCarriesMigratedDetail()
+    {
+        String guide = new FindReferencesTool().getGuide();
+        assertNotNull(guide);
+        assertFalse(guide.isEmpty());
+        assertTrue(guide.contains("limit*10")); //$NON-NLS-1$
+        assertTrue(guide.contains("synonym")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no workbench needed) ====================
 
     @Test

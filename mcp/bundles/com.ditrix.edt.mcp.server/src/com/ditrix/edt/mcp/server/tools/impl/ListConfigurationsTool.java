@@ -55,14 +55,12 @@ public class ListConfigurationsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List EDT launch configurations (runtime client + Attach + other 1C types) " //$NON-NLS-1$
-            + "with their current running state. Each entry carries the configuration name " //$NON-NLS-1$
-            + "(use it as launchConfigurationName in debug_launch / run_yaxunit_tests / " //$NON-NLS-1$
-            + "debug_yaxunit_tests / update_database), type id, attach flag, applicationId " //$NON-NLS-1$
-            + "(real or synthetic 'attach:<name>'), project, infobase alias, debug server URL, " //$NON-NLS-1$
-            + "and a 'running' flag (plus 'suspended' when the session is paused on a breakpoint). " //$NON-NLS-1$
-            + "Use type='attach' for server-side debug setups (HTTP services, background jobs), " //$NON-NLS-1$
-            + "type='client' for 1C:Enterprise client configs, or type='all' (default)."; //$NON-NLS-1$
+        return "List EDT launch configurations (runtime client + Attach + other 1C types) with " //$NON-NLS-1$
+            + "their running state. This is the discovery step before debug_launch / " //$NON-NLS-1$
+            + "run_yaxunit_tests / debug_yaxunit_tests / update_database: use the returned 'name' " //$NON-NLS-1$
+            + "as their launchConfigurationName. Use type='attach' for server-side debug setups, " //$NON-NLS-1$
+            + "type='client' for 1C:Enterprise client configs, or type='all' (default). " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('list_configurations')."; //$NON-NLS-1$
     }
 
     @Override
@@ -70,11 +68,61 @@ public class ListConfigurationsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .enumProperty("type", //$NON-NLS-1$
-                "Filter: 'attach' (RemoteRuntime + LocalRuntime), 'client' (RuntimeClient), " //$NON-NLS-1$
-                    + "or 'all' (default — any 1C/EDT launch config)", //$NON-NLS-1$
+                "Filter by config kind; default 'all'. e.g. 'attach' for server-side debug.", //$NON-NLS-1$
                 "attach", "client", "all") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .stringProperty("projectName", "Optional project name filter") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("projectName", "Optional exact project-name filter.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "Lists EDT launch configurations — runtime client, Attach (RemoteRuntime / " //$NON-NLS-1$
+            + "LocalRuntime), and any other config in the 1C/EDT namespace — together with " //$NON-NLS-1$
+            + "their current running state. Once the client knows the exact `name`, it can target " //$NON-NLS-1$
+            + "that configuration by name without juggling applicationId/project pairs.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- Discovery step before `debug_launch`, `run_yaxunit_tests`, " //$NON-NLS-1$
+            + "`debug_yaxunit_tests` and `update_database` — copy the returned `name` into " //$NON-NLS-1$
+            + "their `launchConfigurationName`.\n" //$NON-NLS-1$
+            + "- See whether a configuration is already running (and whether it is paused on a " //$NON-NLS-1$
+            + "breakpoint) before launching a second client.\n\n" //$NON-NLS-1$
+
+            + "## Server-side debug workflow\n" //$NON-NLS-1$
+            + "1. `list_configurations({type: \"attach\"})` — see available Attach configs, " //$NON-NLS-1$
+            + "their infobase aliases, and whether any is already running.\n" //$NON-NLS-1$
+            + "2. `debug_launch({launchConfigurationName: ...})` — attach to it.\n" //$NON-NLS-1$
+            + "3. `set_breakpoint` → `wait_for_break` → standard debug flow.\n\n" //$NON-NLS-1$
+
+            + "## Parameter details\n" //$NON-NLS-1$
+            + "- `type` — filter by config kind:\n" //$NON-NLS-1$
+            + "  - `attach`: RemoteRuntime + LocalRuntime (server-side debug: HTTP services, " //$NON-NLS-1$
+            + "background jobs).\n" //$NON-NLS-1$
+            + "  - `client`: RuntimeClient (1C:Enterprise client configs). The aliases " //$NON-NLS-1$
+            + "`runtime` and `runtimeClient` are also accepted.\n" //$NON-NLS-1$
+            + "  - `all` (default): any 1C/EDT launch config. An unknown value is treated " //$NON-NLS-1$
+            + "permissively as `all`.\n" //$NON-NLS-1$
+            + "- `projectName` — optional; keeps only configs whose project attribute equals " //$NON-NLS-1$
+            + "this value exactly. Omit to list across all projects.\n\n" //$NON-NLS-1$
+
+            + "## Result fields (per entry)\n" //$NON-NLS-1$
+            + "- `name` — the configuration name; this is the value to pass as " //$NON-NLS-1$
+            + "`launchConfigurationName` downstream.\n" //$NON-NLS-1$
+            + "- `type` — the launch-config type id.\n" //$NON-NLS-1$
+            + "- `attach` — boolean, true for Attach configs.\n" //$NON-NLS-1$
+            + "- `applicationId` — real applicationId, or a synthetic `attach:<name>` for " //$NON-NLS-1$
+            + "Attach configs (present only when known).\n" //$NON-NLS-1$
+            + "- `project`, `infobaseAlias`, `debugServerUrl` — present only when the config " //$NON-NLS-1$
+            + "defines them.\n" //$NON-NLS-1$
+            + "- `running` — boolean; when true, `mode` (debug/run) is added, and " //$NON-NLS-1$
+            + "`suspended` is true when a thread is paused on a breakpoint.\n\n" //$NON-NLS-1$
+
+            + "## Notes\n" //$NON-NLS-1$
+            + "- Returns JSON: a `configurations` array plus a `count`.\n" //$NON-NLS-1$
+            + "- Only the `launchConfigurationName` mode of `debug_launch` can start an Attach " //$NON-NLS-1$
+            + "session — the `projectName + applicationId` mode reaches runtime-client " //$NON-NLS-1$
+            + "configs only.\n"; //$NON-NLS-1$
     }
 
     @Override

@@ -59,24 +59,82 @@ public class ValidateQueryTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Validate 1C:Enterprise query language (QL) text in the context of a project. " + //$NON-NLS-1$
-               "Parses query text and returns syntax and semantic errors with line numbers. " + //$NON-NLS-1$
-               "Supports both regular queries and DCS (Data Composition System) queries."; //$NON-NLS-1$
+        return "Validate 1C:Enterprise query language (QL) text against a project, returning " + //$NON-NLS-1$
+               "syntax and semantic errors with line numbers. Use to check a query before " + //$NON-NLS-1$
+               "embedding it in BSL; resolves table/field names against the project's metadata. " + //$NON-NLS-1$
+               "Full parameters and examples: call get_tool_guide('validate_query')."; //$NON-NLS-1$
     }
-    
+
     @Override
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
-                "EDT project name (required)", true) //$NON-NLS-1$
+                "EDT project name (required).", true) //$NON-NLS-1$
             .stringProperty("queryText", //$NON-NLS-1$
-                "Query text to validate (required). The full text of the 1C query, e.g. " + //$NON-NLS-1$
-                "'SELECT Ref FROM Catalog.Products WHERE Description LIKE &SearchString'", true) //$NON-NLS-1$
+                "Full 1C query text to validate (required), e.g. 'SELECT Ref FROM Catalog.Products'.", //$NON-NLS-1$
+                true)
             .booleanProperty("dcsMode", //$NON-NLS-1$
-                "DCS (Data Composition System) mode. Set to true for queries used in " + //$NON-NLS-1$
-                "data composition schemas. Allows additional DCS-specific syntax. Default: false") //$NON-NLS-1$
+                "true for Data Composition System queries (allows DCS-specific syntax). Default: false.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "Validates 1C:Enterprise query language (QL) text in the context of a project, " //$NON-NLS-1$
+            + "using EDT's Xtext QL infrastructure. It parses the query and runs full semantic " //$NON-NLS-1$
+            + "validation, so it catches both grammar errors and references to tables/fields that " //$NON-NLS-1$
+            + "do not exist in the project's metadata. The query is validated only; nothing is " //$NON-NLS-1$
+            + "written to the model or executed.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- Before pasting a query string into a BSL module, to confirm it parses and all " //$NON-NLS-1$
+            + "referenced metadata resolves.\n" //$NON-NLS-1$
+            + "- To diagnose a query that fails at runtime: the returned line/column points at the " //$NON-NLS-1$
+            + "offending token.\n" //$NON-NLS-1$
+            + "- For queries that drive a Data Composition Schema (set `dcsMode=true`).\n\n" //$NON-NLS-1$
+
+            + "## Parameter details\n" //$NON-NLS-1$
+            + "- `projectName` (required) - EDT project name; the query is resolved against this " //$NON-NLS-1$
+            + "project's metadata, so table and field names must exist there.\n" //$NON-NLS-1$
+            + "- `queryText` (required) - the complete query text. Query parameters " //$NON-NLS-1$
+            + "(`&SearchString`) are allowed and need not be bound. Example: " //$NON-NLS-1$
+            + "`SELECT Ref FROM Catalog.Products WHERE Description LIKE &SearchString`.\n" //$NON-NLS-1$
+            + "- `dcsMode` - default `false`. Set `true` only for queries used inside a Data " //$NON-NLS-1$
+            + "Composition Schema; this enables DCS-specific syntax (e.g. `{...}` braces, dataset " //$NON-NLS-1$
+            + "fields) that a plain query would reject, and is echoed back as `dcsMode` in the " //$NON-NLS-1$
+            + "result.\n\n" //$NON-NLS-1$
+
+            + "## Bilingual (ru/en) notes\n" //$NON-NLS-1$
+            + "The QL parser is dialect-aware: both the English and Russian forms of keywords and " //$NON-NLS-1$
+            + "table-type tokens are accepted (e.g. `SELECT ... FROM Catalog.Products` and " //$NON-NLS-1$
+            + "`\u0412\u042B\u0411\u0420\u0410\u0422\u042C ... \u0418\u0417 " //$NON-NLS-1$
+            + "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A." //$NON-NLS-1$
+            + "\u041F\u0440\u043E\u0434\u0443\u043A\u0442\u044B`). Do not assume a single dialect. " //$NON-NLS-1$
+            + "Metadata objects are referenced by their programmatic `Name` (not by synonym); only " //$NON-NLS-1$
+            + "the type token (Catalog / \u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A) " //$NON-NLS-1$
+            + "may be in either language.\n\n" //$NON-NLS-1$
+
+            + "## Result shape\n" //$NON-NLS-1$
+            + "JSON with `valid` (true when there are zero issues), `dcsMode`, `errorCount`, " //$NON-NLS-1$
+            + "`warningCount`, `infoCount`, and an `issues` array. Each issue has `severity` " //$NON-NLS-1$
+            + "(ERROR / WARNING / INFO), `message`, and, when located, `line`, `column` and " //$NON-NLS-1$
+            + "`offset` (1-based line/column; non-positive locations are omitted).\n\n" //$NON-NLS-1$
+
+            + "## Examples\n" //$NON-NLS-1$
+            + "- Plain query: `{ \"projectName\": \"MyProj\", \"queryText\": " //$NON-NLS-1$
+            + "\"SELECT Ref FROM Catalog.Products\" }`.\n" //$NON-NLS-1$
+            + "- DCS query: add `\"dcsMode\": true` for a query backing a data composition " //$NON-NLS-1$
+            + "schema.\n\n" //$NON-NLS-1$
+
+            + "## Gotchas\n" //$NON-NLS-1$
+            + "- `success:true` means the tool ran; check `valid` for whether the query itself is " //$NON-NLS-1$
+            + "error-free. A successful run can still report `valid:false` with issues.\n" //$NON-NLS-1$
+            + "- A field/table that exists in the platform but not in THIS project resolves as a " //$NON-NLS-1$
+            + "semantic error - pass the project that actually owns the metadata.\n" //$NON-NLS-1$
+            + "- If QL language support is unavailable the tool returns an error rather than a " //$NON-NLS-1$
+            + "validation result.\n"; //$NON-NLS-1$
     }
     
     @Override

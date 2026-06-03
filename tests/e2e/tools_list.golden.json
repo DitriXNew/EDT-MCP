@@ -207,19 +207,19 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata object or attribute with full refactoring support. Cleans up all references in BSL code, forms, and other metadata. First call without confirm to preview affected locations, then call with confirm=true to apply. Supports FQNs like 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount'. Russian type names are also supported.",
+    "description": "Delete a metadata object or attribute, cascading the cleanup of all references in BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm to preview affected references, review, then call with confirm=true to apply (deletion is hard to reverse). Full parameters and examples: call get_tool_guide('delete_metadata_object').",
     "inputSchema": {
       "properties": {
         "confirm": {
-          "description": "Set to true to execute the deletion. Default false = preview only.",
+          "description": "true = execute the deletion; default false = preview only.",
           "type": "boolean"
         },
         "objectFqn": {
-          "description": "FQN of the object to delete (e.g. 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount'). The metadata TYPE token may be English or Russian; the object name is the programmatic Name (not the synonym / display name).",
+          "description": "FQN of the object to delete, e.g. 'Catalog.Products' or 'Document.SalesOrder.Attribute.Amount' (Russian type token also accepted; name is the programmatic Name, not the synonym).",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name (required)",
+          "description": "EDT project name.",
           "type": "string"
         }
       },
@@ -289,15 +289,15 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Find all references to a metadata object. Returns all places where the object is used: in other metadata objects, in BSL code modules with line numbers, forms, roles, subsystems, etc. Supports both English and Russian metadata type names (e.g., 'Справочник.Номенклатура', 'Документ.Заказ').",
+    "description": "Find every place a metadata object is used: BSL code modules (with line numbers), other metadata, forms, roles, subsystems, etc. Pass the object FQN; the type token may be English or Russian (e.g. 'Catalog.Products' or its Russian spelling). Full parameters and examples: call get_tool_guide('find_references').",
     "inputSchema": {
       "properties": {
         "limit": {
-          "description": "Result-size hint (default 100, max 500). Caps the overall number of references collected before grouping at limit*10, not per category.",
+          "description": "Result-size hint (default 100, max 500); caps the overall reference count (at limit*10), not per category.",
           "type": "integer"
         },
         "objectFqn": {
-          "description": "Fully qualified name of the object to find references for (e.g. 'Catalog.Products', 'Document.SalesOrder', 'CommonModule.Common'). Russian type names are also supported (e.g. 'Справочник.Номенклатура')",
+          "description": "FQN of the object to search for, e.g. 'Catalog.Products' (type token may be English or Russian) (required)",
           "type": "string"
         },
         "projectName": {
@@ -564,11 +564,11 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Capture a screenshot of the active form WYSIWYG editor as PNG. Can open and activate a form automatically by metadata FQN path. Requires EDT launched with -DnativeFormBufferedLayoutRender=true; a blank/empty result usually means that JVM flag is missing, not a bad call.",
+    "description": "Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the form automatically or omit it to shoot the active editor. Requires EDT launched with -DnativeFormBufferedLayoutRender=true, else the image is blank (missing flag, not a bad call). Full parameters and examples: call get_tool_guide('get_form_screenshot').",
     "inputSchema": {
       "properties": {
         "formPath": {
-          "description": "Metadata FQN path to the form. Format: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName'. Examples: 'Catalog.Products.Forms.ItemForm', 'Document.SalesOrder.Forms.DocumentForm', 'CommonForm.MyForm'. If not specified, captures the currently active form editor.",
+          "description": "Form FQN (e.g. 'Catalog.Products.Forms.ItemForm' or 'CommonForm.MyForm'); if omitted, captures the active form editor.",
           "type": "string"
         },
         "projectName": {
@@ -621,19 +621,19 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get detailed properties of metadata objects from 1C configuration. Returns basic info by default, or full details with 'full: true'. In full mode each reflection section is capped (a '[truncated]' row marks omitted rows); request fewer FQNs to keep the response small.",
+    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. Full parameters and examples: call get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
         "full": {
-          "description": "Return all properties (true) or only key info (false). Default: false",
+          "description": "All reflected properties (true) or only key info (false). Default: false",
           "type": "boolean"
         },
         "language": {
-          "description": "Language code for synonyms (e.g. 'en', 'ru'). Uses configuration default if not specified.",
+          "description": "Synonym language code, e.g. 'en'/'ru' (default: configuration default)",
           "type": "string"
         },
         "objectFqns": {
-          "description": "Array of FQNs (e.g. ['Catalog.Products', 'Document.SalesOrder']). Russian type names are also supported (e.g. 'Справочник.Номенклатура'). Required.",
+          "description": "Required. FQNs as Type.Name, e.g. ['Catalog.Products', 'Document.SalesOrder']; Russian type tokens also work (e.g. 'Справочник.Products').",
           "items": {
             "type": "string"
           },
@@ -695,11 +695,11 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Find method call hierarchy: who calls this method (callers) or what this method calls (callees). Uses semantic BSL AST analysis (resolved feature references).",
+    "description": "Find a BSL method's call hierarchy: who calls it (callers, default) or what it calls (callees), via semantic AST analysis that resolves ru/en spellings (unlike literal search_in_code). Full parameters and examples: call get_tool_guide('get_method_call_hierarchy').",
     "inputSchema": {
       "properties": {
         "direction": {
-          "description": "Direction: 'callers' (who calls this method, default) or 'callees' (what this method calls)",
+          "description": "'callers' (default) or 'callees'",
           "enum": [
             "callers",
             "callees"
@@ -707,7 +707,7 @@
           "type": "string"
         },
         "limit": {
-          "description": "Maximum number of results. Default: 100, max: 500",
+          "description": "Max results. Default: 100, max: 500",
           "type": "integer"
         },
         "methodName": {
@@ -884,11 +884,11 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get profiling (performance measurement) results after a debug session. Returns per-module, per-line data: call count, timing, percentage. Also reports whether profiling is currently active (pass applicationId to check a specific session). Optionally filter by module name. Call after start_profiling + test run (and stop_profiling to finalize collection).",
+    "description": "Get profiling (performance measurement) results after a debug session: per-module, per-line call count, timing and percentage. Also reports whether profiling is currently active. Run start_profiling + the test (then stop_profiling) first. Full parameters and examples: call get_tool_guide('get_profiling_results').",
     "inputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Optional debug session id. When set, the response reports whether profiling is currently active (on/off) for that session.",
+          "description": "Debug session id; when set, reports active state for that session",
           "type": "string"
         },
         "minFrequency": {
@@ -896,7 +896,7 @@
           "type": "integer"
         },
         "moduleFilter": {
-          "description": "Optional substring filter on module name",
+          "description": "Case-insensitive substring filter on module name",
           "type": "string"
         }
       },
@@ -1123,11 +1123,11 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Return LanguageTool metadata for a project: translation storages declared on the project and available translation provider IDs. Requires EDT with LanguageTool installed. If the storages list is empty, the configuration has no dictionary storage attached yet. The user has to set this up in EDT manually (no MCP tool for it): create a plain Eclipse project (File -> New -> Project -> General -> Project), then attach it to the configuration via the configuration project's properties (Translation settings). Do NOT use any '1C:Enterprise -> Dependent translation project' wizard — the dictionary storage project must be a plain Eclipse project, and the configuration itself can also act as its own storage if no separate Eclipse project is desired.",
+    "description": "Return LanguageTool metadata for a project: the translation storages declared on it and the available translation provider IDs. Use it to check whether a dictionary storage is attached before translating; an empty storages list means none is attached yet (set up manually in EDT). Requires EDT with LanguageTool installed. Full parameters and examples: call get_tool_guide('get_translation_project_info').",
     "inputSchema": {
       "properties": {
         "projectName": {
-          "description": "Project name (required)",
+          "description": "EDT project name (required)",
           "type": "string"
         }
       },
@@ -1175,15 +1175,15 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Go to definition of a symbol — the inverse of find_references. Accepts three forms: 'ModuleName.MethodName' (qualified method), 'MethodName' (unqualified — also pass modulePath), and a metadata FQN like 'Catalog.Products'. Supports Russian type names.",
+    "description": "Go to the definition of a symbol (the inverse of find_references): a qualified method 'ModuleName.MethodName', a bare 'MethodName' (also pass modulePath), or a metadata FQN like 'Catalog.Products'. A bare method name requires modulePath. Full parameters and examples: call get_tool_guide('go_to_definition').",
     "inputSchema": {
       "properties": {
         "includeSource": {
-          "description": "Include source code (default: true)",
+          "description": "Include the source body (default true)",
           "type": "boolean"
         },
         "modulePath": {
-          "description": "Module path from src/. Required for unqualified method names.",
+          "description": "Module path from src/, e.g. 'CommonModules/My/Module.bsl'; required for a bare method name",
           "type": "string"
         },
         "projectName": {
@@ -1191,7 +1191,7 @@
           "type": "string"
         },
         "symbol": {
-          "description": "Formats: 'ModuleName.MethodName', 'MethodName' (needs modulePath), 'Catalog.Products' (metadata FQN). Russian type names supported.",
+          "description": "'ModuleName.MethodName', bare 'MethodName' (needs modulePath), or metadata FQN 'Catalog.Products'",
           "type": "string"
         }
       },
@@ -1209,23 +1209,23 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Import a configuration from a directory of XML files into a new EDT project (EDT menu: Import). The reverse of export_configuration_to_xml.",
+    "description": "Import a configuration from a directory of XML files into a NEW EDT project (EDT menu: Import); the reverse of export_configuration_to_xml. The projectName must not already exist in the workspace. Full parameters and examples: call get_tool_guide('import_configuration_from_xml').",
     "inputSchema": {
       "properties": {
         "importPath": {
-          "description": "Filesystem path of the source directory containing XML files (required)",
+          "description": "Path of the source directory of XML files.",
           "type": "string"
         },
         "projectName": {
-          "description": "Name of the new EDT project to create in the workspace (required)",
+          "description": "Name of the NEW EDT project to create (must not already exist).",
           "type": "string"
         },
         "projectNature": {
-          "description": "EDT project nature ID, e.g. 'com._1c.g5.v8.dt.core.V8ConfigurationNature'. Pass empty string to let EDT auto-detect.",
+          "description": "Optional EDT nature ID, e.g. 'com._1c.g5.v8.dt.core.V8ConfigurationNature'; empty = auto-detect.",
           "type": "string"
         },
         "xmlVersion": {
-          "description": "XML format version, e.g. '8.3.20'. Pass empty string to let EDT auto-detect.",
+          "description": "Optional XML format version, e.g. '8.3.20'; empty = auto-detect.",
           "type": "string"
         }
       },
@@ -1262,15 +1262,15 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List EDT launch configurations (runtime client + Attach + other 1C types) with their current running state. Each entry carries the configuration name (use it as launchConfigurationName in debug_launch / run_yaxunit_tests / debug_yaxunit_tests / update_database), type id, attach flag, applicationId (real or synthetic 'attach:<name>'), project, infobase alias, debug server URL, and a 'running' flag (plus 'suspended' when the session is paused on a breakpoint). Use type='attach' for server-side debug setups (HTTP services, background jobs), type='client' for 1C:Enterprise client configs, or type='all' (default).",
+    "description": "List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxunit_tests / debug_yaxunit_tests / update_database: use the returned 'name' as their launchConfigurationName. Use type='attach' for server-side debug setups, type='client' for 1C:Enterprise client configs, or type='all' (default). Full parameters and examples: call get_tool_guide('list_configurations').",
     "inputSchema": {
       "properties": {
         "projectName": {
-          "description": "Optional project name filter",
+          "description": "Optional exact project-name filter.",
           "type": "string"
         },
         "type": {
-          "description": "Filter: 'attach' (RemoteRuntime + LocalRuntime), 'client' (RuntimeClient), or 'all' (default — any 1C/EDT launch config)",
+          "description": "Filter by config kind; default 'all'. e.g. 'attach' for server-side debug.",
           "enum": [
             "attach",
             "client",
@@ -1290,23 +1290,23 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List all BSL modules in an EDT project. Can filter by metadata type (documents, catalogs, commonModules, etc.) or by specific object name. Returns module path, type, and parent object.",
+    "description": "List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). Use it to discover module paths before reading or editing code; filter by metadataType, objectName or nameFilter. Full parameters and examples: call get_tool_guide('list_modules').",
     "inputSchema": {
       "properties": {
         "limit": {
-          "description": "Maximum number of results. Default: 200",
+          "description": "Max rows, default 200 (clamped to 1000)",
           "type": "integer"
         },
         "metadataType": {
-          "description": "Filter by type: 'all', 'documents', 'catalogs', 'commonModules', 'informationRegisters', 'accumulationRegisters', 'reports', 'dataProcessors', 'exchangePlans', 'businessProcesses', 'tasks', 'constants', 'commonCommands', 'commonForms', 'webServices', 'httpServices'. Default: 'all'",
+          "description": "Type filter, default 'all'. One of: all, documents, catalogs, commonModules, informationRegisters, accumulationRegisters, reports, dataProcessors, exchangePlans, businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices",
           "type": "string"
         },
         "nameFilter": {
-          "description": "Substring filter on module path (case-insensitive)",
+          "description": "Case-insensitive substring matched against the module path",
           "type": "string"
         },
         "objectName": {
-          "description": "Name of specific metadata object to list modules for (e.g. 'Products')",
+          "description": "Programmatic Name of one object to scope to, e.g. 'Products' (case-insensitive)",
           "type": "string"
         },
         "projectName": {
@@ -1903,19 +1903,19 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Validate 1C:Enterprise query language (QL) text in the context of a project. Parses query text and returns syntax and semantic errors with line numbers. Supports both regular queries and DCS (Data Composition System) queries.",
+    "description": "Validate 1C:Enterprise query language (QL) text against a project, returning syntax and semantic errors with line numbers. Use to check a query before embedding it in BSL; resolves table/field names against the project's metadata. Full parameters and examples: call get_tool_guide('validate_query').",
     "inputSchema": {
       "properties": {
         "dcsMode": {
-          "description": "DCS (Data Composition System) mode. Set to true for queries used in data composition schemas. Allows additional DCS-specific syntax. Default: false",
+          "description": "true for Data Composition System queries (allows DCS-specific syntax). Default: false.",
           "type": "boolean"
         },
         "projectName": {
-          "description": "EDT project name (required)",
+          "description": "EDT project name (required).",
           "type": "string"
         },
         "queryText": {
-          "description": "Query text to validate (required). The full text of the 1C query, e.g. 'SELECT Ref FROM Catalog.Products WHERE Description LIKE &SearchString'",
+          "description": "Full 1C query text to validate (required), e.g. 'SELECT Ref FROM Catalog.Products'.",
           "type": "string"
         }
       },

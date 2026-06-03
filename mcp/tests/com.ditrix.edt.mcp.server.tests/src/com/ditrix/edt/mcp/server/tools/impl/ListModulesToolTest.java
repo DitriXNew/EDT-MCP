@@ -62,6 +62,17 @@ public class ListModulesToolTest
         assertTrue(schema.contains("\"metadataType\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        String guide = new ListModulesTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        // Detail moved out of the description/schema into the on-demand guide.
+        assertTrue(guide.contains("FormModule")); //$NON-NLS-1$
+        assertTrue(guide.contains("nameFilter")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

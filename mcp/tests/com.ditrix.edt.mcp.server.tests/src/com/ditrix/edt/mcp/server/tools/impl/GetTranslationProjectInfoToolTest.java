@@ -44,6 +44,20 @@ public class GetTranslationProjectInfoToolTest
     }
 
     @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        // The exhaustive setup walkthrough moved out of getDescription() into the
+        // on-demand getGuide(); assert the depth landed there (not vanished).
+        String guide = new GetTranslationProjectInfoTool().getGuide();
+        assertNotNull(guide);
+        assertFalse(guide.isEmpty());
+        assertTrue("guide must keep the storage IDs detail", //$NON-NLS-1$
+            guide.contains("dictionary:common")); //$NON-NLS-1$
+        assertTrue("guide must keep the manual attach walkthrough", //$NON-NLS-1$
+            guide.contains("Translation settings")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testInputSchemaContainsProjectName()
     {
         @SuppressWarnings("unchecked")

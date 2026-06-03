@@ -49,6 +49,21 @@ public class ValidateQueryToolTest
     }
 
     @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        ValidateQueryTool tool = new ValidateQueryTool();
+        String guide = tool.getGuide();
+
+        assertNotNull(guide);
+        assertFalse(guide.isEmpty());
+        // Detail migrated out of the slimmed description/schema must live in the guide.
+        assertTrue(guide.contains("dcsMode")); //$NON-NLS-1$
+        assertTrue(guide.contains("Data Composition")); //$NON-NLS-1$
+        // The slim description now points callers at the guide channel.
+        assertTrue(tool.getDescription().contains("get_tool_guide('validate_query')")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testExecuteMissingProjectName()
     {
         ValidateQueryTool tool = new ValidateQueryTool();

@@ -65,6 +65,30 @@ public class GetMetadataDetailsToolTest
         assertTrue(schema.contains("\"objectFqns\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testDescriptionPointsToGuide()
+    {
+        String desc = new GetMetadataDetailsTool().getDescription();
+        assertTrue(desc.contains("get_tool_guide('get_metadata_details')")); //$NON-NLS-1$
+    }
+
+    /**
+     * The exhaustive detail moved out of the always-loaded
+     * description/schema and into the on-demand guide channel: the guide must be
+     * non-empty and still carry the migrated specifics (full mode, the
+     * {@code [truncated]} cap, the bilingual type token).
+     */
+    @Test
+    public void testGuideNonEmptyAndCarriesMigratedDetail()
+    {
+        String guide = new GetMetadataDetailsTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        assertTrue(guide.contains("[truncated]")); //$NON-NLS-1$
+        assertTrue(guide.contains("## Parameter details")); //$NON-NLS-1$
+        assertTrue(guide.contains("full")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

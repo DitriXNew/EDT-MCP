@@ -50,6 +50,24 @@ public class DeleteMetadataObjectToolTest
         assertFalse(desc.isEmpty());
     }
 
+    /**
+     * The exhaustive detail (two-phase workflow, child types, bilingual notes)
+     * moved out of the always-loaded description/schema into the on-demand
+     * {@code getGuide()} channel. Guard that it is non-empty and still carries
+     * the migrated specifics rather than having vanished.
+     */
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        String guide = new DeleteMetadataObjectTool().getGuide();
+        assertNotNull(guide);
+        assertFalse("guide must not be empty", guide.isEmpty()); //$NON-NLS-1$
+        assertTrue("guide must explain the two-phase workflow", //$NON-NLS-1$
+            guide.contains("Two-phase workflow")); //$NON-NLS-1$
+        assertTrue("guide must list the supported child types", //$NON-NLS-1$
+            guide.contains("TabularSection")); //$NON-NLS-1$
+    }
+
     @Test
     public void testInputSchemaContainsAllParameters()
     {

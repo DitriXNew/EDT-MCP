@@ -55,10 +55,10 @@ public class GoToDefinitionTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Go to definition of a symbol — the inverse of find_references. " + //$NON-NLS-1$
-               "Accepts three forms: 'ModuleName.MethodName' (qualified method), " + //$NON-NLS-1$
-               "'MethodName' (unqualified — also pass modulePath), and a metadata FQN " + //$NON-NLS-1$
-               "like 'Catalog.Products'. Supports Russian type names."; //$NON-NLS-1$
+        return "Go to the definition of a symbol (the inverse of find_references): a qualified " + //$NON-NLS-1$
+               "method 'ModuleName.MethodName', a bare 'MethodName' (also pass modulePath), or a " + //$NON-NLS-1$
+               "metadata FQN like 'Catalog.Products'. A bare method name requires modulePath. " + //$NON-NLS-1$
+               "Full parameters and examples: call get_tool_guide('go_to_definition')."; //$NON-NLS-1$
     }
 
     @Override
@@ -68,13 +68,73 @@ public class GoToDefinitionTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name", true) //$NON-NLS-1$
             .stringProperty("symbol", //$NON-NLS-1$
-                "Formats: 'ModuleName.MethodName', 'MethodName' (needs modulePath), " + //$NON-NLS-1$
-                "'Catalog.Products' (metadata FQN). Russian type names supported.", true) //$NON-NLS-1$
+                "'ModuleName.MethodName', bare 'MethodName' (needs modulePath), or metadata FQN " + //$NON-NLS-1$
+                "'Catalog.Products'", true) //$NON-NLS-1$
             .stringProperty("modulePath", //$NON-NLS-1$
-                "Module path from src/. Required for unqualified method names.") //$NON-NLS-1$
+                "Module path from src/, e.g. 'CommonModules/My/Module.bsl'; required for a bare method name") //$NON-NLS-1$
             .booleanProperty("includeSource", //$NON-NLS-1$
-                "Include source code (default: true)") //$NON-NLS-1$
+                "Include the source body (default true)") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "Resolves a symbol to where it is DEFINED (the inverse of find_references): instead of " //$NON-NLS-1$
+            + "listing usages, it returns the definition location, signature, region, and (optionally) " //$NON-NLS-1$
+            + "the source body. Works for common-module methods and metadata objects.\n\n" //$NON-NLS-1$
+            + "## When to use\n\n" //$NON-NLS-1$
+            + "- You have a call like `Foo.Bar()` or a method name and want to jump to its definition.\n" //$NON-NLS-1$
+            + "- You have a metadata reference like `Catalog.Products` and want its type plus the BSL " //$NON-NLS-1$
+            + "modules attached to that object.\n" //$NON-NLS-1$
+            + "- For the reverse direction (who calls/uses a symbol), use `find_references` instead.\n\n" //$NON-NLS-1$
+            + "## Parameter details\n\n" //$NON-NLS-1$
+            + "- `projectName` (required): EDT project name.\n" //$NON-NLS-1$
+            + "- `symbol` (required): one of three forms (see Modes below).\n" //$NON-NLS-1$
+            + "- `modulePath` (conditional): path from `src/`, e.g. " //$NON-NLS-1$
+            + "`Documents/SalesOrder/ObjectModule.bsl`. REQUIRED when `symbol` is a bare method name " //$NON-NLS-1$
+            + "(no dot) - there is no way to locate an unqualified method without its module. Ignored " //$NON-NLS-1$
+            + "for the qualified-method and metadata-FQN forms.\n" //$NON-NLS-1$
+            + "- `includeSource` (optional, default true): when true, the method body (plus any " //$NON-NLS-1$
+            + "adjacent doc-comment block) is included in a fenced `bsl` block; pass false for just the " //$NON-NLS-1$
+            + "frontmatter location.\n\n" //$NON-NLS-1$
+            + "## Modes (the three symbol forms)\n\n" //$NON-NLS-1$
+            + "1. Qualified method `ModuleName.MethodName` - `ModuleName` is matched against common " //$NON-NLS-1$
+            + "modules (case-insensitive); the method is then resolved inside that common module.\n" //$NON-NLS-1$
+            + "2. Bare method `MethodName` - resolved inside the module given by `modulePath`. Use this " //$NON-NLS-1$
+            + "for methods in object/manager/form modules that are not common modules.\n" //$NON-NLS-1$
+            + "3. Metadata FQN `Type.Name` (e.g. `Catalog.Products`) - returns the object kind/type and " //$NON-NLS-1$
+            + "lists the available BSL modules under that object; follow up with `get_metadata_details` " //$NON-NLS-1$
+            + "or `read_module_source`.\n\n" //$NON-NLS-1$
+            + "Resolution order for a two-part symbol: it is tried as a common-module method first, then " //$NON-NLS-1$
+            + "as a metadata FQN. So a name that collides could match the common module - prefer the " //$NON-NLS-1$
+            + "explicit metadata type token if you mean the object.\n\n" //$NON-NLS-1$
+            + "## Output\n\n" //$NON-NLS-1$
+            + "YAML frontmatter plus an optional fenced `bsl` body. For a method: `module`, `method`, " //$NON-NLS-1$
+            + "`type` (Procedure/Function), `export`, `startLine`/`endLine`, `totalLines`, `region`, " //$NON-NLS-1$
+            + "and `qualifiedName` when the qualified form was used. For a metadata object: `kind`, " //$NON-NLS-1$
+            + "`type`, `name`, and an Available Modules list.\n\n" //$NON-NLS-1$
+            + "## Bilingual (ru/en)\n\n" //$NON-NLS-1$
+            + "The metadata type token is dialect-aware: the FQN may use the Russian type name " //$NON-NLS-1$
+            + "(\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442.\u0412\u0441\u0442\u0440\u0435\u0447\u0430, " // Документ.Встреча //$NON-NLS-1$
+            + "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.\u0422\u043e\u0432\u0430\u0440\u044b), " // Справочник.Товары //$NON-NLS-1$
+            + "singular or plural, and is normalized internally. The OBJECT name itself is the " //$NON-NLS-1$
+            + "programmatic `Name`, not a synonym - only the leading TYPE token is bilingual.\n\n" //$NON-NLS-1$
+            + "## Examples\n\n" //$NON-NLS-1$
+            + "- Qualified method: " //$NON-NLS-1$
+            + "`{ \"projectName\": \"MyProject\", \"symbol\": \"CommonModule.DoWork\" }`\n" //$NON-NLS-1$
+            + "- Bare method in an object module: " //$NON-NLS-1$
+            + "`{ \"projectName\": \"MyProject\", \"symbol\": \"OnWrite\", " //$NON-NLS-1$
+            + "\"modulePath\": \"Documents/SalesOrder/ObjectModule.bsl\" }`\n" //$NON-NLS-1$
+            + "- Metadata object: " //$NON-NLS-1$
+            + "`{ \"projectName\": \"MyProject\", \"symbol\": \"Catalog.Products\" }`\n" //$NON-NLS-1$
+            + "- Location only (no body): add `\"includeSource\": false`.\n\n" //$NON-NLS-1$
+            + "## Gotchas\n\n" //$NON-NLS-1$
+            + "- A bare method name without `modulePath` is rejected - qualify it or supply the module.\n" //$NON-NLS-1$
+            + "- When nothing matches, the response lists similar common modules or objects and the " //$NON-NLS-1$
+            + "supported metadata types as suggestions; it is not an error.\n" //$NON-NLS-1$
+            + "- Only common-module methods resolve from the `ModuleName.MethodName` form; for methods " //$NON-NLS-1$
+            + "in non-common modules use the bare-name + `modulePath` form."; //$NON-NLS-1$
     }
 
     @Override

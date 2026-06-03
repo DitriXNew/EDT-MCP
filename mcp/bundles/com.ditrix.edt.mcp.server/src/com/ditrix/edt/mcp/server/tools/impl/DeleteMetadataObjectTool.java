@@ -51,11 +51,10 @@ public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Delete a metadata object or attribute with full refactoring support. " + //$NON-NLS-1$
-               "Cleans up all references in BSL code, forms, and other metadata. " + //$NON-NLS-1$
-               "First call without confirm to preview affected locations, then call with confirm=true to apply. " + //$NON-NLS-1$
-               "Supports FQNs like 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount'. " + //$NON-NLS-1$
-               "Russian type names are also supported."; //$NON-NLS-1$
+        return "Delete a metadata object or attribute, cascading the cleanup of all references in BSL " + //$NON-NLS-1$
+               "code, forms, and other metadata. Use the two-phase workflow: call without confirm to " + //$NON-NLS-1$
+               "preview affected references, review, then call with confirm=true to apply (deletion is " + //$NON-NLS-1$
+               "hard to reverse). Full parameters and examples: call get_tool_guide('delete_metadata_object')."; //$NON-NLS-1$
     }
 
     @Override
@@ -63,16 +62,72 @@ public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
-                "EDT project name (required)", true) //$NON-NLS-1$
+                "EDT project name.", true) //$NON-NLS-1$
             .stringProperty("objectFqn", //$NON-NLS-1$
-                "FQN of the object to delete " + //$NON-NLS-1$
-                "(e.g. 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount'). " + //$NON-NLS-1$
-                "The metadata TYPE token may be English or Russian; the object name is the " + //$NON-NLS-1$
-                "programmatic Name (not the synonym / display name).", true) //$NON-NLS-1$
+                "FQN of the object to delete, e.g. 'Catalog.Products' or " + //$NON-NLS-1$
+                "'Document.SalesOrder.Attribute.Amount' (Russian type token also accepted; " + //$NON-NLS-1$
+                "name is the programmatic Name, not the synonym).", true) //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
-                "Set to true to execute the deletion. " + //$NON-NLS-1$
-                "Default false = preview only.") //$NON-NLS-1$
+                "true = execute the deletion; default false = preview only.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "Deletes one metadata object or one of its child members and cascades the cleanup to " //$NON-NLS-1$
+            + "every reference across the configuration: BSL code, forms, and other metadata. It is " //$NON-NLS-1$
+            + "backed by EDT's md-refactoring service (IMdRefactoringService delete refactoring), so the " //$NON-NLS-1$
+            + "same reference cleanup EDT computes for the IDE delete is what gets applied. The target's " //$NON-NLS-1$
+            + "identity is its programmatic Name (not its synonym / display name).\n\n" //$NON-NLS-1$
+            + "## Think twice\n" //$NON-NLS-1$
+            + "This is a CASCADING, hard-to-reverse deletion: a wrong target can mass-edit BSL, forms and " //$NON-NLS-1$
+            + "metadata across the whole configuration. Always preview first, run it on a configuration " //$NON-NLS-1$
+            + "you can revert (version control), and do not execute without an explicit request. After " //$NON-NLS-1$
+            + "execute, verify with get_project_errors.\n\n" //$NON-NLS-1$
+            + "## When to use\n" //$NON-NLS-1$
+            + "Use to remove an existing object or member and have all references cleaned automatically. " //$NON-NLS-1$
+            + "To rename instead use rename_metadata_object; to create use create_metadata_object; to add " //$NON-NLS-1$
+            + "a member use add_metadata_attribute.\n\n" //$NON-NLS-1$
+            + "## Two-phase workflow\n" //$NON-NLS-1$
+            + "1. Preview (confirm omitted / false, the default): returns the refactoring title, the list " //$NON-NLS-1$
+            + "of refactoring items, and the affected references (referencingObject, reference feature, " //$NON-NLS-1$
+            + "and targetObject FQN) plus a count. Nothing is modified.\n" //$NON-NLS-1$
+            + "2. Execute (confirm=true): performs the delete refactoring, removing the object and " //$NON-NLS-1$
+            + "cleaning up every reference. Returns action='executed' on success.\n\n" //$NON-NLS-1$
+            + "## Parameter details\n" //$NON-NLS-1$
+            + "- projectName (required): EDT project name.\n" //$NON-NLS-1$
+            + "- objectFqn (required): FQN of the delete target. Top object: 'Type.Name' " //$NON-NLS-1$
+            + "(e.g. 'Catalog.Products' deletes the whole catalog). Child member: " //$NON-NLS-1$
+            + "'Type.Name.ChildType.ChildName' (e.g. 'Document.SalesOrder.Attribute.Amount' deletes one " //$NON-NLS-1$
+            + "attribute; 'Catalog.Products.TabularSection.Prices' deletes a tabular section). Supported " //$NON-NLS-1$
+            + "child types: Attribute, TabularSection, Dimension, Resource.\n" //$NON-NLS-1$
+            + "- confirm (optional, default false): false previews, true applies.\n\n" //$NON-NLS-1$
+            + "## Bilingual notes (ru/en)\n" //$NON-NLS-1$
+            + "- objectFqn resolves by the object's programmatic Name; in the FQN only the leading TYPE " //$NON-NLS-1$
+            + "token may be bilingual (e.g. 'Catalog' or the Russian " //$NON-NLS-1$
+            + "'\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a'). The synonym is never used " //$NON-NLS-1$
+            + "to locate the target.\n" //$NON-NLS-1$
+            + "- Child-type tokens are also bilingual: e.g. Attribute / " //$NON-NLS-1$
+            + "'\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442', TabularSection / " //$NON-NLS-1$
+            + "'\u0422\u0430\u0431\u043b\u0438\u0447\u043d\u0430\u044f\u0427\u0430\u0441\u0442\u044c', " //$NON-NLS-1$
+            + "Dimension / '\u0418\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u0435', Resource / " //$NON-NLS-1$
+            + "'\u0420\u0435\u0441\u0443\u0440\u0441'.\n\n" //$NON-NLS-1$
+            + "## Examples\n" //$NON-NLS-1$
+            + "- Preview deleting a catalog: {projectName: 'MyProject', objectFqn: 'Catalog.Products'}\n" //$NON-NLS-1$
+            + "- Execute it: {projectName: 'MyProject', objectFqn: 'Catalog.Products', confirm: true}\n" //$NON-NLS-1$
+            + "- Delete one attribute: {projectName: 'MyProject', " //$NON-NLS-1$
+            + "objectFqn: 'Document.SalesOrder.Attribute.Amount', confirm: true}\n" //$NON-NLS-1$
+            + "- Russian type token: {projectName: 'MyProject', objectFqn: '\u0421\u043f\u0440\u0430" //$NON-NLS-1$
+            + "\u0432\u043e\u0447\u043d\u0438\u043a.Products'}\n\n" //$NON-NLS-1$
+            + "## Gotchas\n" //$NON-NLS-1$
+            + "- A malformed nested FQN with an odd trailing token (e.g. 'Catalog.Products.Attribute') is " //$NON-NLS-1$
+            + "rejected as not found, so a nested delete never silently falls back to deleting the parent " //$NON-NLS-1$
+            + "object.\n" //$NON-NLS-1$
+            + "- An unsupported child type or a name that does not resolve is rejected with guidance on " //$NON-NLS-1$
+            + "the accepted 'Type.Name' / 'Type.Name.ChildType.ChildName' shapes.\n" //$NON-NLS-1$
+            + "- Deletion targets the programmatic Name; passing a synonym / display name will not " //$NON-NLS-1$
+            + "resolve."; //$NON-NLS-1$
     }
 
     @Override

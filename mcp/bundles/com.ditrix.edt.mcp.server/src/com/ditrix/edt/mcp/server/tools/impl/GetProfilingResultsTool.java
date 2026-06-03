@@ -48,23 +48,65 @@ public class GetProfilingResultsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get profiling (performance measurement) results after a debug session. " //$NON-NLS-1$
-            + "Returns per-module, per-line data: call count, timing, percentage. " //$NON-NLS-1$
-            + "Also reports whether profiling is currently active (pass applicationId to check a " //$NON-NLS-1$
-            + "specific session). Optionally filter by module name. " //$NON-NLS-1$
-            + "Call after start_profiling + test run (and stop_profiling to finalize collection)."; //$NON-NLS-1$
+        return "Get profiling (performance measurement) results after a debug session: " //$NON-NLS-1$
+            + "per-module, per-line call count, timing and percentage. Also reports whether " //$NON-NLS-1$
+            + "profiling is currently active. Run start_profiling + the test (then stop_profiling) first. " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('get_profiling_results')."; //$NON-NLS-1$
     }
 
     @Override
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("moduleFilter", "Optional substring filter on module name") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("moduleFilter", "Case-insensitive substring filter on module name") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("minFrequency", "Only include lines called at least N times (default: 1)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", //$NON-NLS-1$
-                "Optional debug session id. When set, the response reports whether profiling is " //$NON-NLS-1$
-                    + "currently active (on/off) for that session.") //$NON-NLS-1$
+                "Debug session id; when set, reports active state for that session") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "Retrieve the accumulated 1C performance-measurement (profiling) readout: which BSL " //$NON-NLS-1$
+            + "lines ran, how often, and how long. Effectively a line-level coverage + timing report, " //$NON-NLS-1$
+            + "grouped per module. Returns JSON.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- After a profiled debug run, to see which code was exercised and where time went.\n" //$NON-NLS-1$
+            + "- Typical sequence: `debug_launch` (or `debug_yaxunit_tests`) -> `start_profiling` -> " //$NON-NLS-1$
+            + "run the scenario/test -> `stop_profiling` (finalizes collection) -> `get_profiling_results`.\n" //$NON-NLS-1$
+            + "- You can also call it just to check whether profiling is currently active (see " //$NON-NLS-1$
+            + "`applicationId` below) without having results yet.\n\n" //$NON-NLS-1$
+
+            + "## Parameter details\n" //$NON-NLS-1$
+            + "- `moduleFilter` - optional case-insensitive substring matched against the module name; " //$NON-NLS-1$
+            + "only matching modules appear. Omit to include every module.\n" //$NON-NLS-1$
+            + "- `minFrequency` - optional integer (default `1`); drops lines whose call count is below " //$NON-NLS-1$
+            + "this threshold. Raise it to hide rarely-hit lines and focus on hot paths.\n" //$NON-NLS-1$
+            + "- `applicationId` - optional debug session id. When supplied, the `profilingActive` field " //$NON-NLS-1$
+            + "reflects that specific session's on/off state. When omitted, `profilingActive` reflects " //$NON-NLS-1$
+            + "whether ANY session is currently profiling, so a client can still tell a stop is pending.\n\n" //$NON-NLS-1$
+
+            + "## Output\n" //$NON-NLS-1$
+            + "JSON with `count` (number of profiling result sets), `profilingActive` (boolean) and " //$NON-NLS-1$
+            + "`results`. Each result has `name`, `totalDurability` and a `modules` map (module name -> " //$NON-NLS-1$
+            + "list of lines). Each line carries `line`, `calls` (frequency), `pct`, `dur`, `pureDur`, " //$NON-NLS-1$
+            + "`code` (source text, truncated to 120 chars) and `method` (the method signature).\n" //$NON-NLS-1$
+            + "Output is capped at 200 lines per module to keep the response bounded; narrow with " //$NON-NLS-1$
+            + "`moduleFilter` / `minFrequency` if you hit the cap.\n\n" //$NON-NLS-1$
+
+            + "## Examples\n" //$NON-NLS-1$
+            + "- Everything collected: `{}`.\n" //$NON-NLS-1$
+            + "- Hot lines in one module: `{moduleFilter: \"CommonModule\", minFrequency: 10}`.\n" //$NON-NLS-1$
+            + "- Check a specific session's state: `{applicationId: \"<id>\"}`.\n\n" //$NON-NLS-1$
+
+            + "## Notes & gotchas\n" //$NON-NLS-1$
+            + "- An empty/zero result usually means `start_profiling` was not called before the run, or " //$NON-NLS-1$
+            + "the data has not been finalized yet - call `stop_profiling` first.\n" //$NON-NLS-1$
+            + "- `profilingActive: true` with `count: 0` means a session is profiling but no results " //$NON-NLS-1$
+            + "have been flushed; finish the scenario and stop profiling.\n" //$NON-NLS-1$
+            + "- Results are read-only; this tool never toggles profiling on or off.\n"; //$NON-NLS-1$
     }
 
     @Override

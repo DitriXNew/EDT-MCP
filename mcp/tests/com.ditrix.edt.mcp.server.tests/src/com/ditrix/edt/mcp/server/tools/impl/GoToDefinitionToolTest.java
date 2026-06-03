@@ -72,6 +72,37 @@ public class GoToDefinitionToolTest
         assertTrue(schema.contains("\"modulePath\"")); //$NON-NLS-1$
     }
 
+    /**
+     * The slimmed description points to the on-demand guide channel and still
+     * names the inverse-of relationship used for tool selection.
+     */
+    @Test
+    public void testDescriptionPointsToGuide()
+    {
+        String desc = new GoToDefinitionTool().getDescription();
+        assertTrue(desc.contains("find_references")); //$NON-NLS-1$
+        assertTrue(desc.contains("get_tool_guide('go_to_definition')")); //$NON-NLS-1$
+    }
+
+    /**
+     * The exhaustive detail (modes, conditional modulePath rule, bilingual
+     * notes) moved out of the always-loaded description/schema into getGuide().
+     * Assert it landed there rather than vanishing.
+     */
+    @Test
+    public void testGuideNotEmptyAndContainsMigratedDetail()
+    {
+        String guide = new GoToDefinitionTool().getGuide();
+        assertNotNull(guide);
+        assertFalse(guide.isEmpty());
+        // Conditional-parameter rule migrated from the schema/description.
+        assertTrue(guide.contains("modulePath")); //$NON-NLS-1$
+        // The three symbol forms / modes section migrated into the guide.
+        assertTrue(guide.contains("Modes")); //$NON-NLS-1$
+        // Metadata-FQN form example migrated into the guide.
+        assertTrue(guide.contains("Catalog.Products")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no workbench needed) ====================
 
     @Test

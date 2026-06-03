@@ -62,6 +62,17 @@ public class GetFormScreenshotToolTest
         assertTrue(schema.contains("\"formPath\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        String guide = new GetFormScreenshotTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        // Detail moved out of the slimmed description/schema must live in the guide.
+        assertTrue(guide.contains("nativeFormBufferedLayoutRender")); //$NON-NLS-1$
+        assertTrue(guide.contains("CommonForm")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

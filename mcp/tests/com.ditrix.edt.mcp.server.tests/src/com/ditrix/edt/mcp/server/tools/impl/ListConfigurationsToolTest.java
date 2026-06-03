@@ -58,4 +58,15 @@ public class ListConfigurationsToolTest
         assertTrue(schema.contains("\"type\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        String guide = new ListConfigurationsTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        // Detail moved out of the slimmed description/schema lives in the guide.
+        assertTrue(guide.contains("launchConfigurationName")); //$NON-NLS-1$
+        assertTrue(guide.contains("suspended")); //$NON-NLS-1$
+    }
 }

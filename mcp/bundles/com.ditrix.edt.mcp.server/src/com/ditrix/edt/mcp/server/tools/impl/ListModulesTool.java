@@ -67,9 +67,9 @@ public class ListModulesTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List all BSL modules in an EDT project. " + //$NON-NLS-1$
-               "Can filter by metadata type (documents, catalogs, commonModules, etc.) " + //$NON-NLS-1$
-               "or by specific object name. Returns module path, type, and parent object."; //$NON-NLS-1$
+        return "List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). " //$NON-NLS-1$
+            + "Use it to discover module paths before reading or editing code; filter by metadataType, objectName or nameFilter. " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('list_modules')."; //$NON-NLS-1$
     }
 
     @Override
@@ -79,17 +79,80 @@ public class ListModulesTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("metadataType", //$NON-NLS-1$
-                "Filter by type: 'all', 'documents', 'catalogs', 'commonModules', " + //$NON-NLS-1$
-                "'informationRegisters', 'accumulationRegisters', 'reports', 'dataProcessors', " + //$NON-NLS-1$
-                "'exchangePlans', 'businessProcesses', 'tasks', 'constants', " + //$NON-NLS-1$
-                "'commonCommands', 'commonForms', 'webServices', 'httpServices'. Default: 'all'") //$NON-NLS-1$
+                "Type filter, default 'all'. One of: all, documents, catalogs, commonModules, " + //$NON-NLS-1$
+                "informationRegisters, accumulationRegisters, reports, dataProcessors, exchangePlans, " + //$NON-NLS-1$
+                "businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices") //$NON-NLS-1$
             .stringProperty("objectName", //$NON-NLS-1$
-                "Name of specific metadata object to list modules for (e.g. 'Products')") //$NON-NLS-1$
+                "Programmatic Name of one object to scope to, e.g. 'Products' (case-insensitive)") //$NON-NLS-1$
             .stringProperty("nameFilter", //$NON-NLS-1$
-                "Substring filter on module path (case-insensitive)") //$NON-NLS-1$
+                "Case-insensitive substring matched against the module path") //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
-                "Maximum number of results. Default: 200") //$NON-NLS-1$
+                "Max rows, default 200 (clamped to 1000)") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "List the BSL modules of an EDT project as a Markdown table. Each row reports the " //$NON-NLS-1$
+            + "module path (relative to `src/`), the module type (`Module`, `ObjectModule`, " //$NON-NLS-1$
+            + "`ManagerModule`, `FormModule`, `CommandModule`, ...), the parent metadata type and " //$NON-NLS-1$
+            + "the parent object Name. Use it to discover concrete module paths before calling " //$NON-NLS-1$
+            + "`read_module_source`, `read_method_source`, `write_module_source` or `get_module_structure`.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- Enumerate every module in a project (default `metadataType: all`).\n" //$NON-NLS-1$
+            + "- Narrow to one metadata kind (e.g. only `commonModules` or `documents`).\n" //$NON-NLS-1$
+            + "- Find all modules belonging to a single object via `objectName`.\n" //$NON-NLS-1$
+            + "- Grep module paths with `nameFilter` (e.g. only form modules).\n\n" //$NON-NLS-1$
+
+            + "## Parameter details\n" //$NON-NLS-1$
+            + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
+            + "- `metadataType` - type filter, default `all`. Accepted values: `all`, `documents`, " //$NON-NLS-1$
+            + "`catalogs`, `commonModules`, `informationRegisters`, `accumulationRegisters`, " //$NON-NLS-1$
+            + "`reports`, `dataProcessors`, `exchangePlans`, `businessProcesses`, `tasks`, " //$NON-NLS-1$
+            + "`constants`, `commonCommands`, `commonForms`, `webServices`, `httpServices`. " //$NON-NLS-1$
+            + "An unknown value returns a `ToolResult.error` that lists the supported values.\n" //$NON-NLS-1$
+            + "- `objectName` - programmatic **Name** of one metadata object to scope to (e.g. " //$NON-NLS-1$
+            + "`Products`). Matched case-insensitively against the object Name, never against the " //$NON-NLS-1$
+            + "synonym - pass the English or Russian Name as defined in the model, not a localized " //$NON-NLS-1$
+            + "caption.\n" //$NON-NLS-1$
+            + "- `nameFilter` - case-insensitive substring matched against the **module path** " //$NON-NLS-1$
+            + "(e.g. `Forms/` to keep only form modules, `ManagerModule` for manager modules).\n" //$NON-NLS-1$
+            + "- `limit` - max rows, default 200, clamped to 1000. A truncation notice is appended " //$NON-NLS-1$
+            + "when results are capped.\n\n" //$NON-NLS-1$
+
+            + "## Modes\n" //$NON-NLS-1$
+            + "- **`metadataType: all`** scans the `src/` directory recursively, so it covers every " //$NON-NLS-1$
+            + "metadata kind (including ones without a dedicated branch) and Configuration-level " //$NON-NLS-1$
+            + "modules. The parent type is inferred from the top-level `src/` folder name.\n" //$NON-NLS-1$
+            + "- **A specific `metadataType`** uses the EDT configuration model to enumerate objects " //$NON-NLS-1$
+            + "of that kind, then collects their `.bsl` files. Single-module kinds (`commonModules`, " //$NON-NLS-1$
+            + "`commonCommands`, `commonForms`, `webServices`, `httpServices`) resolve one known file; " //$NON-NLS-1$
+            + "multi-module kinds (`documents`, `catalogs`, registers, `reports`, `dataProcessors`, " //$NON-NLS-1$
+            + "...) are scanned recursively so object, manager, form and command modules all appear.\n\n" //$NON-NLS-1$
+
+            + "## Module type derivation\n" //$NON-NLS-1$
+            + "The module type comes from the file name relative to the object directory. " //$NON-NLS-1$
+            + "`Module.bsl` under a `Forms/` subfolder is reported as `FormModule`; a top-level " //$NON-NLS-1$
+            + "`Module.bsl` (CommonModule, WebService, HTTPService) stays `Module`; otherwise the " //$NON-NLS-1$
+            + "file base name is used verbatim (e.g. `ObjectModule`, `ManagerModule`, `CommandModule`).\n\n" //$NON-NLS-1$
+
+            + "## Examples\n" //$NON-NLS-1$
+            + "- Everything: `{projectName: \"MyProject\"}`.\n" //$NON-NLS-1$
+            + "- Only common modules: `{projectName: \"MyProject\", metadataType: \"commonModules\"}`.\n" //$NON-NLS-1$
+            + "- All modules of one document: " //$NON-NLS-1$
+            + "`{projectName: \"MyProject\", metadataType: \"documents\", objectName: \"Order\"}`.\n" //$NON-NLS-1$
+            + "- Only form modules across the project: " //$NON-NLS-1$
+            + "`{projectName: \"MyProject\", nameFilter: \"Forms/\"}`.\n\n" //$NON-NLS-1$
+
+            + "## Notes & gotchas\n" //$NON-NLS-1$
+            + "- `objectName` resolves by programmatic Name (case-insensitive), not by synonym; a " //$NON-NLS-1$
+            + "translated caption will not match.\n" //$NON-NLS-1$
+            + "- `nameFilter` matches the path, while `objectName` matches the parent object - they " //$NON-NLS-1$
+            + "are independent and can be combined.\n" //$NON-NLS-1$
+            + "- Paths are relative to `src/`; feed them directly to the module read/write tools.\n" //$NON-NLS-1$
+            + "- Output is Markdown with escaped table cells, so a `|` in a path does not break the table.\n"; //$NON-NLS-1$
     }
 
     @Override

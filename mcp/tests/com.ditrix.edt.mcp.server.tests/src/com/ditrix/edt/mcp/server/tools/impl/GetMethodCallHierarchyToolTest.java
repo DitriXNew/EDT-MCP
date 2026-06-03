@@ -54,6 +54,21 @@ public class GetMethodCallHierarchyToolTest
         String desc = new GetMethodCallHierarchyTool().getDescription();
         assertNotNull(desc);
         assertTrue(desc.length() > 0);
+        // The slim description points at the on-demand guide channel.
+        assertTrue(desc.contains("get_tool_guide('get_method_call_hierarchy')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        // Exhaustive detail moved out of the description/schema and into getGuide().
+        String guide = new GetMethodCallHierarchyTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        assertTrue(guide.contains("callers")); //$NON-NLS-1$
+        assertTrue(guide.contains("callees")); //$NON-NLS-1$
+        // The caller-discovery rationale (resolved feature entries) now lives only here.
+        assertTrue(guide.contains("feature entry")); //$NON-NLS-1$
     }
 
     @Test
