@@ -281,7 +281,7 @@ public class McpHttpHandler implements HttpHandler
             return;
         }
 
-        Activator.logInfo("MCP request body: " + requestBody); //$NON-NLS-1$
+        Activator.logDebug("MCP request body: " + requestBody); //$NON-NLS-1$
 
         String response;
         boolean isInitialize = requestBody.contains("\"" + McpConstants.METHOD_INITIALIZE + "\""); //$NON-NLS-1$ //$NON-NLS-2$
@@ -312,7 +312,7 @@ public class McpHttpHandler implements HttpHandler
                 return;
             }
 
-            Activator.logInfo("MCP response: " + response.substring(0, Math.min(200, response.length())) + "..."); //$NON-NLS-1$ //$NON-NLS-2$
+            Activator.logDebug("MCP response: " + response.substring(0, Math.min(200, response.length())) + "..."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         catch (Exception e)
         {

@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.function.BooleanSupplier;
+
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
@@ -32,9 +34,55 @@ public final class Log
     private static final String PLUGIN_ID =
         BUNDLE != null ? BUNDLE.getSymbolicName() : "com.ditrix.edt.mcp.server"; //$NON-NLS-1$
 
+    /**
+     * Standard Eclipse tracing option for verbose/debug output. Enabled by the
+     * platform when {@code <pluginId>/debug=true} is set in a {@code .options}
+     * file and Eclipse is launched with {@code -debug}. Off by default, so the
+     * production INFO log stays terse.
+     */
+    private static final String DEBUG_OPTION = PLUGIN_ID + "/debug"; //$NON-NLS-1$
+
+    /**
+     * Default gate: consults the standard Eclipse debug-tracing flag via
+     * {@link Platform#getDebugBoolean(String)}. Returns {@code false} unless the
+     * tracing option is explicitly turned on, keeping debug output suppressed by
+     * default.
+     */
+    private static final BooleanSupplier DEFAULT_DEBUG_GATE = () -> Platform.getDebugBoolean(DEBUG_OPTION);
+
+    /**
+     * The active gate controlling {@link #debug(String)}. Defaults to the Eclipse
+     * tracing flag; overridable (e.g. from tests) via {@link #setDebugGate}.
+     * Never {@code null}.
+     */
+    private static volatile BooleanSupplier debugGate = DEFAULT_DEBUG_GATE;
+
     private Log()
     {
         // Utility class
+    }
+
+    /**
+     * Reports whether debug logging is currently enabled (i.e. whether a
+     * subsequent {@link #debug(String)} call would emit anything).
+     *
+     * @return {@code true} when the debug gate is open
+     */
+    public static boolean isDebugEnabled()
+    {
+        return debugGate.getAsBoolean();
+    }
+
+    /**
+     * Overrides the gate that controls {@link #debug(String)}. Intended for tests
+     * that need to force debug output on or off deterministically. Pass
+     * {@code null} to restore the production default (the Eclipse tracing flag).
+     *
+     * @param gate the new gate, or {@code null} to restore the default
+     */
+    static void setDebugGate(BooleanSupplier gate)
+    {
+        debugGate = gate != null ? gate : DEFAULT_DEBUG_GATE;
     }
 
     /**
@@ -48,15 +96,19 @@ public final class Log
     }
 
     /**
-     * Logs a debug message. Disabled by default (kept for parity with the former
-     * {@code Activator.logDebug}); enable the body below for troubleshooting.
+     * Logs a debug message, but only when debug logging is enabled (see
+     * {@link #isDebugEnabled()}). Disabled by default, so the production INFO log
+     * stays terse; enable it with the standard Eclipse {@code <pluginId>/debug}
+     * tracing option (a {@code .options} file plus {@code -debug}).
      *
      * @param message the debug message
      */
     public static void debug(String message)
     {
-        // Disabled by default - uncomment to troubleshoot:
-        // log(IStatus.INFO, "[DEBUG] " + message, null);
+        if (isDebugEnabled())
+        {
+            log(IStatus.INFO, "[DEBUG] " + message, null); //$NON-NLS-1$
+        }
     }
 
     /**
