@@ -111,6 +111,16 @@ public class WriteModuleSourceTool implements IMcpTool
                 "By default, checks balanced Procedure/EndProcedure, " + //$NON-NLS-1$
                 "Function/EndFunction, If/EndIf, While/EndDo, " + //$NON-NLS-1$
                 "For/EndDo, Try/EndTry. Set true to force write.") //$NON-NLS-1$
+            .stringProperty("expectedSource", //$NON-NLS-1$
+                "Lost-update guard for mode=replace over an EXISTING module. " + //$NON-NLS-1$
+                "Pass the exact module content you last read with read_module_source; " + //$NON-NLS-1$
+                "if it no longer matches the current file (someone else edited it), " + //$NON-NLS-1$
+                "the write is rejected so you can re-read and retry. " + //$NON-NLS-1$
+                "Ignored for searchReplace/append and when creating a new module.") //$NON-NLS-1$
+            .booleanProperty("overwrite", //$NON-NLS-1$
+                "Force mode=replace to overwrite an EXISTING module without an " + //$NON-NLS-1$
+                "expectedSource lost-update check (default: false). " + //$NON-NLS-1$
+                "Ignored for searchReplace/append and when creating a new module.") //$NON-NLS-1$
             .build();
     }
 
@@ -146,6 +156,8 @@ public class WriteModuleSourceTool implements IMcpTool
         String formName = JsonUtils.extractStringArgument(params, "formName"); //$NON-NLS-1$
         String commandName = JsonUtils.extractStringArgument(params, "commandName"); //$NON-NLS-1$
         boolean skipSyntaxCheck = JsonUtils.extractBooleanArgument(params, "skipSyntaxCheck", false); //$NON-NLS-1$
+        String expectedSource = JsonUtils.extractStringArgument(params, "expectedSource"); //$NON-NLS-1$
+        boolean overwrite = JsonUtils.extractBooleanArgument(params, "overwrite", false); //$NON-NLS-1$
 
         // 2. Validate required parameters
         String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
@@ -259,8 +271,22 @@ public class WriteModuleSourceTool implements IMcpTool
             switch (mode)
             {
                 case MODE_REPLACE:
+                {
+                    // Lost-update guard: overwriting an EXISTING module blindly
+                    // clobbers any edit made since the agent last read it. Creating a
+                    // NEW module is unconditional (nothing to lose).
+                    if (fileExists)
+                    {
+                        String preconditionError =
+                            checkReplacePrecondition(file, expectedSource, overwrite);
+                        if (preconditionError != null)
+                        {
+                            return preconditionError;
+                        }
+                    }
                     newLines = splitSourceLines(source);
                     break;
+                }
 
                 case MODE_APPEND:
                     newLines = new ArrayList<>(originalLines);
@@ -405,6 +431,74 @@ public class WriteModuleSourceTool implements IMcpTool
         String newContent = currentContent.substring(0, idx) + newSource
             + currentContent.substring(idx + oldSource.length());
         return new SearchReplaceResult(1, newContent);
+    }
+
+    /**
+     * Lost-update precondition for {@code mode=replace} over an EXISTING module.
+     * mode=searchReplace is already protected by its {@code oldSource} content match;
+     * a full replace would otherwise blindly clobber whatever the module contains now,
+     * losing a concurrent edit (or one made between the agent's read and write).
+     * <p>
+     * Resolution:
+     * <ul>
+     * <li>{@code expectedSource} provided — compare it to the current module content;
+     *     on mismatch reject with a "read it again then retry" steer (mirrors the
+     *     searchReplace not-found steer), on match proceed.</li>
+     * <li>else {@code overwrite == true} — proceed (explicit force).</li>
+     * <li>else — reject and point at expectedSource / overwrite / searchReplace.</li>
+     * </ul>
+     * Content is compared on {@code \n}-normalized text (same normalization
+     * {@code source} and searchReplace use), so a CRLF/LF difference alone is not a
+     * spurious mismatch.
+     *
+     * @return {@code null} to proceed, or a ready {@link ToolResult#error} JSON
+     *     payload to return verbatim from {@link #execute}.
+     */
+    private static String checkReplacePrecondition(IFile file, String expectedSource,
+        boolean overwrite) throws Exception
+    {
+        // Read the raw module content (same normalization searchReplace uses) ONLY
+        // when an expectedSource has to be compared; otherwise the decision is purely
+        // overwrite vs reject and no file access is needed.
+        String currentContent = expectedSource == null
+            ? null
+            : BslModuleUtils.readFileText(file).replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        return evaluateReplacePrecondition(currentContent, expectedSource, overwrite);
+    }
+
+    /**
+     * Pure decision for the {@code mode=replace}-over-existing lost-update guard,
+     * split out so it is unit-testable without an Eclipse workspace (mirrors
+     * {@link #applySearchReplace}). {@code currentContent} is the {@code \n}-normalized
+     * current module content and may be {@code null} when {@code expectedSource} is
+     * {@code null} (no content comparison is performed in that branch).
+     *
+     * @return {@code null} to proceed, or a ready {@link ToolResult#error} JSON
+     *     payload to return verbatim from {@link #execute}.
+     */
+    static String evaluateReplacePrecondition(String currentContent, String expectedSource,
+        boolean overwrite)
+    {
+        if (expectedSource != null)
+        {
+            String expectedNormalized = expectedSource.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (currentContent == null || !currentContent.equals(expectedNormalized))
+            {
+                return ToolResult.error("expectedSource does not match the current module content. " + //$NON-NLS-1$
+                    "The module changed since you read it (a concurrent edit), so a full replace " + //$NON-NLS-1$
+                    "would lose that change. Please read the file again with read_module_source, " + //$NON-NLS-1$
+                    "then retry with the up-to-date expectedSource.").toJson(); //$NON-NLS-1$
+            }
+            return null;
+        }
+        if (overwrite)
+        {
+            return null;
+        }
+        return ToolResult.error("module already exists; a full replace would overwrite it and " + //$NON-NLS-1$
+            "could lose a concurrent edit. Pass expectedSource (the content you last read with " + //$NON-NLS-1$
+            "read_module_source) to guard against a lost update, or overwrite=true to force, " + //$NON-NLS-1$
+            "or use mode=searchReplace to change only a fragment.").toJson(); //$NON-NLS-1$
     }
 
     /**

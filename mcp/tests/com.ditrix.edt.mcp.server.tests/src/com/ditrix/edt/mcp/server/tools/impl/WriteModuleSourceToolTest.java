@@ -69,6 +69,10 @@ public class WriteModuleSourceToolTest
         assertTrue(schema.contains("\"formName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"commandName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"skipSyntaxCheck\"")); //$NON-NLS-1$
+        // Lost-update guard params for mode=replace over an existing module.
+        assertTrue(schema.contains("\"expectedSource\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"overwrite\"")); //$NON-NLS-1$
+        // The new params are OPTIONAL — required stays projectName + source only.
         assertTrue(schema.contains("\"required\":[\"projectName\",\"source\"]")); //$NON-NLS-1$
     }
 
@@ -758,5 +762,152 @@ public class WriteModuleSourceToolTest
             WriteModuleSourceTool.applySearchReplace("A\nB", "A", "Z"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(1, r.occurrences);
         assertEquals("Z\nB", r.newContent); //$NON-NLS-1$
+    }
+
+    // ===== evaluateReplacePrecondition: mode=replace lost-update guard (pure) =====
+    // mode=replace over an EXISTING module must not blindly clobber state the agent
+    // never saw. searchReplace is already guarded by its oldSource match; replace was
+    // not. These tests exercise the pure decision (no Eclipse workspace needed);
+    // the file-read wiring + new-file creation are covered by E2E.
+
+    @Test
+    public void testReplacePreconditionRejectsBareExistingOverwrite()
+    {
+        // Existing module, no expectedSource and no overwrite -> rejected with the
+        // steer toward expectedSource / overwrite / searchReplace.
+        String result =
+            WriteModuleSourceTool.evaluateReplacePrecondition("Procedure A()\nEndProcedure\n", null, false); //$NON-NLS-1$
+        assertNotNull("a bare replace over an existing module must be rejected", result); //$NON-NLS-1$
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(result.contains("already exists")); //$NON-NLS-1$
+        assertTrue(result.contains("expectedSource")); //$NON-NLS-1$
+        assertTrue(result.contains("overwrite")); //$NON-NLS-1$
+        assertTrue(result.contains("searchReplace")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplacePreconditionExpectedSourceMismatchRereadSteer()
+    {
+        // expectedSource differs from current content -> re-read steer (mirrors the
+        // searchReplace not-found "read the file again" steer).
+        String current = "Procedure A()\nEndProcedure\n"; //$NON-NLS-1$
+        String stale = "Procedure A()\n// old body\nEndProcedure\n"; //$NON-NLS-1$
+        String result = WriteModuleSourceTool.evaluateReplacePrecondition(current, stale, false);
+        assertNotNull("a stale expectedSource must be rejected", result); //$NON-NLS-1$
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(result.contains("does not match")); //$NON-NLS-1$
+        assertTrue(result.contains("read_module_source")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplacePreconditionExpectedSourceMatchProceeds()
+    {
+        // expectedSource equals current content -> proceed (null = no error).
+        String current = "Procedure A()\nEndProcedure\n"; //$NON-NLS-1$
+        String result = WriteModuleSourceTool.evaluateReplacePrecondition(current, current, false);
+        assertNull("a matching expectedSource must let the write proceed", result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplacePreconditionExpectedSourceMatchIgnoresCrlf()
+    {
+        // CRLF vs LF alone is not a spurious mismatch — both are \n-normalized.
+        // currentContent is already \n-normalized by the caller; expectedSource is
+        // normalized inside the decision.
+        String current = "Procedure A()\nEndProcedure\n"; //$NON-NLS-1$
+        String expectedCrlf = "Procedure A()\r\nEndProcedure\r\n"; //$NON-NLS-1$
+        String result = WriteModuleSourceTool.evaluateReplacePrecondition(current, expectedCrlf, false);
+        assertNull("a CRLF/LF-only difference must not be a mismatch", result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplacePreconditionOverwriteForcesProceed()
+    {
+        // overwrite=true, no expectedSource -> proceed (explicit force).
+        String result =
+            WriteModuleSourceTool.evaluateReplacePrecondition("anything\n", null, true); //$NON-NLS-1$
+        assertNull("overwrite=true must force the write through", result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplacePreconditionExpectedSourceWinsOverOverwriteFlag()
+    {
+        // When expectedSource is provided it is authoritative: a mismatch is rejected
+        // even if overwrite=true was also passed (the content guard is the stronger
+        // signal that the agent had a specific prior state in mind).
+        String result =
+            WriteModuleSourceTool.evaluateReplacePrecondition("current\n", "stale\n", true); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(result);
+        assertTrue(result.contains("does not match")); //$NON-NLS-1$
+    }
+
+    // ===== execute(): new params do not break resolution (reach project check) =====
+    // In the unit-test env there is no workspace, so execute() stops at
+    // "Project not found" before any file I/O. These prove the gate params are
+    // wired without disturbing modulePath/objectName resolution — and that the
+    // guard is language-agnostic (English + Russian object Name).
+
+    @Test
+    public void testReplaceWithExpectedSourceReachesProjectValidation()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("expectedSource", "old content"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("Project not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplaceWithOverwriteReachesProjectValidation()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "Documents/MyDoc/ObjectModule.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("overwrite", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("Project not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplaceWithExpectedSourceResolvesRussianObjectName()
+    {
+        // Language-agnostic: a Russian object Name ("Документ.МойДок") still resolves
+        // by its programmatic Name; the lost-update guard does not depend on language.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", //$NON-NLS-1$
+            "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u041C\u043E\u0439\u0414\u043E\u043A"); //$NON-NLS-1$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("expectedSource", "old content"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("Project not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplaceWithOverwriteResolvesRussianObjectName()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", //$NON-NLS-1$
+            "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u041C\u043E\u0439\u0414\u043E\u043A"); //$NON-NLS-1$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("overwrite", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("Project not found")); //$NON-NLS-1$
     }
 }
