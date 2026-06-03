@@ -163,4 +163,51 @@ public class AbstractMetadataFormatterTest
     {
         assertEquals("MONDAY", f.formatEnum(java.time.DayOfWeek.MONDAY)); //$NON-NLS-1$
     }
+
+    // ==================== section/depth cap on the reflection dump ====================
+
+    @Test
+    public void testMaxDynamicRowsIsBounded()
+    {
+        // The reflection dumps (formatAllDynamicProperties / formatReferenceCollection)
+        // are capped per section so a heavily-referenced object cannot produce an
+        // unbounded dump even below the global output guard.
+        assertTrue("the per-section row cap must be a small positive bound",
+            AbstractMetadataFormatter.MAX_DYNAMIC_ROWS > 0
+                && AbstractMetadataFormatter.MAX_DYNAMIC_ROWS <= 1000);
+    }
+
+    @Test
+    public void testAppendTruncatedRowIsActionableAndTableSafe()
+    {
+        // The section-truncation notice row must be a single, table-safe row that
+        // tells the agent how many rows were omitted, the cap, and how to see more.
+        StringBuilder sb = new StringBuilder();
+        f.appendTruncatedRow(sb, 37, "references"); //$NON-NLS-1$
+        String row = sb.toString();
+
+        assertTrue("must be a single markdown table row",
+            row.startsWith("| ") && row.endsWith(" |\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must report the omitted count", row.contains("37")); //$NON-NLS-1$
+        assertTrue("must name the omitted unit", row.contains("references")); //$NON-NLS-1$
+        assertTrue("must report the cap", //$NON-NLS-1$
+            row.contains(String.valueOf(AbstractMetadataFormatter.MAX_DYNAMIC_ROWS)));
+        assertTrue("must point to a narrowing action", row.contains("fqn")); //$NON-NLS-1$
+        // Exactly one row: a lone trailing newline, no embedded ones that would
+        // split the table.
+        assertEquals("the notice must be exactly one row", 1, countChar(row, '\n'));
+    }
+
+    private static int countChar(String s, char c)
+    {
+        int n = 0;
+        for (int i = 0; i < s.length(); i++)
+        {
+            if (s.charAt(i) == c)
+            {
+                n++;
+            }
+        }
+        return n;
+    }
 }

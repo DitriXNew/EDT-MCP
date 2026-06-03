@@ -47,7 +47,9 @@ public class GetMetadataDetailsTool implements IMcpTool
     public String getDescription()
     {
         return "Get detailed properties of metadata objects from 1C configuration. " + //$NON-NLS-1$
-               "Returns basic info by default, or full details with 'full: true'."; //$NON-NLS-1$
+               "Returns basic info by default, or full details with 'full: true'. " + //$NON-NLS-1$
+               "In full mode each reflection section is capped (a '[truncated]' row " + //$NON-NLS-1$
+               "marks omitted rows); request fewer FQNs to keep the response small."; //$NON-NLS-1$
     }
     
     @Override

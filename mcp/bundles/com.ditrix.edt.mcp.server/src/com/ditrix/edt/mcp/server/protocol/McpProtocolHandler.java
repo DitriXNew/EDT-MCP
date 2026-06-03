@@ -22,6 +22,7 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolsListResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.Log;
+import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
@@ -640,10 +641,20 @@ public class McpProtocolHandler
     
     /**
      * Builds tool call response for text result.
+     * <p>
+     * This and {@link #buildToolCallResourceResponse} are the single central point
+     * where a tool's human-readable CONTENT TEXT is finalized into a tools/call
+     * result, so the absolute output-size guard is applied here (and only here).
+     * The guard is a pure no-op below its budget, so sub-cap output is byte-for-byte
+     * identical to before. It is deliberately NOT applied on the JSON
+     * structuredContent path ({@link #buildToolCallJsonResponse}), where the textual
+     * content is only a bounded digest and the full data must round-trip intact in
+     * structuredContent; nor to the JSON-RPC envelope itself (capping that would
+     * corrupt the wire frame).
      */
     private String buildToolCallTextResponse(String result, Object requestId)
     {
-        ToolCallResult toolResult = ToolCallResult.text(result);
+        ToolCallResult toolResult = ToolCallResult.text(OutputSizeGuard.cap(result));
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
     }
     
@@ -665,10 +676,16 @@ public class McpProtocolHandler
     
     /**
      * Builds tool call response for resource with MIME type (e.g., Markdown).
+     * <p>
+     * The embedded resource body is the human-readable content text for a
+     * MARKDOWN/YAML tool, so the absolute output-size guard is applied here too
+     * (see {@link #buildToolCallTextResponse} for the contract). A no-op below the
+     * budget keeps the resource body byte-for-byte identical.
      */
     private String buildToolCallResourceResponse(String content, String mimeType, String fileName, Object requestId)
     {
-        ToolCallResult toolResult = ToolCallResult.resource("embedded://" + fileName, mimeType, content); //$NON-NLS-1$
+        ToolCallResult toolResult =
+            ToolCallResult.resource("embedded://" + fileName, mimeType, OutputSizeGuard.cap(content)); //$NON-NLS-1$
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
     }
     

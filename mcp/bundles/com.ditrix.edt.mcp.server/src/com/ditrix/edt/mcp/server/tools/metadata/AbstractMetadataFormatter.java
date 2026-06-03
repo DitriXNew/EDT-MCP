@@ -32,7 +32,21 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
     protected static final String YES = "Yes"; //$NON-NLS-1$
     protected static final String NO = "No"; //$NON-NLS-1$
     protected static final String DASH = "-"; //$NON-NLS-1$
-    
+
+    /**
+     * Per-section row cap for the unbounded EMF-reflection dumps
+     * ({@link #formatAllDynamicProperties} over every structural feature, and
+     * {@link #formatReferenceCollection} over every referencing object). Without
+     * it, the {@code full:true} details of a heavily-referenced object can produce
+     * an arbitrarily large section even before the global output guard runs. When a
+     * section has more rows than this it is cut here and a single notice row records
+     * how many were omitted; below the cap the output is byte-for-byte identical, so
+     * ordinary objects are unaffected. This bounds the dump per section, while the
+     * central {@code OutputSizeGuard} caps the assembled result as a whole.
+     */
+    protected static final int MAX_DYNAMIC_ROWS = 200;
+
+
     /**
      * Gets synonym for the specified language with fallback.
      */
@@ -279,9 +293,14 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
     {
         addSectionHeader(sb, sectionTitle);
         startTable(sb, "Property", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
-        
+
         List<EStructuralFeature> features = eObject.eClass().getEAllStructuralFeatures();
-        
+
+        // Bound the dump: a row is emitted only for a rendered property, and at most
+        // MAX_DYNAMIC_ROWS rows are emitted, after which a single notice row records
+        // how many properties were omitted. Below the cap this is a pure no-op.
+        int rendered = 0;
+        int omitted = 0;
         for (EStructuralFeature feature : features)
         {
             // Skip derived, transient, and volatile features (they're computed, not stored)
@@ -289,16 +308,16 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
             {
                 continue;
             }
-            
+
             // Skip containment references (handled separately as collections)
             if (feature instanceof EReference && ((EReference) feature).isContainment())
             {
                 continue;
             }
-            
+
             Object value = eObject.eGet(feature);
             String valueStr = formatDynamicValue(value, feature, language);
-            
+
             // Show all properties, even empty ones - use empty string for null/empty values
             if (valueStr == null || valueStr.equals(DASH))
             {
@@ -312,9 +331,37 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
                     continue; // Skip truly null values
                 }
             }
-            
+
+            if (rendered >= MAX_DYNAMIC_ROWS)
+            {
+                omitted++;
+                continue;
+            }
             addPropertyRow(sb, formatFeatureName(feature.getName()), valueStr);
+            rendered++;
         }
+        if (omitted > 0)
+        {
+            appendTruncatedRow(sb, omitted, "properties"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Appends a single section-truncation notice row to a two-column table. Emitted
+     * only when a reflection dump exceeded {@link #MAX_DYNAMIC_ROWS}; it tells the
+     * agent how many rows were omitted and how to see more. Both cells go through
+     * the shared row escaping (via {@link #addTableRow}), so the notice can never
+     * break the table.
+     *
+     * @param sb the table being built
+     * @param omitted the number of rows omitted (must be positive to be meaningful)
+     * @param unit the plural noun describing the omitted rows (e.g. "properties")
+     */
+    protected void appendTruncatedRow(StringBuilder sb, int omitted, String unit)
+    {
+        addTableRow(sb, "[truncated]", //$NON-NLS-1$
+            omitted + " more " + unit + " omitted (section capped at " //$NON-NLS-1$ //$NON-NLS-2$
+                + MAX_DYNAMIC_ROWS + "; query a more specific fqn for the rest)"); //$NON-NLS-1$
     }
     
     /**
@@ -435,8 +482,14 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         }
         
         addSectionHeader(sb, formatFeatureName(name) + " (" + collection.size() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
-        
+
         boolean first = true;
+        // Bound the MdObject reference rows: a heavily-referenced object can list
+        // an arbitrary number of referencing objects here. At most MAX_DYNAMIC_ROWS
+        // FQN rows are emitted, then a single notice row records how many were
+        // omitted. Below the cap the output is byte-for-byte identical.
+        int mdRendered = 0;
+        int mdOmitted = 0;
         for (Object item : collection)
         {
             if (item instanceof MdObject)
@@ -447,9 +500,15 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
                     startTable(sb, "FQN", "Synonym"); //$NON-NLS-1$ //$NON-NLS-2$
                     first = false;
                 }
+                if (mdRendered >= MAX_DYNAMIC_ROWS)
+                {
+                    mdOmitted++;
+                    continue;
+                }
                 // Show full FQN: Type.Name (e.g. Catalog.Products)
                 String fqn = mdObj.eClass().getName() + "." + mdObj.getName(); //$NON-NLS-1$
                 addTableRow(sb, fqn, getSynonym(mdObj.getSynonym(), language));
+                mdRendered++;
             }
             else if (item instanceof EObject)
             {
@@ -477,6 +536,10 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
                 }
                 sb.append(item.toString());
             }
+        }
+        if (mdOmitted > 0)
+        {
+            appendTruncatedRow(sb, mdOmitted, "references"); //$NON-NLS-1$
         }
         if (!first && !(collection.iterator().next() instanceof MdObject))
         {

@@ -16,6 +16,7 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -659,6 +660,76 @@ public class McpProtocolHandlerTest
         JsonObject result = parseResponse(response).getAsJsonObject("result");
         assertTrue("text error payload must set isError:true",
             result.has("isError") && result.get("isError").getAsBoolean());
+    }
+
+    // === Absolute output-size guard (content-text cap) ===
+
+    @Test
+    public void testSubBudgetMarkdownContentIsByteIdentical()
+    {
+        // A normal markdown result is far below the cap, so the embedded resource
+        // body must be byte-for-byte identical to what the tool produced — the
+        // guard is a pure no-op below its budget.
+        String body = "# Title\n\n| Name | Value |\n| --- | --- |\n| Code | 9 |\n";
+        registry.register(new StubTypedTool("md_small", body, IMcpTool.ResponseType.MARKDOWN));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "md_small", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        String text = result.getAsJsonArray("content").get(0)
+            .getAsJsonObject().getAsJsonObject("resource").get("text").getAsString();
+        assertEquals("sub-budget content must pass through unchanged", body, text);
+        assertFalse("sub-budget content must NOT carry a truncation notice",
+            text.contains("[OUTPUT TRUNCATED]"));
+    }
+
+    @Test
+    public void testOverBudgetTextContentIsTruncatedWithNotice()
+    {
+        // A TEXT tool that returns more than the budget must have its content text
+        // capped and carry the actionable, size-keyed truncation notice.
+        StringBuilder huge = new StringBuilder();
+        for (int i = 0; i < OutputSizeGuard.MAX_CONTENT_CHARS + 20_000; i++)
+        {
+            huge.append('x');
+        }
+        registry.register(new StubTypedTool("txt_huge", huge.toString(), IMcpTool.ResponseType.TEXT));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "txt_huge", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        String text = result.getAsJsonArray("content").get(0)
+            .getAsJsonObject().get("text").getAsString();
+        assertTrue("over-budget content must be capped to the budget",
+            text.length() <= OutputSizeGuard.MAX_CONTENT_CHARS);
+        assertTrue("over-budget content must carry the truncation notice",
+            text.contains("[OUTPUT TRUNCATED]"));
+        assertTrue("notice must name a narrowing param", text.contains("limit"));
+    }
+
+    @Test
+    public void testJsonStructuredContentIsNotCappedByTheGuard()
+    {
+        // A JSON tool with a payload far larger than the budget must keep its
+        // structuredContent intact (the guard caps only content text, never the
+        // structured JSON object that must round-trip). The bounded content[0].text
+        // is just the digest, not the full payload.
+        StringBuilder bigValue = new StringBuilder();
+        for (int i = 0; i < OutputSizeGuard.MAX_CONTENT_CHARS + 50_000; i++)
+        {
+            bigValue.append('a');
+        }
+        String payload = "{\"success\":true,\"blob\":\"" + bigValue + "\",\"value\":7}";
+        registry.register(new StubJsonTool("json_huge", payload));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "json_huge", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        JsonObject structured = result.getAsJsonObject("structuredContent");
+        // structuredContent must be intact and round-trip the full data.
+        assertEquals("structuredContent must round-trip the scalar intact", 7,
+            structured.get("value").getAsInt());
+        assertEquals("structuredContent blob must NOT be truncated",
+            bigValue.length(), structured.get("blob").getAsString().length());
+        assertFalse("structuredContent must NOT carry a truncation notice",
+            structured.get("blob").getAsString().contains("[OUTPUT TRUNCATED]"));
     }
 
     // === Per-call completion log line (pure helpers) ===
