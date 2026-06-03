@@ -38,20 +38,27 @@ public class InitializeResult
     }
     
     /**
-     * MCP capabilities.
+     * The SERVER's declared capabilities, returned to the client in the
+     * initialize result. This server advertises the {@code tools} capability only;
+     * it does not yet advertise resources, prompts, or other optional features, so
+     * those fields are intentionally absent (the shared Gson omits null fields).
+     * The CLIENT's capabilities are a separate concern: they arrive in the
+     * initialize REQUEST and are parsed/stored by the protocol handler (see
+     * {@code McpProtocolHandler#getClientCapabilities()}), not modelled here.
      */
     public static class Capabilities
     {
         private Tools tools = new Tools();
-        
+
         public Tools getTools()
         {
             return tools;
         }
     }
-    
+
     /**
-     * Tools capability (empty object signals support).
+     * Tools capability (an empty object signals that tools are supported, per the
+     * MCP capabilities convention).
      */
     public static class Tools
     {

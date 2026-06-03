@@ -190,6 +190,164 @@ public class McpProtocolHandlerTest
         assertEquals("abc-123", json.get("id").getAsString());
     }
 
+    // === Client capabilities (parse / store / gate) ===
+
+    @Test
+    public void testInitializeParsesAndStoresClientCapabilities()
+    {
+        // (a) Capabilities sent in an initialize request are parsed and retrievable.
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"roots\":{\"listChanged\":true},\"sampling\":{}},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertNotNull("capabilities holder must never be null", caps);
+        assertTrue("a supplied capabilities object must be present", caps.isPresent());
+        assertTrue("declared roots capability must be retrievable", caps.has("roots"));
+        assertTrue("declared sampling capability must be retrievable", caps.has("sampling"));
+        assertFalse("an undeclared capability must read absent", caps.has("elicitation"));
+    }
+
+    @Test
+    public void testGetClientCapabilitiesDefaultsToAbsentBeforeInitialize()
+    {
+        // (c) The stored capabilities are exposed for gating and have a safe,
+        // permissive default before any initialize has been processed.
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertNotNull("default capabilities must never be null", caps);
+        assertFalse("no initialize yet => not present", caps.isPresent());
+        assertTrue("default must allow structuredContent", caps.allowsStructuredContent());
+    }
+
+    @Test
+    public void testInitializeWithoutCapabilitiesKeepsPermissiveDefault()
+    {
+        // An initialize that omits capabilities entirely leaves the permissive
+        // default in place (structuredContent allowed).
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertFalse("an absent capabilities object must read not-present", caps.isPresent());
+        assertTrue("absent capabilities must still allow structuredContent",
+            caps.allowsStructuredContent());
+    }
+
+    @Test
+    public void testToolCallEmitsStructuredContentAfterInitializeWithoutCapabilities()
+    {
+        // (b) NO-REGRESSION: a tools/call after an initialize WITHOUT capabilities
+        // must STILL emit structuredContent on a JSON-responseType tool result.
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+
+        String initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(initialize);
+
+        String response = handler.processRequest(buildToolCallRequest(2, "ok_tool", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertNotNull("structuredContent must be present by default",
+            result.get("structuredContent"));
+        assertEquals("structuredContent must carry the payload", 7,
+            result.getAsJsonObject("structuredContent").get("value").getAsInt());
+    }
+
+    @Test
+    public void testToolCallEmitsStructuredContentWithEmptyCapabilities()
+    {
+        // NO-REGRESSION: an explicit but EMPTY capabilities object must not change
+        // the default — structuredContent stays present.
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+
+        String initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(initialize);
+
+        String response = handler.processRequest(buildToolCallRequest(2, "ok_tool", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertNotNull("empty capabilities must still emit structuredContent",
+            result.get("structuredContent"));
+    }
+
+    @Test
+    public void testToolCallEmitsStructuredContentWithNoInitializeAtAll()
+    {
+        // NO-REGRESSION: even with no initialize handshake, a JSON tool result still
+        // carries structuredContent (the default holder is permissive).
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "ok_tool", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertNotNull("structuredContent must be present without any initialize",
+            result.get("structuredContent"));
+    }
+
+    @Test
+    public void testToolCallSuppressesStructuredContentWhenClientExplicitlyOptsOut()
+    {
+        // The gating substrate: a client that EXPLICITLY opts out via
+        // experimental.structuredContent=false suppresses structuredContent; the
+        // JSON payload is then delivered as text so the data is still returned.
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+
+        String initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"experimental\":{\"structuredContent\":false}},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(initialize);
+        assertFalse("an explicit opt-out must disable structuredContent",
+            handler.getClientCapabilities().allowsStructuredContent());
+
+        String response = handler.processRequest(buildToolCallRequest(2, "ok_tool", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertNull("structuredContent must be suppressed for an opted-out client",
+            result.get("structuredContent"));
+        // The data is still returned as the text content payload.
+        String text = result.getAsJsonArray("content").get(0)
+            .getAsJsonObject().get("text").getAsString();
+        assertTrue("the JSON payload must still be returned as text", text.contains("value"));
+    }
+
+    @Test
+    public void testExplicitStructuredContentTrueStillAllows()
+    {
+        // experimental.structuredContent=true is the same as the default: allowed.
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"experimental\":{\"structuredContent\":true}},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+        assertTrue("explicit true must allow structuredContent",
+            handler.getClientCapabilities().allowsStructuredContent());
+    }
+
+    @Test
+    public void testMalformedCapabilitiesFallsBackToPermissiveDefault()
+    {
+        // A malformed (non-object) capabilities value must not break initialize and
+        // must leave the permissive default in place.
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":\"not-an-object\","
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        String response = handler.processRequest(request);
+
+        // initialize must still succeed.
+        JsonObject json = parseResponse(response);
+        assertNotNull("initialize must still return a result", json.get("result"));
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertFalse("a non-object capabilities value must read not-present", caps.isPresent());
+        assertTrue("malformed capabilities must keep the permissive default",
+            caps.allowsStructuredContent());
+    }
+
     // === Initialized notification ===
 
     @Test

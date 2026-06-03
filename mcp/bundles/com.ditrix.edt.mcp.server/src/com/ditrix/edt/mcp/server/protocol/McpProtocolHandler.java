@@ -43,13 +43,38 @@ public class McpProtocolHandler
     static final long SLOW_TOOL_CALL_MS = 5000L;
 
     private final McpToolRegistry toolRegistry;
-    
+
+    /**
+     * Capabilities the connected client declared in its last {@code initialize}
+     * request. Server-scoped (NOT per session) because this EDT MCP server is
+     * effectively single-client over localhost: one EDT workbench serves one
+     * connected MCP client at a time, so the last initialize wins. {@code volatile}
+     * because initialize and tools/call can be processed on different transport
+     * threads. Defaults to {@link ClientCapabilities#ABSENT} so the behaviour
+     * before any initialize (and for a client that sends no capabilities) is the
+     * permissive default — in particular structuredContent stays emitted.
+     */
+    private volatile ClientCapabilities clientCapabilities = ClientCapabilities.ABSENT;
+
     /**
      * Creates a new protocol handler.
      */
     public McpProtocolHandler()
     {
         this.toolRegistry = McpToolRegistry.getInstance();
+    }
+
+    /**
+     * The capabilities declared by the connected client in its last
+     * {@code initialize}, never {@code null} (defaults to
+     * {@link ClientCapabilities#ABSENT}). Exposed so current and future protocol
+     * features can gate on what the client said it supports.
+     *
+     * @return the stored client capabilities
+     */
+    public ClientCapabilities getClientCapabilities()
+    {
+        return clientCapabilities;
     }
     
     /**
@@ -89,6 +114,12 @@ public class McpProtocolHandler
                 // Per spec: echo back the client's requested protocol version if it is a
                 // known/supported version; otherwise, fall back to our latest version.
                 String clientVersion = request.getStringParam("protocolVersion"); //$NON-NLS-1$
+                // Mirror the version handling for the client's declared capabilities:
+                // read the optional "capabilities" object from the same params and
+                // store it server-scoped so later tools/call (and future protocol
+                // features) can gate on it. Absent / malformed capabilities resolve
+                // to ClientCapabilities.ABSENT, which keeps every default permissive.
+                clientCapabilities = parseClientCapabilities(request);
                 return buildInitializeResponse(requestId, clientVersion);
             }
             
@@ -260,6 +291,16 @@ public class McpProtocolHandler
                 }
                 // In plain text mode, return markdown as plain text instead of structured content
                 if (plainTextMode)
+                {
+                    return buildToolCallTextResponse(result, requestId);
+                }
+                // Capability gate for structuredContent. By DEFAULT (no capabilities,
+                // or a client that does not explicitly opt out) this is true, so the
+                // structuredContent response below is emitted exactly as before — the
+                // no-regression guarantee. Only a client that EXPLICITLY declared it
+                // cannot accept structuredContent suppresses it; the JSON payload is
+                // then delivered as text so the data is still returned.
+                if (!clientCapabilities.allowsStructuredContent())
                 {
                     return buildToolCallTextResponse(result, requestId);
                 }
@@ -537,7 +578,44 @@ public class McpProtocolHandler
         );
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));
     }
-    
+
+    /**
+     * Reads the optional {@code capabilities} object from an initialize request's
+     * params and wraps it in a {@link ClientCapabilities} holder. Gson deserializes
+     * the nested object into a {@code Map}, so it is converted back to a Gson tree
+     * for a uniform inspection API. Never throws: a missing, {@code null}, or
+     * malformed (non-object) capabilities value yields {@link ClientCapabilities#ABSENT}
+     * so the permissive default behaviour is preserved.
+     *
+     * @param request the parsed initialize request (may be {@code null})
+     * @return the parsed capabilities, never {@code null}
+     */
+    private ClientCapabilities parseClientCapabilities(JsonRpcRequest request)
+    {
+        Map<String, Object> params = request != null ? request.getParams() : null;
+        if (params == null)
+        {
+            return ClientCapabilities.ABSENT;
+        }
+        Object capabilities = params.get("capabilities"); //$NON-NLS-1$
+        if (capabilities == null)
+        {
+            return ClientCapabilities.ABSENT;
+        }
+        try
+        {
+            JsonElement tree = GsonProvider.get().toJsonTree(capabilities);
+            return ClientCapabilities.from(tree);
+        }
+        catch (RuntimeException e)
+        {
+            // A malformed capabilities value must not fail initialize; fall back to
+            // the permissive default and record why for an operator.
+            Activator.logError("Failed to parse client capabilities; using defaults", e); //$NON-NLS-1$
+            return ClientCapabilities.ABSENT;
+        }
+    }
+
     /**
      * Builds tools/list response dynamically from registry.
      */
