@@ -48,13 +48,11 @@ public class GetSubsystemContentTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get content of a specific 1C subsystem: basic properties, " //$NON-NLS-1$
-            + "list of metadata objects included in the subsystem (Type/Name/Synonym/FQN), " //$NON-NLS-1$
-            + "and nested child subsystems. Subsystem is identified by FQN " //$NON-NLS-1$
-            + "(e.g. 'Subsystem.Sales' or 'Subsystem.Sales.Subsystem.Orders'). " //$NON-NLS-1$
-            + "Returns content of the requested subsystem only by default (recursive=false) " //$NON-NLS-1$
-            + "to keep the response compact; set recursive=true to also include " //$NON-NLS-1$
-            + "objects from nested subsystems (deduplicated)."; //$NON-NLS-1$
+        return "Get one 1C subsystem's content: properties, its metadata objects " //$NON-NLS-1$
+            + "(Type/Name/Synonym/FQN) and child subsystems, identified by FQN " //$NON-NLS-1$
+            + "(e.g. 'Subsystem.Sales.Subsystem.Orders'). " //$NON-NLS-1$
+            + "By default lists only this subsystem's objects; set recursive=true to fold in nested ones. " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('get_subsystem_content')."; //$NON-NLS-1$
     }
 
     @Override
@@ -64,13 +62,71 @@ public class GetSubsystemContentTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("subsystemFqn", //$NON-NLS-1$
-                "Subsystem FQN (required), e.g. 'Subsystem.Sales' or 'Subsystem.Sales.Subsystem.Orders'", //$NON-NLS-1$
+                "Subsystem FQN (required), e.g. 'Subsystem.Sales.Subsystem.Orders'", //$NON-NLS-1$
                 true)
             .booleanProperty("recursive", //$NON-NLS-1$
-                "Include objects from nested subsystems in the Content section (default: false)") //$NON-NLS-1$
+                "Also include objects from nested subsystems (default: false)") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
-                "Language code for synonyms (e.g. 'en', 'ru'). Uses configuration default if not specified.") //$NON-NLS-1$
+                "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# get_subsystem_content\n\n" //$NON-NLS-1$
+            + "Inspect a single 1C subsystem in depth: its properties, the metadata objects " //$NON-NLS-1$
+            + "it contains and its direct child subsystems. Output is Markdown with a " //$NON-NLS-1$
+            + "`## Properties` table, a `## Content` table (Type/Name/Synonym/FQN of each " //$NON-NLS-1$
+            + "included object) and a `## Child Subsystems` table.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- You have a subsystem FQN (typically from `list_subsystems`) and want the " //$NON-NLS-1$
+            + "objects assigned to it plus its settings.\n" //$NON-NLS-1$
+            + "- To map an entire configuration's subsystem tree first, use `list_subsystems`; " //$NON-NLS-1$
+            + "this tool drills into one node.\n\n" //$NON-NLS-1$
+
+            + "## Parameters\n" //$NON-NLS-1$
+            + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
+            + "- `subsystemFqn` (required) - the subsystem FQN (see FQN format below).\n" //$NON-NLS-1$
+            + "- `recursive` - default `false`: the Content table lists only the objects " //$NON-NLS-1$
+            + "directly assigned to this subsystem, keeping the response compact. Set `true` " //$NON-NLS-1$
+            + "to also fold in objects from all nested subsystems; duplicates that appear in " //$NON-NLS-1$
+            + "more than one nested subsystem are deduplicated. The Content header is marked " //$NON-NLS-1$
+            + "`(recursive)` in that mode.\n" //$NON-NLS-1$
+            + "- `language` - language code for the Synonym/Explanation columns (e.g. `en`, " //$NON-NLS-1$
+            + "`ru`). Defaults to the configuration's default language.\n\n" //$NON-NLS-1$
+
+            + "## FQN format\n" //$NON-NLS-1$
+            + "Top-level: `Subsystem.Sales`. Nested subsystems repeat the segment: " //$NON-NLS-1$
+            + "`Subsystem.Sales.Subsystem.Orders`. The child-subsystem table emits exactly " //$NON-NLS-1$
+            + "these FQNs, so you can chain another `get_subsystem_content` call on a child.\n\n" //$NON-NLS-1$
+
+            + "## Output sections\n" //$NON-NLS-1$
+            + "- **Properties** - FQN, Name, Synonym, optional Comment, the " //$NON-NLS-1$
+            + "IncludeInCommandInterface / IncludeHelpInContents / UseOneCommand flags, " //$NON-NLS-1$
+            + "optional Explanation and the parent subsystem.\n" //$NON-NLS-1$
+            + "- **Content** - one row per included object (Type, Name, Synonym, FQN), sorted " //$NON-NLS-1$
+            + "by Type then Name. The header shows the object count.\n" //$NON-NLS-1$
+            + "- **Child Subsystems** - direct children with FQN, Synonym and content/children " //$NON-NLS-1$
+            + "counts (omitted when there are none).\n\n" //$NON-NLS-1$
+
+            + "## Examples\n" //$NON-NLS-1$
+            + "- Direct content only: " //$NON-NLS-1$
+            + "`{projectName: \"MyProject\", subsystemFqn: \"Subsystem.Sales\"}`.\n" //$NON-NLS-1$
+            + "- Include nested objects: " //$NON-NLS-1$
+            + "`{projectName: \"MyProject\", subsystemFqn: \"Subsystem.Sales\", recursive: true}`.\n" //$NON-NLS-1$
+            + "- Nested subsystem with Russian synonyms: `{projectName: \"MyProject\", " //$NON-NLS-1$
+            + "subsystemFqn: \"Subsystem.Sales.Subsystem.Orders\", language: \"ru\"}`.\n\n" //$NON-NLS-1$
+
+            + "## Notes & gotchas\n" //$NON-NLS-1$
+            + "- The object Name is the programmatic identifier; the Synonym is rendered for " //$NON-NLS-1$
+            + "the chosen `language` only. An unconfigured language yields an empty synonym, " //$NON-NLS-1$
+            + "not an error.\n" //$NON-NLS-1$
+            + "- A subsystem with no assigned objects renders an explicit " //$NON-NLS-1$
+            + "*No objects in this subsystem.* line rather than an empty table.\n" //$NON-NLS-1$
+            + "- Output is Markdown; table cells are escaped so a `|` in a synonym/comment " //$NON-NLS-1$
+            + "does not break the table.\n"; //$NON-NLS-1$
     }
 
     @Override

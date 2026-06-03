@@ -57,10 +57,44 @@ public final class GuideRenderer
         String guide = tool.getGuide();
         if (guide != null && !guide.isEmpty())
         {
-            sb.append("\n## Guide\n").append(guide); //$NON-NLS-1$
+            // The renderer already emitted the tool name as the document H1, so a
+            // guide that opens with its own "# <name>" would duplicate it. Strip that
+            // one redundant leading heading; guides that open with prose or a
+            // different heading are unaffected.
+            sb.append("\n## Guide\n").append(stripRedundantH1(guide, tool.getName())); //$NON-NLS-1$
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Removes a redundant leading {@code # <toolName>} H1 from a guide body. The
+     * renderer emits the tool name as the document H1 in {@link #render}, so a guide
+     * whose first line is exactly {@code # <name>} would render a duplicated
+     * top-level heading. Only that exact first-line heading (with any following blank
+     * lines) is dropped; a guide opening with prose, a {@code ##} subheading, or a
+     * different {@code #} title is returned unchanged.
+     *
+     * @param guide the non-empty guide text
+     * @param name the tool name
+     * @return the guide with a redundant leading H1 removed, otherwise unchanged
+     */
+    static String stripRedundantH1(String guide, String name)
+    {
+        String h1 = "# " + name; //$NON-NLS-1$
+        int newline = guide.indexOf('\n');
+        String firstLine = newline >= 0 ? guide.substring(0, newline) : guide;
+        if (!firstLine.trim().equals(h1))
+        {
+            return guide;
+        }
+        String rest = newline >= 0 ? guide.substring(newline + 1) : ""; //$NON-NLS-1$
+        // Drop blank lines left between the removed H1 and the first real content.
+        while (rest.startsWith("\n")) //$NON-NLS-1$
+        {
+            rest = rest.substring(1);
+        }
+        return rest;
     }
 
     /**

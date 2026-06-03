@@ -114,23 +114,23 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Start an EDT debug session. Pass launchConfigurationName to run any existing EDT debug configuration by name (runtime client OR 'Attach to 1C:Enterprise Debug Server' — required for debugging server-side code: HTTP services, background jobs, scheduled jobs). Otherwise pass projectName + applicationId to launch the matching runtime-client config. If a previous launch of the same configuration is still alive, the tool short-circuits with `alreadyRunning: true` and does NOT spawn a fresh client — to force a clean restart (e.g. after code changes that require a new session), call `terminate_launch` first, then `debug_launch` again.",
+    "description": "Start an EDT debug session: either an existing config by launchConfigurationName (runtime client OR Attach, the latter needed to debug server-side code), or a runtime-client config matched by projectName + applicationId. If that config is already running it short-circuits with alreadyRunning:true (terminate_launch first to force a restart). Full parameters and examples: call get_tool_guide('debug_launch').",
     "inputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application ID from get_applications (required for runtime-client launches)",
+          "description": "Application ID from get_applications; required in the projectName+applicationId mode.",
           "type": "string"
         },
         "launchConfigurationName": {
-          "description": "Exact name of an EDT debug launch configuration (runtime client or Attach). Use for Attach configurations or to pick a specific client config by name.",
+          "description": "Exact name of an EDT debug launch config (runtime client or Attach); skips projectName/applicationId.",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name (required unless launchConfigurationName is given)",
+          "description": "EDT project name; required unless launchConfigurationName is given.",
           "type": "string"
         },
         "updateBeforeLaunch": {
-          "description": "If true — update database before launching (default: true, ignored for Attach)",
+          "description": "Update the database before launching. Default true; ignored for Attach.",
           "type": "boolean"
         }
       },
@@ -460,7 +460,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get content assist (code completion) proposals at a specific position in a BSL file. Opens the file in EDT editor and retrieves available completions at the given line and column.",
+    "description": "Get code-completion proposals at a 1-based line/column in a BSL module - the members, globals and variables valid at that caret (e.g. after a '.'). May return a 'not ready' error while the editor loads; just retry. Full parameters and examples: call get_tool_guide('get_content_assist').",
     "inputSchema": {
       "properties": {
         "column": {
@@ -468,11 +468,11 @@
           "type": "integer"
         },
         "contains": {
-          "description": "Filter proposals by display string containing these substrings (comma-separated, e.g. 'Insert,Add')",
+          "description": "Keep proposals whose display string contains any of these substrings (comma-separated, e.g. 'Insert,Add')",
           "type": "string"
         },
         "extendedDocumentation": {
-          "description": "Return full documentation (default: false, only display string)",
+          "description": "Include full documentation per proposal (default: false)",
           "type": "boolean"
         },
         "filePath": {
@@ -480,7 +480,7 @@
           "type": "string"
         },
         "limit": {
-          "description": "Maximum number of proposals to return (default: from preferences)",
+          "description": "Max proposals to return (default: from preferences, max 1000)",
           "type": "integer"
         },
         "line": {
@@ -488,15 +488,15 @@
           "type": "integer"
         },
         "modulePath": {
-          "description": "BSL module path from project's src folder (e.g. 'CommonModules/MyModule/Module.bsl') (canonical; alias: filePath)",
+          "description": "BSL module path under src (e.g. 'CommonModules/MyModule/Module.bsl'); alias: filePath",
           "type": "string"
         },
         "offset": {
-          "description": "Skip first N proposals (default: 0, for pagination)",
+          "description": "Skip first N matching proposals for pagination (default: 0)",
           "type": "integer"
         },
         "projectName": {
-          "description": "EDT project name (required)",
+          "description": "EDT project name",
           "type": "string"
         }
       },
@@ -529,15 +529,15 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Return a YAML snapshot of the active form WYSIWYG layout: calculated bounds, element types, and display-affecting properties. Can open and activate a form automatically. Requires EDT launched with -DnativeFormBufferedLayoutRender=true; a blank/empty result usually means that JVM flag is missing, not a bad call.",
+    "description": "Return a YAML snapshot of a form's calculated WYSIWYG layout (bounds, element types, display properties) as text; use it to inspect or compare what a form actually renders. Requires EDT launched with -DnativeFormBufferedLayoutRender=true, else the result is blank (missing flag, not a bad call). Full parameters and examples: call get_tool_guide('get_form_layout_snapshot').",
     "inputSchema": {
       "properties": {
         "formPath": {
-          "description": "Metadata FQN path to the form. Format: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName'. Examples: 'Catalog.Products.Forms.ItemForm', 'Document.SalesOrder.Forms.DocumentForm', 'CommonForm.MyForm'. If not specified, uses the currently active form editor.",
+          "description": "Form FQN (e.g. 'Catalog.Products.Forms.ItemForm' or 'CommonForm.MyForm'); if omitted, uses the active form editor.",
           "type": "string"
         },
         "mode": {
-          "description": "Output mode: 'compact' (default) or 'full'. Compact returns only visual elements with positive bounds and selected display properties. Full returns all layout nodes and all non-containment properties.",
+          "description": "Output mode: 'compact' (default, visible elements only) or 'full' (all nodes/properties)",
           "enum": [
             "compact",
             "full"
@@ -591,19 +591,19 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Read the editable model tree of a managed form: the nested items (groups, fields, tables) with their programmatic name, integer id and item type; the form attributes (name + value type); and the form commands (name + title). This is the form's editable model (the source of the item/attribute ids that form-write tools address), NOT the rendered WYSIWYG layout (use get_form_layout_snapshot for bounds). Reads the BM model directly; does not open the form editor.",
+    "description": "Read the editable model tree of a managed form (nested items, attributes, commands) with each item's programmatic name and integer id. Use to get the addressing ids that form-write tools need, NOT the rendered WYSIWYG layout (use get_form_layout_snapshot for bounds). Reads the BM model directly; does not open the form editor. Full parameters and examples: call get_tool_guide('get_form_structure').",
     "inputSchema": {
       "properties": {
         "formPath": {
-          "description": "Metadata FQN path to the form. Format: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName'. Examples: 'Catalog.Products.Forms.ItemForm', 'Document.SalesOrder.Forms.DocumentForm', 'CommonForm.MyForm'. The metadata TYPE token may be English or Russian; the object and form names are the programmatic Name (not the synonym / display name).",
+          "description": "Form FQN: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName' (e.g. 'Catalog.Products.Forms.ItemForm'). Names are the programmatic Name, not the synonym.",
           "type": "string"
         },
         "language": {
-          "description": "Language code for titles (e.g. 'en', 'ru'). Uses the configuration default if not specified.",
+          "description": "Language code for titles, e.g. 'en'/'ru'. Defaults to the configuration language.",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name. Required when formPath is specified.",
+          "description": "EDT project name (required).",
           "type": "string"
         }
       },
@@ -658,23 +658,23 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get list of metadata objects from 1C configuration. Returns Name, Synonym, Comment, Type, ObjectModule, ManagerModule for each object. Supports filtering by metadata type.",
+    "description": "Get a flat list of 1C configuration metadata objects (Name, Synonym, Comment, Type, ObjectModule, ManagerModule) as a Markdown table. Use it to discover what objects exist; filter by metadataType and/or nameFilter (Name only). Full parameters and examples: call get_tool_guide('get_metadata_objects').",
     "inputSchema": {
       "properties": {
         "language": {
-          "description": "Language code for synonyms (e.g. 'en', 'ru'). If not specified, uses configuration default language.",
+          "description": "Synonym language code, e.g. 'en'/'ru' (default: configuration default)",
           "type": "string"
         },
         "limit": {
-          "description": "Maximum number of results. Default: 100",
+          "description": "Max rows (default from preferences: 100, max 1000)",
           "type": "integer"
         },
         "metadataType": {
-          "description": "Filter by metadata type: 'all', 'documents', 'catalogs', 'informationRegisters', 'accumulationRegisters', 'commonModules', 'enums', 'constants', 'reports', 'dataProcessors', 'exchangePlans', 'businessProcesses', 'tasks', 'commonAttributes', 'eventSubscriptions', 'scheduledJobs'. Default: 'all'",
+          "description": "Type filter (case-insensitive), default 'all'. One of: all, documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs",
           "type": "string"
         },
         "nameFilter": {
-          "description": "Partial name match filter (case-insensitive)",
+          "description": "Case-insensitive substring matched against Name only (not Synonym)",
           "type": "string"
         },
         "projectName": {
@@ -805,11 +805,11 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get platform documentation for 1C:Enterprise types, methods, properties, and built-in functions. Examples: typeName='ValueTable', typeName='Array' memberName='Add'",
+    "description": "Look up 1C:Enterprise platform documentation for built-in types (ValueTable, Array, Structure) and global built-in functions, including their methods, properties, constructors and events. Use when you need the exact platform API signature rather than configuration metadata. Full parameters and examples: call get_tool_guide('get_platform_documentation').",
     "inputSchema": {
       "properties": {
         "category": {
-          "description": "Category: 'type' (platform types like ValueTable), 'builtin' (built-in functions). Default: 'type'",
+          "description": "'type' (platform types) or 'builtin' (global functions). Default: 'type'.",
           "enum": [
             "type",
             "builtin"
@@ -817,7 +817,7 @@
           "type": "string"
         },
         "language": {
-          "description": "Output language: 'en' (English) or 'ru' (Russian). Default: 'en'",
+          "description": "Output language. Default: 'en'.",
           "enum": [
             "en",
             "ru"
@@ -825,15 +825,15 @@
           "type": "string"
         },
         "limit": {
-          "description": "Maximum number of results to return. Default: 50",
+          "description": "Max results. Default: 50, max 200.",
           "type": "integer"
         },
         "memberName": {
-          "description": "Filter by member name (method/property). Supports partial match. Example: 'Add', 'Insert', 'Count'",
+          "description": "Filter members by name, partial match (e.g. 'Add').",
           "type": "string"
         },
         "memberType": {
-          "description": "Filter by member type: 'method', 'property', 'constructor', 'event', 'all'. Default: 'all'",
+          "description": "Filter by member kind. Default: 'all'.",
           "enum": [
             "method",
             "property",
@@ -844,11 +844,11 @@
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name to determine platform version. Optional.",
+          "description": "EDT project name to pin the platform version. Optional.",
           "type": "string"
         },
         "typeName": {
-          "description": "Type or symbol name (e.g. 'ValueTable', 'Array', 'Structure'). Supports both English and Russian names.",
+          "description": "Type or symbol name, English or Russian (e.g. 'ValueTable').",
           "type": "string"
         }
       },
@@ -911,26 +911,26 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get detailed configuration problems from EDT. Returns check code, description, object location, severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL, NONE). For problems that point at a BSL module, also returns a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Can filter by specific objects using FQN (e.g. 'Document.SalesOrder', 'Catalog.Products'). Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура').",
+    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Object FQN filters accept English or Russian type names (e.g. 'Catalog.Products'). Full parameters and examples: call get_tool_guide('get_project_errors').",
     "inputSchema": {
       "properties": {
         "checkId": {
-          "description": "Filter by check ID substring. Matches either the symbolic check id (e.g. 'ql-temp-table-index') or the short UID (e.g. 'SU23') (optional)",
+          "description": "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)",
           "type": "string"
         },
         "limit": {
-          "description": "Maximum number of results (default: 100, max: 1000)",
+          "description": "Max results; default 100, max 1000 (optional)",
           "type": "integer"
         },
         "objects": {
-          "description": "Filter by object FQNs (e.g. ['Document.SalesOrder', 'Catalog.Products']). Russian type names supported (e.g. 'Документ.ПродажаТоваров'). Returns errors only from these objects.",
+          "description": "Filter by object FQNs, e.g. ['Catalog.Products']; English or Russian type names accepted (optional)",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "projectName": {
-          "description": "Filter by project name (optional)",
+          "description": "Filter by EDT project name; omit to scan all projects (optional)",
           "type": "string"
         },
         "severity": {
@@ -972,11 +972,11 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get content of a specific 1C subsystem: basic properties, list of metadata objects included in the subsystem (Type/Name/Synonym/FQN), and nested child subsystems. Subsystem is identified by FQN (e.g. 'Subsystem.Sales' or 'Subsystem.Sales.Subsystem.Orders'). Returns content of the requested subsystem only by default (recursive=false) to keep the response compact; set recursive=true to also include objects from nested subsystems (deduplicated).",
+    "description": "Get one 1C subsystem's content: properties, its metadata objects (Type/Name/Synonym/FQN) and child subsystems, identified by FQN (e.g. 'Subsystem.Sales.Subsystem.Orders'). By default lists only this subsystem's objects; set recursive=true to fold in nested ones. Full parameters and examples: call get_tool_guide('get_subsystem_content').",
     "inputSchema": {
       "properties": {
         "language": {
-          "description": "Language code for synonyms (e.g. 'en', 'ru'). Uses configuration default if not specified.",
+          "description": "Synonym language code, e.g. 'en'/'ru' (default: configuration default)",
           "type": "string"
         },
         "projectName": {
@@ -984,11 +984,11 @@
           "type": "string"
         },
         "recursive": {
-          "description": "Include objects from nested subsystems in the Content section (default: false)",
+          "description": "Also include objects from nested subsystems (default: false)",
           "type": "boolean"
         },
         "subsystemFqn": {
-          "description": "Subsystem FQN (required), e.g. 'Subsystem.Sales' or 'Subsystem.Sales.Subsystem.Orders'",
+          "description": "Subsystem FQN (required), e.g. 'Subsystem.Sales.Subsystem.Orders'",
           "type": "string"
         }
       },
@@ -1341,19 +1341,19 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List 1C subsystems of a configuration. Returns a flat table with FQN (e.g. 'Subsystem.Sales' or 'Subsystem.Sales.Subsystem.Orders'), Synonym, Comment, IncludeInCommandInterface flag, content count (objects in subsystem) and children count (nested subsystems). Walks the whole tree by default (recursive=true) so AI sees all subsystems at once; set recursive=false to list only top-level subsystems. Use 'get_subsystem_content' to inspect a specific subsystem and its objects.",
+    "description": "List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by default (recursive=true); use get_subsystem_content for one subsystem's objects. Full parameters and examples: call get_tool_guide('list_subsystems').",
     "inputSchema": {
       "properties": {
         "language": {
-          "description": "Language code for synonyms (e.g. 'en', 'ru'). Uses configuration default if not specified.",
+          "description": "Synonym language code, e.g. 'en'/'ru' (default: configuration default)",
           "type": "string"
         },
         "limit": {
-          "description": "Maximum number of results. Default: from preferences (100)",
+          "description": "Max results (default from preferences: 100, max 1000)",
           "type": "integer"
         },
         "nameFilter": {
-          "description": "Partial name match filter (case-insensitive, matches Name only — not Synonym)",
+          "description": "Case-insensitive partial match on Name only (not Synonym)",
           "type": "string"
         },
         "projectName": {
@@ -1409,15 +1409,15 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Read BSL module source code from EDT project. Returns YAML frontmatter (projectName, module, contentHash, startLine, endLine, totalLines; plus truncated: true, nextStartLine and hint when the range was clamped by the configured line limit) followed by clean source in a fenced bsl block (no line-number prefixes). contentHash is an opaque whole-file revision token: pass it back as write_module_source's expectedHash to guard against a lost update. For an empty file, startLine/endLine are omitted and totalLines is 0. Supports reading full file or a specific line range.",
+    "description": "Read BSL module source code from an EDT project, whole file or a line range. Returns YAML frontmatter (including a contentHash revision token to round-trip into write_module_source's expectedHash) followed by clean source in a fenced bsl block. Full parameters and examples: call get_tool_guide('read_module_source').",
     "inputSchema": {
       "properties": {
         "endLine": {
-          "description": "End line number (1-based, inclusive). If omitted, reads to end.",
+          "description": "Last line, 1-based inclusive; omit to read to the end.",
           "type": "integer"
         },
         "modulePath": {
-          "description": "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' or 'Documents/SalesOrder/ObjectModule.bsl' (required)",
+          "description": "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (required)",
           "type": "string"
         },
         "projectName": {
@@ -1425,7 +1425,7 @@
           "type": "string"
         },
         "startLine": {
-          "description": "Start line number (1-based, inclusive). If omitted, reads from beginning.",
+          "description": "First line, 1-based inclusive; omit to read from the start.",
           "type": "integer"
         }
       },
@@ -1478,31 +1478,31 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Rename a metadata object or attribute with full refactoring support. Updates all references in BSL code, forms, and other metadata. WORKFLOW: 1) Call without confirm to get a preview with all change points and their indices. 2) Review the preview — each change has an index, file, description, and enabled state. 3) Call with confirm=true. Optionally pass disableIndices to skip specific change points. Supports FQNs like 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount'. Russian type names are also supported.",
+    "description": "Rename a metadata object or attribute, cascading the change across all references in BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm for an indexed preview of every change point, review it, then call again with confirm=true to apply. Full parameters and examples: call get_tool_guide('rename_metadata_object').",
     "inputSchema": {
       "properties": {
         "confirm": {
-          "description": "Set to true to execute the rename. Default false = preview only.",
+          "description": "true = apply the rename; default false = preview only.",
           "type": "boolean"
         },
         "disableIndices": {
-          "description": "Comma-separated indices of change points to SKIP (from the preview list). Only optional changes can be disabled. Example: '2,3,5'",
+          "description": "Comma-separated preview '#' indices of OPTIONAL change points to skip, e.g. '2,3,5'.",
           "type": "string"
         },
         "maxResults": {
-          "description": "Max number of change points to show in preview (default 20). 0 = no limit.",
+          "description": "Max change points shown in the preview (default 20; 0 = no limit).",
           "type": "integer"
         },
         "newName": {
-          "description": "New name for the object (required)",
+          "description": "New programmatic Name for the object.",
           "type": "string"
         },
         "objectFqn": {
-          "description": "FQN of the object to rename (e.g. 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount'). Russian names supported.",
+          "description": "FQN of the object to rename, e.g. 'Catalog.Products' or 'Document.SalesOrder.Attribute.Amount' (Russian type names also accepted).",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name (required)",
+          "description": "EDT project name.",
           "type": "string"
         }
       },
@@ -1868,27 +1868,27 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Update database (infobase) for an application. Target the application either by launchConfigurationName (preferred; from list_configurations) or by projectName + applicationId (from get_applications). Supports full update (complete reload) and incremental update (changes only). IMPORTANT: if a 1С client launched from this EDT is currently running against the target infobase, the update typically fails because the IB is held in exclusive use. Check `list_configurations` for `running: true`; if so, call `terminate_launch` first (it only affects launches started from this EDT instance), then retry.",
+    "description": "Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + applicationId. Destructive/irreversible: run only on explicit request, and terminate any running 1C client on the target infobase first (exclusive lock). Full parameters and examples: call get_tool_guide('update_database').",
     "inputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application ID from get_applications (required if launchConfigurationName is omitted)",
+          "description": "Application ID from get_applications; required if launchConfigurationName is omitted.",
           "type": "string"
         },
         "autoRestructure": {
-          "description": "Automatically apply restructurization if needed (default: true)",
+          "description": "Auto-apply restructurization when needed (default true).",
           "type": "boolean"
         },
         "fullUpdate": {
-          "description": "If true - full reload, if false - incremental update (default: false)",
+          "description": "true = full reload, false = incremental (default false).",
           "type": "boolean"
         },
         "launchConfigurationName": {
-          "description": "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)",
+          "description": "Exact runtime-client config name from list_configurations (preferred target).",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name (required if launchConfigurationName is omitted)",
+          "description": "EDT project name; required if launchConfigurationName is omitted.",
           "type": "string"
         }
       },

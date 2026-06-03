@@ -502,6 +502,29 @@ public class GetProjectErrorsToolTest
         assertTrue(result.contains("severity must be one of")); //$NON-NLS-1$
     }
 
+    // ========== on-demand guide (detail moved out of description/schema) ==========
+
+    @Test
+    public void testGuideIsNonEmptyAndHoldsMigratedDetail()
+    {
+        // The exhaustive prose now lives in getGuide() (served on demand), not in the
+        // always-loaded description/schema. Assert it migrated rather than vanished by
+        // checking keywords that were removed from the slim description/schema.
+        String guide = new GetProjectErrorsTool().getGuide();
+        assertNotNull(guide);
+        assertFalse("guide must be non-empty", guide.isEmpty()); //$NON-NLS-1$
+        assertTrue("guide should name the tool", guide.contains("get_project_errors")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Detail moved out of the description: the structural locator columns.
+        assertTrue("guide should document the Module path locator", //$NON-NLS-1$
+            guide.contains("Module path")); //$NON-NLS-1$
+        // Detail moved out of the schema: the checkId short-UID vs symbolic-id nuance.
+        assertTrue("guide should explain the short UID / symbolic check id", //$NON-NLS-1$
+            guide.contains("ql-temp-table-index") && guide.contains("SU23")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Detail moved out of the description: the unresolved-marker behaviour.
+        assertTrue("guide should explain unresolved markers", //$NON-NLS-1$
+            guide.contains("unresolved")); //$NON-NLS-1$
+    }
+
     // ========== helpers ==========
 
     private static Marker marker(MarkerSeverity severity, String checkId, String message, String projectName)

@@ -81,12 +81,11 @@ public class GetFormStructureTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Read the editable model tree of a managed form: the nested items " + //$NON-NLS-1$
-            "(groups, fields, tables) with their programmatic name, integer id and item type; " + //$NON-NLS-1$
-            "the form attributes (name + value type); and the form commands (name + title). " + //$NON-NLS-1$
-            "This is the form's editable model (the source of the item/attribute ids that form-write " + //$NON-NLS-1$
-            "tools address), NOT the rendered WYSIWYG layout (use get_form_layout_snapshot for bounds). " + //$NON-NLS-1$
-            "Reads the BM model directly; does not open the form editor."; //$NON-NLS-1$
+        return "Read the editable model tree of a managed form (nested items, attributes, commands) " + //$NON-NLS-1$
+            "with each item's programmatic name and integer id. Use to get the addressing ids that " + //$NON-NLS-1$
+            "form-write tools need, NOT the rendered WYSIWYG layout (use get_form_layout_snapshot for " + //$NON-NLS-1$
+            "bounds). Reads the BM model directly; does not open the form editor. " + //$NON-NLS-1$
+            "Full parameters and examples: call get_tool_guide('get_form_structure')."; //$NON-NLS-1$
     }
 
     @Override
@@ -94,16 +93,78 @@ public class GetFormStructureTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
-                "EDT project name. Required when formPath is specified.", true) //$NON-NLS-1$
+                "EDT project name (required).", true) //$NON-NLS-1$
             .stringProperty("formPath", //$NON-NLS-1$
-                "Metadata FQN path to the form. " + //$NON-NLS-1$
-                "Format: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName'. " + //$NON-NLS-1$
-                "Examples: 'Catalog.Products.Forms.ItemForm', 'Document.SalesOrder.Forms.DocumentForm', " + //$NON-NLS-1$
-                "'CommonForm.MyForm'. The metadata TYPE token may be English or Russian; the object and " + //$NON-NLS-1$
-                "form names are the programmatic Name (not the synonym / display name).", true) //$NON-NLS-1$
+                "Form FQN: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName' " + //$NON-NLS-1$
+                "(e.g. 'Catalog.Products.Forms.ItemForm'). Names are the programmatic Name, not the synonym.", //$NON-NLS-1$
+                true)
             .stringProperty("language", //$NON-NLS-1$
-                "Language code for titles (e.g. 'en', 'ru'). Uses the configuration default if not specified.") //$NON-NLS-1$
+                "Language code for titles, e.g. 'en'/'ru'. Defaults to the configuration language.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# get_form_structure\n\n" //$NON-NLS-1$
+            + "Reads the **editable model tree** of a 1C managed form straight from the BM " //$NON-NLS-1$
+            + "business model inside a read transaction. Returns, as Markdown: the nested " //$NON-NLS-1$
+            + "**items** tree (groups / fields / tables), the form **attributes** " //$NON-NLS-1$
+            + "(name + value type), and the form **commands** (name + title). The form editor " //$NON-NLS-1$
+            + "is never opened.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- Get the stable item/attribute ids a form-write tool will address.\n" //$NON-NLS-1$
+            + "- Inspect a form's structure (containment, attribute types, commands) " //$NON-NLS-1$
+            + "without rendering it.\n\n" //$NON-NLS-1$
+
+            + "## When NOT to use\n" //$NON-NLS-1$
+            + "This is the editable MODEL, not the rendered layout. For on-screen WYSIWYG " //$NON-NLS-1$
+            + "bounds use `get_form_layout_snapshot`; for a PNG use `get_form_screenshot`. " //$NON-NLS-1$
+            + "Ordinary/legacy (non-managed) forms have no editable model and return an error.\n\n" //$NON-NLS-1$
+
+            + "## Parameters\n" //$NON-NLS-1$
+            + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
+            + "- `formPath` (required) - the form FQN. Two accepted shapes:\n" //$NON-NLS-1$
+            + "  - `MetadataType.ObjectName.Forms.FormName` " //$NON-NLS-1$
+            + "(e.g. `Catalog.Products.Forms.ItemForm`, `Document.SalesOrder.Forms.DocumentForm`).\n" //$NON-NLS-1$
+            + "  - `CommonForm.FormName` (e.g. `CommonForm.MyForm`).\n" //$NON-NLS-1$
+            + "- `language` - language code for titles (e.g. `en`, `ru`); defaults to the " //$NON-NLS-1$
+            + "configuration language when omitted.\n\n" //$NON-NLS-1$
+
+            + "## Naming: programmatic Name vs synonym (ru/en)\n" //$NON-NLS-1$
+            + "- The object and form names in `formPath` are the **programmatic Name** " //$NON-NLS-1$
+            + "(resolved case-insensitively), never the synonym / display name.\n" //$NON-NLS-1$
+            + "- Only the metadata **TYPE token** is bilingual: " //$NON-NLS-1$
+            + "`Catalog`/`\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A`, " //$NON-NLS-1$
+            + "`Document`/`\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442`, etc. all resolve.\n" //$NON-NLS-1$
+            + "- Item/command **titles** are read by the language CODE from the synonym map " //$NON-NLS-1$
+            + "(keyed by code, never by the language name) and are purely informational - " //$NON-NLS-1$
+            + "they are never the addressing id.\n\n" //$NON-NLS-1$
+
+            + "## Output\n" //$NON-NLS-1$
+            + "- `## Items` - a nested outline; each line is " //$NON-NLS-1$
+            + "`- Name (type: EClassName, id: N, title: ...)`. The **Name** is the stable, " //$NON-NLS-1$
+            + "programmatic addressing id; the integer **id** is also reported; the title is " //$NON-NLS-1$
+            + "shown only when present. Indentation reflects containment.\n" //$NON-NLS-1$
+            + "- `## Attributes` - a table of attribute Name + value Type.\n" //$NON-NLS-1$
+            + "- `## Commands` - a table of command Name + Title.\n" //$NON-NLS-1$
+            + "Empty sections render as `_(no items)_` / `_(no attributes)_` / " //$NON-NLS-1$
+            + "`_(no commands)_`.\n\n" //$NON-NLS-1$
+
+            + "## Examples\n" //$NON-NLS-1$
+            + "- Object form: `{projectName, formPath: \"Catalog.Products.Forms.ItemForm\"}`.\n" //$NON-NLS-1$
+            + "- Common form: `{projectName, formPath: \"CommonForm.MyForm\"}`.\n" //$NON-NLS-1$
+            + "- Russian type token + Russian titles: " //$NON-NLS-1$
+            + "`{projectName, formPath: \"\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.Products.Forms.ItemForm\", language: \"ru\"}`.\n\n" //$NON-NLS-1$
+
+            + "## Gotchas\n" //$NON-NLS-1$
+            + "- `projectName` is required whenever `formPath` is given.\n" //$NON-NLS-1$
+            + "- A 3- or 5-part path, or a 2-part path whose type is not `CommonForm`, is " //$NON-NLS-1$
+            + "rejected; the `Forms` keyword must be the third segment of a 4-part path.\n" //$NON-NLS-1$
+            + "- A form that is empty, ordinary/legacy, or not yet built has no editable " //$NON-NLS-1$
+            + "model and returns an error.\n" //$NON-NLS-1$
+            + "- An unnamed item is surfaced as `(unnamed)` rather than dropped.\n"; //$NON-NLS-1$
     }
 
     @Override

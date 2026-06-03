@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -147,5 +148,41 @@ public class GuideRendererTest
         String md = GuideRenderer.render(tool("esc_tool", "desc", schema, "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assertTrue(md.contains("a\\|b")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRedundantSelfH1InGuideIsNotDuplicated()
+    {
+        // A guide that opens with its own "# <name>" must not render a duplicated
+        // top-level H1 (the renderer already emits one).
+        String guide = "# dup_tool\n\nThe real guide body."; //$NON-NLS-1$
+        String md = GuideRenderer.render(tool("dup_tool", "desc", "{}", guide)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertEquals("the tool-name H1 must appear exactly once", //$NON-NLS-1$
+            1, countOccurrences(md, "# dup_tool")); //$NON-NLS-1$
+        assertTrue("the guide body must survive", md.contains("The real guide body.")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideWithoutSelfH1IsUnchanged()
+    {
+        // A guide opening with prose or a subheading is appended as-is.
+        assertEquals("prose body", GuideRenderer.stripRedundantH1("prose body", "t")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("## When to use\nx", //$NON-NLS-1$
+            GuideRenderer.stripRedundantH1("## When to use\nx", "t")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Only an EXACT "# <name>" first line is stripped, not "# <name> extra".
+        assertEquals("# t extra\nx", GuideRenderer.stripRedundantH1("# t extra\nx", "t")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    private static int countOccurrences(String haystack, String needle)
+    {
+        int count = 0;
+        int idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) >= 0)
+        {
+            count++;
+            idx += needle.length();
+        }
+        return count;
     }
 }

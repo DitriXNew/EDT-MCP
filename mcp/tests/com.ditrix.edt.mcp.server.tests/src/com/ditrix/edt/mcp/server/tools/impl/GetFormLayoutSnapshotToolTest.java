@@ -63,6 +63,19 @@ public class GetFormLayoutSnapshotToolTest
         assertTrue(schema.contains("\"mode\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        // The exhaustive detail moved out of getDescription()/getInputSchema() into
+        // getGuide(); assert it is non-empty and still carries the migrated keywords.
+        String guide = new GetFormLayoutSnapshotTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        assertTrue(guide.contains("nativeFormBufferedLayoutRender")); //$NON-NLS-1$
+        assertTrue(guide.contains("compact")); //$NON-NLS-1$
+        assertTrue(guide.contains("full")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

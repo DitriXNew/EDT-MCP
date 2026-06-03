@@ -62,6 +62,18 @@ public class ListSubsystemsToolTest
         assertTrue(schema.contains("\"nameFilter\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        String guide = new ListSubsystemsTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        // Detail moved out of the slimmed description/schema must live in the guide.
+        assertTrue(guide.contains("recursive")); //$NON-NLS-1$
+        assertTrue(guide.contains("get_subsystem_content")); //$NON-NLS-1$
+        assertTrue(guide.contains("FQN")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

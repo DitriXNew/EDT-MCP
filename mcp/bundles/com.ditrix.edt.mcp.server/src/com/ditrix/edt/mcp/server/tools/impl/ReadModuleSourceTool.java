@@ -45,14 +45,10 @@ public class ReadModuleSourceTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Read BSL module source code from EDT project. " + //$NON-NLS-1$
-               "Returns YAML frontmatter (projectName, module, contentHash, startLine, endLine, " + //$NON-NLS-1$
-               "totalLines; plus truncated: true, nextStartLine and hint when the range was clamped " + //$NON-NLS-1$
-               "by the configured line limit) followed by clean source in a fenced bsl block " + //$NON-NLS-1$
-               "(no line-number prefixes). contentHash is an opaque whole-file revision token: pass " + //$NON-NLS-1$
-               "it back as write_module_source's expectedHash to guard against a lost update. " + //$NON-NLS-1$
-               "For an empty file, startLine/endLine are omitted and totalLines is 0. " + //$NON-NLS-1$
-               "Supports reading full file or a specific line range."; //$NON-NLS-1$
+        return "Read BSL module source code from an EDT project, whole file or a line range. " + //$NON-NLS-1$
+               "Returns YAML frontmatter (including a contentHash revision token to round-trip into " + //$NON-NLS-1$
+               "write_module_source's expectedHash) followed by clean source in a fenced bsl block. " + //$NON-NLS-1$
+               "Full parameters and examples: call get_tool_guide('read_module_source')."; //$NON-NLS-1$
     }
 
     @Override
@@ -62,13 +58,65 @@ public class ReadModuleSourceTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("modulePath", //$NON-NLS-1$
-                "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' or " + //$NON-NLS-1$
-                "'Documents/SalesOrder/ObjectModule.bsl' (required)", true) //$NON-NLS-1$
+                "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
             .integerProperty("startLine", //$NON-NLS-1$
-                "Start line number (1-based, inclusive). If omitted, reads from beginning.") //$NON-NLS-1$
+                "First line, 1-based inclusive; omit to read from the start.") //$NON-NLS-1$
             .integerProperty("endLine", //$NON-NLS-1$
-                "End line number (1-based, inclusive). If omitted, reads to end.") //$NON-NLS-1$
+                "Last line, 1-based inclusive; omit to read to the end.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# read_module_source\n\n" //$NON-NLS-1$
+            + "Reads a BSL module's source from an EDT project, either the whole file or a specific " //$NON-NLS-1$
+            + "line range, and returns it as clean source (no line-number prefixes) inside a fenced " //$NON-NLS-1$
+            + "bsl block, preceded by YAML frontmatter.\n\n" //$NON-NLS-1$
+            + "## When to use\n\n" //$NON-NLS-1$
+            + "- To read a module before editing it, and to obtain the `contentHash` revision token " //$NON-NLS-1$
+            + "that `write_module_source` accepts as `expectedHash` to guard against a lost update.\n" //$NON-NLS-1$
+            + "- For a structural overview (procedures, functions, regions) rather than raw text, " //$NON-NLS-1$
+            + "prefer `get_module_structure`. For a single method body, prefer `read_method_source`.\n\n" //$NON-NLS-1$
+            + "## Parameters\n\n" //$NON-NLS-1$
+            + "- `projectName` (string, required): EDT project name.\n" //$NON-NLS-1$
+            + "- `modulePath` (string, required): path from the `src/` folder, e.g. " //$NON-NLS-1$
+            + "`CommonModules/MyModule/Module.bsl` or `Documents/SalesOrder/ObjectModule.bsl`.\n" //$NON-NLS-1$
+            + "- `startLine` (integer, optional): 1-based inclusive first line; omit to read from " //$NON-NLS-1$
+            + "the beginning.\n" //$NON-NLS-1$
+            + "- `endLine` (integer, optional): 1-based inclusive last line; omit to read to the end.\n\n" //$NON-NLS-1$
+            + "## Output\n\n" //$NON-NLS-1$
+            + "YAML frontmatter followed by a fenced `bsl` block. Frontmatter fields:\n\n" //$NON-NLS-1$
+            + "- `projectName`, `module`: echo of the inputs.\n" //$NON-NLS-1$
+            + "- `contentHash`: an opaque whole-file revision token. It is computed over the WHOLE " //$NON-NLS-1$
+            + "file (not just the returned range) from the same canonical, `\\n`-normalized text that " //$NON-NLS-1$
+            + "`write_module_source` recomputes, so a write carrying this exact `expectedHash` matches " //$NON-NLS-1$
+            + "as long as nothing changed on disk. Whole-file even for a range read, because a write " //$NON-NLS-1$
+            + "targets the whole module. Omitted only when no token is available.\n" //$NON-NLS-1$
+            + "- `startLine`, `endLine`: the 1-based inclusive range actually returned.\n" //$NON-NLS-1$
+            + "- `totalLines`: total line count of the file.\n" //$NON-NLS-1$
+            + "- `truncated: true`, `nextStartLine`, `hint`: present only when the requested range was " //$NON-NLS-1$
+            + "clamped by the configured line limit (the `maxLines` tool parameter, default 500). " //$NON-NLS-1$
+            + "`nextStartLine` is the line to resume from.\n\n" //$NON-NLS-1$
+            + "## Continuation (large files)\n\n" //$NON-NLS-1$
+            + "When `truncated: true`, call this tool again with the same `projectName` and " //$NON-NLS-1$
+            + "`modulePath` and `startLine` set to the `nextStartLine` value to fetch the next chunk. " //$NON-NLS-1$
+            + "Repeat until `truncated` is absent.\n\n" //$NON-NLS-1$
+            + "## Empty file\n\n" //$NON-NLS-1$
+            + "For an empty file, `startLine`/`endLine` are omitted, `totalLines` is `0`, and the bsl " //$NON-NLS-1$
+            + "block is empty.\n\n" //$NON-NLS-1$
+            + "## Examples\n\n" //$NON-NLS-1$
+            + "- Whole module: `{ \"projectName\": \"MyProject\", " //$NON-NLS-1$
+            + "\"modulePath\": \"CommonModules/MyModule/Module.bsl\" }`\n" //$NON-NLS-1$
+            + "- Lines 100-150: add `\"startLine\": 100, \"endLine\": 150`.\n" //$NON-NLS-1$
+            + "- From line 200 to the end: add `\"startLine\": 200` only.\n\n" //$NON-NLS-1$
+            + "## Notes\n\n" //$NON-NLS-1$
+            + "- The returned source is clean BSL with no line-number prefixes; line numbers live in " //$NON-NLS-1$
+            + "the frontmatter only.\n" //$NON-NLS-1$
+            + "- The source may contain Cyrillic identifiers (procedure/variable names); this tool " //$NON-NLS-1$
+            + "returns the text verbatim and is not dialect-aware.\n" //$NON-NLS-1$
+            + "- To round-trip a safe edit: read here, take `contentHash`, then pass it as " //$NON-NLS-1$
+            + "`write_module_source`'s `expectedHash`."; //$NON-NLS-1$
     }
 
     @Override

@@ -66,6 +66,20 @@ public class DebugLaunchToolTest
         assertTrue(schema.contains("\"launchConfigurationName\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        // The exhaustive detail (Attach mode, the alreadyRunning short-circuit and
+        // updateBeforeLaunch nuances) moved out of the slimmed description/schema
+        // into getGuide(); assert it survived there rather than vanishing.
+        String guide = new DebugLaunchTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        assertTrue(guide.contains("Attach")); //$NON-NLS-1$
+        assertTrue(guide.contains("alreadyRunning")); //$NON-NLS-1$
+        assertTrue(guide.contains("updateBeforeLaunch")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

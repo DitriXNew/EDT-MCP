@@ -50,14 +50,11 @@ public class UpdateDatabaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Update database (infobase) for an application. " //$NON-NLS-1$
-            + "Target the application either by launchConfigurationName (preferred; " //$NON-NLS-1$
-            + "from list_configurations) or by projectName + applicationId (from get_applications). " //$NON-NLS-1$
-            + "Supports full update (complete reload) and incremental update (changes only). " //$NON-NLS-1$
-            + "IMPORTANT: if a 1С client launched from this EDT is currently running against " //$NON-NLS-1$
-            + "the target infobase, the update typically fails because the IB is held in exclusive " //$NON-NLS-1$
-            + "use. Check `list_configurations` for `running: true`; if so, call `terminate_launch` " //$NON-NLS-1$
-            + "first (it only affects launches started from this EDT instance), then retry."; //$NON-NLS-1$
+        return "Apply configuration changes to an application's database (infobase), full or " //$NON-NLS-1$
+            + "incremental. Target by launchConfigurationName (preferred) or projectName + " //$NON-NLS-1$
+            + "applicationId. Destructive/irreversible: run only on explicit request, and " //$NON-NLS-1$
+            + "terminate any running 1C client on the target infobase first (exclusive lock). " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('update_database')."; //$NON-NLS-1$
     }
 
     @Override
@@ -65,13 +62,73 @@ public class UpdateDatabaseTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
-                "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)") //$NON-NLS-1$
-            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted)") //$NON-NLS-1$ //$NON-NLS-2$
+                "Exact runtime-client config name from list_configurations (preferred target).") //$NON-NLS-1$
+            .stringProperty("projectName", //$NON-NLS-1$
+                "EDT project name; required if launchConfigurationName is omitted.") //$NON-NLS-1$
             .stringProperty("applicationId", //$NON-NLS-1$
-                "Application ID from get_applications (required if launchConfigurationName is omitted)") //$NON-NLS-1$
-            .booleanProperty("fullUpdate", "If true - full reload, if false - incremental update (default: false)") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("autoRestructure", "Automatically apply restructurization if needed (default: true)") //$NON-NLS-1$ //$NON-NLS-2$
+                "Application ID from get_applications; required if launchConfigurationName is omitted.") //$NON-NLS-1$
+            .booleanProperty("fullUpdate", //$NON-NLS-1$
+                "true = full reload, false = incremental (default false).") //$NON-NLS-1$
+            .booleanProperty("autoRestructure", //$NON-NLS-1$
+                "Auto-apply restructurization when needed (default true).") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# update_database\n\n" //$NON-NLS-1$
+            + "Applies the EDT configuration to an application's database (infobase) — the " //$NON-NLS-1$
+            + "equivalent of \"Update database configuration\" in Designer. Supports a full " //$NON-NLS-1$
+            + "reload or an incremental (changes-only) update.\n\n" //$NON-NLS-1$
+            + "## Think twice — destructive\n\n" //$NON-NLS-1$
+            + "This tool mutates the infobase and is **irreversible**. Run it ONLY on an explicit " //$NON-NLS-1$
+            + "user request. A full update can drop/recreate database structures; back up or be " //$NON-NLS-1$
+            + "sure the infobase is disposable.\n\n" //$NON-NLS-1$
+            + "## When to use\n\n" //$NON-NLS-1$
+            + "After changing metadata/configuration, to push those changes into the running " //$NON-NLS-1$
+            + "infobase so a launched client sees them. Typically: edit metadata -> " //$NON-NLS-1$
+            + "`update_database` -> launch/restart the client.\n\n" //$NON-NLS-1$
+            + "## Targeting (choose ONE)\n\n" //$NON-NLS-1$
+            + "1. **`launchConfigurationName`** (preferred) — exact runtime-client config name " //$NON-NLS-1$
+            + "from `list_configurations`. It fixes the project + applicationId pair for you, so " //$NON-NLS-1$
+            + "you cannot mismatch them. Must be a runtime-client config (not an Attach config).\n" //$NON-NLS-1$
+            + "2. **`projectName` + `applicationId`** — used only when " //$NON-NLS-1$
+            + "`launchConfigurationName` is omitted. Get `applicationId` from `get_applications`. " //$NON-NLS-1$
+            + "Both are required in this mode.\n\n" //$NON-NLS-1$
+            + "## Parameters\n\n" //$NON-NLS-1$
+            + "- **launchConfigurationName** (string) — preferred target; see above.\n" //$NON-NLS-1$
+            + "- **projectName** (string) — required if launchConfigurationName is omitted.\n" //$NON-NLS-1$
+            + "- **applicationId** (string) — from `get_applications`; required if " //$NON-NLS-1$
+            + "launchConfigurationName is omitted.\n" //$NON-NLS-1$
+            + "- **fullUpdate** (boolean, default false) — true performs a FULL reload (complete " //$NON-NLS-1$
+            + "rebuild), false performs an INCREMENTAL update (changed objects only). " //$NON-NLS-1$
+            + "Incremental is faster; use full when the structure changed substantially or an " //$NON-NLS-1$
+            + "incremental update fails.\n" //$NON-NLS-1$
+            + "- **autoRestructure** (boolean, default true) — automatically apply database " //$NON-NLS-1$
+            + "restructurization (table/index changes) when the update requires it, instead of " //$NON-NLS-1$
+            + "prompting. Leave true for unattended use.\n\n" //$NON-NLS-1$
+            + "## Exclusive-lock gotcha\n\n" //$NON-NLS-1$
+            + "If a 1C client launched from this EDT is currently running against the target " //$NON-NLS-1$
+            + "infobase, the update typically FAILS because the infobase is held in exclusive " //$NON-NLS-1$
+            + "use. Check `list_configurations` for `running: true`; if so, call " //$NON-NLS-1$
+            + "`terminate_launch` first (it only affects launches started from this EDT " //$NON-NLS-1$
+            + "instance), then retry. Externally launched clients (Designer, ad-hoc 1cv8c.exe) " //$NON-NLS-1$
+            + "are invisible to `terminate_launch` and must be closed by hand.\n\n" //$NON-NLS-1$
+            + "## Examples\n\n" //$NON-NLS-1$
+            + "- Preferred, incremental: `launchConfigurationName=\"MyApp / ThinClient\"`.\n" //$NON-NLS-1$
+            + "- Full reload via project + appId: `projectName=\"MyProject\"`, " //$NON-NLS-1$
+            + "`applicationId=\"<id from get_applications>\"`, `fullUpdate=true`.\n\n" //$NON-NLS-1$
+            + "## Result\n\n" //$NON-NLS-1$
+            + "JSON with `project`, `applicationId`, `applicationName`, `updateType` " //$NON-NLS-1$
+            + "(FULL/INCREMENTAL), `stateBefore`, `stateAfter` and a `message`. A successful run " //$NON-NLS-1$
+            + "reports `stateAfter = UPDATED`. If the application is already BEING_UPDATED the " //$NON-NLS-1$
+            + "tool returns an error and you should wait.\n\n" //$NON-NLS-1$
+            + "## Gotchas\n\n" //$NON-NLS-1$
+            + "- Most failures are the exclusive lock above — terminate the running launch first.\n" //$NON-NLS-1$
+            + "- `launchConfigurationName` must reference a runtime-client config; an Attach " //$NON-NLS-1$
+            + "config is rejected.\n" //$NON-NLS-1$
+            + "- The project must exist and be open; a closed project returns an error."; //$NON-NLS-1$
     }
 
     @Override

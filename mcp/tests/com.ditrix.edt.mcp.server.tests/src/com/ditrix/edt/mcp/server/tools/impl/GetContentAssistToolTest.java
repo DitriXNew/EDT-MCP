@@ -71,6 +71,28 @@ public class GetContentAssistToolTest
         assertTrue(schema.contains("\"column\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testDescriptionPointsToGuide()
+    {
+        // The slimmed description must keep the standard pointer to the on-demand guide.
+        String desc = new GetContentAssistTool().getDescription();
+        assertTrue(desc.contains("get_tool_guide('get_content_assist')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        // The exhaustive detail removed from description/schema must live in the guide.
+        String guide = new GetContentAssistTool().getGuide();
+        assertNotNull(guide);
+        assertFalse(guide.isEmpty());
+        assertTrue(guide.contains("## Parameters")); //$NON-NLS-1$
+        assertTrue(guide.contains("extendedDocumentation")); //$NON-NLS-1$
+        // The position/readiness nuance that no longer clutters the schema.
+        assertTrue(guide.contains("1-based")); //$NON-NLS-1$
+        assertTrue(guide.contains("retry")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

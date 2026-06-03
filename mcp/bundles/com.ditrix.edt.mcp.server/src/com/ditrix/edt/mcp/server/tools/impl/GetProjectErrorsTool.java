@@ -75,26 +75,95 @@ public class GetProjectErrorsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get detailed configuration problems from EDT. " + //$NON-NLS-1$
-               "Returns check code, description, object location, severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL, NONE). " + //$NON-NLS-1$
-               "For problems that point at a BSL module, also returns a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
-               "Can filter by specific objects using FQN (e.g. 'Document.SalesOrder', 'Catalog.Products'). " + //$NON-NLS-1$
-               "Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура')."; //$NON-NLS-1$
+        return "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. " + //$NON-NLS-1$
+               "Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
+               "Object FQN filters accept English or Russian type names (e.g. 'Catalog.Products'). " + //$NON-NLS-1$
+               "Full parameters and examples: call get_tool_guide('get_project_errors')."; //$NON-NLS-1$
     }
     
     @Override
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "Filter by project name (optional)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("projectName", "Filter by EDT project name; omit to scan all projects (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .enumProperty("severity", "Filter by severity (optional)", //$NON-NLS-1$ //$NON-NLS-2$
                 "ERRORS", "BLOCKER", "CRITICAL", "MAJOR", "MINOR", "TRIVIAL", "NONE") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
-            .stringProperty("checkId", "Filter by check ID substring. Matches either the symbolic check id (e.g. 'ql-temp-table-index') or the short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty("objects", "Filter by object FQNs (e.g. ['Document.SalesOrder', 'Catalog.Products']). Russian type names supported (e.g. 'Документ.ПродажаТоваров'). Returns errors only from these objects.") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("limit", "Maximum number of results (default: 100, max: 1000)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("checkId", "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("objects", "Filter by object FQNs, e.g. ['Catalog.Products']; English or Russian type names accepted (optional)") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("limit", "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
-    
+
+    @Override
+    public String getGuide()
+    {
+        return "# get_project_errors\n\n" //$NON-NLS-1$
+            + "Lists EDT configuration problems (validation markers: the same set EDT shows in " //$NON-NLS-1$
+            + "its *Configuration Problems* view) as a Markdown table, with optional filters. " //$NON-NLS-1$
+            + "All parameters are optional; with none, every problem across every project is " //$NON-NLS-1$
+            + "returned (up to `limit`).\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- Triage validation errors/warnings after editing code or metadata.\n" //$NON-NLS-1$
+            + "- Get a structural locator (Module path + Line) for a BSL problem to feed " //$NON-NLS-1$
+            + "straight into `read_module_source` or `set_breakpoint`.\n" //$NON-NLS-1$
+            + "- Narrow to one object (`objects`), one check (`checkId`) or one severity band " //$NON-NLS-1$
+            + "(`severity`) while iterating on a fix.\n" //$NON-NLS-1$
+            + "- For just the totals (counts per severity, no detail) prefer " //$NON-NLS-1$
+            + "`get_problem_summary`.\n\n" //$NON-NLS-1$
+
+            + "## Parameters\n" //$NON-NLS-1$
+            + "- `projectName` - EDT project name. Omit to scan all projects. An unknown " //$NON-NLS-1$
+            + "project returns an error; a project still indexing returns a not-ready error.\n" //$NON-NLS-1$
+            + "- `severity` - one of `ERRORS`, `BLOCKER`, `CRITICAL`, `MAJOR`, `MINOR`, " //$NON-NLS-1$
+            + "`TRIVIAL`, `NONE` (case-insensitive). An out-of-set value is rejected (the " //$NON-NLS-1$
+            + "filter is never silently widened to \"all\"). Matches that exact severity only " //$NON-NLS-1$
+            + "(it is not a >= threshold).\n" //$NON-NLS-1$
+            + "- `checkId` - case-insensitive substring matched against EITHER the symbolic " //$NON-NLS-1$
+            + "check id (e.g. `ql-temp-table-index`) OR the short UID (e.g. `SU23`). The short " //$NON-NLS-1$
+            + "UID alone is rarely what you want, so the symbolic id is matched too.\n" //$NON-NLS-1$
+            + "- `objects` - array of object FQNs; returns problems only from these objects. " //$NON-NLS-1$
+            + "Matching is a case-insensitive substring test against the resolved object " //$NON-NLS-1$
+            + "presentation.\n" //$NON-NLS-1$
+            + "- `limit` - max rows; default 100, max 1000. When reached, the output appends a " //$NON-NLS-1$
+            + "limit-reached notice; narrow the filters to see the rest.\n\n" //$NON-NLS-1$
+
+            + "## Output columns\n" //$NON-NLS-1$
+            + "`Description` | `Location` | `Module path` | `Line` | `Check code` | `Has docs`. " //$NON-NLS-1$
+            + "`Module path` + `Line` are populated only for problems that resolve to a `.bsl` " //$NON-NLS-1$
+            + "module under `src/` (empty for metadata-only problems). `Check code` shows the " //$NON-NLS-1$
+            + "symbolic id when known, else the short UID. `Has docs=true` means " //$NON-NLS-1$
+            + "`get_check_description` has detail for that check.\n\n" //$NON-NLS-1$
+
+            + "## Bilingual (ru/en) note\n" //$NON-NLS-1$
+            + "The `objects` filter accepts the TYPE token in English or Russian; each FQN is " //$NON-NLS-1$
+            + "expanded to all language variants before matching, so " //$NON-NLS-1$
+            + "`Document.SalesOrder` and the Russian " //$NON-NLS-1$
+            + "`\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u041F\u0440\u043E\u0434\u0430\u0436\u0430\u0422\u043E\u0432\u0430\u0440\u043E\u0432` " //$NON-NLS-1$
+            + "both resolve. The object NAME after the dot must still be the real " //$NON-NLS-1$
+            + "programmatic name, not a synonym.\n\n" //$NON-NLS-1$
+
+            + "## Examples\n" //$NON-NLS-1$
+            + "- All problems in one project: `{projectName: \"MyConfig\"}`.\n" //$NON-NLS-1$
+            + "- Errors only: `{projectName: \"MyConfig\", severity: \"ERRORS\"}`.\n" //$NON-NLS-1$
+            + "- One check across all projects: `{checkId: \"ql-temp-table-index\"}`.\n" //$NON-NLS-1$
+            + "- Scoped to objects: " //$NON-NLS-1$
+            + "`{objects: [\"Catalog.Products\", \"Document.SalesOrder\"]}`.\n" //$NON-NLS-1$
+            + "- Russian type name: " //$NON-NLS-1$
+            + "`{objects: [\"\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.\u041D\u043E\u043C\u0435\u043D\u043A\u043B\u0430\u0442\u0443\u0440\u0430\"]}`.\n\n" //$NON-NLS-1$
+
+            + "## Gotchas\n" //$NON-NLS-1$
+            + "- Markers whose location cannot be resolved are NOT dropped: without an " //$NON-NLS-1$
+            + "`objects` filter they appear with a `<unresolved: project>` placeholder (a " //$NON-NLS-1$
+            + "trailing warning counts them); with an `objects` filter they are excluded " //$NON-NLS-1$
+            + "(membership cannot be tested) and a separate warning counts them. Run " //$NON-NLS-1$
+            + "`clean_project` / `revalidate_objects` to refresh stale markers.\n" //$NON-NLS-1$
+            + "- `severity` matches exactly; to see everything at or above a level, omit it " //$NON-NLS-1$
+            + "and read the `Check code` / severity yourself, or call once per band.\n" //$NON-NLS-1$
+            + "- The `objects` match is a substring of the presentation, so an overly short " //$NON-NLS-1$
+            + "FQN fragment can over-match; prefer the full `Type.Name`.\n"; //$NON-NLS-1$
+    }
+
     @Override
     public String execute(Map<String, String> params)
     {

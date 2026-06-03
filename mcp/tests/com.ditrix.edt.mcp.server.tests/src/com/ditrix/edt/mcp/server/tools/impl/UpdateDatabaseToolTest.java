@@ -62,6 +62,31 @@ public class UpdateDatabaseToolTest
         assertTrue(schema.contains("\"launchConfigurationName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"fullUpdate\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"autoRestructure\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionPointsToGuide()
+    {
+        // The slimmed description must still steer the agent to the on-demand guide.
+        String desc = new UpdateDatabaseTool().getDescription();
+        assertTrue(desc.contains("get_tool_guide('update_database')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideNotEmptyAndHoldsMigratedDetail()
+    {
+        // The exhaustive detail moved out of the description/schema and into the guide:
+        // assert it is non-empty and still carries the migrated concepts.
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        // Exclusive-lock guidance migrated from the old description.
+        assertTrue(guide.contains("terminate_launch")); //$NON-NLS-1$
+        assertTrue(guide.contains("exclusive")); //$NON-NLS-1$
+        // fullUpdate/autoRestructure rationale migrated from the old schema descriptions.
+        assertTrue(guide.contains("autoRestructure")); //$NON-NLS-1$
     }
 
     // ==================== Argument validation (no live launch manager needed) ====================

@@ -54,6 +54,19 @@ public class GetPlatformDocumentationToolTest
     }
 
     @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        // The exhaustive detail moved out of the slim description/schema into the
+        // on-demand guide channel; assert it is present and non-empty there.
+        String guide = new GetPlatformDocumentationTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        assertTrue(guide.contains("category")); //$NON-NLS-1$
+        assertTrue(guide.contains("builtin")); //$NON-NLS-1$
+        assertTrue(guide.contains("memberType")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testSchemaDeclaresParameters()
     {
         String schema = new GetPlatformDocumentationTool().getInputSchema();

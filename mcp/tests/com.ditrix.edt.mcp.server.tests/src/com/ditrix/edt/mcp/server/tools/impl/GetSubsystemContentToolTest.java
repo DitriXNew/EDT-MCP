@@ -62,6 +62,18 @@ public class GetSubsystemContentToolTest
         assertTrue(schema.contains("\"subsystemFqn\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        String guide = new GetSubsystemContentTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        // Detail moved out of the slimmed description/schema into the on-demand guide.
+        assertTrue(guide.contains("recursive")); //$NON-NLS-1$
+        assertTrue(guide.contains("FQN format")); //$NON-NLS-1$
+        assertTrue(guide.contains("deduplicated")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

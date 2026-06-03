@@ -68,6 +68,22 @@ public class GetFormStructureToolTest
         String desc = new GetFormStructureTool().getDescription();
         assertNotNull(desc);
         assertTrue(desc.length() > 0);
+        // The slimmed description points at the on-demand guide channel.
+        assertTrue(desc.contains("get_tool_guide('get_form_structure')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        // The exhaustive detail moved OUT of the description/schema and INTO getGuide():
+        // it must be non-empty and still carry the key migrated facts (FQN shapes, the
+        // managed-vs-rendered distinction, the bilingual TYPE-token note).
+        String guide = new GetFormStructureTool().getGuide();
+        assertNotNull(guide);
+        assertFalse(guide.isEmpty());
+        assertTrue(guide.contains("## Parameters")); //$NON-NLS-1$
+        assertTrue(guide.contains("CommonForm.FormName")); //$NON-NLS-1$
+        assertTrue(guide.contains("get_form_layout_snapshot")); //$NON-NLS-1$
     }
 
     @Test

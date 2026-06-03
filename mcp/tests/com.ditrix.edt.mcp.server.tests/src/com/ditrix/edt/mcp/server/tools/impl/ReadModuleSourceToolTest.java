@@ -66,6 +66,23 @@ public class ReadModuleSourceToolTest
     }
 
     @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        ReadModuleSourceTool tool = new ReadModuleSourceTool();
+        String guide = tool.getGuide();
+
+        assertNotNull(guide);
+        assertFalse("guide must not be empty", guide.isEmpty()); //$NON-NLS-1$
+        // Detail moved out of description/schema must now live in the guide.
+        assertTrue("guide should explain contentHash round-trip", //$NON-NLS-1$
+            guide.contains("contentHash")); //$NON-NLS-1$
+        assertTrue("guide should mention expectedHash round-trip target", //$NON-NLS-1$
+            guide.contains("expectedHash")); //$NON-NLS-1$
+        assertTrue("guide should document the truncation/continuation behavior", //$NON-NLS-1$
+            guide.contains("truncated")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testInputSchemaContainsRequiredParameters()
     {
         ReadModuleSourceTool tool = new ReadModuleSourceTool();

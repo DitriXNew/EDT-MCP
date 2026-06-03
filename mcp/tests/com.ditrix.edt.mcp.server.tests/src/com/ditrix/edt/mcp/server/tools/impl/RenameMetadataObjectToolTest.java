@@ -72,6 +72,27 @@ public class RenameMetadataObjectToolTest
         assertTrue(schema.contains("\"newName\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testDescriptionPointsToGuide()
+    {
+        // The slim description must steer callers to the on-demand guide channel.
+        String desc = new RenameMetadataObjectTool().getDescription();
+        assertTrue(desc.contains("get_tool_guide('rename_metadata_object')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        // The exhaustive detail moved out of description/schema into getGuide();
+        // assert it is non-empty and still carries the key migrated topics.
+        String guide = new RenameMetadataObjectTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        assertTrue(guide.contains("disableIndices")); //$NON-NLS-1$
+        assertTrue(guide.contains("Attribute")); //$NON-NLS-1$
+        assertTrue(guide.contains("preview")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (returns before any rename) ====================
 
     @Test

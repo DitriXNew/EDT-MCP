@@ -63,6 +63,21 @@ public class GetMetadataObjectsToolTest
         assertTrue(schema.contains("\"nameFilter\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideHasMigratedDetail()
+    {
+        // The exhaustive per-tool detail moved out of the always-loaded
+        // description/schema and into the on-demand guide channel. The guide
+        // must be non-empty and still carry the migrated specifics (the full
+        // metadataType enum, the Name-only filter rule, the synonym-by-code note).
+        String guide = new GetMetadataObjectsTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        assertTrue(guide.contains("eventSubscriptions")); //$NON-NLS-1$
+        assertTrue(guide.contains("nameFilter")); //$NON-NLS-1$
+        assertTrue(guide.contains("ManagerModule")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

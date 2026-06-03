@@ -62,15 +62,12 @@ public class DebugLaunchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Start an EDT debug session. " //$NON-NLS-1$
-            + "Pass launchConfigurationName to run any existing EDT debug configuration by name " //$NON-NLS-1$
-            + "(runtime client OR 'Attach to 1C:Enterprise Debug Server' — required for debugging " //$NON-NLS-1$
-            + "server-side code: HTTP services, background jobs, scheduled jobs). " //$NON-NLS-1$
-            + "Otherwise pass projectName + applicationId to launch the matching runtime-client config. " //$NON-NLS-1$
-            + "If a previous launch of the same configuration is still alive, the tool short-circuits " //$NON-NLS-1$
-            + "with `alreadyRunning: true` and does NOT spawn a fresh client — to force a clean restart " //$NON-NLS-1$
-            + "(e.g. after code changes that require a new session), call `terminate_launch` first, " //$NON-NLS-1$
-            + "then `debug_launch` again."; //$NON-NLS-1$
+        return "Start an EDT debug session: either an existing config by launchConfigurationName " //$NON-NLS-1$
+            + "(runtime client OR Attach, the latter needed to debug server-side code), or a " //$NON-NLS-1$
+            + "runtime-client config matched by projectName + applicationId. If that config is " //$NON-NLS-1$
+            + "already running it short-circuits with alreadyRunning:true (terminate_launch first " //$NON-NLS-1$
+            + "to force a restart). " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('debug_launch')."; //$NON-NLS-1$
     }
 
     @Override
@@ -78,15 +75,76 @@ public class DebugLaunchTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
-                "EDT project name (required unless launchConfigurationName is given)") //$NON-NLS-1$
+                "EDT project name; required unless launchConfigurationName is given.") //$NON-NLS-1$
             .stringProperty("applicationId", //$NON-NLS-1$
-                "Application ID from get_applications (required for runtime-client launches)") //$NON-NLS-1$
+                "Application ID from get_applications; required in the projectName+applicationId mode.") //$NON-NLS-1$
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
-                "Exact name of an EDT debug launch configuration (runtime client or Attach). " //$NON-NLS-1$
-                    + "Use for Attach configurations or to pick a specific client config by name.") //$NON-NLS-1$
+                "Exact name of an EDT debug launch config (runtime client or Attach); skips projectName/applicationId.") //$NON-NLS-1$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
-                "If true — update database before launching (default: true, ignored for Attach)") //$NON-NLS-1$
+                "Update the database before launching. Default true; ignored for Attach.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# debug_launch\n\n" //$NON-NLS-1$
+            + "Starts an EDT debug session for a 1C application. There are two ways to pick what " //$NON-NLS-1$
+            + "to launch, plus an idempotency guard that prevents a second client over a session " //$NON-NLS-1$
+            + "that is already alive.\n\n" //$NON-NLS-1$
+            + "## When to use\n\n" //$NON-NLS-1$
+            + "Use this to bring up a debuggable 1C session before setting breakpoints and " //$NON-NLS-1$
+            + "stepping. For client-side code, launch a runtime-client config (spawns 1cv8c). " //$NON-NLS-1$
+            + "For SERVER-side code (HTTP services, background jobs, scheduled jobs) you must use " //$NON-NLS-1$
+            + "an 'Attach to 1C:Enterprise Debug Server' config — a runtime-client launch cannot " //$NON-NLS-1$
+            + "hit those breakpoints. After it returns, use `debug_status` to inspect, " //$NON-NLS-1$
+            + "`wait_for_break` to block until a breakpoint is hit, and `terminate_launch` to stop.\n\n" //$NON-NLS-1$
+            + "## Modes (choose ONE)\n\n" //$NON-NLS-1$
+            + "1. **launchConfigurationName** — start an existing EDT launch configuration by its " //$NON-NLS-1$
+            + "EXACT name. Works for both runtime-client configs (spawns 1cv8c) AND Attach configs " //$NON-NLS-1$
+            + "(attaches to ragent/rphost for server-side code). Does NOT require applicationId. " //$NON-NLS-1$
+            + "This is the only mode that can start an Attach session.\n" //$NON-NLS-1$
+            + "2. **projectName + applicationId** — searches the runtime-client configs of that " //$NON-NLS-1$
+            + "project for a match and launches it. Runtime-client only; cannot reach an Attach " //$NON-NLS-1$
+            + "config. Get the applicationId from `get_applications`.\n\n" //$NON-NLS-1$
+            + "## Parameters\n\n" //$NON-NLS-1$
+            + "- **launchConfigurationName** (string) — exact config name; if set, projectName and " //$NON-NLS-1$
+            + "applicationId are ignored. Use `list_configurations` to find the name.\n" //$NON-NLS-1$
+            + "- **projectName** (string) — EDT project name; required when launchConfigurationName " //$NON-NLS-1$
+            + "is absent.\n" //$NON-NLS-1$
+            + "- **applicationId** (string) — from `get_applications`; required in the " //$NON-NLS-1$
+            + "projectName+applicationId mode.\n" //$NON-NLS-1$
+            + "- **updateBeforeLaunch** (boolean, default true) — run the EDT 'update database " //$NON-NLS-1$
+            + "before launch' preflight. Ignored for Attach configs (nothing to update). The " //$NON-NLS-1$
+            + "update analysis is shared with the YAXUnit tools: skip when already UPDATED, wait " //$NON-NLS-1$
+            + "when BEING_UPDATED, otherwise incremental-update.\n\n" //$NON-NLS-1$
+            + "## Already-running guard\n\n" //$NON-NLS-1$
+            + "If a launch of the same configuration/application is still alive, the tool " //$NON-NLS-1$
+            + "short-circuits with `alreadyRunning: true` and a `mode` field, and does NOT spawn a " //$NON-NLS-1$
+            + "fresh client. This also covers a launch started in RUN mode (no debug target): the " //$NON-NLS-1$
+            + "tool still detects it and refuses to start a second client over it. To force a clean " //$NON-NLS-1$
+            + "restart (e.g. after code changes that require a new session), call " //$NON-NLS-1$
+            + "`terminate_launch` first, then `debug_launch` again.\n\n" //$NON-NLS-1$
+            + "## Examples\n\n" //$NON-NLS-1$
+            + "- Runtime client by name: `launchConfigurationName=\"MyApp / ThinClient\"`.\n" //$NON-NLS-1$
+            + "- Attach to debug server-side code: `launchConfigurationName=\"Attach to 1C:Enterprise " //$NON-NLS-1$
+            + "Debug Server\"`.\n" //$NON-NLS-1$
+            + "- Runtime client by project + app: `projectName=\"MyProject\"`, " //$NON-NLS-1$
+            + "`applicationId=\"<id from get_applications>\"`.\n" //$NON-NLS-1$
+            + "- Skip the DB update: add `updateBeforeLaunch=false`.\n\n" //$NON-NLS-1$
+            + "## Notes\n\n" //$NON-NLS-1$
+            + "- Returns JSON. On success: `launchConfiguration`, `configurationType`, `attach`, " //$NON-NLS-1$
+            + "`mode`, `project`/`applicationId` (when known), and a `message`.\n" //$NON-NLS-1$
+            + "- On a not-found config the error payload includes `availableConfigurations` " //$NON-NLS-1$
+            + "(every debug-capable config: runtime client + attach), so you can pick a valid name.\n" //$NON-NLS-1$
+            + "- The launch goes through a direct `config.launch(DEBUG_MODE, null)` to avoid modal " //$NON-NLS-1$
+            + "EDT dialogs that would block the MCP worker thread.\n\n" //$NON-NLS-1$
+            + "## Gotchas\n\n" //$NON-NLS-1$
+            + "- Attach is reachable ONLY via launchConfigurationName; projectName+applicationId " //$NON-NLS-1$
+            + "never starts an Attach session.\n" //$NON-NLS-1$
+            + "- `alreadyRunning: true` is a success, not an error — don't retry it; terminate first " //$NON-NLS-1$
+            + "if you truly need a fresh session.\n" //$NON-NLS-1$
+            + "- `updateBeforeLaunch` has no effect on Attach configs."; //$NON-NLS-1$
     }
 
     @Override
