@@ -51,15 +51,22 @@ function main() {
   const isBslCode =
     /(Module|Method|Symbol|Reference|Definition|ContentAssist|SearchInCode|Query|CallHierarchy|Bsl)/.test(base);
   const inAssociations = /\/(tags|groups)\//.test(p);
+  const inE2eTests = /\/tests\/e2e\//.test(p);
 
-  if (inImpl) {
-    tips.push('cross-tool contract — use /edt-mcp-tool-conventions (param naming, ToolResult.error, shared resolvers, schema↔code)');
-  }
-  if (isMetadata || isBslCode) {
-    tips.push('1C ru/en correctness — use /edt-mcp-bilingual (synonym keyed by language CODE, resolve by Name, dialect-aware vs literal)');
-  }
-  if (inAssociations) {
-    tips.push('tags/* and groups/* must share a common base, not diverge — see /edt-mcp-architecture (extract-tags-groups-shared-base)');
+  if (inE2eTests) {
+    // e2e test files (Python, tests/e2e/) have names like test_get_module_structure.py
+    // that would false-match the Java-plugin rules below, so the e2e tip is EXCLUSIVE.
+    tips.push('automated black-box e2e suite — use /edt-mcp-e2e-testing (git-fixture isolation; happy + negative + error-quality; MODEL read-back for write-metadata, NOT git-diff; anti-cheat mutation thinking; full guide: tests/e2e/SKILL.md)');
+  } else {
+    if (inImpl) {
+      tips.push('cross-tool contract — use /edt-mcp-tool-conventions (param naming, ToolResult.error, shared resolvers, schema↔code)');
+    }
+    if (isMetadata || isBslCode) {
+      tips.push('1C ru/en correctness — use /edt-mcp-bilingual (synonym keyed by language CODE, resolve by Name, dialect-aware vs literal)');
+    }
+    if (inAssociations) {
+      tips.push('tags/* and groups/* must share a common base, not diverge — see /edt-mcp-architecture (extract-tags-groups-shared-base)');
+    }
   }
 
   if (tips.length === 0) process.exit(0);

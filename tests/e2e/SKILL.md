@@ -33,7 +33,8 @@ tests/e2e/
     test_list_projects.py          <- one file per tool. You write/own exactly one of these.
     test_write_module_source.py
     test_create_metadata_object.py
-    ... (one per tool)
+    ... (one per tool, 61 total)
+    test_coverage_ratchet.py       <- meta: fails if a tools/list tool has no @e2e_test
 ```
 
 - **`harness.py`** owns: the HTTP/JSON-RPC client (+ SSE framing), the git-fixture helpers, and all assertion helpers (including error-quality). You call its functions; you never re-implement them.
@@ -48,31 +49,28 @@ tests/e2e/
 
 `TestConfiguration` is a **git-tracked 1C project committed in this repo** (`TestConfiguration/`). That is our test fixture and our source of on-disk truth. The protocol for **every** test:
 
-1. **Before the test — hard reset, never trust the previous test:**
-   `git checkout -- TestConfiguration/` + `git clean -fd TestConfiguration/`
-   (`checkout` reverts modified/deleted tracked files; `clean -fd` removes new files created by `create_*` tools.) The orchestrator does this for you via `reset_fixture()`. Each test starts from the committed baseline.
+1. **Before the test — hard reset, never trust the previous test.** The orchestrator calls `reset_fixture()` = `git reset` (unstage) + `git checkout HEAD --` + `git clean -fd` on `TestConfiguration/`. ALL THREE are needed: metadata delete/rename persist to disk **and can land STAGED** in the index, which a plain `git checkout -- ` (restores from the index) would NOT revert. `checkout HEAD --` restores from the commit; `reset` unstages; `clean -fd` removes untracked files.
 2. **Run the tool** (one or more `call(...)`).
-3. **Assert the on-disk effect via git:**
-   - **Destructive / write tool** → the working tree must show the **expected** change: `assert_diff_contains(...)` / `assert_diff_paths(...)`.
-   - **Non-destructive / read tool** → the working tree must be **clean**: `assert_no_diff()`. This is a guardrail: a read tool that secretly mutates the project is a bug, and this catches it.
-4. **After the whole run — guarantee cleanliness:** the orchestrator runs `finalize_clean()`; the final `git status TestConfiguration/` MUST be empty. A run that leaves the project dirty is a failed run.
+3. **Assert the effect** — the assertion depends on the tool kind (see §4): on-disk git-diff (file-write), MODEL read-back (metadata-write), or empty-diff (read).
+4. **`kind="write-metadata"` tools get extra isolation** (the orchestrator does this, not you): immediately after such a test it runs `reset_fixture()` **then** `reset_model()`. Why: these tools mutate EDT's in-memory BM model, EDT may **async-autosave** it to disk, and a git reset alone cannot undo an *unsaved model* change — `reset_model()` (calls `clean_project`, which refreshes the model from the just-reset clean disk) discards it before the next test.
+5. **After the whole run** the final `git status TestConfiguration/` MUST be empty. A run that leaves the project dirty is a failed run.
 
-**EDT in-memory note:** EDT reads the project files live, so after a `git checkout` it re-syncs from disk on its own (verified: a reverted module reads back empty). You do **not** need an explicit EDT refresh for normal file reverts. The one real risk is a tool leaving an **unsaved/dirty editor** hanging in EDT (stale in-memory state could later overwrite the disk). Write tools here persist synchronously, so this is not a concern in practice — but if you ever see a `reset_fixture()` not "stick", that is the cause; report it.
-
-**On-disk timing:** `write_module_source` flushes to the `.bsl` **synchronously** — `git diff` sees it immediately, no polling needed. XML-writing tools (`create_metadata_object`, `delete_metadata_object`, `rename_metadata_object`) may differ; if a diff is not immediately visible, `harness.py` provides a short poll-with-timeout — use it, do not `sleep()` blindly.
+**CRITICAL — metadata writes do NOT persist to disk synchronously** (tool finding → fix-card `metadata-writes-not-persisted-to-disk`). `write_module_source` flushes `.bsl` **synchronously** (git sees it at once). But `add_metadata_attribute` writes NOTHING to disk (model only); `create_metadata_object` writes only `Configuration.mdo`, not the object's own files; `delete`/`rename` DO persist (as staged changes). **Consequence:** verify metadata-write effects via **MODEL READ-BACK** (call a read tool and assert the change in the model), NOT git-diff. EDT picks up a `git checkout` of module *content* on the fly; metadata *structure* is re-synced by `reset_model()`.
 
 ---
 
 ## 4. How to verify "something really changed" (per tool type)
 
-| Tool kind | Examples | Happy-path assertion |
+| Tool kind (`@e2e_test(kind=...)`) | Examples | Happy-path assertion |
 |---|---|---|
-| **read / list / search / navigate** | list_projects, read_module_source, get_metadata_details, search_in_code, find_references | response shape/content is correct **AND** `assert_no_diff()` (nothing changed on disk) |
-| **write** | write_module_source, create/add/delete/rename metadata, form-edit | `assert_diff_contains(...)` — the expected lines are added/removed in the expected file(s). Optionally also a wire read-back via the sibling read tool (the client's view). |
-| **action / status** | clean_project, revalidate_objects, import/export_configuration, update_database | diff on the artifacts the action touches (export → a new XML file; etc.) or `assert_no_diff()` if it legitimately changes nothing in the project tree |
+| **read** | list_projects, read_module_source, get_metadata_details, search_in_code, find_references | response content correct **AND** `assert_no_diff()` (nothing changed on disk — the read-tool guardrail) |
+| **write** (file-write) | write_module_source | `assert_diff_contains(...)` — the change is on disk (synchronous `.bsl` flush) |
+| **write-metadata** | create / add / delete / rename metadata | **MODEL READ-BACK** (NOT git-diff — see §3, metadata writes don't persist). After the write, `call(...)` a read tool (get_metadata_objects / get_metadata_details / get_module_structure) and assert the change in the MODEL (object present/absent, attribute present, renamed). For delete/rename cover preview (no mutation) + confirm. For rejected/preview calls, `assert_no_diff()`. |
+| **action** | clean_project, revalidate_objects, import/export_configuration, update_database | usually `assert_no_diff()` (they touch validation markers / the infobase DB / an external XML dump, NOT project files) + assert the status. Do NOT run a destructive happy mutation (import/update_database) that could corrupt the fixture — cover the error/sentinel matrix. |
+| **env-dependent** | get_form_screenshot / get_form_layout_snapshot (JVM render flag), translate_configuration / generate_translation_strings / get_translation_project_info (LanguageTool plugin), debug/profiling (no session/infobase in this env) | **env-robust branch:** assert the REAL observed contract — a structured result IF the dependency is present, OR a clear, actionable **SENTINEL** ("LanguageTool ... not available. Install ...", "no active debug session") if not. Both branches must be mutation-sensitive (a wrong/blank payload fails). |
 | **round-trip ID** | get_applications → debug_launch, find_references → read_* | assert the returned ID is consumable by the sibling tool |
 
-The **on-disk diff is the ground truth** for persistence. A wire read-back (calling the read tool) confirms the *client's view* but goes through the same in-memory model; prefer the git diff as the primary persistence proof, the read-back as a complement.
+**Ground truth depends on the tool:** for a **file-write** it is the git diff (disk); for a **metadata-write** it is the model read-back (the change never reaches disk synchronously). Never assert a metadata-write effect with git-diff, and never use `assert_no_diff()` as the *only* assertion (it must accompany a real content/sentinel check).
 
 ---
 
@@ -124,6 +122,7 @@ A separate **anti-cheat verifier subagent** will read every test and rule REAL o
 9. No final `git status` clean → the run leaves the project dirty.
 10. A negative test that checks only `is_error` / the fact of failure, but **not the error content** (the specific invalid value + an actionable next step).
 11. Only the happy path covered where the tool has XOR / conditional / enum parameters (invalid combinations not tested).
+12. A `write-metadata` test that "verifies" the effect with git-diff (metadata writes don't reach disk — §3) or with `assert_no_diff()` alone, instead of a MODEL READ-BACK (call a read tool, assert the change in the model). For delete/rename, also: a confirm test that doesn't read back the gone/renamed object, or a preview test that doesn't assert the object is UNCHANGED.
 
 ---
 
@@ -131,37 +130,47 @@ A separate **anti-cheat verifier subagent** will read every test and rule REAL o
 
 ```python
 from harness import (
-    call, reset_fixture, diff, read_disk,
-    assert_ok, assert_error, assert_error_quality,
-    assert_no_diff, assert_diff_contains, assert_diff_paths,
-    e2e_test,
+    call,                                                     # tools/call (the orchestrator does the initialize handshake once)
+    assert_ok, assert_error, assert_error_quality,            # outcome + error quality
+    assert_contains, assert_not_contains,                     # text content
+    assert_no_diff, assert_diff_contains, assert_diff_paths,  # on-disk truth (git)
+    read_disk, diff,                                          # rarely needed (prefer the asserts above)
+    e2e_test, PROJECT,                                        # PROJECT == "TestConfiguration"
 )
+# NOTE: reset_fixture() and reset_model() also exist but the ORCHESTRATOR calls them
+# for you (reset_fixture before every test; reset_fixture+reset_model after every
+# write-metadata test). Do NOT call them in a test unless you genuinely need an
+# intermediate reset.
 
 # --- calling a tool ---
-r = call("write_module_source", {"projectName": "TestConfiguration",
+r = call("write_module_source", {"projectName": PROJECT,
                                  "modulePath": "CommonModules/OK/Module.bsl",
                                  "mode": "append", "source": "// x\n"})
 r.is_error      # bool   - did the tool report an error (server sets isError)
-r.text          # str    - content[0].text (or the embedded resource text)
-r.structured    # dict|None - structuredContent (None for MARKDOWN/TEXT tools)
+r.text          # str    - content[0].text (digest/markdown). JSON tools put data in .structured!
+r.structured    # dict|None - structuredContent (None for MARKDOWN/TEXT tools; the data for JSON tools)
+r.error_text()  # str    - best-effort error message (structured.error, then text)
 
 # --- happy-path assertions ---
 assert_ok(r, ctx="append to OK module")          # fails if r.is_error
-assert_diff_contains("// x")                      # the on-disk working-tree diff includes this
-assert_diff_paths(["TestConfiguration/src/CommonModules/OK/Module.bsl"])
-assert_no_diff()                                  # working tree for TestConfiguration is clean
+assert_contains(r.text, "...", ctx="...")        # / assert_not_contains(...)
+assert_diff_contains("// x")                      # file-write: the on-disk diff includes this
+assert_no_diff()                                  # read/rejected: working tree for TestConfiguration is clean
 
 # --- negative + error-quality ---
 e = assert_error(r, ctx="missing projectName")    # asserts is_error; returns the error text
 assert_error_quality(e,
     names=["OK/DoesNotExist"],                    # the message names the bad value
     suggests=["list_modules", "modulePath"])       # the message is actionable (mentions a next step/tool)
-
-# --- direct disk read (rarely needed; prefer diff) ---
-content = read_disk("src/CommonModules/OK/Module.bsl")
 ```
 
-**Test registration:** each test is a function decorated with `@e2e_test(tool="<tool_name>", kind="read|write|action")`. The orchestrator discovers them, calls `reset_fixture()` **before each**, runs it, records pass/fail, and enforces cleanliness. Do not call `reset_fixture()` yourself unless a single test needs an intermediate reset.
+**Test registration:** each test is `@e2e_test(tool="<tool_name>", kind=...)`. The **kind** picks the isolation + the verification idiom:
+- `kind="read"` — read/list/search/nav/debug. Guardrail: `assert_no_diff()`.
+- `kind="write"` — file-write (write_module_source). Verify with `assert_diff_contains()` (on disk).
+- `kind="write-metadata"` — create/add/delete/rename metadata. Verify with MODEL READ-BACK (call a read tool). The orchestrator runs `reset_fixture()`+`reset_model()` after each such test (you don't).
+- `kind="action"` — clean/revalidate/import/export/update_database. Usually `assert_no_diff()` + status.
+
+The orchestrator discovers `@e2e_test` functions, runs them serially, `reset_fixture()` **before each**, and enforces final cleanliness.
 
 ```python
 @e2e_test(tool="write_module_source", kind="write")
@@ -180,6 +189,26 @@ def test_searchreplace_missing_oldsource_errors_clearly():
     e = assert_error(r, "searchReplace stale oldSource")
     assert_error_quality(e, names=["THIS_DOES_NOT_EXIST"], suggests=["read_module_source"])
     assert_no_diff()                              # a rejected write must NOT touch disk
+
+@e2e_test(tool="add_metadata_attribute", kind="write-metadata")
+def test_add_attribute_appears_in_model_readback():
+    parent, new_attr = "Catalog.Catalog", "E2EColor"
+    before = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [parent], "full": True})
+    assert_not_contains(before.text, new_attr, "absent before (else a no-op passes)")
+    r = call("add_metadata_attribute", {"projectName": PROJECT, "parentFqn": parent, "attributeName": new_attr})
+    assert_ok(r, "add attribute")
+    after = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [parent], "full": True})
+    assert_contains(after.text, new_attr, "MODEL read-back: new attribute is in the model")
+    # NOTE: do NOT assert_diff_contains here — metadata writes do not reach disk (see §3).
+
+@e2e_test(tool="get_translation_project_info", kind="read")
+def test_env_dependent_sentinel_or_real():
+    r = call("get_translation_project_info", {"projectName": PROJECT})
+    if r.is_error:   # LanguageTool plugin absent in this EDT -> a clear, actionable sentinel
+        assert_error_quality(r.error_text(), names=["LanguageTool"], suggests=["Install"])
+    else:            # plugin present -> the real structured contract
+        assert_contains(r.text, "## Storages", "translation info document")
+    assert_no_diff()
 ```
 
 ---
@@ -195,18 +224,20 @@ python tests/e2e/run_all.py --project TestConfiguration --junit-xml tests/e2e/e2
 - Execution is **serial** (see §3). Do not try to parallelize the run.
 - The run **mutates** `TestConfiguration` and reverts it; on a clean checkout that is expected. The final state must be clean.
 - The existing `.github/workflows/e2e-tests.yml` invokes the runner against a running server; keep its CLI flags (`--host/--port/--project/--junit-xml`) stable.
-- **No new dependencies** — Python **stdlib only** (`urllib`, `json`, `subprocess` for git, `re`). Do not add pip packages.
+- **No new dependencies** — Python **stdlib only** (`urllib`, `json`, `subprocess` for git, `re`). Do not add pip packages. (Research-backed: the official MCP SDK's in-memory transport doesn't fit a server that lives inside EDT; the hand-rolled client is kept spec-conformant instead — initialize + notifications/initialized handshake, Mcp-Session-Id + MCP-Protocol-Version headers, robust SSE.)
+- **Scope:** the suite covers **all 61 tools (~452 tests)** + `tools/test_coverage_ratchet.py` (fails if `tools/list` advertises a tool with no `@e2e_test`). It supersedes the older `tests/e2e/run_e2e_tests.py` monolith. **Adding a new tool?** add `tools/test_<tool>.py` — the ratchet enforces it.
+- **Filter:** `--filter <substr>` runs only tests whose name/tool matches (useful while iterating).
 
 ---
 
 ## 9. Conventions checklist (before you say a test file is done)
 
 - [ ] File is `tests/e2e/tools/test_<tool_name>.py`, imports only from `harness`.
-- [ ] Happy path(s): correct effect asserted (on-disk diff for write, `assert_no_diff()` for read).
-- [ ] Negative matrix: invalid path/object, invalid param combinations (every XOR/conditional/enum), missing required.
+- [ ] Correct `kind=` chosen, and the effect is verified the RIGHT way: **on-disk diff** (file-write) / **model read-back** (write-metadata — NOT git-diff) / **`assert_no_diff()`** (read) / **env-robust sentinel branch** (env-dependent). Never `assert_no_diff()` as the only assertion.
+- [ ] Negative matrix: invalid path/object, invalid param combinations (every XOR/conditional/enum), missing required, boundaries.
 - [ ] Every negative asserts **error quality** (names the bad value + actionable), not just `is_error`.
 - [ ] Any vague/non-actionable error is flagged with `# AUDIT:` and reported (not fudged).
 - [ ] No anti-pattern from §6. Each test would FAIL if the tool were broken (mutation thinking).
 - [ ] Python stdlib only; no `sleep()` (use the harness poll if needed); no `try/except: pass`.
 
-> This skill is a living document. As the harness and tests evolve, it is updated. If something here disagrees with the actual `harness.py`, the harness wins — and this file is corrected to match.
+> This file is the **canonical, authoritative guide** for the `edt-mcp-e2e-testing` Claude skill (`.claude/skills/edt-mcp-e2e-testing/SKILL.md` is a thin entrypoint that points here). It is a living document — keep it current as the harness/tests evolve. If something here disagrees with the actual `harness.py`, the harness wins, and this file is corrected to match.

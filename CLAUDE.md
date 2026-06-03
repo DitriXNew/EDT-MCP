@@ -60,7 +60,7 @@ This file is about **what NOT to do** and **where to stop and think twice**. For
 
 - Changed metadata/code resolution → **a test for both languages** (English `Name`, Russian `Name`, synonym). Reference: `WriteModuleSourceToolTest.testResolveRussianObjectName`.
 - New/changed tool → an `XxxToolTest` (argument validation; for metadata/code, a bilingual case).
-- Right now ~42 of ~58 tools have no unit test — **do not grow** that debt.
+- **Tool behaviour against a live EDT** → the automated **black-box e2e suite** at `tests/e2e/` — one `test_<tool>.py` per tool, git-fixture isolation, happy + negative + error-quality, anti-cheat. All 61 tools are covered (a coverage ratchet fails the suite if a tool has none). Adding/editing a test, or adding a tool? Read the **`edt-mcp-e2e-testing`** skill (full guide `tests/e2e/SKILL.md`; the `edt-skill-router` hook auto-suggests it when you touch `tests/e2e/`). Run: `python tests/e2e/run_all.py --project TestConfiguration` (needs a live `:8765`). NB it surfaced real tool bugs → fix-cards (e.g. metadata-write doesn't persist to disk).
 
 ---
 
@@ -105,4 +105,4 @@ Build + unit tests prove Java logic; **runtime behaviour, the `tools/list` schem
 
 ## Where to look next
 
-- Detailed "how to do it right" — the skills in `.claude/skills/` (some are auto-suggested by the `.claude/hooks/edt-skill-router.js` hook when editing `tools/impl`/metadata/tags/groups).
+- Detailed "how to do it right" — the skills in `.claude/skills/` (some are auto-suggested by the `.claude/hooks/edt-skill-router.js` hook when editing `tools/impl`/metadata/tags/groups, or `tests/e2e/` → `edt-mcp-e2e-testing`).
