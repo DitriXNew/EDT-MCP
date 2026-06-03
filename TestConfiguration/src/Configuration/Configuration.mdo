@@ -39,6 +39,7 @@
   </languages>
   <subsystems>Subsystem.Subsystem</subsystems>
   <sessionParameters>SessionParameter.SessionParameter</sessionParameters>
+  <commonModules>CommonModule.Calc</commonModules>
   <commonModules>CommonModule.Error</commonModules>
   <commonModules>CommonModule.OK</commonModules>
   <commonAttributes>CommonAttribute.CommonAttribute</commonAttributes>
