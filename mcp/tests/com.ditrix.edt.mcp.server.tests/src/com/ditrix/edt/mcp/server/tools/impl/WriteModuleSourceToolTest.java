@@ -14,6 +14,7 @@ import java.util.Map;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 
 /**
  * Tests for {@link WriteModuleSourceTool}.
@@ -980,6 +981,61 @@ public class WriteModuleSourceToolTest
         assertTrue(result.contains("does not match")); //$NON-NLS-1$
     }
 
+    // ===== evaluateExpectedHash: cheap any-mode lost-update guard (pure) =====
+    // expectedHash round-trips an opaque contentHash from a read tool; a change since
+    // then is rejected with the same re-read steer as expectedSource, only cheaper.
+    // Pure decision (no Eclipse workspace); the file-read wiring is covered by E2E.
+
+    @Test
+    public void testExpectedHashAbsentProceeds()
+    {
+        assertNull("no expectedHash -> no precondition", //$NON-NLS-1$
+            WriteModuleSourceTool.evaluateExpectedHash("anything\n", null, true)); //$NON-NLS-1$
+        assertNull("blank expectedHash -> no precondition", //$NON-NLS-1$
+            WriteModuleSourceTool.evaluateExpectedHash("anything\n", "", true)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testExpectedHashMatchProceeds()
+    {
+        String current = "Procedure A()\nEndProcedure\n"; //$NON-NLS-1$
+        assertNull("a matching expectedHash must let the write proceed", //$NON-NLS-1$
+            WriteModuleSourceTool.evaluateExpectedHash(current, ContentHash.of(current), true));
+    }
+
+    @Test
+    public void testExpectedHashMismatchRereadSteer()
+    {
+        String current = "Procedure A()\nEndProcedure\n"; //$NON-NLS-1$
+        String staleToken = ContentHash.of("Procedure A()\n// old body\nEndProcedure\n"); //$NON-NLS-1$
+        String result = WriteModuleSourceTool.evaluateExpectedHash(current, staleToken, true);
+        assertNotNull("a stale expectedHash must be rejected", result); //$NON-NLS-1$
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(result.contains("does not match")); //$NON-NLS-1$
+        assertTrue(result.contains("read_module_source")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExpectedHashOnMissingFileRejected()
+    {
+        // expectedHash given but the module does not exist -> nothing to match; reject
+        // and steer (do not silently fall through to new-file creation).
+        String result = WriteModuleSourceTool.evaluateExpectedHash(null, "deadbeefdeadbeef", false); //$NON-NLS-1$
+        assertNotNull(result);
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(result.contains("does not exist")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExpectedHashMatchIgnoresCrlf()
+    {
+        // The token is line-ending agnostic: a CRLF current file matches an expectedHash
+        // computed from LF content, so a CRLF/LF difference alone is not a spurious miss.
+        String currentLf = "a\nb\n"; //$NON-NLS-1$
+        String token = ContentHash.of("a\r\nb\r\n"); //$NON-NLS-1$
+        assertNull(WriteModuleSourceTool.evaluateExpectedHash(currentLf, token, true));
+    }
+
     // ===== execute(): new params do not break resolution (reach project check) =====
     // In the unit-test env there is no workspace, so execute() stops at
     // "Project not found" before any file I/O. These prove the gate params are
@@ -1045,6 +1101,42 @@ public class WriteModuleSourceToolTest
             "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u041C\u043E\u0439\u0414\u043E\u043A"); //$NON-NLS-1$
         params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("overwrite", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("Project not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExpectedHashReachesProjectValidation()
+    {
+        // expectedHash is wired into execute() without disturbing resolution: with no
+        // workspace, execute() still stops at "Project not found" before any file I/O.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "CommonModules/MyModule/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "searchReplace"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("oldSource", "x = 0;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("expectedHash", "deadbeefdeadbeef"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertTrue(result.contains("Project not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExpectedHashResolvesRussianObjectName()
+    {
+        // Language-agnostic: the cheap hash guard does not depend on the object's
+        // language; a Russian object Name still resolves by its programmatic Name.
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "x = 1;"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectName", //$NON-NLS-1$
+            "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442.\u041C\u043E\u0439\u0414\u043E\u043A"); //$NON-NLS-1$
+        params.put("mode", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("expectedHash", "deadbeefdeadbeef"); //$NON-NLS-1$ //$NON-NLS-2$
 
         String result = tool.execute(params);
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$

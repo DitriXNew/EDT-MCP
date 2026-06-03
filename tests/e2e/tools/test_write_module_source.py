@@ -17,6 +17,8 @@ Fixture target: CommonModules/OK/Module.bsl (empty in the committed baseline).
 The orchestrator resets the fixture before every test, so each starts empty.
 """
 
+import re
+
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains,
@@ -24,6 +26,21 @@ from harness import (
 )
 
 MODULE = "CommonModules/OK/Module.bsl"
+
+# The opaque revision token read_module_source / read_method_source emit in their
+# YAML frontmatter (16 lowercase hex chars, possibly double-quoted by the YAML escaper).
+_HASH_RE = re.compile(r'contentHash:\s*"?([0-9a-f]{16})"?')
+
+
+def _read_content_hash(module=MODULE):
+    """Read the module and return its frontmatter contentHash token (or fail)."""
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": module})
+    assert_ok(src, "read for contentHash")
+    m = _HASH_RE.search(src.text or "")
+    if not m:
+        from harness import E2EAssertion
+        raise E2EAssertion("read_module_source did not emit a contentHash:\n%s" % (src.text or "")[:300])
+    return m.group(1)
 
 
 @e2e_test(tool="write_module_source", kind="write")
@@ -212,3 +229,72 @@ def test_searchreplace_ambiguous_oldsource_rejected_and_keeps_content():
     src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
     assert_not_contains(src.text, "Значение = 9;", "an ambiguous searchReplace must not partially apply")
     assert_contains(src.text, "Значение = 1;", "the original duplicated fragment must remain")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# expectedHash — the cheap optimistic lock (contentHash round-trip from a read).
+# Both branches: a matching token ACCEPTS, a stale token REJECTS without clobbering.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_replace_with_matching_expectedhash_succeeds():
+    # Round-trip: seed -> read the contentHash -> guarded replace with that exact token.
+    # The token still matches the unchanged file, so the write proceeds WITHOUT
+    # overwrite=true (the hash is the proof the agent saw the current state).
+    seed = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replace", "source": _SEED, "overwrite": True,
+    })
+    assert_ok(seed, "seed content")
+    token = _read_content_hash()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE, "mode": "replace",
+        "source": "Процедура Rehashed() Экспорт\nКонецПроцедуры\n", "expectedHash": token,
+    })
+    assert_ok(r, "replace with a matching expectedHash must be accepted")
+    assert_diff_contains("Процедура Rehashed()", "the hash-guarded replace must persist to disk")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Процедура Rehashed()", "read-back shows the guarded replacement")
+    assert_not_contains(src.text, "Demo", "the previous Demo procedure was replaced")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_replace_with_stale_expectedhash_rejected_and_keeps_content():
+    # A wrong/stale token means the file changed since the agent read it: the write is
+    # refused with a re-read steer and the seeded content must survive untouched.
+    seed = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replace", "source": _SEED, "overwrite": True,
+    })
+    assert_ok(seed, "seed content")
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE, "mode": "replace",
+        "source": "// CLOBBERED_via_hash_e2e\n", "expectedHash": "0123456789abcdef",
+    })
+    err = assert_error(r, "replace with a stale expectedHash")
+    assert_error_quality(err, names=["expectedHash"], suggests=["read_module_source"],
+                         ctx="stale expectedHash names the param + steers to re-read")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Значение = 1;",
+                    "the seeded content must survive a rejected stale-hash replace")
+    assert_not_contains(src.text, "CLOBBERED_via_hash_e2e",
+                        "the rejected replace must not have written its payload")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_searchreplace_with_matching_expectedhash_succeeds():
+    # expectedHash is mode-agnostic: it also guards searchReplace. A matching token plus
+    # a found oldSource swaps the fragment; proves the cheap guard does not block the
+    # normal surgical edit.
+    seed = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replace", "source": _SEED, "overwrite": True,
+    })
+    assert_ok(seed, "seed content")
+    token = _read_content_hash()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE, "mode": "searchReplace",
+        "oldSource": "Значение = 1;", "source": "Значение = 7;", "expectedHash": token,
+    })
+    assert_ok(r, "searchReplace with a matching expectedHash must be accepted")
+    assert_diff_contains("Значение = 7;", "the hash-guarded searchReplace must persist to disk")

@@ -136,12 +136,13 @@ public class ReadModuleSourceToolTest
             "КонецПроцедуры"); //$NON-NLS-1$
 
         String result = ReadModuleSourceTool.formatOutput(
-            "MyProject", "CommonModules/MyModule/Module.bsl", lines, 1, 3, 3, false); //$NON-NLS-1$ //$NON-NLS-2$
+            "MyProject", "CommonModules/MyModule/Module.bsl", lines, 1, 3, 3, false, "deadbeefdeadbeef"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assertTrue("must contain frontmatter start", result.startsWith("---\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must contain projectName", result.contains("projectName: MyProject\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must contain module", //$NON-NLS-1$
             result.contains("module: CommonModules/MyModule/Module.bsl\n")); //$NON-NLS-1$
+        assertTrue("must contain contentHash", result.contains("contentHash: deadbeefdeadbeef\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must contain startLine", result.contains("startLine: 1\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must contain endLine", result.contains("endLine: 3\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must contain totalLines", result.contains("totalLines: 3\n")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -164,7 +165,7 @@ public class ReadModuleSourceToolTest
 
         // Simulate: file has 15000 lines, we return 1-5000 truncated
         String result = ReadModuleSourceTool.formatOutput(
-            "MyProject", "CommonModules/Big/Module.bsl", lines, 1, 5, 15000, true); //$NON-NLS-1$ //$NON-NLS-2$
+            "MyProject", "CommonModules/Big/Module.bsl", lines, 1, 5, 15000, true, "deadbeefdeadbeef"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assertTrue("must contain truncated: true", result.contains("truncated: true\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must contain totalLines", result.contains("totalLines: 15000\n")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -184,14 +185,29 @@ public class ReadModuleSourceToolTest
         List<String> lines = Collections.emptyList();
 
         String result = ReadModuleSourceTool.formatOutput(
-            "MyProject", "CommonModules/Empty/Module.bsl", lines, 0, 0, 0, false); //$NON-NLS-1$ //$NON-NLS-2$
+            "MyProject", "CommonModules/Empty/Module.bsl", lines, 0, 0, 0, false, "e3b0c44298fc1c14"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assertTrue("must contain projectName", result.contains("projectName: MyProject\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must contain contentHash even for empty file", //$NON-NLS-1$
+            result.contains("contentHash: e3b0c44298fc1c14\n")); //$NON-NLS-1$
         assertTrue("must contain totalLines: 0", result.contains("totalLines: 0\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("must NOT contain startLine on empty file", result.contains("startLine")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("must NOT contain endLine on empty file", result.contains("endLine")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("must NOT contain truncated on empty file", result.contains("truncated")); //$NON-NLS-1$ //$NON-NLS-2$
         // Empty bsl block: opening fence, no body, closing fence
         assertTrue("must contain empty bsl block", result.contains("```bsl\n```\n")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatOutputOmitsContentHashWhenNull()
+    {
+        // A null contentHash (no token available) must simply omit the field, not
+        // render an empty/garbage line.
+        List<String> lines = Arrays.asList("x = 1;"); //$NON-NLS-1$
+        String result = ReadModuleSourceTool.formatOutput(
+            "MyProject", "CommonModules/MyModule/Module.bsl", lines, 1, 1, 1, false, null); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("must NOT contain contentHash when null", result.contains("contentHash")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("other frontmatter still present", result.contains("totalLines: 1\n")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

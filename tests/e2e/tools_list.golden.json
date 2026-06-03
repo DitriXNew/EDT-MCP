@@ -12,6 +12,10 @@
           "description": "Name for the new attribute (required)",
           "type": "string"
         },
+        "expectedNotExists": {
+          "description": "Stale-intent guard (default: false). Set true to assert that, per the state you last read, the parent has NO attribute with this name. If one already exists, the add is rejected with a precondition error steering you to re-read — instead of the generic duplicate error. A duplicate attribute is rejected regardless of this flag; it only sharpens the diagnostic for a stale snapshot.",
+          "type": "boolean"
+        },
         "language": {
           "description": "Language code for the synonym (e.g. 'ru', 'en'). If not specified, uses the configuration default language.",
           "type": "string"
@@ -69,6 +73,10 @@
         "comment": {
           "description": "Optional comment for the new object.",
           "type": "string"
+        },
+        "expectedNotExists": {
+          "description": "Stale-intent guard (default: false). Set true to assert that, per the state you last read, this object does NOT yet exist. If it actually does, the create is rejected with a precondition error steering you to re-read — instead of the generic duplicate error. A creation always rejects a real duplicate regardless of this flag; it only sharpens the diagnostic for a stale snapshot.",
+          "type": "boolean"
         },
         "language": {
           "description": "Language code for the synonym (e.g. 'ru', 'en'). If not specified, uses the configuration default language.",
@@ -1380,7 +1388,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Read BSL module source code from EDT project. Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines; plus truncated: true, nextStartLine and hint when the range was clamped by the configured line limit) followed by clean source in a fenced bsl block (no line-number prefixes). For an empty file, startLine/endLine are omitted and totalLines is 0. Supports reading full file or a specific line range.",
+    "description": "Read BSL module source code from EDT project. Returns YAML frontmatter (projectName, module, contentHash, startLine, endLine, totalLines; plus truncated: true, nextStartLine and hint when the range was clamped by the configured line limit) followed by clean source in a fenced bsl block (no line-number prefixes). contentHash is an opaque whole-file revision token: pass it back as write_module_source's expectedHash to guard against a lost update. For an empty file, startLine/endLine are omitted and totalLines is 0. Supports reading full file or a specific line range.",
     "inputSchema": {
       "properties": {
         "endLine": {
@@ -1927,11 +1935,15 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Write BSL source code to 1C metadata object modules. Modes: searchReplace (find oldSource and replace with source, default), replace (replace entire file), append (add to end). Target the module EITHER by modulePath OR by objectName (these are mutually exclusive — pass exactly one, never both, never neither). Conditional parameters (each required only in its case): moduleType only with objectName (ignored/rejected with modulePath); oldSource only for mode=searchReplace (required there); formName only for moduleType=FormModule (required there, except CommonForm); commandName only for moduleType=CommandModule (required there, except CommonCommand). Automatically checks BSL syntax (balanced Procedure/EndProcedure, Function/EndFunction, If/EndIf, etc.) before writing — blocks write on errors. Pass skipSyntaxCheck=true to force.",
+    "description": "Write BSL source code to 1C metadata object modules. Modes: searchReplace (find oldSource and replace with source, default), replace (replace entire file), append (add to end). Target the module EITHER by modulePath OR by objectName (these are mutually exclusive — pass exactly one, never both, never neither). Conditional parameters (each required only in its case): moduleType only with objectName (ignored/rejected with modulePath); oldSource only for mode=searchReplace (required there); formName only for moduleType=FormModule (required there, except CommonForm); commandName only for moduleType=CommandModule (required there, except CommonCommand). Optional expectedHash (the contentHash from your last read_module_source / read_method_source) rejects the write if the module changed since you read it — a cheap lost-update guard that works for any mode. Automatically checks BSL syntax (balanced Procedure/EndProcedure, Function/EndFunction, If/EndIf, etc.) before writing — blocks write on errors. Pass skipSyntaxCheck=true to force.",
     "inputSchema": {
       "properties": {
         "commandName": {
           "description": "Command name, required when moduleType=CommandModule (e.g. 'FillByTemplate').",
+          "type": "string"
+        },
+        "expectedHash": {
+          "description": "Lost-update guard for ANY mode over an EXISTING module. Pass the opaque contentHash you got from read_module_source / read_method_source; if it no longer matches the current file (someone else edited it), the write is rejected so you can re-read and retry. Cheaper than expectedSource (a fixed-size token, not the whole file). Ignored when creating a new module.",
           "type": "string"
         },
         "expectedSource": {

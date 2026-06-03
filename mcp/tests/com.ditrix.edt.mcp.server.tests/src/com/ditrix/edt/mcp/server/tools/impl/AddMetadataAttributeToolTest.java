@@ -61,6 +61,8 @@ public class AddMetadataAttributeToolTest
         // Optional synonym/language for writing a localized display name.
         assertTrue(schema.contains("\"synonym\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"language\"")); //$NON-NLS-1$
+        // Optional stale-intent guard.
+        assertTrue(schema.contains("\"expectedNotExists\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -72,6 +74,9 @@ public class AddMetadataAttributeToolTest
         String tail = schema.substring(requiredIdx);
         assertFalse("synonym must NOT be required", tail.contains("\"synonym\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("language must NOT be required", tail.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The stale-intent guard is opt-in: declared but never required.
+        assertFalse("expectedNotExists must NOT be required", //$NON-NLS-1$
+            tail.contains("\"expectedNotExists\"")); //$NON-NLS-1$
     }
 
     @Test

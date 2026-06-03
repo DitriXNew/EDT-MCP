@@ -17,6 +17,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -45,11 +46,13 @@ public class ReadModuleSourceTool implements IMcpTool
     public String getDescription()
     {
         return "Read BSL module source code from EDT project. " + //$NON-NLS-1$
-               "Returns YAML frontmatter (projectName, module, startLine, endLine, totalLines; " + //$NON-NLS-1$
-               "plus truncated: true, nextStartLine and hint when the range was clamped by " + //$NON-NLS-1$
-               "the configured line limit) followed by clean source in a fenced bsl block " + //$NON-NLS-1$
-               "(no line-number prefixes). For an empty file, startLine/endLine are omitted " + //$NON-NLS-1$
-               "and totalLines is 0. Supports reading full file or a specific line range."; //$NON-NLS-1$
+               "Returns YAML frontmatter (projectName, module, contentHash, startLine, endLine, " + //$NON-NLS-1$
+               "totalLines; plus truncated: true, nextStartLine and hint when the range was clamped " + //$NON-NLS-1$
+               "by the configured line limit) followed by clean source in a fenced bsl block " + //$NON-NLS-1$
+               "(no line-number prefixes). contentHash is an opaque whole-file revision token: pass " + //$NON-NLS-1$
+               "it back as write_module_source's expectedHash to guard against a lost update. " + //$NON-NLS-1$
+               "For an empty file, startLine/endLine are omitted and totalLines is 0. " + //$NON-NLS-1$
+               "Supports reading full file or a specific line range."; //$NON-NLS-1$
     }
 
     @Override
@@ -131,10 +134,17 @@ public class ReadModuleSourceTool implements IMcpTool
 
             int totalLines = allLines.size();
 
+            // Revision token for the optimistic-lock round-trip: hash the WHOLE file
+            // (not the returned range) from the same canonical text write_module_source
+            // recomputes (readFileText, \n-normalized), so a write with this exact
+            // expectedHash matches when nothing changed. Whole-file even on a range read,
+            // because a write targets the whole module.
+            String contentHash = ContentHash.of(BslModuleUtils.readFileText(file).replace("\r\n", "\n")); //$NON-NLS-1$ //$NON-NLS-2$
+
             // Handle empty file
             if (totalLines == 0)
             {
-                return formatOutput(projectName, modulePath, allLines, 0, 0, 0, false);
+                return formatOutput(projectName, modulePath, allLines, 0, 0, 0, false, contentHash);
             }
 
             // Determine range
@@ -160,7 +170,7 @@ public class ReadModuleSourceTool implements IMcpTool
                 truncated = true;
             }
 
-            return formatOutput(projectName, modulePath, allLines, from, to, totalLines, truncated);
+            return formatOutput(projectName, modulePath, allLines, from, to, totalLines, truncated, contentHash);
         }
         catch (Exception e)
         {
@@ -178,14 +188,21 @@ public class ReadModuleSourceTool implements IMcpTool
      * @param to 1-based end line (inclusive); ignored when totalLines == 0
      * @param totalLines total line count in the file (0 for empty file)
      * @param truncated true if the returned range was clamped by the configured line limit
+     * @param contentHash opaque whole-file revision token to round-trip into
+     *     write_module_source's expectedHash; omitted from the frontmatter when null
      * @return formatted result string
      */
     static String formatOutput(String projectName, String modulePath, List<String> allLines,
-        int from, int to, int totalLines, boolean truncated)
+        int from, int to, int totalLines, boolean truncated, String contentHash)
     {
         FrontMatter fm = FrontMatter.create()
             .put("projectName", projectName) //$NON-NLS-1$
             .put("module", modulePath); //$NON-NLS-1$
+
+        if (contentHash != null)
+        {
+            fm.put("contentHash", contentHash); //$NON-NLS-1$
+        }
 
         if (totalLines > 0)
         {

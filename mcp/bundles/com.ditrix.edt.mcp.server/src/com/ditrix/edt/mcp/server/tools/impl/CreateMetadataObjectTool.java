@@ -93,6 +93,12 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty("language", //$NON-NLS-1$
                 "Language code for the synonym (e.g. 'ru', 'en'). " + //$NON-NLS-1$
                 "If not specified, uses the configuration default language.") //$NON-NLS-1$
+            .booleanProperty("expectedNotExists", //$NON-NLS-1$
+                "Stale-intent guard (default: false). Set true to assert that, per the state you " + //$NON-NLS-1$
+                "last read, this object does NOT yet exist. If it actually does, the create is " + //$NON-NLS-1$
+                "rejected with a precondition error steering you to re-read — instead of the " + //$NON-NLS-1$
+                "generic duplicate error. A creation always rejects a real duplicate regardless " + //$NON-NLS-1$
+                "of this flag; it only sharpens the diagnostic for a stale snapshot.") //$NON-NLS-1$
             .build();
     }
 
@@ -105,6 +111,7 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
         String synonym = JsonUtils.extractStringArgument(params, "synonym"); //$NON-NLS-1$
         String comment = JsonUtils.extractStringArgument(params, "comment"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
+        boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, "expectedNotExists", false); //$NON-NLS-1$
 
         String err = JsonUtils.requireArgument(params, "projectName", //$NON-NLS-1$
             ". Usage: {projectName: 'MyProject', metadataType: 'Catalog', name: 'Products'}"); //$NON-NLS-1$
@@ -130,11 +137,12 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
                 "A name must start with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
 
-        return executeInternal(projectName, metadataType, name, synonym, comment, language);
+        return executeInternal(projectName, metadataType, name, synonym, comment, language,
+            expectedNotExists);
     }
 
     private String executeInternal(String projectName, String metadataType, String name,
-        String synonym, String comment, String language)
+        String synonym, String comment, String language, boolean expectedNotExists)
     {
         // Resolve and validate the metadata type
         String canonicalType = MetadataTypeUtils.toEnglishSingular(metadataType);
@@ -170,9 +178,19 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
         }
         final EClass eClass = (EClass)feature.getEType();
 
-        // Check duplicate
+        // Check duplicate. A real duplicate is always rejected; when the caller set
+        // expectedNotExists (it asserted, from the state it last read, that this object
+        // did NOT exist) the rejection is reframed as a stale-intent precondition with a
+        // re-read steer, matching the optimistic-lock pattern of the write tools.
         if (MetadataTypeUtils.findObject(config, canonicalType, name) != null)
         {
+            if (expectedNotExists)
+            {
+                return ToolResult.error("Precondition failed: you set expectedNotExists, but " //$NON-NLS-1$
+                    + canonicalType + "." + name + " already exists. Your snapshot is stale — " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "re-read with get_metadata_objects, then add to / rename the existing object " //$NON-NLS-1$
+                    + "instead of creating a duplicate.").toJson(); //$NON-NLS-1$
+            }
             return ToolResult.error("Object already exists: " + canonicalType + "." + name).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 

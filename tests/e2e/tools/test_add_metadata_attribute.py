@@ -296,3 +296,46 @@ def test_duplicate_attribute_name_is_error():
     # use get_metadata_details to inspect existing attributes"). Weakly actionable.
     # Fix-card: append a discovery hint to the duplicate-attribute message.
     assert_no_diff("a rejected duplicate add must not change the project")
+
+
+@e2e_test(tool="add_metadata_attribute", kind="write-metadata")
+def test_expected_not_exists_on_existing_attribute_is_precondition_error():
+    # Stale-intent guard: the agent asserts (per a stale snapshot) that the attribute
+    # does NOT exist, but the fixture Catalog.Catalog already has "Attribute". With
+    # expectedNotExists=true the add is rejected EARLY (before the write transaction)
+    # with a precondition-framed, re-read-steering message — distinct from the generic
+    # in-transaction "already exists" duplicate error.
+    r = call("add_metadata_attribute", {
+        "projectName": PROJECT,
+        "parentFqn": "Catalog.Catalog",
+        "attributeName": "Attribute",
+        "expectedNotExists": True,
+    })
+    e = assert_error(r, "expectedNotExists on an existing attribute")
+    # Precondition framing + a re-read steer (get_metadata_details). "Precondition" and
+    # "stale" are delimiter-free; the apostrophe around the name is Gson-escaped so we
+    # do not anchor on it.
+    assert_error_quality(e, names=["precondition"],
+                         suggests=["stale", "get_metadata_details"],
+                         ctx="expectedNotExists violation is a precondition error, not a generic dup")
+    assert_no_diff("a rejected precondition add must not change the project")
+
+
+@e2e_test(tool="add_metadata_attribute", kind="write-metadata")
+def test_expected_not_exists_on_new_attribute_succeeds():
+    # The opt-in guard does NOT block a legitimate add: when the attribute genuinely is
+    # absent, expectedNotExists=true passes and the add lands (model read-back proves it).
+    parent = "Catalog.Catalog"
+    new_attr = "E2EGuardedNew"
+    before = _details_full(parent)
+    assert_not_contains(before.text, new_attr, "probe attribute absent before the guarded add")
+    r = call("add_metadata_attribute", {
+        "projectName": PROJECT,
+        "parentFqn": parent,
+        "attributeName": new_attr,
+        "expectedNotExists": True,
+    })
+    assert_ok(r, "expectedNotExists on a genuinely-new attribute must succeed")
+    after = _details_full(parent)
+    assert_contains(after.text, new_attr, "the guarded add appears in the model read-back")
+    poll_diff_contains("<name>%s</name>" % new_attr, ctx="guarded add persists to Catalog.mdo")

@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -176,10 +177,20 @@ public class ReadMethodSourceTool implements IMcpTool
         // Find containing region
         String region = BslModuleUtils.findRegionForLine(allLines, startLine);
 
+        // Whole-MODULE revision token (not just this method) so the caller can round-trip
+        // it into write_module_source's expectedHash. Same canonical text read_module_source
+        // hashes (readFileText, \n-normalized) so the tokens agree across both read tools.
+        // Best-effort: a re-read failure just omits the field rather than failing the read.
+        String contentHash = computeModuleHash(file);
+
         FrontMatter fm = FrontMatter.create()
             .put("projectName", projectName) //$NON-NLS-1$
-            .put("module", modulePath) //$NON-NLS-1$
-            .put("method", method.getName()) //$NON-NLS-1$
+            .put("module", modulePath); //$NON-NLS-1$
+        if (contentHash != null)
+        {
+            fm.put("contentHash", contentHash); //$NON-NLS-1$
+        }
+        fm.put("method", method.getName()) //$NON-NLS-1$
             .put("type", typeStr) //$NON-NLS-1$
             .put("export", method.isExport()) //$NON-NLS-1$
             .put("startLine", from) //$NON-NLS-1$
@@ -256,10 +267,18 @@ public class ReadMethodSourceTool implements IMcpTool
             // Find containing region
             String region = BslModuleUtils.findRegionForLine(allLines, methodStart + 1);
 
+            // Whole-MODULE revision token (see readMethodViaEmf) for the expectedHash
+            // round-trip; same canonical text read_module_source hashes.
+            String contentHash = computeModuleHash(file);
+
             FrontMatter fm = FrontMatter.create()
                 .put("projectName", projectName) //$NON-NLS-1$
-                .put("module", modulePath) //$NON-NLS-1$
-                .put("method", methodName) //$NON-NLS-1$
+                .put("module", modulePath); //$NON-NLS-1$
+            if (contentHash != null)
+            {
+                fm.put("contentHash", contentHash); //$NON-NLS-1$
+            }
+            fm.put("method", methodName) //$NON-NLS-1$
                 .put("type", typeStr) //$NON-NLS-1$
                 .put("export", isExport) //$NON-NLS-1$
                 .put("startLine", methodStart + 1) //$NON-NLS-1$
@@ -288,6 +307,30 @@ public class ReadMethodSourceTool implements IMcpTool
     }
 
     // ========== Helper methods ==========
+
+    /**
+     * Computes the WHOLE-module optimistic-lock token for the {@code expectedHash}
+     * round-trip into write_module_source. Reads the same canonical text
+     * read_module_source hashes ({@code readFileText}, {@code \n}-normalized) so a method
+     * read and a module read of the same file yield the same token. Best-effort: a read
+     * failure returns {@code null} so the field is simply omitted rather than failing the
+     * method read.
+     *
+     * @param file the module file
+     * @return the token, or {@code null} when the file could not be read
+     */
+    private String computeModuleHash(IFile file)
+    {
+        try
+        {
+            return ContentHash.of(BslModuleUtils.readFileText(file).replace("\r\n", "\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        catch (Exception e)
+        {
+            Activator.logWarning("read_method_source: contentHash unavailable: " + e.getMessage()); //$NON-NLS-1$
+            return null;
+        }
+    }
 
     /**
      * Fallback: format method source from EMF getText() when file reading fails.

@@ -84,6 +84,12 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             .stringProperty("language", //$NON-NLS-1$
                 "Language code for the synonym (e.g. 'ru', 'en'). " + //$NON-NLS-1$
                 "If not specified, uses the configuration default language.") //$NON-NLS-1$
+            .booleanProperty("expectedNotExists", //$NON-NLS-1$
+                "Stale-intent guard (default: false). Set true to assert that, per the state you " + //$NON-NLS-1$
+                "last read, the parent has NO attribute with this name. If one already exists, the " + //$NON-NLS-1$
+                "add is rejected with a precondition error steering you to re-read — instead of the " + //$NON-NLS-1$
+                "generic duplicate error. A duplicate attribute is rejected regardless of this flag; " + //$NON-NLS-1$
+                "it only sharpens the diagnostic for a stale snapshot.") //$NON-NLS-1$
             .build();
     }
 
@@ -95,6 +101,7 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
         String attributeName = JsonUtils.extractStringArgument(params, "attributeName"); //$NON-NLS-1$
         String synonym = JsonUtils.extractStringArgument(params, "synonym"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
+        boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, "expectedNotExists", false); //$NON-NLS-1$
 
         String err = JsonUtils.requireArgument(params, "projectName", //$NON-NLS-1$
             ". Usage: {projectName: 'MyProject', parentFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
@@ -121,11 +128,12 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
                 "A name must start with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
 
-        return executeInternal(projectName, parentFqn, attributeName, synonym, language);
+        return executeInternal(projectName, parentFqn, attributeName, synonym, language,
+            expectedNotExists);
     }
 
     private String executeInternal(String projectName, String parentFqn, String attributeName,
-        String synonym, String language)
+        String synonym, String language, boolean expectedNotExists)
     {
         // Get project and configuration
         ProjectContext ctx = resolveProjectAndConfig(projectName);
@@ -171,6 +179,18 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
                 "Catalog, Document, ExchangePlan, ChartOfCharacteristicTypes, ChartOfAccounts, " + //$NON-NLS-1$
                 "ChartOfCalculationTypes, BusinessProcess, Task, DataProcessor, Report, " + //$NON-NLS-1$
                 "InformationRegister, AccumulationRegister, AccountingRegister.").toJson(); //$NON-NLS-1$
+        }
+
+        // Stale-intent precondition: when the caller asserted expectedNotExists, an
+        // attribute that is in fact already present means the snapshot it read is stale.
+        // Reject early with a re-read steer; the in-transaction dup-check below remains the
+        // authoritative TOCTOU guard with its own generic "already exists" message.
+        if (expectedNotExists && hasAttribute(parentObject, attributeName))
+        {
+            return ToolResult.error("Precondition failed: you set expectedNotExists, but attribute '" //$NON-NLS-1$
+                + attributeName + "' already exists on " + parentFqn + ". Your snapshot is stale — " //$NON-NLS-1$ //$NON-NLS-2$
+                + "re-read with get_metadata_details, then update the existing attribute instead of " //$NON-NLS-1$
+                + "adding a duplicate.").toJson(); //$NON-NLS-1$
         }
 
         // Get bmId of parent for BM task

@@ -343,6 +343,46 @@ def test_duplicate_object_name_is_error():
 
 
 @e2e_test(tool="create_metadata_object", kind="write-metadata")
+def test_expected_not_exists_on_existing_object_is_precondition_error():
+    # Stale-intent guard: the agent asserts (per a stale snapshot) that Catalog.Catalog
+    # does NOT exist, but it does. With expectedNotExists=true the create is rejected
+    # with a precondition-framed, re-read-steering message — distinct from the generic
+    # "Object already exists" duplicate error.
+    r = call("create_metadata_object", {
+        "projectName": PROJECT,
+        "metadataType": "Catalog",
+        "name": "Catalog",
+        "expectedNotExists": True,
+    })
+    e = assert_error(r, "expectedNotExists on an existing object")
+    # Precondition framing + a re-read steer (get_metadata_objects). The conflicting FQN
+    # is still named for context.
+    assert_error_quality(e, names=["precondition", "Catalog.Catalog"],
+                         suggests=["stale", "get_metadata_objects"],
+                         ctx="expectedNotExists violation is a precondition error, not a generic dup")
+    assert_no_diff("a rejected precondition create must not change the project")
+
+
+@e2e_test(tool="create_metadata_object", kind="write-metadata")
+def test_expected_not_exists_on_new_object_succeeds():
+    # The opt-in guard does NOT block a legitimate create: a genuinely-new name passes
+    # the precondition and the object is created (model read-back + on-disk both prove it).
+    name = "E2EGuardedCatalog"
+    r = call("create_metadata_object", {
+        "projectName": PROJECT,
+        "metadataType": "Catalog",
+        "name": name,
+        "expectedNotExists": True,
+    })
+    assert_ok(r, "expectedNotExists on a genuinely-new object must succeed")
+    assert r.structured is not None, "JSON tool must return structuredContent"
+    assert r.structured.get("fqn") == "Catalog." + name, "echoes the created FQN"
+    assert_contains(_objects_text("catalogs"), name,
+                    "the guarded create appears in the model read-back")
+    poll_diff_contains("<name>%s</name>" % name, ctx="guarded create persists the object .mdo")
+
+
+@e2e_test(tool="create_metadata_object", kind="write-metadata")
 def test_nonexistent_project_is_error():
     bogus = "NoSuchProject_zzz"
     r = call("create_metadata_object", {

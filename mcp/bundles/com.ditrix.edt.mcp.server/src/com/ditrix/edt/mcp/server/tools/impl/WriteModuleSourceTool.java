@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -68,6 +69,9 @@ public class WriteModuleSourceTool implements IMcpTool
             "oldSource only for mode=searchReplace (required there); " + //$NON-NLS-1$
             "formName only for moduleType=FormModule (required there, except CommonForm); " + //$NON-NLS-1$
             "commandName only for moduleType=CommandModule (required there, except CommonCommand). " + //$NON-NLS-1$
+            "Optional expectedHash (the contentHash from your last read_module_source / " + //$NON-NLS-1$
+            "read_method_source) rejects the write if the module changed since you read it — " + //$NON-NLS-1$
+            "a cheap lost-update guard that works for any mode. " + //$NON-NLS-1$
             "Automatically checks BSL syntax (balanced Procedure/EndProcedure, " + //$NON-NLS-1$
             "Function/EndFunction, If/EndIf, etc.) before writing — " + //$NON-NLS-1$
             "blocks write on errors. Pass skipSyntaxCheck=true to force."; //$NON-NLS-1$
@@ -127,6 +131,12 @@ public class WriteModuleSourceTool implements IMcpTool
                 "Force mode=replace to overwrite an EXISTING module without an " + //$NON-NLS-1$
                 "expectedSource lost-update check (default: false). " + //$NON-NLS-1$
                 "Ignored for searchReplace/append and when creating a new module.") //$NON-NLS-1$
+            .stringProperty("expectedHash", //$NON-NLS-1$
+                "Lost-update guard for ANY mode over an EXISTING module. " + //$NON-NLS-1$
+                "Pass the opaque contentHash you got from read_module_source / read_method_source; " + //$NON-NLS-1$
+                "if it no longer matches the current file (someone else edited it), the write is " + //$NON-NLS-1$
+                "rejected so you can re-read and retry. Cheaper than expectedSource (a fixed-size " + //$NON-NLS-1$
+                "token, not the whole file). Ignored when creating a new module.") //$NON-NLS-1$
             .build();
     }
 
@@ -164,6 +174,7 @@ public class WriteModuleSourceTool implements IMcpTool
         boolean skipSyntaxCheck = JsonUtils.extractBooleanArgument(params, "skipSyntaxCheck", false); //$NON-NLS-1$
         String expectedSource = JsonUtils.extractStringArgument(params, "expectedSource"); //$NON-NLS-1$
         boolean overwrite = JsonUtils.extractBooleanArgument(params, "overwrite", false); //$NON-NLS-1$
+        String expectedHash = JsonUtils.extractStringArgument(params, "expectedHash"); //$NON-NLS-1$
 
         // 2. Validate required parameters
         String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
@@ -290,6 +301,21 @@ public class WriteModuleSourceTool implements IMcpTool
                 hasBom = true; // New BSL files should have BOM
             }
 
+            // 6b. Optimistic-lock guard (any mode): when the caller carried an
+            // expectedHash from its last read, reject if the module changed since —
+            // a cheap lost-update check that complements searchReplace's oldSource
+            // match and replace's expectedSource. Read the canonical text the same way
+            // those guards do (readFileText, \n-normalized) so the hashes always agree;
+            // skipped entirely when no expectedHash is given.
+            String currentTextForHash = (expectedHash != null && !expectedHash.isEmpty() && fileExists)
+                ? BslModuleUtils.readFileText(file).replace("\r\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                : null;
+            String hashError = evaluateExpectedHash(currentTextForHash, expectedHash, fileExists);
+            if (hashError != null)
+            {
+                return hashError;
+            }
+
             // 7. Compute new content based on mode
             List<String> newLines;
             int totalOriginal = originalLines.size();
@@ -301,7 +327,12 @@ public class WriteModuleSourceTool implements IMcpTool
                     // Lost-update guard: overwriting an EXISTING module blindly
                     // clobbers any edit made since the agent last read it. Creating a
                     // NEW module is unconditional (nothing to lose).
-                    if (fileExists)
+                    // A matching expectedHash is itself a valid lost-update precondition
+                    // (the whole-file token proves the agent saw the current state) and
+                    // was ALREADY validated at step 6b — so when one was supplied, the
+                    // expectedSource/overwrite precondition is satisfied and skipped.
+                    boolean hashGuardSatisfied = expectedHash != null && !expectedHash.isEmpty();
+                    if (fileExists && !hashGuardSatisfied)
                     {
                         String preconditionError =
                             checkReplacePrecondition(file, expectedSource, overwrite);
@@ -525,6 +556,45 @@ public class WriteModuleSourceTool implements IMcpTool
             "could lose a concurrent edit. Pass expectedSource (the content you last read with " + //$NON-NLS-1$
             "read_module_source) to guard against a lost update, or overwrite=true to force, " + //$NON-NLS-1$
             "or use mode=searchReplace to change only a fragment.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Pure decision for the {@code expectedHash} optimistic-lock guard, split out so
+     * it is unit-testable without an Eclipse workspace (mirrors
+     * {@link #evaluateReplacePrecondition}). Applies to ANY write mode and is the cheap
+     * counterpart to {@code expectedSource}: the caller round-trips the opaque
+     * {@code contentHash} from a read tool, and a change since then is rejected with the
+     * same "read it again then retry" steer.
+     *
+     * @param currentContent the {@code \n}-normalized current module content, or
+     *     {@code null} when {@code expectedHash} is blank or the file does not exist
+     *     (no content comparison is performed in those branches)
+     * @param expectedHash the opaque token the caller carried over from its read; a
+     *     blank value disables the guard (backward compatible)
+     * @param fileExists whether the target module already exists on disk
+     * @return {@code null} to proceed, or a ready {@link ToolResult#error} JSON payload
+     *     to return verbatim from {@link #execute}
+     */
+    static String evaluateExpectedHash(String currentContent, String expectedHash, boolean fileExists)
+    {
+        if (expectedHash == null || expectedHash.isEmpty())
+        {
+            return null;
+        }
+        if (!fileExists)
+        {
+            return ToolResult.error("expectedHash was provided but this module does not exist yet, " + //$NON-NLS-1$
+                "so there is nothing to match. To CREATE a new module omit expectedHash; otherwise the " + //$NON-NLS-1$
+                "path is wrong or the module was deleted — re-check with read_module_source.").toJson(); //$NON-NLS-1$
+        }
+        if (!ContentHash.matches(currentContent, expectedHash))
+        {
+            return ToolResult.error("expectedHash does not match the current module content. " + //$NON-NLS-1$
+                "The module changed since you read it (a concurrent edit), so writing now could lose " + //$NON-NLS-1$
+                "that change. Please read the file again with read_module_source and retry with the " + //$NON-NLS-1$
+                "up-to-date contentHash.").toJson(); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**

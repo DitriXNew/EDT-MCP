@@ -137,6 +137,33 @@ def test_reads_function_add_body_and_metadata():
 
 
 @e2e_test(tool="read_method_source", kind="read")
+def test_emits_whole_module_content_hash_matching_read_module_source():
+    """The front-matter carries a contentHash — the WHOLE-module token (not just this
+    method) — so a method read round-trips into write_module_source's expectedHash.
+
+    Mutation thinking: the token MUST equal what read_module_source emits for the same
+    file (both hash the canonical module text). If read_method_source hashed only the
+    method fragment, or used a different canonical form, the two tokens would differ and
+    the cross-tool round-trip would silently break — this asserts they are identical."""
+    import re
+    r = call("read_method_source", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE, "methodName": "Add",
+    })
+    assert_ok(r, "read_method_source Add for contentHash")
+    assert_contains(r.text, "contentHash", "front-matter must carry a contentHash")
+    m = re.search(r'contentHash:\s*"?([0-9a-f]{16})"?', r.text or "")
+    if not m:
+        from harness import E2EAssertion
+        raise E2EAssertion("contentHash is not a 16-hex token:\n%s" % (r.text or "")[:300])
+    # Must equal the module-level token, proving it's the whole-module hash.
+    mod = call("read_module_source", {"projectName": PROJECT, "modulePath": CALC_MODULE})
+    mm = re.search(r'contentHash:\s*"?([0-9a-f]{16})"?', mod.text or "")
+    assert mm and mm.group(1) == m.group(1), \
+        "read_method_source contentHash must equal read_module_source's whole-module token"
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="read_method_source", kind="read")
 def test_reads_procedure_test_body_and_metadata():
     """Read the Procedure 'Test' by name -> the OTHER method in the same module.
     Asserting Test's real body ('Результат = Add(1, 2);') and type=Procedure proves

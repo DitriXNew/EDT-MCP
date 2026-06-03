@@ -53,6 +53,30 @@ def test_reads_module_content_and_does_not_mutate():
 
 
 @e2e_test(tool="read_module_source", kind="read")
+def test_emits_content_hash_for_lost_update_round_trip():
+    """The frontmatter carries a contentHash token for the optimistic-lock round-trip.
+
+    Mutation thinking: if the tool stopped emitting the token (or emitted a
+    non-deterministic / wrong-shaped value), the 16-hex-char match would FAIL.
+    The token must be stable across two reads of the unchanged file, since
+    write_module_source recomputes it to validate an expectedHash.
+    """
+    import re
+    r = call("read_module_source", {"projectName": PROJECT, "modulePath": ERROR_MODULE})
+    assert_ok(r, "read for contentHash")
+    assert_contains(r.text, "contentHash", "frontmatter must carry a contentHash")
+    m = re.search(r'contentHash:\s*"?([0-9a-f]{16})"?', r.text or "")
+    if not m:
+        from harness import E2EAssertion
+        raise E2EAssertion("contentHash is not a 16-hex token:\n%s" % (r.text or "")[:300])
+    # Stable: a second read of the unchanged file yields the same token.
+    r2 = call("read_module_source", {"projectName": PROJECT, "modulePath": ERROR_MODULE})
+    m2 = re.search(r'contentHash:\s*"?([0-9a-f]{16})"?', r2.text or "")
+    assert m2 and m2.group(1) == m.group(1), "contentHash must be stable across reads of an unchanged file"
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="read_module_source", kind="read")
 def test_reads_empty_module_reports_zero_lines():
     """An empty module reads back with totalLines: 0 (the documented contract).
 

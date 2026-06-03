@@ -65,6 +65,20 @@ public class CreateMetadataObjectToolTest
         assertTrue(schema.contains("\"synonym\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"comment\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"language\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"expectedNotExists\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExpectedNotExistsIsOptional()
+    {
+        // The stale-intent guard is opt-in: declared but never required, so existing
+        // callers that omit it keep the current behavior.
+        String schema = new CreateMetadataObjectTool().getInputSchema();
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue(requiredIdx >= 0);
+        String tail = schema.substring(requiredIdx);
+        assertFalse("expectedNotExists must not be required", //$NON-NLS-1$
+            tail.contains("\"expectedNotExists\"")); //$NON-NLS-1$
     }
 
     @Test
