@@ -11,24 +11,20 @@ message, [synonym, language]}); content[0].text is just a placeholder.
 HOW WE VERIFY (this is a metadata-WRITE tool — verification differs from the
 on-disk batches):
 
-  Metadata-write tools mutate EDT's IN-MEMORY BM model but do NOT synchronously
-  flush every change to disk. For create_metadata_object the on-disk effect is
-  only PARTIAL: Configuration.mdo gets the new collection entry, but the object's
-  own .mdo file is not written synchronously. So a git diff is empty-or-partial
-  and CANNOT prove the object was created. The PRIMARY proof is a MODEL READ-BACK
-  over the wire: after the create we call get_metadata_objects and assert the new
-  object NAME appears in its markdown table. A broken (no-op) create would leave
-  the read-back without the new name -> the test FAILS.
+  PRIMARY proof is a MODEL READ-BACK over the wire: after the create we call
+  get_metadata_objects and assert the new object NAME appears in its markdown
+  table. A broken (no-op) create would leave the read-back without the new name
+  -> the test FAILS.
 
-  We do NOT use assert_no_diff() as the happy guardrail here: the model changed
-  while disk did not, so the working tree is trivially clean and asserting it
-  would prove nothing. assert_no_diff() IS used for the REJECTED (negative) calls
-  — a call the tool refuses must not touch the project at all.
+  ON-DISK too: since the metadata-writes-not-persisted-to-disk fix, a create
+  force-exports BOTH the new object's own .mdo AND the Configuration.mdo collection
+  entry (the parent Configuration is dirtied too). The half-create (object files
+  never written) is gone, so a dedicated test asserts both land on disk via
+  poll_diff_contains (the export can lag a beat after the call returns, hence poll).
 
-  As a SECONDARY characterization of the documented HALF-PERSIST behaviour
-  (fix-card: metadata-writes-not-persisted-to-disk) one happy test additionally
-  asserts that git shows Configuration.mdo changed — clearly marked # AUDIT and
-  never the primary signal.
+  assert_no_diff() is NOT the happy guardrail (a successful create legitimately
+  changes the tree now); it IS used for the REJECTED (negative) calls — a call the
+  tool refuses must not touch the project at all.
 
   The orchestrator calls reset_model() (clean_project — refreshes the model from
   disk, discarding the unsaved create) AFTER every kind='write-metadata' test, so
@@ -57,8 +53,7 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
-    assert_diff_contains,
-    diff,
+    poll_diff_contains,
     e2e_test,
     PROJECT,
 )
@@ -191,27 +186,38 @@ def test_russian_type_token_creates_catalog_under_english_collection():
 
 
 @e2e_test(tool="create_metadata_object", kind="write-metadata")
-def test_create_half_persists_configuration_mdo_on_disk():
-    # SECONDARY / AUDIT characterization only. The PRIMARY proof stays the model
-    # read-back below; this test additionally documents the HALF-PERSIST finding.
-    name = "E2EHalfPersistCatalog"
+def test_create_persists_object_and_configuration_to_disk():
+    # ON-DISK regression guard for the metadata-writes-not-persisted-to-disk fix: a
+    # create now force-exports BOTH the new object's own .mdo AND the Configuration.mdo
+    # collection entry (the parent Configuration is dirtied too). Before the fix the
+    # object files were never written (half-create) and the git diff was empty/partial
+    # at call time; a regression to that behaviour now FAILS here.
+    name = "E2EPersistCatalog"
     r = call("create_metadata_object", {
         "projectName": PROJECT,
         "metadataType": "Catalog",
         "name": name,
     })
-    assert_ok(r, "create Catalog.%s (half-persist characterization)" % name)
+    assert_ok(r, "create Catalog.%s (on-disk persistence)" % name)
+    assert r.structured is not None and r.structured.get("persisted") is True, \
+        "create must report persisted=true once the .mdo is force-exported, got: %r" \
+        % (r.structured,)
 
-    # PRIMARY: the model genuinely changed (read-back sees the new object).
+    # Model read-back (the object is genuinely in the model).
     after = _objects_text("catalogs")
-    assert_contains(after, name, "PRIMARY proof: new catalog visible in the model read-back")
+    assert_contains(after, name, "PRIMARY: new catalog visible in the model read-back")
 
-    # AUDIT (fix-card metadata-writes-not-persisted-to-disk): metadata writes are NOT
-    # flushed to disk synchronously — the Configuration.mdo collection entry and the
-    # object's own .mdo are written asynchronously (or not at all) by EDT, so git cannot
-    # reliably verify a create AT CALL TIME (the diff is often empty right after the
-    # call). We therefore do NOT assert an on-disk diff here; the model read-back above
-    # is the real, deterministic proof. The on-disk persistence gap IS the finding.
+    # ON DISK: the new object's own .mdo carries its <name> (the half-create fix), and
+    # Configuration.mdo gains the "Catalog.<name>" collection reference. The forceExport
+    # flush can lag a beat after the call returns, so poll rather than a bare diff.
+    poll_diff_contains(name,
+                       ctx="create must write the new object's own .mdo on disk (half-create fix)")
+    # Guard the DUAL-flush half specifically: the "<catalogs>Catalog.<name></catalogs>"
+    # collection element appears ONLY in Configuration.mdo (not the object's own .mdo,
+    # which would also contain "Catalog.<name>." in default StandardAttribute paths). A
+    # regression to single-flush (object exported, Configuration lagging) FAILS here.
+    poll_diff_contains("<catalogs>Catalog." + name + "</catalogs>",
+                       ctx="create must add the Configuration.mdo collection reference on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -18,12 +18,17 @@ HOW THE EFFECT IS VERIFIED (this batch is different from the on-disk batches):
   The fixture Catalog.Catalog starts with exactly ONE attribute, "Attribute"
   (TestConfiguration/src/Catalogs/Catalog/Catalog.mdo), and the probe name is
   absent before the add -> a no-op / broken write leaves the read-back unchanged
-  and the test FAILS. We do NOT use assert_no_diff() as the happy guardrail here
-  (the model changed while disk did not, so git is trivially clean).
+  and the test FAILS.
 
-  The orchestrator calls reset_model() (clean_project, refreshes the model from
-  disk and discards the unsaved attribute) AFTER each write-metadata test, so
-  every test starts from a clean model. We never reset the model ourselves.
+  ON-DISK too: since the metadata-writes-not-persisted-to-disk fix, the add is
+  force-exported to the parent's .mdo on disk (not just the in-memory model), so the
+  happy test ALSO asserts the attribute lands in Catalog.mdo via poll_diff_contains
+  (the export can lag a beat after the call returns, hence poll not a bare diff). A
+  write that mutated only the model would now FAIL this on-disk check.
+
+  The orchestrator reverts the on-disk .mdo via reset_fixture (git) and resyncs the
+  model via reset_model() (clean_project) AFTER each write-metadata test, so every
+  test starts clean. We never reset ourselves.
 
 ERROR-QUALITY note on Gson escaping: ToolResult.toJson() HTML-escapes the
 apostrophe (1C-style 'X' quoting) to \\uXXXX in the JSON text channel, so
@@ -46,6 +51,7 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    poll_diff_contains,
     e2e_test,
     PROJECT,
 )
@@ -93,6 +99,11 @@ def test_add_attribute_appears_in_model_readback():
     # The pre-existing fixture attribute is still there (the add must not wipe it).
     assert_contains(after.text, "Attribute",
         "the pre-existing fixture attribute must remain after the add")
+    # ON DISK: the attribute must be serialized into the parent's .mdo, not just the
+    # in-memory model (the metadata-writes-not-persisted-to-disk fix). The forceExport
+    # flush can lag a beat after the call returns, so poll rather than a bare diff.
+    poll_diff_contains(new_attr,
+        ctx="add_metadata_attribute must persist the attribute into Catalog.mdo on disk")
 
 
 @e2e_test(tool="add_metadata_attribute", kind="write-metadata")

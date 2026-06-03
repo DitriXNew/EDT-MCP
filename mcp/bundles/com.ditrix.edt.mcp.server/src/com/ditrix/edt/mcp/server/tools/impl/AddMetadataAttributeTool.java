@@ -239,9 +239,16 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to add attribute: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
+        // Persist the mutated TOP object (the PARENT - the attribute is not a top
+        // object) to its .mdo on disk. A bare BM write only updates the in-memory
+        // model and enqueues the async export, so without this the new attribute is
+        // lost on refresh / clean_project / EDT restart. Runs AFTER the write commit.
+        boolean persisted = BmTransactions.forceExportToDisk(project, normalizedParentFqn);
+
         ToolResult result = ToolResult.success()
             .put("parentFqn", normalizedParentFqn) //$NON-NLS-1$
-            .put("attributeName", attributeName); //$NON-NLS-1$
+            .put("attributeName", attributeName) //$NON-NLS-1$
+            .put("persisted", persisted); //$NON-NLS-1$
         // Echo back the synonym actually written so callers can confirm the localized
         // name without a second get. synonymLanguage is the resolved language CODE
         // (see MetadataLanguageUtils); both are non-null together.

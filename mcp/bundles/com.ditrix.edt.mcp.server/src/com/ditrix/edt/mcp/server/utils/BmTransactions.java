@@ -6,11 +6,19 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Collections;
+import java.util.List;
+
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com.ditrix.edt.mcp.server.Activator;
 
 /**
  * Runs work against the 1C BM (business model) inside an explicit read or write
@@ -106,5 +114,67 @@ public final class BmTransactions
                 return operation.execute(tx, monitor);
             }
         });
+    }
+
+    /**
+     * Forces the BM model's pending serialization of a top object to its {@code .mdo}
+     * file on disk, AFTER the {@link #write} transaction that mutated it has committed.
+     * <p>
+     * A bare {@link #write} commit only updates the in-memory model and ENQUEUES the
+     * asynchronous {@code .mdo} export; nothing drains it, so the change is invisible
+     * on disk and is discarded by a refresh / {@code clean_project} / EDT restart
+     * (rename/delete avoid this because the refactoring service drains the pipeline).
+     * {@link IBmModelManager#forceExport} runs the platform's own object exporter
+     * synchronously, writing the same {@code .mdo} EDT writes on a normal save.
+     * <p>
+     * MUST be called OUTSIDE the {@link #write} boundary (it starts its own task).
+     * {@code topObjectFqn} must be a TOP object FQN: for a nested change (e.g. a new
+     * attribute) pass the PARENT object's FQN, not the child's.
+     *
+     * @param project the workspace project owning the object
+     * @param topObjectFqn the FQN of the top object whose {@code .mdo} to write
+     * @return {@code true} if the platform serialized an object; {@code false} if the
+     *         services/project/FQN could not be resolved or the export failed (the
+     *         in-memory mutation still stands - this is best-effort persistence)
+     */
+    public static boolean forceExportToDisk(IProject project, String topObjectFqn)
+    {
+        return forceExportToDisk(project, Collections.singletonList(topObjectFqn));
+    }
+
+    /**
+     * List overload of {@link #forceExportToDisk(IProject, String)} for a mutation
+     * that dirtied MORE THAN ONE top object - e.g. creating an object dirties both the
+     * new object AND the {@code Configuration} (its child collection changed), so BOTH
+     * must be serialized or the {@code Configuration.mdo} reference lags behind (the
+     * new object would be orphaned on a restart before the async export drains).
+     *
+     * @param project the workspace project owning the objects
+     * @param topObjectFqns the FQNs of every top object whose {@code .mdo} to write
+     * @return {@code true} if the platform serialized at least one object; {@code false}
+     *         if the services/project could not be resolved or the export failed
+     */
+    public static boolean forceExportToDisk(IProject project, List<String> topObjectFqns)
+    {
+        try
+        {
+            IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
+            IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+            if (dtProjectManager == null || bmModelManager == null)
+            {
+                return false;
+            }
+            IDtProject dtProject = dtProjectManager.getDtProject(project);
+            if (dtProject == null)
+            {
+                return false;
+            }
+            return bmModelManager.forceExport(dtProject, topObjectFqns);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("forceExport to disk failed for " + topObjectFqns, e); //$NON-NLS-1$
+            return false;
+        }
     }
 }

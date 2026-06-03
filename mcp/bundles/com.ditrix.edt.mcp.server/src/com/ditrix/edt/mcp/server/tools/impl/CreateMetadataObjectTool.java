@@ -230,6 +230,9 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
             return ToolResult.error("Configuration is not a BM object").toJson(); //$NON-NLS-1$
         }
         final long configBmId = ((IBmObject)config).bmGetId();
+        // The Configuration's own FQN - it is dirtied too (its child collection gains
+        // the new object), so it must be force-exported alongside the new object.
+        final String configFqn = ((IBmObject)config).bmGetFqn();
         final String fqn = canonicalType + "." + name; //$NON-NLS-1$
 
         try
@@ -276,10 +279,24 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
+        // Persist BOTH the new top object AND the Configuration (whose child
+        // collection changed) to disk. A bare BM write only mutates the in-memory model
+        // and enqueues the async export; without forcing it the object's own .mdo is
+        // never written (half-create) and the Configuration.mdo reference lags, leaving
+        // the object orphaned on refresh / restart. Runs AFTER the write commit.
+        java.util.List<String> dirtyFqns = new java.util.ArrayList<>();
+        dirtyFqns.add(fqn);
+        if (configFqn != null && !configFqn.isEmpty())
+        {
+            dirtyFqns.add(configFqn);
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(project, dirtyFqns);
+
         ToolResult result = ToolResult.success()
             .put("fqn", fqn) //$NON-NLS-1$
             .put("metadataType", canonicalType) //$NON-NLS-1$
-            .put("name", name); //$NON-NLS-1$
+            .put("name", name) //$NON-NLS-1$
+            .put("persisted", persisted); //$NON-NLS-1$
         // Echo back the synonym actually written, so callers can confirm the
         // localized name without a second get. synonymLanguage is the resolved
         // language CODE (see MetadataLanguageUtils); both are non-null together.
