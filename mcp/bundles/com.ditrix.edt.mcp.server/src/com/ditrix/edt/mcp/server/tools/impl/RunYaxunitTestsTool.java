@@ -83,14 +83,12 @@ public class RunYaxunitTestsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run YAXUnit tests for a 1C:Enterprise project. " + //$NON-NLS-1$
-               "Launches the application with RunUnitTests parameter, polls for completion " + //$NON-NLS-1$
-               "for up to `timeout` seconds (default 60), then returns the JUnit Markdown report. " + //$NON-NLS-1$
-               "If the launch is still running when the polling window expires, returns " + //$NON-NLS-1$
-               "**Pending** — call this tool again with the same arguments to keep waiting and " + //$NON-NLS-1$
-               "fetch the result once the launch finishes. The launch is NOT terminated on timeout. " + //$NON-NLS-1$
-               "A full Markdown report is also written to report.md next to junit.xml. " + //$NON-NLS-1$
-               "Requires an existing launch configuration and YAXUnit extension installed in the infobase."; //$NON-NLS-1$
+        return "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. " //$NON-NLS-1$
+               + "Polls for up to `timeout` seconds, then returns the report or **Pending** " //$NON-NLS-1$
+               + "(call again with identical arguments to keep waiting; the launch is not terminated). " //$NON-NLS-1$
+               + "Requires an existing runtime-client launch configuration and the YAXUnit extension " //$NON-NLS-1$
+               + "installed in the infobase. " //$NON-NLS-1$
+               + "Full parameters and examples: call get_tool_guide('run_yaxunit_tests')."; //$NON-NLS-1$
     }
 
     @Override
@@ -98,21 +96,92 @@ public class RunYaxunitTestsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
-                "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)") //$NON-NLS-1$
-            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted)") //$NON-NLS-1$ //$NON-NLS-2$
+                "Exact runtime-client launch config name (preferred; from list_configurations).") //$NON-NLS-1$
+            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted).") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", //$NON-NLS-1$
-                "Application ID from get_applications (required if launchConfigurationName is omitted)") //$NON-NLS-1$
-            .stringProperty("extensions", "Comma-separated extension names to filter tests by extension") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("modules", "Comma-separated module names to filter tests") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("tests", "Comma-separated test names in Module.Method format") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("timeout", "Polling window in seconds (default: 60). On expiry returns Pending; call again to keep waiting.") //$NON-NLS-1$ //$NON-NLS-2$
+                "Application ID from get_applications (required if launchConfigurationName is omitted).") //$NON-NLS-1$
+            .stringProperty("extensions", "Comma-separated extension names to filter tests.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("modules", "Comma-separated module names to filter tests.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("tests", "Comma-separated test names in Module.Method format.") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("timeout", "Polling window in seconds (default: 60); on expiry returns Pending.") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
-                "Auto-chain (default: true): before spawning a new test launch, " //$NON-NLS-1$
-                    + "politely terminate any live 1С client running this configuration " //$NON-NLS-1$
-                    + "and run a silent DB update — so EDT's launch delegate does not pop " //$NON-NLS-1$
-                    + "its modal 'Update database?' dialog that would block the MCP call. " //$NON-NLS-1$
-                    + "Set false to keep legacy behaviour (delegate decides; dialog may appear).") //$NON-NLS-1$
+                "Auto-chain (default: true): terminate a live client and run a silent DB update first.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# run_yaxunit_tests\n\n" //$NON-NLS-1$
+            + "Launches the 1C:Enterprise application with the `RunUnitTests` startup parameter, " //$NON-NLS-1$
+            + "polls until the launch terminates or the polling window expires, then parses the " //$NON-NLS-1$
+            + "JUnit XML report and returns a Markdown summary. The full Markdown report is also " //$NON-NLS-1$
+            + "written to `report.md` next to `junit.xml` so you can read it directly from disk.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n\n" //$NON-NLS-1$
+            + "Use after writing or changing test code to verify it. " //$NON-NLS-1$
+            + "Prerequisites: an existing runtime-client launch configuration for the project/application, " //$NON-NLS-1$
+            + "and the YAXUnit extension installed in the target infobase. " //$NON-NLS-1$
+            + "Without YAXUnit no JUnit XML is produced and the tool returns an error.\n\n" //$NON-NLS-1$
+
+            + "## Parameters\n\n" //$NON-NLS-1$
+            + "Two ways to identify the launch:\n\n" //$NON-NLS-1$
+            + "- `launchConfigurationName` (preferred) — the exact runtime-client config name from " //$NON-NLS-1$
+            + "`list_configurations`. When set, `projectName` and `applicationId` are derived from it.\n" //$NON-NLS-1$
+            + "- `projectName` + `applicationId` — required together when `launchConfigurationName` is " //$NON-NLS-1$
+            + "omitted. Get the application id from `get_applications`.\n\n" //$NON-NLS-1$
+            + "Optional test filters (comma-separated, AND-combined):\n\n" //$NON-NLS-1$
+            + "- `extensions` — restrict to tests in these extensions.\n" //$NON-NLS-1$
+            + "- `modules` — restrict to these test modules.\n" //$NON-NLS-1$
+            + "- `tests` — individual tests in `Module.Method` format.\n\n" //$NON-NLS-1$
+            + "Control:\n\n" //$NON-NLS-1$
+            + "- `timeout` — polling window in seconds (default 60). See ## Polling and Pending.\n" //$NON-NLS-1$
+            + "- `updateBeforeLaunch` — auto-chain, default `true`. See ## Auto-chain.\n\n" //$NON-NLS-1$
+
+            + "## Polling and Pending\n\n" //$NON-NLS-1$
+            + "The tool polls for up to `timeout` seconds. If the launch finishes in that window it " //$NON-NLS-1$
+            + "returns the parsed JUnit report. If the window expires while the launch is still running " //$NON-NLS-1$
+            + "it returns **Pending** and does NOT terminate the launch. Call the tool again with the " //$NON-NLS-1$
+            + "SAME arguments to keep waiting and fetch the result once the launch completes. " //$NON-NLS-1$
+            + "A run key is derived from the config name plus the filter, so identical arguments reattach " //$NON-NLS-1$
+            + "to the in-flight launch instead of starting a new one. A fresh report (under a few minutes " //$NON-NLS-1$
+            + "old) is served from cache.\n\n" //$NON-NLS-1$
+
+            + "## Auto-chain (updateBeforeLaunch)\n\n" //$NON-NLS-1$
+            + "Default `true`: before spawning a new test launch, the tool politely terminates any live " //$NON-NLS-1$
+            + "1C client running this configuration and runs a silent database update — so EDT's launch " //$NON-NLS-1$
+            + "delegate does not pop its modal 'Update database?' dialog that would otherwise block the " //$NON-NLS-1$
+            + "MCP call. Set `false` to keep legacy behaviour (the delegate decides; the dialog may " //$NON-NLS-1$
+            + "appear and block). If pre-launch preparation fails because a previous launch is stuck, " //$NON-NLS-1$
+            + "call `terminate_launch` with `force=true` and retry.\n\n" //$NON-NLS-1$
+
+            + "## Examples\n\n" //$NON-NLS-1$
+            + "Run all tests via a named config:\n\n" //$NON-NLS-1$
+            + "```json\n" //$NON-NLS-1$
+            + "{ \"launchConfigurationName\": \"TestClient\" }\n" //$NON-NLS-1$
+            + "```\n\n" //$NON-NLS-1$
+            + "Run by project + application, filtered to two modules:\n\n" //$NON-NLS-1$
+            + "```json\n" //$NON-NLS-1$
+            + "{ \"projectName\": \"MyProject\", \"applicationId\": \"<id-from-get_applications>\", " //$NON-NLS-1$
+            + "\"modules\": \"Tests_Catalog, Tests_Document\" }\n" //$NON-NLS-1$
+            + "```\n\n" //$NON-NLS-1$
+            + "Run a single test method with a longer window:\n\n" //$NON-NLS-1$
+            + "```json\n" //$NON-NLS-1$
+            + "{ \"launchConfigurationName\": \"TestClient\", \"tests\": \"Tests_Catalog.CreateAndPost\", " //$NON-NLS-1$
+            + "\"timeout\": 180 }\n" //$NON-NLS-1$
+            + "```\n\n" //$NON-NLS-1$
+
+            + "## Notes\n\n" //$NON-NLS-1$
+            + "- Response type is Markdown; the report is also saved to `report.md` next to `junit.xml`.\n" //$NON-NLS-1$
+            + "- The temp/report directory is not deleted on completion so a later call can re-fetch it.\n" //$NON-NLS-1$
+            + "- Module and test names are 1C identifiers (programmatic `Name`), not synonyms.\n\n" //$NON-NLS-1$
+
+            + "## Gotchas\n\n" //$NON-NLS-1$
+            + "- A timeout returns **Pending**, not a failure — do not retry with different arguments; " //$NON-NLS-1$
+            + "reuse the same ones so the run key matches.\n" //$NON-NLS-1$
+            + "- If no JUnit XML appears after the launch finishes, the YAXUnit extension is likely not " //$NON-NLS-1$
+            + "installed in the infobase, or the filter matched no tests.\n" //$NON-NLS-1$
+            + "- The config must be a runtime-client launch configuration; other types are rejected.\n"; //$NON-NLS-1$
     }
 
     @Override

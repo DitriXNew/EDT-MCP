@@ -68,10 +68,10 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Create a new top-level metadata object with EDT default content. " + //$NON-NLS-1$
-               "Supported types: " + SUPPORTED_TYPES_LIST + ". The object is created with a properly " + //$NON-NLS-1$ //$NON-NLS-2$
-               "generated UUID and default properties (same as the EDT 'New' wizard). " + //$NON-NLS-1$
-               "Optionally sets synonym and comment. Russian type names are also supported."; //$NON-NLS-1$
+        return "Create a new top-level metadata object (Catalog, Document, register, etc.) with " + //$NON-NLS-1$
+               "EDT default content, the same as the 'New' wizard. Use when adding an object to a " + //$NON-NLS-1$
+               "configuration; supported types: " + SUPPORTED_TYPES_LIST + " (Russian type names " + //$NON-NLS-1$ //$NON-NLS-2$
+               "also accepted). Full parameters and examples: call get_tool_guide('create_metadata_object')."; //$NON-NLS-1$
     }
 
     @Override
@@ -79,27 +79,76 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
-                "EDT project name (required)", true) //$NON-NLS-1$
+                "EDT project name.", true) //$NON-NLS-1$
             .stringProperty("metadataType", //$NON-NLS-1$
-                "Metadata type to create (required): " + SUPPORTED_TYPES_QUOTED + ". " + //$NON-NLS-1$ //$NON-NLS-2$
-                "Russian type names are also supported.", true) //$NON-NLS-1$
+                "Type to create: " + SUPPORTED_TYPES_QUOTED + " (Russian names also accepted).", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", //$NON-NLS-1$
-                "Name for the new object (required). Must be a valid 1C identifier.", true) //$NON-NLS-1$
+                "Name for the new object; must be a valid 1C identifier (e.g. 'Products').", true) //$NON-NLS-1$
             .stringProperty("synonym", //$NON-NLS-1$
-                "Optional synonym (display name). Set for the configuration default language " + //$NON-NLS-1$
-                "unless 'language' is specified.") //$NON-NLS-1$
+                "Optional display name; written for the config default language unless 'language' is set.") //$NON-NLS-1$
             .stringProperty("comment", //$NON-NLS-1$
                 "Optional comment for the new object.") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
-                "Language code for the synonym (e.g. 'ru', 'en'). " + //$NON-NLS-1$
-                "If not specified, uses the configuration default language.") //$NON-NLS-1$
+                "Optional language code for the synonym (e.g. 'ru', 'en'); defaults to config default language.") //$NON-NLS-1$
             .booleanProperty("expectedNotExists", //$NON-NLS-1$
-                "Stale-intent guard (default: false). Set true to assert that, per the state you " + //$NON-NLS-1$
-                "last read, this object does NOT yet exist. If it actually does, the create is " + //$NON-NLS-1$
-                "rejected with a precondition error steering you to re-read — instead of the " + //$NON-NLS-1$
-                "generic duplicate error. A creation always rejects a real duplicate regardless " + //$NON-NLS-1$
-                "of this flag; it only sharpens the diagnostic for a stale snapshot.") //$NON-NLS-1$
+                "Optional stale-intent guard (default false): assert the object does not yet exist " + //$NON-NLS-1$
+                "for a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "Creates one new top-level metadata object using the EDT model object factory, so it " //$NON-NLS-1$
+            + "gets a freshly generated UUID and the same default content as the EDT 'New' wizard. " //$NON-NLS-1$
+            + "The object is attached as a BM top object and added to the matching Configuration " //$NON-NLS-1$
+            + "collection, then force-exported so its own .mdo file and the Configuration.mdo are " //$NON-NLS-1$
+            + "written to disk (not just held in memory).\n\n" //$NON-NLS-1$
+            + "## When to use\n" //$NON-NLS-1$
+            + "Use to add a brand-new object to a configuration. To extend an existing object use " //$NON-NLS-1$
+            + "add_metadata_attribute; to rename use rename_metadata_object. This is a write tool — " //$NON-NLS-1$
+            + "the mutation runs inside a BM write transaction.\n\n" //$NON-NLS-1$
+            + "## Supported types\n" //$NON-NLS-1$
+            + SUPPORTED_TYPES_LIST + ". Pass the English singular (e.g. 'Catalog') or the Russian " //$NON-NLS-1$
+            + "type name; both resolve to the same canonical type. Any other type is rejected.\n\n" //$NON-NLS-1$
+            + "## Parameters\n" //$NON-NLS-1$
+            + "- projectName (required): EDT project name.\n" //$NON-NLS-1$
+            + "- metadataType (required): one of the supported types above (English or Russian).\n" //$NON-NLS-1$
+            + "- name (required): a valid 1C identifier — starts with a letter or underscore, then " //$NON-NLS-1$
+            + "letters, digits or underscores only. This is the programmatic Name, not the synonym.\n" //$NON-NLS-1$
+            + "- synonym (optional): the localized display name.\n" //$NON-NLS-1$
+            + "- comment (optional): a free-text comment on the object.\n" //$NON-NLS-1$
+            + "- language (optional): the language CODE for the synonym, e.g. 'en' or 'ru'.\n" //$NON-NLS-1$
+            + "- expectedNotExists (optional, default false): stale-intent guard, see Gotchas.\n\n" //$NON-NLS-1$
+            + "## Bilingual notes (ru/en)\n" //$NON-NLS-1$
+            + "- The object's identity is its Name; only the metadataType TYPE token may be bilingual " //$NON-NLS-1$
+            + "(Catalog vs the Russian equivalent). Two objects differing only by synonym are still " //$NON-NLS-1$
+            + "the same Name and collide.\n" //$NON-NLS-1$
+            + "- The synonym is stored keyed by the language CODE (e.g. 'en'/'ru'), never by the " //$NON-NLS-1$
+            + "language display name. If you omit 'language', the configuration's default language " //$NON-NLS-1$
+            + "code is used; on a multi-language configuration set 'language' explicitly to target " //$NON-NLS-1$
+            + "the right entry.\n" //$NON-NLS-1$
+            + "- 'language' is only consulted when a non-empty synonym is supplied.\n\n" //$NON-NLS-1$
+            + "## Examples\n" //$NON-NLS-1$
+            + "- Minimal: {projectName: 'MyProject', metadataType: 'Catalog', name: 'Products'}\n" //$NON-NLS-1$
+            + "- With synonym: {projectName: 'MyProject', metadataType: 'Document', name: 'Invoice', " //$NON-NLS-1$
+            + "synonym: 'Invoice', language: 'en'}\n" //$NON-NLS-1$
+            + "- Russian type token + synonym in ru: {projectName: 'MyProject', metadataType: " //$NON-NLS-1$
+            + "'\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A', name: 'Goods', synonym: " //$NON-NLS-1$
+            + "'\u0422\u043E\u0432\u0430\u0440\u044B', language: 'ru'}\n\n" //$NON-NLS-1$
+            + "## Result\n" //$NON-NLS-1$
+            + "Returns JSON with fqn (e.g. 'Catalog.Products'), metadataType, name, persisted, and — " //$NON-NLS-1$
+            + "when a synonym was written — the echoed synonym and resolved language code. After a " //$NON-NLS-1$
+            + "create, run get_project_errors to verify, or revalidate_objects if needed.\n\n" //$NON-NLS-1$
+            + "## Gotchas\n" //$NON-NLS-1$
+            + "- Creating an object whose Name already exists is always rejected as a duplicate.\n" //$NON-NLS-1$
+            + "- expectedNotExists is an opt-in optimistic-lock guard: set it true to assert that, " //$NON-NLS-1$
+            + "per the state you last read, the object does NOT yet exist. If it actually does, the " //$NON-NLS-1$
+            + "create is rejected with a precondition error that steers you to re-read with " //$NON-NLS-1$
+            + "get_metadata_objects (then add to / rename the existing object) instead of the generic " //$NON-NLS-1$
+            + "duplicate message. It only sharpens the diagnostic; it never lets a duplicate through.\n" //$NON-NLS-1$
+            + "- persisted=false means the in-memory mutation committed but the forced disk export " //$NON-NLS-1$
+            + "did not confirm — re-read and verify the .mdo before relying on it."; //$NON-NLS-1$
     }
 
     @Override

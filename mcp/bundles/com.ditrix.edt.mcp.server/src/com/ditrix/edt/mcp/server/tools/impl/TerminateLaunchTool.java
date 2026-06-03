@@ -81,15 +81,10 @@ public class TerminateLaunchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Terminate one or more 1С launches that were started from THIS EDT instance " //$NON-NLS-1$
-            + "(runtime-client or Attach). Only launches visible via the Eclipse launch manager " //$NON-NLS-1$
-            + "can be affected — 1С clients started externally (Designer, ad-hoc 1cv8c.exe, " //$NON-NLS-1$
-            + "another EDT) are never touched. " //$NON-NLS-1$
-            + "Select target via launchConfigurationName, or projectName+applicationId, " //$NON-NLS-1$
-            + "or all=true (requires confirm=true). " //$NON-NLS-1$
-            + "Attach configurations are disconnected (the 1С server keeps running) — " //$NON-NLS-1$
-            + "set includeAttach=false to skip them. " //$NON-NLS-1$
-            + "Use list_configurations first to see what is currently running."; //$NON-NLS-1$
+        return "Terminate one or more 1С launches started from THIS EDT instance; externally " //$NON-NLS-1$
+            + "launched 1С clients are never touched. Select ONE target mode: " //$NON-NLS-1$
+            + "launchConfigurationName, projectName+applicationId, or all=true (needs confirm=true). " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('terminate_launch')."; //$NON-NLS-1$
     }
 
     @Override
@@ -97,30 +92,93 @@ public class TerminateLaunchTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
-                "Exact EDT launch configuration name (from list_configurations) to terminate.") //$NON-NLS-1$
+                "Exact launch configuration name from list_configurations (single-launch mode).") //$NON-NLS-1$
             .stringProperty("projectName", //$NON-NLS-1$
-                "EDT project name. Combine with applicationId for a single launch, or with " //$NON-NLS-1$
-                    + "all=true to narrow 'terminate all' to one project.") //$NON-NLS-1$
+                "EDT project name; pair with applicationId for one launch, or with all=true.") //$NON-NLS-1$
             .stringProperty("applicationId", //$NON-NLS-1$
-                "Application ID from get_applications. Requires projectName.") //$NON-NLS-1$
+                "Application ID from get_applications; requires projectName.") //$NON-NLS-1$
             .booleanProperty("all", //$NON-NLS-1$
-                "Terminate every live EDT launch (optionally narrowed by projectName). " //$NON-NLS-1$
-                    + "Requires confirm=true. Default: false.") //$NON-NLS-1$
+                "Terminate every live EDT launch (optionally narrowed by projectName); " //$NON-NLS-1$
+                    + "requires confirm=true. Default false.") //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
-                "Must be true when all=true. Guard against accidental mass termination.") //$NON-NLS-1$
+                "Required (true) when all=true; guards against accidental mass termination.") //$NON-NLS-1$
             .booleanProperty("force", //$NON-NLS-1$
-                "If a polite ILaunch.terminate() does not finish within timeoutSeconds, " //$NON-NLS-1$
-                    + "escalate to IProcess.terminate() (OS-level kill). " //$NON-NLS-1$
-                    + "May lose unsaved 1С state. Default: false. Ignored for Attach.") //$NON-NLS-1$
+                "On polite-termination timeout, escalate to an OS-level process kill; " //$NON-NLS-1$
+                    + "may lose unsaved 1С state. Default false. Ignored for Attach.") //$NON-NLS-1$
             .integerProperty("timeoutSeconds", //$NON-NLS-1$
-                "How long to wait for a polite termination per launch. " //$NON-NLS-1$
-                    + "Default is configured in EDT preferences (MCP Server → Tools → terminate_launch), " //$NON-NLS-1$
-                    + "factory default 10. Clamped to [1, 120].") //$NON-NLS-1$
+                "Polite-wait window per launch, clamped to [1, 120]. " //$NON-NLS-1$
+                    + "Default from EDT preferences (factory default 10).") //$NON-NLS-1$
             .booleanProperty("includeAttach", //$NON-NLS-1$
-                "Whether to act on Attach configurations (RemoteRuntime/LocalRuntime). " //$NON-NLS-1$
-                    + "When true, Attach launches are disconnected (the 1С cluster keeps running). " //$NON-NLS-1$
-                    + "Default: true.") //$NON-NLS-1$
+                "Whether to act on Attach configs (disconnected, server keeps running). " //$NON-NLS-1$
+                    + "Default true; set false to skip them.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# terminate_launch\n\n" //$NON-NLS-1$
+            + "Terminates 1C launches started from THIS EDT instance. The affectable set is " //$NON-NLS-1$
+            + "exactly `ILaunchManager.getLaunches()` — any 1C client started externally " //$NON-NLS-1$
+            + "(Designer, ad-hoc 1cv8c.exe, another EDT instance) is invisible to this tool and " //$NON-NLS-1$
+            + "therefore never touched.\n\n" //$NON-NLS-1$
+            + "## When to use\n\n" //$NON-NLS-1$
+            + "Run `list_configurations` first to see what is currently running (look for entries " //$NON-NLS-1$
+            + "with `running: true`), then pick a selection mode below. Use this to stop a " //$NON-NLS-1$
+            + "runtime-client launch, or to disconnect an Attach session.\n\n" //$NON-NLS-1$
+            + "## Selection modes (mutually exclusive — choose exactly ONE)\n\n" //$NON-NLS-1$
+            + "1. **`launchConfigurationName`** — one live launch by exact config name " //$NON-NLS-1$
+            + "(from `list_configurations`).\n" //$NON-NLS-1$
+            + "2. **`projectName` + `applicationId`** — one live launch by project + appId " //$NON-NLS-1$
+            + "(appId from `get_applications`). The search is scoped to the project first, then " //$NON-NLS-1$
+            + "matches the applicationId, so a same-named appId in another project won't cause a " //$NON-NLS-1$
+            + "false not_found.\n" //$NON-NLS-1$
+            + "3. **`all=true`** (requires **`confirm=true`**) — every live EDT launch, optionally " //$NON-NLS-1$
+            + "narrowed by `projectName`.\n\n" //$NON-NLS-1$
+            + "Combination rules enforced at runtime: `applicationId` requires `projectName`; " //$NON-NLS-1$
+            + "`applicationId` cannot be combined with `all=true`; `projectName` alone (no " //$NON-NLS-1$
+            + "applicationId, no all) is ambiguous and rejected; `all=true` without `confirm=true` " //$NON-NLS-1$
+            + "is rejected.\n\n" //$NON-NLS-1$
+            + "## Parameters\n\n" //$NON-NLS-1$
+            + "- **launchConfigurationName** (string) — exact config name; mode 1.\n" //$NON-NLS-1$
+            + "- **projectName** (string) — EDT project; pairs with applicationId (mode 2) or " //$NON-NLS-1$
+            + "narrows all (mode 3).\n" //$NON-NLS-1$
+            + "- **applicationId** (string) — from `get_applications`; requires projectName.\n" //$NON-NLS-1$
+            + "- **all** (boolean, default false) — terminate every live EDT launch; needs confirm.\n" //$NON-NLS-1$
+            + "- **confirm** (boolean, default false) — must be true when all=true.\n" //$NON-NLS-1$
+            + "- **force** (boolean, default false) — see Force escalation below; ignored for Attach.\n" //$NON-NLS-1$
+            + "- **timeoutSeconds** (integer) — polite-wait window per launch, clamped to [1, 120]. " //$NON-NLS-1$
+            + "Default comes from EDT preferences (MCP Server -> Tools -> terminate_launch), " //$NON-NLS-1$
+            + "factory default 10.\n" //$NON-NLS-1$
+            + "- **includeAttach** (boolean, default true) — see Attach behaviour below.\n\n" //$NON-NLS-1$
+            + "## Attach behaviour\n\n" //$NON-NLS-1$
+            + "Attach launches (RemoteRuntime / LocalRuntime) are **disconnected**, not killed: " //$NON-NLS-1$
+            + "the 1C server (ragent/rphost) keeps running, only the debugger detaches. Per the " //$NON-NLS-1$
+            + "Eclipse Debug Platform contract, disconnect does not flip `ILaunch.isTerminated()`. " //$NON-NLS-1$
+            + "A detach is reported as `detached`. Set `includeAttach=false` to skip Attach " //$NON-NLS-1$
+            + "launches entirely.\n\n" //$NON-NLS-1$
+            + "## Force escalation\n\n" //$NON-NLS-1$
+            + "By default the tool waits up to `timeoutSeconds` for a polite " //$NON-NLS-1$
+            + "`ILaunch.terminate()`. With `force=true`, an unfinished termination escalates to an " //$NON-NLS-1$
+            + "OS-level `IProcess.terminate()` on the launch's processes (plus a short grace " //$NON-NLS-1$
+            + "window). This can lose unsaved 1C state. `force` is ignored for Attach launches.\n\n" //$NON-NLS-1$
+            + "## Result codes\n\n" //$NON-NLS-1$
+            + "`terminated`, `force_terminated`, `detached`, `timeout`, `already_terminated`, " //$NON-NLS-1$
+            + "`error`. A `timeout` on a runtime launch suggests re-running with `force=true`.\n\n" //$NON-NLS-1$
+            + "## Examples\n\n" //$NON-NLS-1$
+            + "- Single by name: `launchConfigurationName=\"MyApp / ThinClient\"`.\n" //$NON-NLS-1$
+            + "- Single by project + appId: `projectName=\"MyProject\"`, " //$NON-NLS-1$
+            + "`applicationId=\"<id from get_applications>\"`.\n" //$NON-NLS-1$
+            + "- All for one project, runtime only: `all=true`, `confirm=true`, " //$NON-NLS-1$
+            + "`projectName=\"MyProject\"`, `includeAttach=false`.\n" //$NON-NLS-1$
+            + "- Force-kill a stuck launch: `launchConfigurationName=\"MyApp\"`, `force=true`, " //$NON-NLS-1$
+            + "`timeoutSeconds=5`.\n\n" //$NON-NLS-1$
+            + "## Gotchas\n\n" //$NON-NLS-1$
+            + "- Nothing matched returns a `not_found` result, not an error — verify the name/appId " //$NON-NLS-1$
+            + "against `list_configurations`/`get_applications`.\n" //$NON-NLS-1$
+            + "- `force` only affects runtime launches; it never kills the 1C server behind an " //$NON-NLS-1$
+            + "Attach session.\n" //$NON-NLS-1$
+            + "- This tool can only ever affect launches owned by this EDT instance."; //$NON-NLS-1$
     }
 
     @Override

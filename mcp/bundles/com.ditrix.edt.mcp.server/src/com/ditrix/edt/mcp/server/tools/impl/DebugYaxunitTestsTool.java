@@ -71,12 +71,11 @@ public class DebugYaxunitTestsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Launch YAXUnit tests in DEBUG mode so breakpoints fire. " //$NON-NLS-1$
-            + "Returns immediately after the launch is queued — call wait_for_break next " //$NON-NLS-1$
-            + "to block until a breakpoint is hit, then inspect with get_variables / " //$NON-NLS-1$
-            + "evaluate_expression / step / resume. " //$NON-NLS-1$
-            + "Use a tight tests filter (single test method) to make the cycle predictable. " //$NON-NLS-1$
-            + "Requires an existing 1C launch configuration and YAXUnit installed in the infobase."; //$NON-NLS-1$
+        return "Launch YAXUnit tests in DEBUG mode so breakpoints fire, then call wait_for_break " //$NON-NLS-1$
+            + "to inspect; use when you need to step through test-driven code, not just get a pass/fail " //$NON-NLS-1$
+            + "report (use run_yaxunit_tests for that). Requires an existing 1C launch configuration and " //$NON-NLS-1$
+            + "YAXUnit installed in the infobase. " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('debug_yaxunit_tests')."; //$NON-NLS-1$
     }
 
     @Override
@@ -84,20 +83,78 @@ public class DebugYaxunitTestsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
-                "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)") //$NON-NLS-1$
-            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted)") //$NON-NLS-1$ //$NON-NLS-2$
+                "Exact runtime-client launch config name (preferred; from list_configurations).") //$NON-NLS-1$
+            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted).") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", //$NON-NLS-1$
-                "Application id from get_applications (required if launchConfigurationName is omitted)") //$NON-NLS-1$
-            .stringProperty("extensions", "Comma-separated extension names to filter tests by extension") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("modules", "Comma-separated module names to filter tests") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("tests", "Comma-separated test names in Module.Method format (recommended: pin to one test)") //$NON-NLS-1$ //$NON-NLS-2$
+                "Application id from get_applications (required if launchConfigurationName is omitted).") //$NON-NLS-1$
+            .stringProperty("extensions", "Comma-separated extension names to filter tests by extension.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("modules", "Comma-separated module names to filter tests.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("tests", //$NON-NLS-1$
+                "Comma-separated test names as Module.Method (recommended: pin to one test for a predictable cycle).") //$NON-NLS-1$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
-                "Auto-chain (default: true): before spawning the debug launch, " //$NON-NLS-1$
-                    + "politely terminate any live 1С client running this configuration " //$NON-NLS-1$
-                    + "and run a silent DB update — so EDT's launch delegate does not pop " //$NON-NLS-1$
-                    + "its modal 'Update database?' dialog that would block the MCP call. " //$NON-NLS-1$
-                    + "Set false to keep legacy behaviour (delegate decides; dialog may appear).") //$NON-NLS-1$
+                "Default true: terminate any live client and run a silent DB update first so no modal " //$NON-NLS-1$
+                    + "'Update database?' dialog blocks the call; false keeps legacy delegate behaviour.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# debug_yaxunit_tests\n\n" //$NON-NLS-1$
+            + "Launches YAXUnit tests in **DEBUG mode** so that breakpoints set via `set_breakpoint` " //$NON-NLS-1$
+            + "actually trip when the test executes the code under inspection. Unlike " //$NON-NLS-1$
+            + "`run_yaxunit_tests`, this tool does NOT poll for `junit.xml`: after the launch is queued " //$NON-NLS-1$
+            + "control returns immediately and you are expected to call `wait_for_break` next.\n\n" //$NON-NLS-1$
+            + "## When to use\n" //$NON-NLS-1$
+            + "- You need to step through code that a YAXUnit test drives and inspect variables/expressions.\n" //$NON-NLS-1$
+            + "- You do NOT just want a pass/fail report — for that use `run_yaxunit_tests` (it polls the report).\n\n" //$NON-NLS-1$
+            + "## Preconditions\n" //$NON-NLS-1$
+            + "- An existing 1C runtime-client launch configuration (see `list_configurations`).\n" //$NON-NLS-1$
+            + "- YAXUnit installed in the target infobase.\n" //$NON-NLS-1$
+            + "- Set your breakpoints with `set_breakpoint` BEFORE calling this tool.\n\n" //$NON-NLS-1$
+            + "## The full debug cycle\n" //$NON-NLS-1$
+            + "```\n" //$NON-NLS-1$
+            + "set_breakpoint -> debug_yaxunit_tests -> wait_for_break\n" //$NON-NLS-1$
+            + "  -> get_variables / evaluate_expression / step -> resume\n" //$NON-NLS-1$
+            + "```\n" //$NON-NLS-1$
+            + "Use a tight `tests` filter (a single Module.Method) so exactly one breakpoint trips and the " //$NON-NLS-1$
+            + "cycle stays predictable.\n\n" //$NON-NLS-1$
+            + "## Parameters\n" //$NON-NLS-1$
+            + "Identify the launch one of two ways:\n" //$NON-NLS-1$
+            + "- `launchConfigurationName` (preferred): the exact runtime-client config name from " //$NON-NLS-1$
+            + "`list_configurations`. When given, `projectName`/`applicationId` are derived from it.\n" //$NON-NLS-1$
+            + "- OR both `projectName` (EDT project) AND `applicationId` (from `get_applications`) when " //$NON-NLS-1$
+            + "`launchConfigurationName` is omitted. Either one alone is an error.\n\n" //$NON-NLS-1$
+            + "Test filters (all optional, comma-separated, AND-combined):\n" //$NON-NLS-1$
+            + "- `extensions` — extension names, e.g. `MyExtension`.\n" //$NON-NLS-1$
+            + "- `modules` — module names, e.g. `OrderTests,InvoiceTests`.\n" //$NON-NLS-1$
+            + "- `tests` — `Module.Method` names, e.g. `OrderTests.ShouldComputeTotal`. Recommended: pin to ONE.\n\n" //$NON-NLS-1$
+            + "Auto-chain switch:\n" //$NON-NLS-1$
+            + "- `updateBeforeLaunch` (default `true`) — before spawning the debug launch, politely terminate " //$NON-NLS-1$
+            + "any live 1C client running this configuration and run a silent DB update, so EDT's launch " //$NON-NLS-1$
+            + "delegate does not pop its modal 'Update database?' dialog that would otherwise block the MCP " //$NON-NLS-1$
+            + "call. Set `false` to keep legacy behaviour (the delegate decides; the dialog may appear).\n\n" //$NON-NLS-1$
+            + "## Examples\n" //$NON-NLS-1$
+            + "Debug a single test by config name:\n" //$NON-NLS-1$
+            + "```json\n" //$NON-NLS-1$
+            + "{ \"launchConfigurationName\": \"MyApp - client\", \"tests\": \"OrderTests.ShouldComputeTotal\" }\n" //$NON-NLS-1$
+            + "```\n" //$NON-NLS-1$
+            + "Debug by project + application:\n" //$NON-NLS-1$
+            + "```json\n" //$NON-NLS-1$
+            + "{ \"projectName\": \"MyApp\", \"applicationId\": \"app-123\", \"modules\": \"OrderTests\" }\n" //$NON-NLS-1$
+            + "```\n\n" //$NON-NLS-1$
+            + "## Result\n" //$NON-NLS-1$
+            + "JSON with `launched`, the effective `projectName`/`applicationId`, the `reportDir`, the " //$NON-NLS-1$
+            + "`junitXml` path, and `nextStep`. The `junit.xml` report is still written to `reportDir` after " //$NON-NLS-1$
+            + "the test finishes, so a later `run_yaxunit_tests` call (or any file read) can pick it up.\n\n" //$NON-NLS-1$
+            + "## Gotchas\n" //$NON-NLS-1$
+            + "- After this returns you MUST call `wait_for_break` with the SAME `applicationId` to block until " //$NON-NLS-1$
+            + "a breakpoint is hit; this tool does not wait.\n" //$NON-NLS-1$
+            + "- Without a `tests` filter, every matching test runs and any of their breakpoints may trip first.\n" //$NON-NLS-1$
+            + "- If a previous launch is stuck, the pre-launch step fails: call `terminate_launch` with " //$NON-NLS-1$
+            + "`force=true` and retry, or as a last resort pass `updateBeforeLaunch=false` (the modal dialog " //$NON-NLS-1$
+            + "may then block the call).\n" //$NON-NLS-1$
+            + "- The config must be a runtime-client launch config; other launch types are rejected.\n"; //$NON-NLS-1$
     }
 
     @Override

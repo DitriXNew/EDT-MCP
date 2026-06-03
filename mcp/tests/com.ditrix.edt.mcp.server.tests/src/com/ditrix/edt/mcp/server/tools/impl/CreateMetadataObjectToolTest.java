@@ -104,4 +104,27 @@ public class CreateMetadataObjectToolTest
         assertFalse("comment must not be required", tail.contains("\"comment\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("language must not be required", tail.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    @Test
+    public void testDescriptionPointsToGuide()
+    {
+        // The slim description must steer callers to the on-demand guide channel.
+        String desc = new CreateMetadataObjectTool().getDescription();
+        assertTrue("description should point to get_tool_guide", //$NON-NLS-1$
+            desc.contains("get_tool_guide('create_metadata_object')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideNotEmptyAndCarriesMigratedDetail()
+    {
+        // The exhaustive detail moved OUT of description/schema and INTO getGuide();
+        // assert it did not simply vanish.
+        String guide = new CreateMetadataObjectTool().getGuide();
+        assertNotNull(guide);
+        assertFalse("guide must be non-empty", guide.isEmpty()); //$NON-NLS-1$
+        assertTrue("guide should explain the expectedNotExists guard", //$NON-NLS-1$
+            guide.contains("expectedNotExists")); //$NON-NLS-1$
+        assertTrue("guide should retain the bilingual synonym/language-code detail", //$NON-NLS-1$
+            guide.contains("language CODE")); //$NON-NLS-1$
+    }
 }

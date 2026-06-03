@@ -61,14 +61,10 @@ public class SearchInCodeTool implements IMcpTool
     public String getDescription()
     {
         return "Literal/regex full-text search across all BSL modules in a project. " + //$NON-NLS-1$
-               "Supports plain text and regex patterns, case sensitivity, " + //$NON-NLS-1$
-               "context lines around matches, and file path filtering. " + //$NON-NLS-1$
-               "NOT dialect-aware: matching is purely textual, so a query spelled in one " + //$NON-NLS-1$
-               "BSL language (e.g. the English 'EndProcedure') will NOT find the " + //$NON-NLS-1$
-               "Russian-spelled equivalent and vice versa. To find an identifier " + //$NON-NLS-1$
-               "regardless of ru/en spelling, use get_symbol_info, find_references or " + //$NON-NLS-1$
-               "get_method_call_hierarchy instead. " + //$NON-NLS-1$
-               "Use outputMode 'count' or 'files' for lightweight queries before full search."; //$NON-NLS-1$
+               "Matching is purely textual and NOT ru/en dialect-aware, so a query in one " + //$NON-NLS-1$
+               "BSL language won't find the other spelling; for identifier lookup use " + //$NON-NLS-1$
+               "get_symbol_info, find_references or get_method_call_hierarchy instead. " + //$NON-NLS-1$
+               "Full parameters and examples: call get_tool_guide('search_in_code')."; //$NON-NLS-1$
     }
 
     @Override
@@ -78,34 +74,95 @@ public class SearchInCodeTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("query", //$NON-NLS-1$
-                "Search string or regex pattern (required). Matched literally/as regex " //$NON-NLS-1$
-                + "against module text; NOT ru/en dialect-aware, so one language spelling " //$NON-NLS-1$
-                + "will not match the other. For identifier lookup use get_symbol_info / " //$NON-NLS-1$
-                + "find_references / get_method_call_hierarchy.", true) //$NON-NLS-1$
+                "Search string or regex pattern (required); matched literally unless isRegex=true", true) //$NON-NLS-1$
             .booleanProperty("caseSensitive", //$NON-NLS-1$
                 "Case-sensitive search. Default: false") //$NON-NLS-1$
             .booleanProperty("isRegex", //$NON-NLS-1$
-                "Treat query as regular expression. Default: false") //$NON-NLS-1$
+                "Treat query as a regular expression. Default: false") //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
-                "Maximum number of matches to return with context. Default: 100, max: 500") //$NON-NLS-1$
+                "Max matches returned with context. Default: 100, max: 500") //$NON-NLS-1$
             .integerProperty("maxResults", //$NON-NLS-1$
-                "Deprecated alias for 'limit' (Maximum number of matches). Default: 100, max: 500") //$NON-NLS-1$
+                "Deprecated alias for 'limit'. Default: 100, max: 500") //$NON-NLS-1$
             .integerProperty("contextLines", //$NON-NLS-1$
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
             .stringProperty("fileMask", //$NON-NLS-1$
                 "Filter by module path substring (e.g. 'CommonModules' or 'Documents/SalesOrder')") //$NON-NLS-1$
             .stringProperty("metadataType", //$NON-NLS-1$
-                "Filter by metadata type: 'documents', 'catalogs', 'commonModules', " + //$NON-NLS-1$
-                "'informationRegisters', 'accumulationRegisters', 'reports', 'dataProcessors', " + //$NON-NLS-1$
-                "'exchangePlans', 'businessProcesses', 'tasks', 'constants', " + //$NON-NLS-1$
-                "'commonCommands', 'commonForms', 'webServices', 'httpServices'. " + //$NON-NLS-1$
-                "More precise than fileMask.") //$NON-NLS-1$
+                "Filter by metadata type (e.g. 'documents', 'catalogs', 'commonModules'); " + //$NON-NLS-1$
+                "more precise than fileMask. See guide for the full list.") //$NON-NLS-1$
             .enumProperty("outputMode", //$NON-NLS-1$
-                "Output mode: 'full' (matches with context, default), " + //$NON-NLS-1$
-                "'count' (only total count, fast), " + //$NON-NLS-1$
-                "'files' (file list with match counts, no context)", //$NON-NLS-1$
+                "Output mode: 'full' (matches with context, default), 'count', or 'files'", //$NON-NLS-1$
                 "full", "count", "files") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# search_in_code\n\n" //$NON-NLS-1$
+            + "Literal or regex full-text search across every BSL module (`*.bsl`) under the " //$NON-NLS-1$
+            + "project's `src/` folder. Returns matches with surrounding context, or a " //$NON-NLS-1$
+            + "lightweight count / file list.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n" //$NON-NLS-1$
+            + "- Find a literal string, comment, message, or regex pattern in BSL source.\n" //$NON-NLS-1$
+            + "- Scope a query to one metadata family (`metadataType`) or a path " //$NON-NLS-1$
+            + "(`fileMask`).\n" //$NON-NLS-1$
+            + "- Use `outputMode='count'` or `'files'` first for a cheap overview before " //$NON-NLS-1$
+            + "pulling full context.\n\n" //$NON-NLS-1$
+
+            + "## When NOT to use (ru/en dialect trap)\n" //$NON-NLS-1$
+            + "Matching is **purely textual and NOT dialect-aware**. A query in one BSL " //$NON-NLS-1$
+            + "language will not match its other-language spelling: searching the English " //$NON-NLS-1$
+            + "`Procedure` will NOT find a module written with the Russian keyword " //$NON-NLS-1$
+            + "`\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430`, and vice versa. " //$NON-NLS-1$
+            + "To locate an identifier (method, variable, object) regardless of ru/en " //$NON-NLS-1$
+            + "spelling, use `get_symbol_info`, `find_references` or " //$NON-NLS-1$
+            + "`get_method_call_hierarchy` instead.\n\n" //$NON-NLS-1$
+
+            + "## Parameters\n" //$NON-NLS-1$
+            + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
+            + "- `query` (required) - search string or regex; matched literally unless " //$NON-NLS-1$
+            + "`isRegex=true`.\n" //$NON-NLS-1$
+            + "- `caseSensitive` - default `false`.\n" //$NON-NLS-1$
+            + "- `isRegex` - treat `query` as a Java regular expression; default `false`. " //$NON-NLS-1$
+            + "An invalid pattern returns an error.\n" //$NON-NLS-1$
+            + "- `limit` - max matches returned with context; default 100, max 500. " //$NON-NLS-1$
+            + "Counts in `count`/`files` mode are always exact regardless of `limit`.\n" //$NON-NLS-1$
+            + "- `maxResults` - deprecated alias for `limit` (used only when `limit` is " //$NON-NLS-1$
+            + "absent).\n" //$NON-NLS-1$
+            + "- `contextLines` - lines before/after each match; default 2, max 5 " //$NON-NLS-1$
+            + "(`full` mode only).\n" //$NON-NLS-1$
+            + "- `fileMask` - case-insensitive substring of the module path " //$NON-NLS-1$
+            + "(e.g. `CommonModules`, `Documents/SalesOrder`).\n" //$NON-NLS-1$
+            + "- `metadataType` - restrict to one family by folder prefix; more precise " //$NON-NLS-1$
+            + "than `fileMask`. Allowed: documents, catalogs, commonModules, " //$NON-NLS-1$
+            + "informationRegisters, accumulationRegisters, reports, dataProcessors, " //$NON-NLS-1$
+            + "exchangePlans, businessProcesses, tasks, constants, commonCommands, " //$NON-NLS-1$
+            + "commonForms, webServices, httpServices, enums, " //$NON-NLS-1$
+            + "chartsOfCharacteristicTypes, chartsOfAccounts, chartsOfCalculationTypes. " //$NON-NLS-1$
+            + "An unknown value returns an error.\n\n" //$NON-NLS-1$
+
+            + "## Output modes (`outputMode`)\n" //$NON-NLS-1$
+            + "- `full` (default) - matches grouped by file with `contextLines` of " //$NON-NLS-1$
+            + "context, capped at `limit`.\n" //$NON-NLS-1$
+            + "- `count` - only the total match and file counts; fastest.\n" //$NON-NLS-1$
+            + "- `files` - one row per file with its per-file match count; no context.\n\n" //$NON-NLS-1$
+
+            + "## Examples\n" //$NON-NLS-1$
+            + "- Literal search: `{projectName, query: \"FixedDate\"}`.\n" //$NON-NLS-1$
+            + "- Regex, case-sensitive: `{projectName, query: \"Sum\\\\d+\", isRegex: true, " //$NON-NLS-1$
+            + "caseSensitive: true}`.\n" //$NON-NLS-1$
+            + "- Scoped count: `{projectName, query: \"Export\", metadataType: " //$NON-NLS-1$
+            + "\"commonModules\", outputMode: \"count\"}`.\n" //$NON-NLS-1$
+            + "- File overview: `{projectName, query: \"TODO\", outputMode: \"files\"}`.\n\n" //$NON-NLS-1$
+
+            + "## Notes & gotchas\n" //$NON-NLS-1$
+            + "- Searches `src/` only; a project without a `src/` folder returns an error.\n" //$NON-NLS-1$
+            + "- Only `.bsl` files are scanned (no form/query/XML files).\n" //$NON-NLS-1$
+            + "- Each match is a single line; a pattern spanning multiple lines won't match.\n" //$NON-NLS-1$
+            + "- Unreadable files are skipped and reported as a warning, not an error.\n" //$NON-NLS-1$
+            + "- `fileMask` and `metadataType` combine (both must match).\n"; //$NON-NLS-1$
     }
 
     @Override

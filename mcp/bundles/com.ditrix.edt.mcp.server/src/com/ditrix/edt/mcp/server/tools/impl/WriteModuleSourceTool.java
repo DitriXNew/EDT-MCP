@@ -59,22 +59,12 @@ public class WriteModuleSourceTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Write BSL source code to 1C metadata object modules. " + //$NON-NLS-1$
-            "Modes: searchReplace (find oldSource and replace with source, default), " + //$NON-NLS-1$
-            "replace (replace entire file), append (add to end). " + //$NON-NLS-1$
-            "Target the module EITHER by modulePath OR by objectName (these are " + //$NON-NLS-1$
-            "mutually exclusive — pass exactly one, never both, never neither). " + //$NON-NLS-1$
-            "Conditional parameters (each required only in its case): " + //$NON-NLS-1$
-            "moduleType only with objectName (ignored/rejected with modulePath); " + //$NON-NLS-1$
-            "oldSource only for mode=searchReplace (required there); " + //$NON-NLS-1$
-            "formName only for moduleType=FormModule (required there, except CommonForm); " + //$NON-NLS-1$
-            "commandName only for moduleType=CommandModule (required there, except CommonCommand). " + //$NON-NLS-1$
-            "Optional expectedHash (the contentHash from your last read_module_source / " + //$NON-NLS-1$
-            "read_method_source) rejects the write if the module changed since you read it — " + //$NON-NLS-1$
-            "a cheap lost-update guard that works for any mode. " + //$NON-NLS-1$
-            "Automatically checks BSL syntax (balanced Procedure/EndProcedure, " + //$NON-NLS-1$
-            "Function/EndFunction, If/EndIf, etc.) before writing — " + //$NON-NLS-1$
-            "blocks write on errors. Pass skipSyntaxCheck=true to force."; //$NON-NLS-1$
+        return "Write BSL source code to a 1C metadata object module. " + //$NON-NLS-1$
+            "Use to edit a module: searchReplace a fragment (default, needs oldSource), " + //$NON-NLS-1$
+            "replace the whole file, or append. " + //$NON-NLS-1$
+            "Target the module by EITHER modulePath OR objectName (mutually exclusive — pass exactly one). " + //$NON-NLS-1$
+            "Runs a BSL syntax check before writing (skipSyntaxCheck=true to force). " + //$NON-NLS-1$
+            "Full parameters and examples: call get_tool_guide('write_module_source')."; //$NON-NLS-1$
     }
 
     @Override
@@ -84,60 +74,134 @@ public class WriteModuleSourceTool implements IMcpTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("modulePath", //$NON-NLS-1$
-                "Path to module from src/ folder, e.g. " + //$NON-NLS-1$
-                "'Documents/MyDoc/ObjectModule.bsl' or " + //$NON-NLS-1$
-                "'CommonModules/MyModule/Module.bsl'. " + //$NON-NLS-1$
-                "Alternative: use objectName + moduleType.") //$NON-NLS-1$
+                "src/-relative module path, e.g. 'CommonModules/MyModule/Module.bsl'. " + //$NON-NLS-1$
+                "Alternative to objectName (pass exactly one).") //$NON-NLS-1$
             .stringProperty("objectName", //$NON-NLS-1$
-                "Full object name, e.g. 'Document.MyDoc', " + //$NON-NLS-1$
-                "'DataProcessor.MyProcessor'. " + //$NON-NLS-1$
-                "Supports Russian names (e.g. 'Документ.МойДок'). " + //$NON-NLS-1$
-                "Alternative to modulePath.") //$NON-NLS-1$
+                "Object name 'Type.Name', e.g. 'Document.MyDoc'. " + //$NON-NLS-1$
+                "Resolved with moduleType. Alternative to modulePath.") //$NON-NLS-1$
             .enumProperty("moduleType", //$NON-NLS-1$
-                "Module type (used with objectName): ObjectModule (default), " + //$NON-NLS-1$
-                "ManagerModule, FormModule, CommandModule, RecordSetModule, Module.", //$NON-NLS-1$
+                "Module type for objectName resolution (default ObjectModule).", //$NON-NLS-1$
                 "ObjectModule", "ManagerModule", "FormModule", "CommandModule", "RecordSetModule", "Module") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
             .stringProperty("source", //$NON-NLS-1$
-                "BSL source code to write (required). " + //$NON-NLS-1$
-                "For replace: complete module content. " + //$NON-NLS-1$
-                "For searchReplace: new code replacing oldSource. " + //$NON-NLS-1$
-                "For append: code to add.", true) //$NON-NLS-1$
+                "BSL source to write (required): full file for replace, new fragment for " + //$NON-NLS-1$
+                "searchReplace, text to add for append.", true) //$NON-NLS-1$
             .stringProperty("oldSource", //$NON-NLS-1$
-                "Existing code to find and replace (required for searchReplace mode). " + //$NON-NLS-1$
-                "Must match exactly one location in the file. " + //$NON-NLS-1$
-                "Proves that you have read the current file content.") //$NON-NLS-1$
+                "Fragment to find and replace; required for searchReplace, must match exactly once.") //$NON-NLS-1$
             .enumProperty("mode", //$NON-NLS-1$
-                "Write mode: 'searchReplace' (find oldSource and replace with source, default), " + //$NON-NLS-1$
-                "'replace' (replace entire file), 'append' (add to end).", //$NON-NLS-1$
+                "Write mode (default searchReplace).", //$NON-NLS-1$
                 "searchReplace", "replace", "append") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .stringProperty("formName", //$NON-NLS-1$
-                "Form name, required when moduleType=FormModule " + //$NON-NLS-1$
-                "(e.g. 'ItemForm').") //$NON-NLS-1$
+                "Form name; required when moduleType=FormModule (e.g. 'ItemForm').") //$NON-NLS-1$
             .stringProperty("commandName", //$NON-NLS-1$
-                "Command name, required when moduleType=CommandModule " + //$NON-NLS-1$
-                "(e.g. 'FillByTemplate').") //$NON-NLS-1$
+                "Command name; required when moduleType=CommandModule (e.g. 'FillByTemplate').") //$NON-NLS-1$
             .booleanProperty("skipSyntaxCheck", //$NON-NLS-1$
-                "Skip BSL syntax validation (default: false). " + //$NON-NLS-1$
-                "By default, checks balanced Procedure/EndProcedure, " + //$NON-NLS-1$
-                "Function/EndFunction, If/EndIf, While/EndDo, " + //$NON-NLS-1$
-                "For/EndDo, Try/EndTry. Set true to force write.") //$NON-NLS-1$
+                "Skip the BSL syntax check (default false).") //$NON-NLS-1$
             .stringProperty("expectedSource", //$NON-NLS-1$
-                "Lost-update guard for mode=replace over an EXISTING module. " + //$NON-NLS-1$
-                "Pass the exact module content you last read with read_module_source; " + //$NON-NLS-1$
-                "if it no longer matches the current file (someone else edited it), " + //$NON-NLS-1$
-                "the write is rejected so you can re-read and retry. " + //$NON-NLS-1$
-                "Ignored for searchReplace/append and when creating a new module.") //$NON-NLS-1$
+                "Lost-update guard for mode=replace: the module content you last read; mismatch rejects.") //$NON-NLS-1$
             .booleanProperty("overwrite", //$NON-NLS-1$
-                "Force mode=replace to overwrite an EXISTING module without an " + //$NON-NLS-1$
-                "expectedSource lost-update check (default: false). " + //$NON-NLS-1$
-                "Ignored for searchReplace/append and when creating a new module.") //$NON-NLS-1$
+                "Force mode=replace over an existing module without an expectedSource check (default false).") //$NON-NLS-1$
             .stringProperty("expectedHash", //$NON-NLS-1$
-                "Lost-update guard for ANY mode over an EXISTING module. " + //$NON-NLS-1$
-                "Pass the opaque contentHash you got from read_module_source / read_method_source; " + //$NON-NLS-1$
-                "if it no longer matches the current file (someone else edited it), the write is " + //$NON-NLS-1$
-                "rejected so you can re-read and retry. Cheaper than expectedSource (a fixed-size " + //$NON-NLS-1$
-                "token, not the whole file). Ignored when creating a new module.") //$NON-NLS-1$
+                "Lost-update guard for any mode: the contentHash from your last read; mismatch rejects.") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# write_module_source\n\n" //$NON-NLS-1$
+            + "Writes BSL source to a single 1C metadata object module (a `.bsl` file under `src/`). " //$NON-NLS-1$
+            + "Three edit modes, a mandatory BSL syntax check, and optional lost-update guards.\n\n" //$NON-NLS-1$
+
+            + "## When to use\n\n" //$NON-NLS-1$
+            + "- Editing existing BSL: prefer `searchReplace` (the default) — surgical and safe.\n" //$NON-NLS-1$
+            + "- Rewriting or creating a whole module: `replace` (the only mode that can create a new file).\n" //$NON-NLS-1$
+            + "- Adding code at the end of a module: `append`.\n\n" //$NON-NLS-1$
+
+            + "## Targeting the module (exclusive OR)\n\n" //$NON-NLS-1$
+            + "Pass EXACTLY ONE of:\n" //$NON-NLS-1$
+            + "- `modulePath` — direct `src/`-relative path, e.g. `Documents/MyDoc/ObjectModule.bsl` " //$NON-NLS-1$
+            + "or `CommonModules/MyModule/Module.bsl`.\n" //$NON-NLS-1$
+            + "- `objectName` + (optional) `moduleType` — resolves the path for you.\n\n" //$NON-NLS-1$
+            + "Passing both is rejected; passing neither is rejected. `moduleType` is meaningful ONLY with " //$NON-NLS-1$
+            + "`objectName` — combined with `modulePath` it is rejected, not silently ignored.\n\n" //$NON-NLS-1$
+
+            + "## Parameters\n\n" //$NON-NLS-1$
+            + "| Param | When | Notes |\n" //$NON-NLS-1$
+            + "|---|---|---|\n" //$NON-NLS-1$
+            + "| `projectName` | always | EDT project name. |\n" //$NON-NLS-1$
+            + "| `modulePath` | XOR objectName | `src/`-relative `.bsl` path; no `..`. |\n" //$NON-NLS-1$
+            + "| `objectName` | XOR modulePath | `Type.Name`; see Bilingual. |\n" //$NON-NLS-1$
+            + "| `moduleType` | with objectName | default `ObjectModule`. |\n" //$NON-NLS-1$
+            + "| `source` | always | the BSL to write (max 500000 chars). |\n" //$NON-NLS-1$
+            + "| `oldSource` | mode=searchReplace | must match exactly once. |\n" //$NON-NLS-1$
+            + "| `mode` | optional | `searchReplace` (default), `replace`, `append`. |\n" //$NON-NLS-1$
+            + "| `formName` | moduleType=FormModule | except CommonForm. |\n" //$NON-NLS-1$
+            + "| `commandName` | moduleType=CommandModule | except CommonCommand. |\n" //$NON-NLS-1$
+            + "| `skipSyntaxCheck` | optional | default false. |\n" //$NON-NLS-1$
+            + "| `expectedSource` | mode=replace | lost-update guard. |\n" //$NON-NLS-1$
+            + "| `overwrite` | mode=replace | force without expectedSource. |\n" //$NON-NLS-1$
+            + "| `expectedHash` | any mode | cheap lost-update guard. |\n\n" //$NON-NLS-1$
+
+            + "## moduleType to path\n\n" //$NON-NLS-1$
+            + "`ObjectModule` (default), `ManagerModule`, `RecordSetModule`, `Module` resolve to " //$NON-NLS-1$
+            + "`<Dir>/<Name>/<moduleType>.bsl`. `FormModule` resolves to " //$NON-NLS-1$
+            + "`<Dir>/<Name>/Forms/<formName>/Module.bsl` and REQUIRES `formName` — except CommonForm, " //$NON-NLS-1$
+            + "which has no per-form name and resolves to `CommonForms/<Name>/Module.bsl`. " //$NON-NLS-1$
+            + "`CommandModule` resolves to `<Dir>/<Name>/Commands/<commandName>/CommandModule.bsl` and " //$NON-NLS-1$
+            + "REQUIRES `commandName` — except CommonCommand, which resolves to " //$NON-NLS-1$
+            + "`CommonCommands/<Name>/CommandModule.bsl`.\n\n" //$NON-NLS-1$
+
+            + "## Modes\n\n" //$NON-NLS-1$
+            + "- `searchReplace` (default): finds `oldSource` and replaces it with `source`. `oldSource` is " //$NON-NLS-1$
+            + "REQUIRED and must match EXACTLY ONE location — zero matches or multiple matches are rejected " //$NON-NLS-1$
+            + "with a steer to read again / give a larger fragment. The match runs on the raw file content " //$NON-NLS-1$
+            + "(trailing newline preserved), so a fragment ending at EOF including its final newline is found. " //$NON-NLS-1$
+            + "The file must already exist.\n" //$NON-NLS-1$
+            + "- `replace`: replaces the entire file. The ONLY mode that can CREATE a new module (creates parent " //$NON-NLS-1$
+            + "folders). Over an EXISTING module it is guarded (see Lost-update guards).\n" //$NON-NLS-1$
+            + "- `append`: adds `source` to the end. The file must already exist.\n\n" //$NON-NLS-1$
+
+            + "## Lost-update guards\n\n" //$NON-NLS-1$
+            + "Concurrent edits between your read and write are caught by:\n" //$NON-NLS-1$
+            + "- `expectedHash` (ANY mode): pass the opaque `contentHash` from your last `read_module_source` / " //$NON-NLS-1$
+            + "`read_method_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, " //$NON-NLS-1$
+            + "not the whole file). Ignored when creating a new module.\n" //$NON-NLS-1$
+            + "- `expectedSource` (mode=replace): pass the exact content you last read. Mismatch is rejected.\n" //$NON-NLS-1$
+            + "- `overwrite=true` (mode=replace): force the overwrite with no content check.\n" //$NON-NLS-1$
+            + "A bare `replace` over an existing module with none of these is rejected and steers you toward " //$NON-NLS-1$
+            + "expectedSource / overwrite / searchReplace. A matching `expectedHash` already satisfies the " //$NON-NLS-1$
+            + "replace precondition. All comparisons are `\\n`-normalized, so a CRLF/LF-only difference is not a " //$NON-NLS-1$
+            + "spurious mismatch.\n\n" //$NON-NLS-1$
+
+            + "## BSL syntax check\n\n" //$NON-NLS-1$
+            + "Before writing, the resulting content is checked for balanced block keywords " //$NON-NLS-1$
+            + "(Procedure/EndProcedure, Function/EndFunction, If/EndIf, While/EndDo, For/EndDo, Try/EndTry). " //$NON-NLS-1$
+            + "On error the write is BLOCKED and the errors are returned. Pass `skipSyntaxCheck=true` to force.\n\n" //$NON-NLS-1$
+
+            + "## Bilingual (ru/en)\n\n" //$NON-NLS-1$
+            + "`objectName` resolves by the object's programmatic `Name`, NOT by its synonym. Only the TYPE token " //$NON-NLS-1$
+            + "may be bilingual: the English `Document.MyDoc` and its Russian equivalent (the Cyrillic " //$NON-NLS-1$
+            + "type token plus the SAME programmatic Name) resolve to the same module. " //$NON-NLS-1$
+            + "Resolve by Name, never by synonym.\n\n" //$NON-NLS-1$
+
+            + "## Examples\n\n" //$NON-NLS-1$
+            + "Surgical edit (default mode):\n" //$NON-NLS-1$
+            + "```\n" //$NON-NLS-1$
+            + "{ \"projectName\": \"MyProj\", \"modulePath\": \"CommonModules/MyModule/Module.bsl\",\n" //$NON-NLS-1$
+            + "  \"oldSource\": \"Return 1;\", \"source\": \"Return 2;\" }\n" //$NON-NLS-1$
+            + "```\n\n" //$NON-NLS-1$
+            + "Form module via objectName:\n" //$NON-NLS-1$
+            + "```\n" //$NON-NLS-1$
+            + "{ \"projectName\": \"MyProj\", \"objectName\": \"Document.MyDoc\",\n" //$NON-NLS-1$
+            + "  \"moduleType\": \"FormModule\", \"formName\": \"ItemForm\",\n" //$NON-NLS-1$
+            + "  \"mode\": \"replace\", \"source\": \"...\", \"overwrite\": true }\n" //$NON-NLS-1$
+            + "```\n\n" //$NON-NLS-1$
+
+            + "## Gotchas\n\n" //$NON-NLS-1$
+            + "- Only `.bsl` files; `modulePath` may not contain `..`.\n" //$NON-NLS-1$
+            + "- `searchReplace`/`append` need an EXISTING file; only `replace` creates one.\n" //$NON-NLS-1$
+            + "- New BSL files are written with a UTF-8 BOM; existing files keep their BOM state.\n" //$NON-NLS-1$
+            + "- `source` is `\\r\\n`->`\\n` normalized and the file always ends with a newline."; //$NON-NLS-1$
     }
 
     @Override

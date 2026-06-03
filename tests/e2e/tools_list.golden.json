@@ -5,7 +5,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Add a new attribute to a metadata object. Supports: Catalog, Document, ExchangePlan, ChartOfCharacteristicTypes, ChartOfAccounts, ChartOfCalculationTypes, BusinessProcess, Task, DataProcessor, Report, InformationRegister, AccumulationRegister, AccountingRegister. The attribute is created with default properties. Russian type names are also supported.",
+    "description": "Add a new attribute to a metadata object (Catalog, Document, register, etc.) with default properties, persisted to disk. Use to extend an object's data model; the parentFqn TYPE token may be English or Russian. Full parameters and examples: call get_tool_guide('add_metadata_attribute').",
     "inputSchema": {
       "properties": {
         "attributeName": {
@@ -13,15 +13,15 @@
           "type": "string"
         },
         "expectedNotExists": {
-          "description": "Stale-intent guard (default: false). Set true to assert that, per the state you last read, the parent has NO attribute with this name. If one already exists, the add is rejected with a precondition error steering you to re-read — instead of the generic duplicate error. A duplicate attribute is rejected regardless of this flag; it only sharpens the diagnostic for a stale snapshot.",
+          "description": "Optional stale-intent guard (default false): assert no such attribute exists yet; if it does, fail with a re-read steer instead of the generic duplicate error",
           "type": "boolean"
         },
         "language": {
-          "description": "Language code for the synonym (e.g. 'ru', 'en'). If not specified, uses the configuration default language.",
+          "description": "Optional language code for the synonym, e.g. 'ru'/'en' (default: config default)",
           "type": "string"
         },
         "parentFqn": {
-          "description": "FQN of the parent object (e.g. 'Catalog.Products', 'Document.SalesOrder'). The metadata TYPE token may be English or Russian; the object name is the programmatic Name (not the synonym / display name).",
+          "description": "FQN of the parent object, e.g. 'Catalog.Products' (TYPE token may be en/ru; object part is the programmatic Name, not the synonym)",
           "type": "string"
         },
         "projectName": {
@@ -29,7 +29,7 @@
           "type": "string"
         },
         "synonym": {
-          "description": "Optional synonym (display name) for the attribute. Set for the configuration default language unless 'language' is specified.",
+          "description": "Optional display name; written for 'language' or the config default language",
           "type": "string"
         }
       },
@@ -67,7 +67,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a new top-level metadata object with EDT default content. Supported types: Catalog, Document, InformationRegister, AccumulationRegister, Enum, CommonModule, Report, DataProcessor. The object is created with a properly generated UUID and default properties (same as the EDT 'New' wizard). Optionally sets synonym and comment. Russian type names are also supported.",
+    "description": "Create a new top-level metadata object (Catalog, Document, register, etc.) with EDT default content, the same as the 'New' wizard. Use when adding an object to a configuration; supported types: Catalog, Document, InformationRegister, AccumulationRegister, Enum, CommonModule, Report, DataProcessor (Russian type names also accepted). Full parameters and examples: call get_tool_guide('create_metadata_object').",
     "inputSchema": {
       "properties": {
         "comment": {
@@ -75,27 +75,27 @@
           "type": "string"
         },
         "expectedNotExists": {
-          "description": "Stale-intent guard (default: false). Set true to assert that, per the state you last read, this object does NOT yet exist. If it actually does, the create is rejected with a precondition error steering you to re-read — instead of the generic duplicate error. A creation always rejects a real duplicate regardless of this flag; it only sharpens the diagnostic for a stale snapshot.",
+          "description": "Optional stale-intent guard (default false): assert the object does not yet exist for a sharper precondition error. A real duplicate is always rejected anyway.",
           "type": "boolean"
         },
         "language": {
-          "description": "Language code for the synonym (e.g. 'ru', 'en'). If not specified, uses the configuration default language.",
+          "description": "Optional language code for the synonym (e.g. 'ru', 'en'); defaults to config default language.",
           "type": "string"
         },
         "metadataType": {
-          "description": "Metadata type to create (required): 'Catalog', 'Document', 'InformationRegister', 'AccumulationRegister', 'Enum', 'CommonModule', 'Report', 'DataProcessor'. Russian type names are also supported.",
+          "description": "Type to create: 'Catalog', 'Document', 'InformationRegister', 'AccumulationRegister', 'Enum', 'CommonModule', 'Report', 'DataProcessor' (Russian names also accepted).",
           "type": "string"
         },
         "name": {
-          "description": "Name for the new object (required). Must be a valid 1C identifier.",
+          "description": "Name for the new object; must be a valid 1C identifier (e.g. 'Products').",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name (required)",
+          "description": "EDT project name.",
           "type": "string"
         },
         "synonym": {
-          "description": "Optional synonym (display name). Set for the configuration default language unless 'language' is specified.",
+          "description": "Optional display name; written for the config default language unless 'language' is set.",
           "type": "string"
         }
       },
@@ -164,35 +164,35 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Launch YAXUnit tests in DEBUG mode so breakpoints fire. Returns immediately after the launch is queued — call wait_for_break next to block until a breakpoint is hit, then inspect with get_variables / evaluate_expression / step / resume. Use a tight tests filter (single test method) to make the cycle predictable. Requires an existing 1C launch configuration and YAXUnit installed in the infobase.",
+    "description": "Launch YAXUnit tests in DEBUG mode so breakpoints fire, then call wait_for_break to inspect; use when you need to step through test-driven code, not just get a pass/fail report (use run_yaxunit_tests for that). Requires an existing 1C launch configuration and YAXUnit installed in the infobase. Full parameters and examples: call get_tool_guide('debug_yaxunit_tests').",
     "inputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application id from get_applications (required if launchConfigurationName is omitted)",
+          "description": "Application id from get_applications (required if launchConfigurationName is omitted).",
           "type": "string"
         },
         "extensions": {
-          "description": "Comma-separated extension names to filter tests by extension",
+          "description": "Comma-separated extension names to filter tests by extension.",
           "type": "string"
         },
         "launchConfigurationName": {
-          "description": "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)",
+          "description": "Exact runtime-client launch config name (preferred; from list_configurations).",
           "type": "string"
         },
         "modules": {
-          "description": "Comma-separated module names to filter tests",
+          "description": "Comma-separated module names to filter tests.",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name (required if launchConfigurationName is omitted)",
+          "description": "EDT project name (required if launchConfigurationName is omitted).",
           "type": "string"
         },
         "tests": {
-          "description": "Comma-separated test names in Module.Method format (recommended: pin to one test)",
+          "description": "Comma-separated test names as Module.Method (recommended: pin to one test for a predictable cycle).",
           "type": "string"
         },
         "updateBeforeLaunch": {
-          "description": "Auto-chain (default: true): before spawning the debug launch, politely terminate any live 1С client running this configuration and run a silent DB update — so EDT's launch delegate does not pop its modal 'Update database?' dialog that would block the MCP call. Set false to keep legacy behaviour (delegate decides; dialog may appear).",
+          "description": "Default true: terminate any live client and run a silent DB update first so no modal 'Update database?' dialog blocks the call; false keeps legacy delegate behaviour.",
           "type": "boolean"
         }
       },
@@ -319,7 +319,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Generate translation strings (.lstr/.trans/.dict) for a configuration project — scans translatable features and writes the resulting keys into the storages declared on the project. Equivalent of the EDT menu Translation -> Generate translation strings. Invoke on the configuration project (V8ConfigurationNature), NOT on a dictionary storage project (plain Eclipse project where .lstr/.trans/.dict live). Requires LanguageTool installed in EDT.",
+    "description": "Generate translation strings (.lstr/.trans/.dict) for a configuration project: scans translatable features and writes the resulting keys into the project's storages (EDT menu Translation -> Generate translation strings). Run on the configuration project (V8ConfigurationNature), not a dictionary storage project; requires LanguageTool installed in EDT. Full parameters and examples: call get_tool_guide('generate_translation_strings').",
     "inputSchema": {
       "properties": {
         "collectInterface": {
@@ -331,27 +331,27 @@
           "type": "boolean"
         },
         "collectModelType": {
-          "description": "Model collection mode: ANY | NONE | COMPUTED_ONLY | UNKNOWN_ONLY | TAGS_ONLY. Default: ANY.",
+          "description": "Model mode: ANY | NONE | COMPUTED_ONLY | UNKNOWN_ONLY | TAGS_ONLY. Default: ANY.",
           "type": "string"
         },
         "fillUpType": {
-          "description": "Pre-fill new keys with values from: NOT_FILLUP | FROM_SOURCE_LANGUAGE | FROM_PROVIDER. Default: NOT_FILLUP.",
+          "description": "Pre-fill source: NOT_FILLUP | FROM_SOURCE_LANGUAGE | FROM_PROVIDER. Default: NOT_FILLUP.",
           "type": "string"
         },
         "projectName": {
-          "description": "Configuration project name (V8ConfigurationNature). NOT a dictionary storage project (the plain Eclipse project where .lstr/.trans/.dict live) — pass the configuration whose translatable features should be scanned. Required.",
+          "description": "Configuration project name (V8ConfigurationNature), not a dictionary storage project. Required.",
           "type": "string"
         },
         "providerId": {
-          "description": "Translation provider ID, used only when fillUpType=FROM_PROVIDER (e.g. \"com.e1c.langtool.history.externalTranslationProvider\"). Use get_translation_project_info to list available providers.",
+          "description": "Translation provider ID; required only when fillUpType=FROM_PROVIDER (see get_translation_project_info).",
           "type": "string"
         },
         "storageId": {
-          "description": "Storage ID to write generated keys into. Use get_translation_project_info to list available storages. Default: \"edit:default\".",
+          "description": "Storage ID to write keys into (see get_translation_project_info). Default: \"edit:default\".",
           "type": "string"
         },
         "targetLanguages": {
-          "description": "Target language codes to generate strings for, e.g. [\"en\"] (required).",
+          "description": "Target language codes to generate, e.g. [\"en\"]. Required.",
           "items": {
             "type": "string"
           },
@@ -1572,39 +1572,39 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Run YAXUnit tests for a 1C:Enterprise project. Launches the application with RunUnitTests parameter, polls for completion for up to `timeout` seconds (default 60), then returns the JUnit Markdown report. If the launch is still running when the polling window expires, returns **Pending** — call this tool again with the same arguments to keep waiting and fetch the result once the launch finishes. The launch is NOT terminated on timeout. A full Markdown report is also written to report.md next to junit.xml. Requires an existing launch configuration and YAXUnit extension installed in the infobase.",
+    "description": "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. Polls for up to `timeout` seconds, then returns the report or **Pending** (call again with identical arguments to keep waiting; the launch is not terminated). Requires an existing runtime-client launch configuration and the YAXUnit extension installed in the infobase. Full parameters and examples: call get_tool_guide('run_yaxunit_tests').",
     "inputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application ID from get_applications (required if launchConfigurationName is omitted)",
+          "description": "Application ID from get_applications (required if launchConfigurationName is omitted).",
           "type": "string"
         },
         "extensions": {
-          "description": "Comma-separated extension names to filter tests by extension",
+          "description": "Comma-separated extension names to filter tests.",
           "type": "string"
         },
         "launchConfigurationName": {
-          "description": "Exact EDT runtime-client launch configuration name (preferred; from list_configurations)",
+          "description": "Exact runtime-client launch config name (preferred; from list_configurations).",
           "type": "string"
         },
         "modules": {
-          "description": "Comma-separated module names to filter tests",
+          "description": "Comma-separated module names to filter tests.",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name (required if launchConfigurationName is omitted)",
+          "description": "EDT project name (required if launchConfigurationName is omitted).",
           "type": "string"
         },
         "tests": {
-          "description": "Comma-separated test names in Module.Method format",
+          "description": "Comma-separated test names in Module.Method format.",
           "type": "string"
         },
         "timeout": {
-          "description": "Polling window in seconds (default: 60). On expiry returns Pending; call again to keep waiting.",
+          "description": "Polling window in seconds (default: 60); on expiry returns Pending.",
           "type": "integer"
         },
         "updateBeforeLaunch": {
-          "description": "Auto-chain (default: true): before spawning a new test launch, politely terminate any live 1С client running this configuration and run a silent DB update — so EDT's launch delegate does not pop its modal 'Update database?' dialog that would block the MCP call. Set false to keep legacy behaviour (delegate decides; dialog may appear).",
+          "description": "Auto-chain (default: true): terminate a live client and run a silent DB update first.",
           "type": "boolean"
         }
       },
@@ -1619,7 +1619,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Literal/regex full-text search across all BSL modules in a project. Supports plain text and regex patterns, case sensitivity, context lines around matches, and file path filtering. NOT dialect-aware: matching is purely textual, so a query spelled in one BSL language (e.g. the English 'EndProcedure') will NOT find the Russian-spelled equivalent and vice versa. To find an identifier regardless of ru/en spelling, use get_symbol_info, find_references or get_method_call_hierarchy instead. Use outputMode 'count' or 'files' for lightweight queries before full search.",
+    "description": "Literal/regex full-text search across all BSL modules in a project. Matching is purely textual and NOT ru/en dialect-aware, so a query in one BSL language won't find the other spelling; for identifier lookup use get_symbol_info, find_references or get_method_call_hierarchy instead. Full parameters and examples: call get_tool_guide('search_in_code').",
     "inputSchema": {
       "properties": {
         "caseSensitive": {
@@ -1635,23 +1635,23 @@
           "type": "string"
         },
         "isRegex": {
-          "description": "Treat query as regular expression. Default: false",
+          "description": "Treat query as a regular expression. Default: false",
           "type": "boolean"
         },
         "limit": {
-          "description": "Maximum number of matches to return with context. Default: 100, max: 500",
+          "description": "Max matches returned with context. Default: 100, max: 500",
           "type": "integer"
         },
         "maxResults": {
-          "description": "Deprecated alias for 'limit' (Maximum number of matches). Default: 100, max: 500",
+          "description": "Deprecated alias for 'limit'. Default: 100, max: 500",
           "type": "integer"
         },
         "metadataType": {
-          "description": "Filter by metadata type: 'documents', 'catalogs', 'commonModules', 'informationRegisters', 'accumulationRegisters', 'reports', 'dataProcessors', 'exchangePlans', 'businessProcesses', 'tasks', 'constants', 'commonCommands', 'commonForms', 'webServices', 'httpServices'. More precise than fileMask.",
+          "description": "Filter by metadata type (e.g. 'documents', 'catalogs', 'commonModules'); more precise than fileMask. See guide for the full list.",
           "type": "string"
         },
         "outputMode": {
-          "description": "Output mode: 'full' (matches with context, default), 'count' (only total count, fast), 'files' (file list with match counts, no context)",
+          "description": "Output mode: 'full' (matches with context, default), 'count', or 'files'",
           "enum": [
             "full",
             "count",
@@ -1664,7 +1664,7 @@
           "type": "string"
         },
         "query": {
-          "description": "Search string or regex pattern (required). Matched literally/as regex against module text; NOT ru/en dialect-aware, so one language spelling will not match the other. For identifier lookup use get_symbol_info / find_references / get_method_call_hierarchy.",
+          "description": "Search string or regex pattern (required); matched literally unless isRegex=true",
           "type": "string"
         }
       },
@@ -1792,39 +1792,39 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Terminate one or more 1С launches that were started from THIS EDT instance (runtime-client or Attach). Only launches visible via the Eclipse launch manager can be affected — 1С clients started externally (Designer, ad-hoc 1cv8c.exe, another EDT) are never touched. Select target via launchConfigurationName, or projectName+applicationId, or all=true (requires confirm=true). Attach configurations are disconnected (the 1С server keeps running) — set includeAttach=false to skip them. Use list_configurations first to see what is currently running.",
+    "description": "Terminate one or more 1С launches started from THIS EDT instance; externally launched 1С clients are never touched. Select ONE target mode: launchConfigurationName, projectName+applicationId, or all=true (needs confirm=true). Full parameters and examples: call get_tool_guide('terminate_launch').",
     "inputSchema": {
       "properties": {
         "all": {
-          "description": "Terminate every live EDT launch (optionally narrowed by projectName). Requires confirm=true. Default: false.",
+          "description": "Terminate every live EDT launch (optionally narrowed by projectName); requires confirm=true. Default false.",
           "type": "boolean"
         },
         "applicationId": {
-          "description": "Application ID from get_applications. Requires projectName.",
+          "description": "Application ID from get_applications; requires projectName.",
           "type": "string"
         },
         "confirm": {
-          "description": "Must be true when all=true. Guard against accidental mass termination.",
+          "description": "Required (true) when all=true; guards against accidental mass termination.",
           "type": "boolean"
         },
         "force": {
-          "description": "If a polite ILaunch.terminate() does not finish within timeoutSeconds, escalate to IProcess.terminate() (OS-level kill). May lose unsaved 1С state. Default: false. Ignored for Attach.",
+          "description": "On polite-termination timeout, escalate to an OS-level process kill; may lose unsaved 1С state. Default false. Ignored for Attach.",
           "type": "boolean"
         },
         "includeAttach": {
-          "description": "Whether to act on Attach configurations (RemoteRuntime/LocalRuntime). When true, Attach launches are disconnected (the 1С cluster keeps running). Default: true.",
+          "description": "Whether to act on Attach configs (disconnected, server keeps running). Default true; set false to skip them.",
           "type": "boolean"
         },
         "launchConfigurationName": {
-          "description": "Exact EDT launch configuration name (from list_configurations) to terminate.",
+          "description": "Exact launch configuration name from list_configurations (single-launch mode).",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name. Combine with applicationId for a single launch, or with all=true to narrow 'terminate all' to one project.",
+          "description": "EDT project name; pair with applicationId for one launch, or with all=true.",
           "type": "string"
         },
         "timeoutSeconds": {
-          "description": "How long to wait for a polite termination per launch. Default is configured in EDT preferences (MCP Server → Tools → terminate_launch), factory default 10. Clamped to [1, 120].",
+          "description": "Polite-wait window per launch, clamped to [1, 120]. Default from EDT preferences (factory default 10).",
           "type": "integer"
         }
       },
@@ -1956,27 +1956,27 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Write BSL source code to 1C metadata object modules. Modes: searchReplace (find oldSource and replace with source, default), replace (replace entire file), append (add to end). Target the module EITHER by modulePath OR by objectName (these are mutually exclusive — pass exactly one, never both, never neither). Conditional parameters (each required only in its case): moduleType only with objectName (ignored/rejected with modulePath); oldSource only for mode=searchReplace (required there); formName only for moduleType=FormModule (required there, except CommonForm); commandName only for moduleType=CommandModule (required there, except CommonCommand). Optional expectedHash (the contentHash from your last read_module_source / read_method_source) rejects the write if the module changed since you read it — a cheap lost-update guard that works for any mode. Automatically checks BSL syntax (balanced Procedure/EndProcedure, Function/EndFunction, If/EndIf, etc.) before writing — blocks write on errors. Pass skipSyntaxCheck=true to force.",
+    "description": "Write BSL source code to a 1C metadata object module. Use to edit a module: searchReplace a fragment (default, needs oldSource), replace the whole file, or append. Target the module by EITHER modulePath OR objectName (mutually exclusive — pass exactly one). Runs a BSL syntax check before writing (skipSyntaxCheck=true to force). Full parameters and examples: call get_tool_guide('write_module_source').",
     "inputSchema": {
       "properties": {
         "commandName": {
-          "description": "Command name, required when moduleType=CommandModule (e.g. 'FillByTemplate').",
+          "description": "Command name; required when moduleType=CommandModule (e.g. 'FillByTemplate').",
           "type": "string"
         },
         "expectedHash": {
-          "description": "Lost-update guard for ANY mode over an EXISTING module. Pass the opaque contentHash you got from read_module_source / read_method_source; if it no longer matches the current file (someone else edited it), the write is rejected so you can re-read and retry. Cheaper than expectedSource (a fixed-size token, not the whole file). Ignored when creating a new module.",
+          "description": "Lost-update guard for any mode: the contentHash from your last read; mismatch rejects.",
           "type": "string"
         },
         "expectedSource": {
-          "description": "Lost-update guard for mode=replace over an EXISTING module. Pass the exact module content you last read with read_module_source; if it no longer matches the current file (someone else edited it), the write is rejected so you can re-read and retry. Ignored for searchReplace/append and when creating a new module.",
+          "description": "Lost-update guard for mode=replace: the module content you last read; mismatch rejects.",
           "type": "string"
         },
         "formName": {
-          "description": "Form name, required when moduleType=FormModule (e.g. 'ItemForm').",
+          "description": "Form name; required when moduleType=FormModule (e.g. 'ItemForm').",
           "type": "string"
         },
         "mode": {
-          "description": "Write mode: 'searchReplace' (find oldSource and replace with source, default), 'replace' (replace entire file), 'append' (add to end).",
+          "description": "Write mode (default searchReplace).",
           "enum": [
             "searchReplace",
             "replace",
@@ -1985,11 +1985,11 @@
           "type": "string"
         },
         "modulePath": {
-          "description": "Path to module from src/ folder, e.g. 'Documents/MyDoc/ObjectModule.bsl' or 'CommonModules/MyModule/Module.bsl'. Alternative: use objectName + moduleType.",
+          "description": "src/-relative module path, e.g. 'CommonModules/MyModule/Module.bsl'. Alternative to objectName (pass exactly one).",
           "type": "string"
         },
         "moduleType": {
-          "description": "Module type (used with objectName): ObjectModule (default), ManagerModule, FormModule, CommandModule, RecordSetModule, Module.",
+          "description": "Module type for objectName resolution (default ObjectModule).",
           "enum": [
             "ObjectModule",
             "ManagerModule",
@@ -2001,15 +2001,15 @@
           "type": "string"
         },
         "objectName": {
-          "description": "Full object name, e.g. 'Document.MyDoc', 'DataProcessor.MyProcessor'. Supports Russian names (e.g. 'Документ.МойДок'). Alternative to modulePath.",
+          "description": "Object name 'Type.Name', e.g. 'Document.MyDoc'. Resolved with moduleType. Alternative to modulePath.",
           "type": "string"
         },
         "oldSource": {
-          "description": "Existing code to find and replace (required for searchReplace mode). Must match exactly one location in the file. Proves that you have read the current file content.",
+          "description": "Fragment to find and replace; required for searchReplace, must match exactly once.",
           "type": "string"
         },
         "overwrite": {
-          "description": "Force mode=replace to overwrite an EXISTING module without an expectedSource lost-update check (default: false). Ignored for searchReplace/append and when creating a new module.",
+          "description": "Force mode=replace over an existing module without an expectedSource check (default false).",
           "type": "boolean"
         },
         "projectName": {
@@ -2017,11 +2017,11 @@
           "type": "string"
         },
         "skipSyntaxCheck": {
-          "description": "Skip BSL syntax validation (default: false). By default, checks balanced Procedure/EndProcedure, Function/EndFunction, If/EndIf, While/EndDo, For/EndDo, Try/EndTry. Set true to force write.",
+          "description": "Skip the BSL syntax check (default false).",
           "type": "boolean"
         },
         "source": {
-          "description": "BSL source code to write (required). For replace: complete module content. For searchReplace: new code replacing oldSource. For append: code to add.",
+          "description": "BSL source to write (required): full file for replace, new fragment for searchReplace, text to add for append.",
           "type": "string"
         }
       },

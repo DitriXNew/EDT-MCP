@@ -50,6 +50,19 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
+    public void testGuideHasMigratedDetail()
+    {
+        IMcpTool tool = new RunYaxunitTestsTool();
+        String guide = tool.getGuide();
+        assertNotNull(guide);
+        assertTrue("guide must be non-empty", guide.length() > 0);
+        // Detail migrated out of the slim description/schema lives here now.
+        assertTrue("guide must explain Pending/polling", guide.contains("Pending"));
+        assertTrue("guide must explain updateBeforeLaunch auto-chain",
+                guide.contains("updateBeforeLaunch"));
+    }
+
+    @Test
     public void testSchemaContainsRequiredFields()
     {
         IMcpTool tool = new RunYaxunitTestsTool();

@@ -54,24 +54,47 @@ public class WriteModuleSourceToolTest
     }
 
     /**
-     * The XOR / conditional-requiredness contract (which a flat Map schema cannot
-     * express) must be discoverable upfront from the description, not only via a
-     * runtime error. Assert the mutually-exclusive modulePath/objectName rule and
-     * the conditional params are named.
+     * The central XOR rule must stay discoverable upfront from the slimmed
+     * description (the modulePath/objectName mutual exclusion drives tool selection).
+     * The full conditional-requiredness contract now lives in the on-demand guide
+     * (see {@link #testGuideDocumentsConditionalRules}), so the always-loaded
+     * description stays short.
      */
     @Test
-    public void testDescriptionDocumentsXorAndConditionalRules()
+    public void testDescriptionDocumentsXorRule()
     {
         WriteModuleSourceTool tool = new WriteModuleSourceTool();
         String desc = tool.getDescription();
-        // XOR pair is named (the central rule).
+        // XOR pair is named (the central rule that drives selection).
         assertTrue(desc.contains("modulePath")); //$NON-NLS-1$
         assertTrue(desc.contains("objectName")); //$NON-NLS-1$
-        // Conditional params are each documented with their condition.
-        assertTrue(desc.contains("moduleType")); //$NON-NLS-1$
-        assertTrue(desc.contains("oldSource")); //$NON-NLS-1$
-        assertTrue(desc.contains("formName")); //$NON-NLS-1$
-        assertTrue(desc.contains("commandName")); //$NON-NLS-1$
+        assertTrue(desc.contains("mutually exclusive")); //$NON-NLS-1$
+        // The closing pointer steers to the on-demand guide for the full detail.
+        assertTrue(desc.contains("get_tool_guide")); //$NON-NLS-1$
+    }
+
+    /**
+     * The exhaustive per-parameter detail (the conditional-requiredness contract,
+     * the lost-update guards, the mode semantics) moved OUT of the always-loaded
+     * description/schema and INTO the on-demand guide. Assert it is non-empty and
+     * still carries the conditional params and their conditions, proving the detail
+     * moved rather than vanished.
+     */
+    @Test
+    public void testGuideDocumentsConditionalRules()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        String guide = tool.getGuide();
+        assertNotNull(guide);
+        assertFalse(guide.isEmpty());
+        // Each conditional param is documented with its condition in the guide.
+        assertTrue(guide.contains("moduleType")); //$NON-NLS-1$
+        assertTrue(guide.contains("oldSource")); //$NON-NLS-1$
+        assertTrue(guide.contains("formName")); //$NON-NLS-1$
+        assertTrue(guide.contains("commandName")); //$NON-NLS-1$
+        // The lost-update and mode detail migrated too.
+        assertTrue(guide.contains("expectedHash")); //$NON-NLS-1$
+        assertTrue(guide.contains("searchReplace")); //$NON-NLS-1$
     }
 
     @Test

@@ -66,6 +66,20 @@ public class DebugYaxunitTestsToolTest
     }
 
     @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        IMcpTool tool = new DebugYaxunitTestsTool();
+        String guide = tool.getGuide();
+        assertNotNull(guide);
+        assertTrue("guide should be non-empty", guide.length() > 0);
+        // Detail moved out of description/schema must live in the guide.
+        assertTrue("guide must explain the wait_for_break next step",
+            guide.contains("wait_for_break"));
+        assertTrue("guide must document the updateBeforeLaunch auto-chain",
+            guide.contains("updateBeforeLaunch"));
+    }
+
+    @Test
     public void testExecuteMissingProjectName()
     {
         IMcpTool tool = new DebugYaxunitTestsTool();

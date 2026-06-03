@@ -63,6 +63,18 @@ public class SearchInCodeToolTest
         assertTrue(schema.contains("\"outputMode\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        String guide = new SearchInCodeTool().getGuide();
+        assertNotNull(guide);
+        assertTrue(guide.length() > 0);
+        // Exhaustive detail moved out of description/schema lives here now.
+        assertTrue(guide.contains("metadataType")); //$NON-NLS-1$
+        assertTrue(guide.contains("outputMode")); //$NON-NLS-1$
+        assertTrue(guide.contains("dialect")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workspace needed) ====================
 
     @Test

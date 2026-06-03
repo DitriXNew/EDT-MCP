@@ -92,6 +92,23 @@ public class AddMetadataAttributeToolTest
     }
 
     @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        // The exhaustive detail (supported types, the stale-intent guard, worked
+        // examples) moved OUT of getDescription()/getInputSchema() and INTO the
+        // on-demand guide. Assert it landed there rather than vanishing.
+        String guide = new AddMetadataAttributeTool().getGuide();
+        assertNotNull(guide);
+        assertFalse("guide must be non-empty", guide.isEmpty()); //$NON-NLS-1$
+        // A supported type that no longer appears in the slimmed description.
+        assertTrue("guide should list supported parent types", //$NON-NLS-1$
+            guide.contains("AccumulationRegister")); //$NON-NLS-1$
+        // The full stale-intent-guard explanation migrated here.
+        assertTrue("guide should explain expectedNotExists", //$NON-NLS-1$
+            guide.contains("expectedNotExists")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testValidIdentifierAccepted()
     {
         assertTrue(AddMetadataAttributeTool.isValidIdentifier("Weight")); //$NON-NLS-1$

@@ -57,12 +57,10 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Add a new attribute to a metadata object. " + //$NON-NLS-1$
-               "Supports: Catalog, Document, ExchangePlan, ChartOfCharacteristicTypes, " + //$NON-NLS-1$
-               "ChartOfAccounts, ChartOfCalculationTypes, BusinessProcess, Task, " + //$NON-NLS-1$
-               "DataProcessor, Report, InformationRegister, AccumulationRegister, AccountingRegister. " + //$NON-NLS-1$
-               "The attribute is created with default properties. " + //$NON-NLS-1$
-               "Russian type names are also supported."; //$NON-NLS-1$
+        return "Add a new attribute to a metadata object (Catalog, Document, register, etc.) " + //$NON-NLS-1$
+               "with default properties, persisted to disk. Use to extend an object's data model; " + //$NON-NLS-1$
+               "the parentFqn TYPE token may be English or Russian. " + //$NON-NLS-1$
+               "Full parameters and examples: call get_tool_guide('add_metadata_attribute')."; //$NON-NLS-1$
     }
 
     @Override
@@ -72,25 +70,84 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("parentFqn", //$NON-NLS-1$
-                "FQN of the parent object " + //$NON-NLS-1$
-                "(e.g. 'Catalog.Products', 'Document.SalesOrder'). " + //$NON-NLS-1$
-                "The metadata TYPE token may be English or Russian; the object name is the " + //$NON-NLS-1$
-                "programmatic Name (not the synonym / display name).", true) //$NON-NLS-1$
+                "FQN of the parent object, e.g. 'Catalog.Products' (TYPE token may be en/ru; " + //$NON-NLS-1$
+                "object part is the programmatic Name, not the synonym)", true) //$NON-NLS-1$
             .stringProperty("attributeName", //$NON-NLS-1$
                 "Name for the new attribute (required)", true) //$NON-NLS-1$
             .stringProperty("synonym", //$NON-NLS-1$
-                "Optional synonym (display name) for the attribute. Set for the configuration " + //$NON-NLS-1$
-                "default language unless 'language' is specified.") //$NON-NLS-1$
+                "Optional display name; written for 'language' or the config default language") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
-                "Language code for the synonym (e.g. 'ru', 'en'). " + //$NON-NLS-1$
-                "If not specified, uses the configuration default language.") //$NON-NLS-1$
+                "Optional language code for the synonym, e.g. 'ru'/'en' (default: config default)") //$NON-NLS-1$
             .booleanProperty("expectedNotExists", //$NON-NLS-1$
-                "Stale-intent guard (default: false). Set true to assert that, per the state you " + //$NON-NLS-1$
-                "last read, the parent has NO attribute with this name. If one already exists, the " + //$NON-NLS-1$
-                "add is rejected with a precondition error steering you to re-read — instead of the " + //$NON-NLS-1$
-                "generic duplicate error. A duplicate attribute is rejected regardless of this flag; " + //$NON-NLS-1$
-                "it only sharpens the diagnostic for a stale snapshot.") //$NON-NLS-1$
+                "Optional stale-intent guard (default false): assert no such attribute exists yet; " + //$NON-NLS-1$
+                "if it does, fail with a re-read steer instead of the generic duplicate error") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    public String getGuide()
+    {
+        return "# add_metadata_attribute\n\n" //$NON-NLS-1$
+            + "Adds one attribute to an existing metadata object via a BM write transaction, then " //$NON-NLS-1$
+            + "force-exports the parent object to its `.mdo` on disk so the change survives a " //$NON-NLS-1$
+            + "refresh / clean_project / EDT restart. The attribute is created with default " //$NON-NLS-1$
+            + "properties (type, length, etc.); tune those afterwards in EDT or via other tools.\n\n" //$NON-NLS-1$
+            + "## When to use\n\n" //$NON-NLS-1$
+            + "Use to extend an object's data model with a new attribute. To rename or change an " //$NON-NLS-1$
+            + "existing attribute, read it first with get_metadata_details and edit it instead of " //$NON-NLS-1$
+            + "adding a duplicate (a duplicate name is always rejected).\n\n" //$NON-NLS-1$
+            + "## Supported parent types\n\n" //$NON-NLS-1$
+            + "Catalog, Document, ExchangePlan, ChartOfCharacteristicTypes, ChartOfAccounts, " //$NON-NLS-1$
+            + "ChartOfCalculationTypes, BusinessProcess, Task, DataProcessor, Report, " //$NON-NLS-1$
+            + "InformationRegister, AccumulationRegister, AccountingRegister. An unsupported type " //$NON-NLS-1$
+            + "(or one without an attribute collection) is rejected.\n\n" //$NON-NLS-1$
+            + "## Parameters\n\n" //$NON-NLS-1$
+            + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
+            + "- `parentFqn` (required) - FQN of the parent object as `Type.Name`. The TYPE token " //$NON-NLS-1$
+            + "may be English or Russian (e.g. `Catalog.Products` or the Russian Catalog token " //$NON-NLS-1$
+            // The escape below spells the Russian Catalog token (Spravochnik).
+            + "`\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.Products`); the object " //$NON-NLS-1$
+            + "part is the programmatic Name, NOT the synonym / display name.\n" //$NON-NLS-1$
+            + "- `attributeName` (required) - new attribute name. Must be a valid 1C identifier: " //$NON-NLS-1$
+            + "start with a letter or `_`, then letters / digits / `_` only. Cyrillic letters are " //$NON-NLS-1$
+            + "valid. Case-insensitive duplicate of an existing attribute is rejected.\n" //$NON-NLS-1$
+            + "- `synonym` (optional) - localized display name. Written for `language`, or the " //$NON-NLS-1$
+            + "configuration default language when `language` is omitted.\n" //$NON-NLS-1$
+            + "- `language` (optional) - language CODE for the synonym (`ru`, `en`, ...). Only " //$NON-NLS-1$
+            + "consulted when `synonym` is supplied. Defaults to the configuration's first / " //$NON-NLS-1$
+            + "default language code.\n" //$NON-NLS-1$
+            + "- `expectedNotExists` (optional, default false) - stale-intent guard, see below.\n\n" //$NON-NLS-1$
+            + "## Bilingual (ru/en) notes\n\n" //$NON-NLS-1$
+            + "The synonym EMap is keyed by the language CODE (`ru`/`en`), never the language " //$NON-NLS-1$
+            + "name. If you pass `language`, pass the code. The parent object is resolved by its " //$NON-NLS-1$
+            + "programmatic Name; only the TYPE token in `parentFqn` is dialect-aware.\n\n" //$NON-NLS-1$
+            + "## expectedNotExists (stale-intent guard)\n\n" //$NON-NLS-1$
+            + "Set `true` to assert that, per the snapshot you last read, the parent has NO " //$NON-NLS-1$
+            + "attribute with this name. If one already exists, the add is rejected with a " //$NON-NLS-1$
+            + "precondition error that steers you to re-read (get_metadata_details) and update the " //$NON-NLS-1$
+            + "existing attribute, instead of returning the generic duplicate error. A duplicate is " //$NON-NLS-1$
+            + "rejected regardless of this flag; the flag only sharpens the diagnostic for a stale " //$NON-NLS-1$
+            + "snapshot. The authoritative duplicate check still runs inside the write " //$NON-NLS-1$
+            + "transaction (TOCTOU guard).\n\n" //$NON-NLS-1$
+            + "## Result\n\n" //$NON-NLS-1$
+            + "JSON with `parentFqn`, `attributeName`, `persisted` (true once the parent `.mdo` was " //$NON-NLS-1$
+            + "exported to disk), and a `message`. When a synonym was written, `synonym` and the " //$NON-NLS-1$
+            + "resolved `language` code are echoed back so you can confirm the localized name " //$NON-NLS-1$
+            + "without a second read.\n\n" //$NON-NLS-1$
+            + "## Examples\n\n" //$NON-NLS-1$
+            + "Minimal: `{projectName: 'MyProject', parentFqn: 'Catalog.Products', " //$NON-NLS-1$
+            + "attributeName: 'Weight'}`\n\n" //$NON-NLS-1$
+            + "With a localized synonym: `{projectName: 'MyProject', " //$NON-NLS-1$
+            + "parentFqn: 'Document.SalesOrder', attributeName: 'Discount', synonym: 'Discount', " //$NON-NLS-1$
+            + "language: 'en'}`\n\n" //$NON-NLS-1$
+            + "Guarded add: `{projectName: 'MyProject', parentFqn: 'Catalog.Products', " //$NON-NLS-1$
+            + "attributeName: 'Weight', expectedNotExists: true}`\n\n" //$NON-NLS-1$
+            + "## Gotchas\n\n" //$NON-NLS-1$
+            + "- `parentFqn` not found -> error pointing to get_metadata_objects; check `Type.Name` " //$NON-NLS-1$
+            + "and that you used the Name, not the synonym.\n" //$NON-NLS-1$
+            + "- Attribute is created with DEFAULT type/length; adjust afterwards.\n" //$NON-NLS-1$
+            + "- If `persisted` is false the in-memory model changed but the `.mdo` write did not " //$NON-NLS-1$
+            + "complete - re-check before relying on it on disk."; //$NON-NLS-1$
     }
 
     @Override

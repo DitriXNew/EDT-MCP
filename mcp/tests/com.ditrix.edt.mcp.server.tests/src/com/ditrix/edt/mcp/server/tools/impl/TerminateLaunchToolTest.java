@@ -53,6 +53,24 @@ public class TerminateLaunchToolTest
             desc.toLowerCase().contains("edt"));
     }
 
+    @Test
+    public void testGuideCarriesMigratedDetail()
+    {
+        // The exhaustive detail moved out of getDescription()/getInputSchema() and
+        // into getGuide() (Wave 2). Prove it landed there, not vanished.
+        IMcpTool tool = new TerminateLaunchTool();
+        String guide = tool.getGuide();
+        assertNotNull(guide);
+        assertTrue("guide should not be empty", guide.length() > 0);
+        // Detail migrated from the old description/schema prose.
+        assertTrue("guide should explain Attach disconnect semantics",
+            guide.contains("disconnected") && guide.toLowerCase().contains("attach"));
+        assertTrue("guide should explain the force OS-level escalation",
+            guide.toLowerCase().contains("force"));
+        assertTrue("guide should document the mutually-exclusive selection modes",
+            guide.contains("mutually exclusive"));
+    }
+
     // === Schema ===
 
     @Test

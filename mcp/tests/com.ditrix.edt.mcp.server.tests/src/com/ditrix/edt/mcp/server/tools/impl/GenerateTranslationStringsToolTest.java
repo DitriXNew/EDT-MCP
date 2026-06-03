@@ -44,6 +44,21 @@ public class GenerateTranslationStringsToolTest
     }
 
     @Test
+    public void testGuideHoldsMigratedDetail()
+    {
+        // The exhaustive parameter/mode detail moved from getDescription()/
+        // getInputSchema() into getGuide(); assert it is non-empty and still
+        // carries the migrated specifics (the FROM_PROVIDER rule and a mode value).
+        String guide = new GenerateTranslationStringsTool().getGuide();
+        assertNotNull(guide);
+        assertFalse(guide.isEmpty());
+        assertTrue("guide must explain the FROM_PROVIDER providerId rule", //$NON-NLS-1$
+            guide.contains("FROM_PROVIDER")); //$NON-NLS-1$
+        assertTrue("guide must list collectModelType modes", //$NON-NLS-1$
+            guide.contains("COMPUTED_ONLY")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testInputSchemaContainsAllParameters()
     {
         @SuppressWarnings("unchecked")
