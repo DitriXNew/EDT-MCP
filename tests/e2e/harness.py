@@ -180,6 +180,11 @@ def assert_contains(haystack, needle, ctx=""):
         _fail("expected text to contain %r [%s]: %s" % (needle, ctx, (haystack or "")[:300]))
 
 
+def assert_not_contains(haystack, needle, ctx=""):
+    if needle in (haystack or ""):
+        _fail("expected text to NOT contain %r [%s]: %s" % (needle, ctx, (haystack or "")[:300]))
+
+
 def assert_no_diff(ctx=""):
     """Non-destructive guardrail: the project working tree must be clean (no mod, no new files)."""
     st = _status_porcelain()
