@@ -28,7 +28,9 @@ import com.google.gson.JsonSyntaxException;
 
 /**
  * Handles MCP JSON-RPC protocol messages.
- * Supports Streamable HTTP transport as per MCP 2025-03-26 specification.
+ * Implements the MCP 2025-11-25 specification (latest of
+ * {@link McpConstants#SUPPORTED_VERSIONS}) over Streamable HTTP transport, and
+ * negotiates the protocol version with the client during {@code initialize}.
  * Uses GsonProvider for JSON serialization/deserialization.
  */
 public class McpProtocolHandler
@@ -437,14 +439,17 @@ public class McpProtocolHandler
     
     /**
      * Builds initialize response.
-     * Echoes back the client's requested protocol version (per spec) if it is a
-     * recognized date-format version; otherwise uses our latest version.
+     * Echoes back the client's requested protocol version (per spec) only when it
+     * is one this server supports ({@link McpConstants#SUPPORTED_VERSIONS}); for an
+     * unsupported (e.g. future) or missing version, responds with our latest
+     * supported version ({@link McpConstants#PROTOCOL_VERSION}) so the client can
+     * decide whether it can proceed.
      */
     private String buildInitializeResponse(Object requestId, String clientVersion)
     {
-        // Use the client's version if it looks like a valid MCP version date (YYYY-MM-DD),
-        // otherwise fall back to our supported version.
-        String version = (clientVersion != null && clientVersion.matches("\\d{4}-\\d{2}-\\d{2}")) //$NON-NLS-1$
+        // Echo the client's version only if we actually support it; otherwise
+        // negotiate down to our latest supported version.
+        String version = McpConstants.isSupportedVersion(clientVersion)
             ? clientVersion : McpConstants.PROTOCOL_VERSION;
         InitializeResult result = new InitializeResult(
             version,

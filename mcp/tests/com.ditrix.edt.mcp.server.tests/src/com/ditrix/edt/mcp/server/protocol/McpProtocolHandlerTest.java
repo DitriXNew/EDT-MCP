@@ -97,6 +97,67 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testInitializeEchosSupportedOlderVersion()
+    {
+        // An older but still-supported version (per SUPPORTED_VERSIONS) is echoed back.
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        String echoed = json.getAsJsonObject("result").get("protocolVersion").getAsString();
+        assertEquals("A supported version must be echoed back", "2024-11-05", echoed);
+        assertTrue("2024-11-05 must be in SUPPORTED_VERSIONS",
+            McpConstants.SUPPORTED_VERSIONS.contains("2024-11-05"));
+    }
+
+    @Test
+    public void testInitializeNegotiatesUnsupportedFutureVersionToLatest()
+    {
+        // A well-formed but unsupported (future) version must NOT be echoed; the
+        // server negotiates down to its latest supported version (PROTOCOL_VERSION).
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2030-01-01\",\"capabilities\":{},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        String version = json.getAsJsonObject("result").get("protocolVersion").getAsString();
+        assertEquals("Unsupported future version must negotiate to latest supported",
+            McpConstants.PROTOCOL_VERSION, version);
+        assertFalse("2030-01-01 must not be a supported version",
+            McpConstants.SUPPORTED_VERSIONS.contains("2030-01-01"));
+    }
+
+    @Test
+    public void testInitializeNegotiatesUnknownNonDateVersionToLatest()
+    {
+        // A malformed / non-date version is also unsupported and negotiates to latest.
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"not-a-version\",\"capabilities\":{},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        String version = json.getAsJsonObject("result").get("protocolVersion").getAsString();
+        assertEquals(McpConstants.PROTOCOL_VERSION, version);
+    }
+
+    @Test
+    public void testSupportedVersionsContainsCurrentAsFirstEntry()
+    {
+        // The latest supported version is the current PROTOCOL_VERSION and is first.
+        assertTrue("current PROTOCOL_VERSION must be supported",
+            McpConstants.SUPPORTED_VERSIONS.contains(McpConstants.PROTOCOL_VERSION));
+        String first = McpConstants.SUPPORTED_VERSIONS.iterator().next();
+        assertEquals("latest supported version must be listed first",
+            McpConstants.PROTOCOL_VERSION, first);
+        assertTrue("the echo-test version 2025-06-18 must stay supported",
+            McpConstants.SUPPORTED_VERSIONS.contains("2025-06-18"));
+    }
+
+    @Test
     public void testInitializePreservesRequestId()
     {
         String request = buildJsonRpcRequest(42, "initialize", null);

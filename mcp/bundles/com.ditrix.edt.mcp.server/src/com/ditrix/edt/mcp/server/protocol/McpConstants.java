@@ -3,6 +3,11 @@
  */
 package com.ditrix.edt.mcp.server.protocol;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.Version;
 
@@ -14,9 +19,37 @@ public final class McpConstants
 {
     /** JSON-RPC version */
     public static final String JSONRPC_VERSION = "2.0"; //$NON-NLS-1$
-    
+
     /** MCP protocol version - updated to 2025-11-25 */
     public static final String PROTOCOL_VERSION = "2025-11-25"; //$NON-NLS-1$
+
+    /**
+     * MCP protocol versions this server is compatible with, latest first.
+     * Per the MCP spec, during {@code initialize} the server echoes the client's
+     * requested version only when it is one of these; for an unsupported (e.g.
+     * future) version the server responds with its latest supported version
+     * ({@link #PROTOCOL_VERSION}, the first entry). The ordering reflects
+     * newest-to-oldest. Backed by an insertion-ordered, unmodifiable set.
+     */
+    public static final Set<String> SUPPORTED_VERSIONS = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.<String> asList(
+            PROTOCOL_VERSION, // 2025-11-25
+            "2025-06-18", //$NON-NLS-1$
+            "2025-03-26", //$NON-NLS-1$
+            "2024-11-05" //$NON-NLS-1$
+        )));
+
+    /**
+     * Returns {@code true} when {@code version} is a protocol version this server
+     * supports (see {@link #SUPPORTED_VERSIONS}).
+     *
+     * @param version the client-requested protocol version (may be {@code null})
+     * @return whether the version is supported
+     */
+    public static boolean isSupportedVersion(String version)
+    {
+        return version != null && SUPPORTED_VERSIONS.contains(version);
+    }
     
     /** Server name */
     public static final String SERVER_NAME = "edt-mcp-server"; //$NON-NLS-1$
