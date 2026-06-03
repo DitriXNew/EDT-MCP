@@ -78,6 +78,7 @@ def main():
 
     print("EDT-MCP e2e: %d test(s) against %s, project=%s" % (len(tests), harness.MCP_URL, harness.PROJECT))
     harness.wait_for_server()
+    harness.initialize()     # proper MCP handshake (captures Mcp-Session-Id if issued)
     harness.reset_fixture()  # clean start
 
     results = []

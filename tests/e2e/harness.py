@@ -33,7 +33,15 @@ PROJECT_DIR = os.path.join(REPO_ROOT, PROJECT)                    # absolute pro
 MCP_URL = "http://%s:%s/mcp" % (MCP_HOST, MCP_PORT)
 HEALTH_URL = "http://%s:%s/health" % (MCP_HOST, MCP_PORT)
 
+# MCP protocol version this client speaks (sent as the MCP-Protocol-Version header,
+# per the 2025-11-25 Streamable HTTP transport spec).
+PROTOCOL_VERSION = os.environ.get("MCP_PROTOCOL_VERSION", "2025-11-25")
+
 _REQUEST_ID = 0
+# Captured from the server's InitializeResult response (Mcp-Session-Id header). When
+# the server issues one, every subsequent request MUST echo it (2025-11-25 spec).
+# Our server is currently session-less, so this stays None and nothing is sent.
+_SESSION_ID = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -83,26 +91,58 @@ def _extract_text(result):
     return ""
 
 
+def _parse_response(text):
+    """Parse a Streamable-HTTP response body: a bare JSON object, or SSE event frames.
+
+    Robust to multiple events and `event:`/`id:`/`data:` lines (the 2025-11-25
+    transport may stream several messages); returns the last JSON-RPC response
+    object (the one carrying result/error)."""
+    t = text.strip()
+    if t.startswith("{"):
+        return json.loads(t)
+    events, cur = [], []
+    for line in t.splitlines():
+        if line.startswith("data:"):
+            cur.append(line[5:].lstrip())
+        elif not line.strip():
+            if cur:
+                events.append("\n".join(cur))
+                cur = []
+    if cur:
+        events.append("\n".join(cur))
+    for payload in reversed(events):
+        try:
+            obj = json.loads(payload)
+            if isinstance(obj, dict) and ("result" in obj or "error" in obj):
+                return obj
+        except Exception:
+            pass
+    return json.loads(t)  # last resort: raise with detail
+
+
 def _post(method, params):
-    global _REQUEST_ID
+    global _REQUEST_ID, _SESSION_ID
     _REQUEST_ID += 1
     body = json.dumps({
         "jsonrpc": "2.0", "id": _REQUEST_ID, "method": method, "params": params,
     }).encode("utf-8")
-    req = urllib.request.Request(MCP_URL, data=body, headers={
+    headers = {
         "Content-Type": "application/json; charset=utf-8",
         "Accept": "application/json, text/event-stream",
-    })
+        "MCP-Protocol-Version": PROTOCOL_VERSION,
+    }
+    if _SESSION_ID:
+        headers["Mcp-Session-Id"] = _SESSION_ID
+    req = urllib.request.Request(MCP_URL, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
+            sid = resp.headers.get("Mcp-Session-Id")
+            if sid:
+                _SESSION_ID = sid
             text = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         text = e.read().decode("utf-8", "replace")
-    # Streamable HTTP / SSE framing: "data: {json}"
-    m = re.search(r"data:\s*(\{.*\})\s*$", text, re.S)
-    if m:
-        text = m.group(1)
-    return json.loads(text)
+    return _parse_response(text)
 
 
 def call(tool, arguments):
@@ -110,12 +150,37 @@ def call(tool, arguments):
     return Result(_post("tools/call", {"name": tool, "arguments": arguments}))
 
 
+def _notify(method, params):
+    """Send a JSON-RPC notification (no id, no response expected)."""
+    global _SESSION_ID
+    body = json.dumps({"jsonrpc": "2.0", "method": method, "params": params}).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": PROTOCOL_VERSION,
+    }
+    if _SESSION_ID:
+        headers["Mcp-Session-Id"] = _SESSION_ID
+    req = urllib.request.Request(MCP_URL, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()  # notifications return 202 Accepted / empty body
+    except urllib.error.HTTPError:
+        pass
+
+
 def initialize(capabilities=None):
-    return _post("initialize", {
-        "protocolVersion": "2025-11-25",
+    """MCP lifecycle handshake: initialize -> capture session id -> notifications/initialized.
+
+    Per the 2025-06-18 / 2025-11-25 spec the client MUST send initialize first and
+    then the initialized notification before normal operations. Done once at startup."""
+    result = _post("initialize", {
+        "protocolVersion": PROTOCOL_VERSION,
         "capabilities": capabilities or {},
-        "clientInfo": {"name": "e2e", "version": "1"},
+        "clientInfo": {"name": "edt-mcp-e2e", "version": "1"},
     })
+    _notify("notifications/initialized", {})
+    return result
 
 
 def wait_for_server(timeout=60):
