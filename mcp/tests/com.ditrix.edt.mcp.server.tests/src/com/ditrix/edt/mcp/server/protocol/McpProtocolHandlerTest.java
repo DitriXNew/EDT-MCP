@@ -402,6 +402,50 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testToolCallSuccessPayloadWithErrorFieldOmitsIsError()
+    {
+        // Regression for the isJsonErrorPayload tightening: a SUCCESSFUL JSON result
+        // (success:true) that ALSO carries a populated "error" field must NOT be
+        // flagged isError. Detection is by success==false only, never by the mere
+        // presence of an "error" key, so future field names stay decoupled from the
+        // error-detection contract.
+        registry.register(new StubJsonTool("ok_with_error_field",
+            "{\"success\":true,\"error\":\"this is data, not a failure\",\"value\":7}"));
+
+        String request = buildToolCallRequest(1, "ok_with_error_field", null);
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNull("tool-level success is not a JSON-RPC error", json.get("error"));
+        JsonObject result = json.getAsJsonObject("result");
+        assertFalse("a success payload carrying an 'error' field must not set isError",
+            result.has("isError"));
+        assertEquals("the structured content must round-trip intact", 7,
+            result.getAsJsonObject("structuredContent").get("value").getAsInt());
+    }
+
+    @Test
+    public void testToolResultErrorPayloadFlagsIsError()
+    {
+        // The actual ToolResult.error(...) output ({"success":false,"error":...})
+        // must still be classified as an error: the tightened predicate keys on the
+        // canonical success==false produced by the shared error builder.
+        String errorPayload = ToolResult.error("module not found").toJson();
+        registry.register(new StubJsonTool("toolresult_error", errorPayload));
+
+        String request = buildToolCallRequest(1, "toolresult_error", null);
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNull("tool-level failure is not a JSON-RPC error", json.get("error"));
+        JsonObject result = json.getAsJsonObject("result");
+        assertTrue("ToolResult.error payload must set isError:true",
+            result.get("isError").getAsBoolean());
+        assertFalse("structuredContent must carry the failure",
+            result.getAsJsonObject("structuredContent").get("success").getAsBoolean());
+    }
+
+    @Test
     public void testMarkdownErrorPayloadDeliveredAsJsonError()
     {
         // A MARKDOWN tool that returns a ToolResult.error JSON payload is delivered
