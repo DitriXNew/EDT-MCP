@@ -200,9 +200,14 @@ def wait_for_server(timeout=60):
 # git fixture (TestConfiguration is the committed baseline; on-disk truth = git)
 # ──────────────────────────────────────────────────────────────────────────────
 def _git(*args):
+    # Decode git output as UTF-8 explicitly. With bare text=True, Python uses the
+    # platform locale codepage (cp125x on Windows), which mangles UTF-8 content in
+    # `git diff` — Cyrillic BSL bodies came back as mojibake and substring checks
+    # missed them. git emits content as UTF-8 and quotes non-ASCII PATHS as ASCII
+    # octal escapes (core.quotepath), so utf-8 decoding is always safe here.
     return subprocess.run(
         ["git", "-C", REPO_ROOT, *args],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -221,7 +226,11 @@ def reset_fixture():
 
 
 def _status_porcelain():
-    return _git("status", "--porcelain", "--", PROJECT_REL).stdout.strip()
+    # Strip only TRAILING newlines. A bare .strip() also eats the LEADING space of the
+    # first porcelain line (status column "XY" -> " M file" becomes "M file"), which
+    # shifts the fixed-width `line[3:]` path slice by one and breaks path parsing in
+    # assert_diff_contains / assert_diff_paths. Leading whitespace is significant here.
+    return _git("status", "--porcelain", "--", PROJECT_REL).stdout.rstrip("\r\n")
 
 
 def diff():
