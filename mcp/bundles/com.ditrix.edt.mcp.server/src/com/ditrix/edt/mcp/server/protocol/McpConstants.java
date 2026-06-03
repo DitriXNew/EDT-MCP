@@ -109,7 +109,22 @@ public final class McpConstants
     
     /** Tools call method */
     public static final String METHOD_TOOLS_CALL = "tools/call"; //$NON-NLS-1$
-    
+
+    /** Resources list method (serves the per-tool guide:// documents) */
+    public static final String METHOD_RESOURCES_LIST = "resources/list"; //$NON-NLS-1$
+
+    /** Resources read method (returns the Markdown body of one guide:// document) */
+    public static final String METHOD_RESOURCES_READ = "resources/read"; //$NON-NLS-1$
+
+    /** URI scheme prefix for a per-tool how-to guide resource ({@code guide://<toolName>}) */
+    public static final String GUIDE_URI_SCHEME = "guide://"; //$NON-NLS-1$
+
+    /**
+     * Name of the on-demand tool-guide tool. Lives here (not only on the tool impl) so
+     * the protocol layer can reference it without depending on {@code tools.impl}.
+     */
+    public static final String TOOL_GET_TOOL_GUIDE = "get_tool_guide"; //$NON-NLS-1$
+
     private McpConstants()
     {
         // Utility class

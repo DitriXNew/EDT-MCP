@@ -1102,6 +1102,27 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Get the full on-demand how-to for a tool: its description, every parameter (type, required, allowed values) and extended examples/preconditions kept OUT of the always-loaded tool list to save context. Pass the exact tool name from tools/list. Also available as the resource guide://<toolName>.",
+    "inputSchema": {
+      "properties": {
+        "toolName": {
+          "description": "The exact name of the tool to document, as it appears in tools/list (e.g. 'read_module_source').",
+          "type": "string"
+        }
+      },
+      "required": [
+        "toolName"
+      ],
+      "type": "object"
+    },
+    "name": "get_tool_guide"
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Return LanguageTool metadata for a project: translation storages declared on the project and available translation provider IDs. Requires EDT with LanguageTool installed. If the storages list is empty, the configuration has no dictionary storage attached yet. The user has to set this up in EDT manually (no MCP tool for it): create a plain Eclipse project (File -> New -> Project -> General -> Project), then attach it to the configuration via the configuration project's properties (Translation settings). Do NOT use any '1C:Enterprise -> Dependent translation project' wizard — the dictionary storage project must be a plain Eclipse project, and the configuration itself can also act as its own storage if no separate Eclipse project is desired.",
     "inputSchema": {
       "properties": {

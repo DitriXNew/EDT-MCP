@@ -21,9 +21,12 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolCallResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolsListResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.GuideRenderer;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 
@@ -141,7 +144,19 @@ public class McpProtocolHandler
             {
                 return handleToolCall(request, requestId);
             }
-            
+
+            // Check for resources/list method (serves the per-tool guide:// docs)
+            if (McpConstants.METHOD_RESOURCES_LIST.equals(method))
+            {
+                return buildResourcesListResponse(requestId);
+            }
+
+            // Check for resources/read method (returns one guide:// Markdown body)
+            if (McpConstants.METHOD_RESOURCES_READ.equals(method))
+            {
+                return handleResourcesRead(request, requestId);
+            }
+
             // Method not found
             return buildErrorResponse(McpConstants.ERROR_METHOD_NOT_FOUND, "Method not found", requestId); //$NON-NLS-1$
         }
@@ -305,14 +320,14 @@ public class McpProtocolHandler
                 {
                     return buildToolCallTextResponse(result, requestId);
                 }
-                return buildToolCallJsonResponse(result, requestId);
+                return buildToolCallJsonResponse(result, requestId, tool.getName());
             case MARKDOWN:
                 // A ToolResult.error JSON payload is delivered as a structured JSON
                 // error (isError:true) instead of a markdown resource, so failures
                 // are machine-detectable regardless of the declared response type.
                 if (isJsonErrorPayload(result))
                 {
-                    return buildToolCallJsonResponse(result, requestId);
+                    return buildToolCallJsonResponse(result, requestId, tool.getName());
                 }
                 // Append user signal as markdown
                 if (signal != null)
@@ -332,7 +347,7 @@ public class McpProtocolHandler
                 // mimeType so it agrees with the .yaml resource URI and the body.
                 if (isJsonErrorPayload(result))
                 {
-                    return buildToolCallJsonResponse(result, requestId);
+                    return buildToolCallJsonResponse(result, requestId, tool.getName());
                 }
                 if (signal != null)
                 {
@@ -349,7 +364,7 @@ public class McpProtocolHandler
                 // For images, user signals are ignored
                 if (isJsonErrorPayload(result))
                 {
-                    return buildToolCallJsonResponse(result, requestId);
+                    return buildToolCallJsonResponse(result, requestId, tool.getName());
                 }
                 String imageFileName = tool.getResultFileName(params);
                 return buildToolCallResourceBlobResponse(result, "image/png", imageFileName, requestId); //$NON-NLS-1$
@@ -359,7 +374,7 @@ public class McpProtocolHandler
                 // structured JSON error regardless of the declared response type.
                 if (isJsonErrorPayload(result))
                 {
-                    return buildToolCallJsonResponse(result, requestId);
+                    return buildToolCallJsonResponse(result, requestId, tool.getName());
                 }
                 // Append user signal as text
                 if (signal != null)
@@ -638,7 +653,81 @@ public class McpProtocolHandler
         
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));
     }
-    
+
+    /**
+     * Builds the {@code resources/list} response: one MCP resource per enabled tool,
+     * each addressing that tool's how-to as {@code guide://<toolName>} with a
+     * {@code text/markdown} mimeType. The list mirrors the lean {@code tools/list}
+     * surface so a client can pull the full per-tool depth on demand without it
+     * being always-loaded. The resource bodies are served by
+     * {@link #handleResourcesRead}.
+     *
+     * @param requestId the JSON-RPC request id to echo
+     * @return the serialized JSON-RPC response
+     */
+    private String buildResourcesListResponse(Object requestId)
+    {
+        JsonArray resources = new JsonArray();
+        for (IMcpTool tool : toolRegistry.getEnabledTools())
+        {
+            String name = tool.getName();
+            JsonObject resource = new JsonObject();
+            resource.addProperty("uri", McpConstants.GUIDE_URI_SCHEME + name); //$NON-NLS-1$
+            resource.addProperty("name", name + " guide"); //$NON-NLS-1$ //$NON-NLS-2$
+            resource.addProperty("description", "Full how-to for " + name); //$NON-NLS-1$ //$NON-NLS-2$
+            resource.addProperty("mimeType", "text/markdown"); //$NON-NLS-1$ //$NON-NLS-2$
+            resources.add(resource);
+        }
+
+        JsonObject result = new JsonObject();
+        result.add("resources", resources); //$NON-NLS-1$
+        return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));
+    }
+
+    /**
+     * Handles a {@code resources/read} request for a {@code guide://<toolName>} URI:
+     * resolves the tool from the registry and returns its rendered Markdown how-to
+     * as a single {@code text/markdown} resource content entry. A URI that is not a
+     * {@code guide://} scheme, that names no tool, or that names an unknown tool is
+     * answered with a JSON-RPC error (mirroring how an unknown method/tool is
+     * reported), not a partial result.
+     *
+     * @param request the parsed request (its {@code params.uri} is read)
+     * @param requestId the JSON-RPC request id to echo
+     * @return the serialized JSON-RPC response (result or error)
+     */
+    private String handleResourcesRead(JsonRpcRequest request, Object requestId)
+    {
+        String uri = request != null ? request.getStringParam("uri") : null; //$NON-NLS-1$
+        if (uri == null || !uri.startsWith(McpConstants.GUIDE_URI_SCHEME))
+        {
+            return buildErrorResponse(McpConstants.ERROR_INVALID_PARAMS,
+                "Unsupported resource uri: " + uri //$NON-NLS-1$
+                    + ". Expected a guide://<toolName> uri (see resources/list).", requestId); //$NON-NLS-1$
+        }
+
+        String toolName = uri.substring(McpConstants.GUIDE_URI_SCHEME.length());
+        IMcpTool tool = toolRegistry.getTool(toolName);
+        if (tool == null)
+        {
+            return buildErrorResponse(McpConstants.ERROR_INVALID_PARAMS,
+                "Unknown guide resource: " + uri //$NON-NLS-1$
+                    + ". Call resources/list (or tools/list) for valid names.", requestId); //$NON-NLS-1$
+        }
+
+        JsonObject content = new JsonObject();
+        content.addProperty("uri", uri); //$NON-NLS-1$
+        content.addProperty("mimeType", "text/markdown"); //$NON-NLS-1$ //$NON-NLS-2$
+        content.addProperty("text", GuideRenderer.render(tool)); //$NON-NLS-1$
+
+        JsonArray contents = new JsonArray();
+        contents.add(content);
+
+        JsonObject result = new JsonObject();
+        result.add("contents", contents); //$NON-NLS-1$
+        return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));
+    }
+
     /**
      * Builds tool call response for text result.
      * <p>
@@ -664,14 +753,105 @@ public class McpProtocolHandler
      * payload (success:false / error field) is flagged with {@code isError:true}
      * so MCP clients can detect a tool-level failure instead of treating every
      * tools/call as successful.
+     * <p>
+     * On a tool-level failure the human-readable error TEXT channel
+     * ({@code content[0].text}) is augmented with a one-line pointer to
+     * {@code get_tool_guide("<toolName>")} so a caller that hit a bad/missing
+     * parameter is told exactly where to find the full parameter list and examples.
+     * This touches ONLY the text shown to the user — {@code structuredContent} and
+     * the {@code isError} flag (the machine-readable error semantics) are unchanged.
+     *
+     * @param jsonResult the tool's JSON payload
+     * @param requestId the JSON-RPC request id to echo
+     * @param toolName the name of the tool that produced this result (for the hint)
+     * @return the serialized JSON-RPC response
      */
-    private String buildToolCallJsonResponse(String jsonResult, Object requestId)
+    private String buildToolCallJsonResponse(String jsonResult, Object requestId, String toolName)
     {
         // Parse the JSON string to JsonElement for proper nesting
         JsonElement structured = JsonParser.parseString(jsonResult);
         boolean isError = isJsonErrorPayload(jsonResult);
         ToolCallResult toolResult = ToolCallResult.json(structured, isError);
-        return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
+        JsonRpcResponse response = JsonRpcResponse.success(requestId, toolResult);
+        if (isError)
+        {
+            String hinted = appendGuideHintToErrorText(response, toolName);
+            if (hinted != null)
+            {
+                return hinted;
+            }
+        }
+        return GsonProvider.toJson(response);
+    }
+
+    /**
+     * Appends the guide hint to the error TEXT channel of an already-built
+     * tools/call response. Serializes the response, then (only when the failing tool
+     * is NOT {@code get_tool_guide}, to avoid suggesting itself) appends
+     * {@code  For full parameters and examples, call get_tool_guide("<toolName>").}
+     * to {@code result.content[0].text}. The {@code structuredContent} and
+     * {@code isError} fields are left untouched: only the human-readable text is
+     * changed. Returns {@code null} when no hint applies or the text channel cannot
+     * be located, so the caller serializes the unmodified response instead.
+     *
+     * @param response the built JSON-RPC success envelope carrying the tool result
+     * @param toolName the failing tool's name (may be {@code null})
+     * @return the re-serialized response with the hint appended, or {@code null}
+     *         when no change was made
+     */
+    private String appendGuideHintToErrorText(JsonRpcResponse response, String toolName)
+    {
+        // Never suggest get_tool_guide for a get_tool_guide failure (circular).
+        if (toolName == null || McpConstants.TOOL_GET_TOOL_GUIDE.equals(toolName))
+        {
+            return null;
+        }
+        try
+        {
+            JsonElement tree = GsonProvider.get().toJsonTree(response);
+            if (!tree.isJsonObject())
+            {
+                return null;
+            }
+            JsonElement resultEl = tree.getAsJsonObject().get("result"); //$NON-NLS-1$
+            if (resultEl == null || !resultEl.isJsonObject())
+            {
+                return null;
+            }
+            JsonElement contentEl = resultEl.getAsJsonObject().get("content"); //$NON-NLS-1$
+            if (contentEl == null || !contentEl.isJsonArray() || contentEl.getAsJsonArray().size() == 0)
+            {
+                return null;
+            }
+            JsonElement first = contentEl.getAsJsonArray().get(0);
+            if (!first.isJsonObject())
+            {
+                return null;
+            }
+            JsonObject firstObj = first.getAsJsonObject();
+            String text = firstObj.has("text") && firstObj.get("text").isJsonPrimitive() //$NON-NLS-1$ //$NON-NLS-2$
+                ? firstObj.get("text").getAsString() : ""; //$NON-NLS-1$ //$NON-NLS-2$
+            firstObj.addProperty("text", text + guideHint(toolName)); //$NON-NLS-1$
+            return GsonProvider.toJson(tree);
+        }
+        catch (RuntimeException e)
+        {
+            // A hint is best-effort: never let it break the error response.
+            return null;
+        }
+    }
+
+    /**
+     * The one-line pointer appended to a failing tool's error text, directing the
+     * caller to the full parameter list and examples via {@code get_tool_guide}.
+     *
+     * @param toolName the failing tool's name
+     * @return the hint text (leading space so it reads as a continuation)
+     */
+    static String guideHint(String toolName)
+    {
+        return " For full parameters and examples, call get_tool_guide(\"" //$NON-NLS-1$
+            + toolName + "\")."; //$NON-NLS-1$
     }
     
     /**

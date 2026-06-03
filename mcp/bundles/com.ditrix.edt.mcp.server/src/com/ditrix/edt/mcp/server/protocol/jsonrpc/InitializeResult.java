@@ -39,20 +39,27 @@ public class InitializeResult
     
     /**
      * The SERVER's declared capabilities, returned to the client in the
-     * initialize result. This server advertises the {@code tools} capability only;
-     * it does not yet advertise resources, prompts, or other optional features, so
-     * those fields are intentionally absent (the shared Gson omits null fields).
-     * The CLIENT's capabilities are a separate concern: they arrive in the
-     * initialize REQUEST and are parsed/stored by the protocol handler (see
-     * {@code McpProtocolHandler#getClientCapabilities()}), not modelled here.
+     * initialize result. This server advertises the {@code tools} and
+     * {@code resources} capabilities; it does not yet advertise prompts or other
+     * optional features, so those fields are intentionally absent (the shared Gson
+     * omits null fields). The CLIENT's capabilities are a separate concern: they
+     * arrive in the initialize REQUEST and are parsed/stored by the protocol
+     * handler (see {@code McpProtocolHandler#getClientCapabilities()}), not
+     * modelled here.
      */
     public static class Capabilities
     {
         private Tools tools = new Tools();
+        private Resources resources = new Resources();
 
         public Tools getTools()
         {
             return tools;
+        }
+
+        public Resources getResources()
+        {
+            return resources;
         }
     }
 
@@ -63,6 +70,23 @@ public class InitializeResult
     public static class Tools
     {
         // Empty - just signals that tools are supported
+    }
+
+    /**
+     * Resources capability. Signals that the server serves MCP resources
+     * (resources/list + resources/read) — here the per-tool {@code guide://<name>}
+     * how-to documents. {@code listChanged} is {@code false} because the guide set
+     * is static for the lifetime of a session (it mirrors the registered tools), so
+     * the server never emits a {@code notifications/resources/list_changed}.
+     */
+    public static class Resources
+    {
+        private boolean listChanged = false;
+
+        public boolean isListChanged()
+        {
+            return listChanged;
+        }
     }
     
     /**

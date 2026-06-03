@@ -62,11 +62,13 @@ public class ToolCallResult
     {
         ToolCallResult result = new ToolCallResult();
         // On success, the full data lives in structuredContent; the textual
-        // content fallback (read by spec-compliant clients that ignore
-        // structuredContent) gets a bounded, human-readable digest instead of an
-        // opaque "Done", so those clients still see something meaningful. The
-        // failure path keeps the literal "Error" (machine-detected via isError).
-        String text = isError ? "Error" : buildSuccessDigest(structuredContent); //$NON-NLS-1$
+        // content fallback (read by spec-compliant clients and the model, which see
+        // content[0].text but may ignore structuredContent) gets a bounded,
+        // human-readable digest instead of an opaque "Done". On failure it carries the
+        // REAL error message (extracted from the {success:false,error:"..."} payload),
+        // not a bare "Error" placeholder, so a client reading only the text channel
+        // still sees WHY it failed. structuredContent stays the pure machine payload.
+        String text = isError ? buildErrorText(structuredContent) : buildSuccessDigest(structuredContent);
         result.content.add(ContentItem.text(text));
         result.structuredContent = structuredContent;
         if (isError)
@@ -74,6 +76,39 @@ public class ToolCallResult
             result.isError = Boolean.TRUE;
         }
         return result;
+    }
+
+    /**
+     * Derives the {@code content[0].text} for a FAILED tool result: the real error
+     * message carried in the {@code error} field of the {@code {success:false,
+     * error:"..."}} payload, so a client (or the model) that reads only the text
+     * channel still sees the reason. Falls back to the literal {@code "Error"} when
+     * the payload has no usable error string. The {@code structuredContent} itself is
+     * left untouched (it stays the pure machine payload).
+     *
+     * @param structuredContent the structured error payload (typically a Gson
+     *            {@link JsonElement}); may be {@code null}
+     * @return the real error message, or {@code "Error"} when none is available
+     */
+    static String buildErrorText(Object structuredContent)
+    {
+        if (structuredContent instanceof JsonElement)
+        {
+            JsonElement element = (JsonElement)structuredContent;
+            if (element.isJsonObject())
+            {
+                JsonObject obj = element.getAsJsonObject();
+                if (obj.has("error") && obj.get("error").isJsonPrimitive()) //$NON-NLS-1$ //$NON-NLS-2$
+                {
+                    String message = obj.get("error").getAsString(); //$NON-NLS-1$
+                    if (message != null && !message.isEmpty())
+                    {
+                        return message;
+                    }
+                }
+            }
+        }
+        return "Error"; //$NON-NLS-1$
     }
 
     /**

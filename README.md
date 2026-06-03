@@ -179,11 +179,11 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 61 tools are organized into 9 semantic groups:
+All 62 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
-| **Core / Project** | EDT version, server self-diagnosis, project listing, configuration, validation, XML export/import | `get_edt_version`, `get_server_status`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml` |
+| **Core / Project** | EDT version, server self-diagnosis, on-demand tool guides, project listing, configuration, validation, XML export/import | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml` |
 | **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 61 tools enabled (default) |
+| **All Tools** | All 62 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -320,6 +320,7 @@ Add to `claude_desktop_config.json`:
 |------|-------------|
 | `get_edt_version` | Returns current EDT version |
 | `get_server_status` | Self-diagnosis snapshot: port, protocol/plugin/EDT version, enabled/total tool counts, plainTextMode, checksFolderConfigured, form-render JVM flags, authEnabled (no secrets) |
+| `get_tool_guide` | On-demand full how-to for a tool: description, every parameter (type, required, allowed values) and extended examples kept out of tools/list. Also available as resource `guide://<toolName>` |
 | `list_projects` | Lists workspace projects with properties |
 | `get_configuration_properties` | Gets 1C configuration properties |
 | `get_project_errors` | Returns EDT problems with severity/checkId/objects filters |

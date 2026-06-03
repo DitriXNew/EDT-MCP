@@ -491,6 +491,194 @@ public class McpProtocolHandlerTest
         assertNotNull(json.get("error"));
     }
 
+    // === Resources (capability + resources/list + resources/read) ===
+
+    @Test
+    public void testInitializeAdvertisesResourcesCapability()
+    {
+        // The server must advertise a resources capability so a client knows it can
+        // call resources/list + resources/read for the per-tool guide:// documents.
+        String request = buildJsonRpcRequest(1, "initialize", null);
+        String response = handler.processRequest(request);
+
+        JsonObject capabilities = parseResponse(response)
+            .getAsJsonObject("result").getAsJsonObject("capabilities");
+        assertNotNull("initialize must advertise a resources capability",
+            capabilities.get("resources"));
+        assertTrue("resources capability must be an object", capabilities.get("resources").isJsonObject());
+        // A static guide set never changes within a session => listChanged is false.
+        assertFalse("static guide set must not advertise listChanged",
+            capabilities.getAsJsonObject("resources").get("listChanged").getAsBoolean());
+        // The pre-existing tools capability must remain advertised.
+        assertNotNull("tools capability must still be advertised", capabilities.get("tools"));
+    }
+
+    @Test
+    public void testResourcesListReturnsGuideEntryForEachTool()
+    {
+        registry.register(new StubTool("tool_alpha", "Alpha tool", "{\"type\":\"object\"}"));
+        registry.register(new StubTool("tool_beta", "Beta tool", "{\"type\":\"object\"}"));
+
+        String request = buildJsonRpcRequest(1, "resources/list", "{}");
+        String response = handler.processRequest(request);
+
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertNotNull("resources/list must return a resources array", result.get("resources"));
+        assertEquals("one guide resource per enabled tool", 2,
+            result.getAsJsonArray("resources").size());
+
+        boolean foundAlpha = false;
+        for (JsonElement el : result.getAsJsonArray("resources"))
+        {
+            JsonObject res = el.getAsJsonObject();
+            assertTrue("each resource uri must use the guide:// scheme",
+                res.get("uri").getAsString().startsWith("guide://"));
+            assertEquals("each guide resource must be text/markdown",
+                "text/markdown", res.get("mimeType").getAsString());
+            assertNotNull("each resource must carry a name", res.get("name"));
+            assertNotNull("each resource must carry a description", res.get("description"));
+            if ("guide://tool_alpha".equals(res.get("uri").getAsString()))
+            {
+                foundAlpha = true;
+            }
+        }
+        assertTrue("resources/list must include a guide:// entry for a known tool", foundAlpha);
+    }
+
+    @Test
+    public void testResourcesReadReturnsMarkdownGuideForKnownTool()
+    {
+        registry.register(new StubTool("tool_alpha", "Alpha tool",
+            "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}"));
+
+        String request = buildJsonRpcRequest(1, "resources/read",
+            "{\"uri\":\"guide://tool_alpha\"}");
+        String response = handler.processRequest(request);
+
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        assertNotNull("resources/read must return a contents array", result.get("contents"));
+        assertEquals(1, result.getAsJsonArray("contents").size());
+
+        JsonObject content = result.getAsJsonArray("contents").get(0).getAsJsonObject();
+        assertEquals("content must echo the requested uri",
+            "guide://tool_alpha", content.get("uri").getAsString());
+        assertEquals("guide content must be text/markdown",
+            "text/markdown", content.get("mimeType").getAsString());
+        String text = content.get("text").getAsString();
+        // The rendered guide carries the tool title and the parsed parameter table.
+        assertTrue("guide text must name the documented tool", text.contains("tool_alpha"));
+        assertTrue("guide text must contain a Parameters section", text.contains("Parameters"));
+    }
+
+    @Test
+    public void testResourcesReadUnknownToolReturnsError()
+    {
+        // A guide:// uri whose tool is not registered must be a JSON-RPC error.
+        String request = buildJsonRpcRequest(1, "resources/read",
+            "{\"uri\":\"guide://no_such_tool\"}");
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNotNull("unknown guide must return a JSON-RPC error", json.get("error"));
+        String message = json.getAsJsonObject("error").get("message").getAsString();
+        assertTrue("error must name the unknown uri", message.contains("guide://no_such_tool"));
+    }
+
+    @Test
+    public void testResourcesReadBadSchemeReturnsError()
+    {
+        // A uri that is not the guide:// scheme is unsupported and must error.
+        String request = buildJsonRpcRequest(1, "resources/read",
+            "{\"uri\":\"file:///etc/passwd\"}");
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNotNull("a non-guide:// uri must return a JSON-RPC error", json.get("error"));
+        assertEquals("bad uri is an invalid-params error", McpConstants.ERROR_INVALID_PARAMS,
+            json.getAsJsonObject("error").get("code").getAsInt());
+    }
+
+    @Test
+    public void testResourcesReadMissingUriReturnsError()
+    {
+        // resources/read without a uri is an invalid-params error, not a crash.
+        String request = buildJsonRpcRequest(1, "resources/read", "{}");
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNotNull("missing uri must return a JSON-RPC error", json.get("error"));
+        assertEquals(McpConstants.ERROR_INVALID_PARAMS,
+            json.getAsJsonObject("error").get("code").getAsInt());
+    }
+
+    // === Error-path guide hint (appended to the human-readable error TEXT) ===
+
+    @Test
+    public void testToolCallErrorTextCarriesGuideHint()
+    {
+        // A failing tool's error TEXT channel must point the caller to get_tool_guide
+        // so they can find the full parameter list and examples. The structured
+        // error and isError flag stay unchanged (machine-readable semantics intact).
+        registry.register(new StubJsonTool("failing_tool",
+            "{\"success\":false,\"error\":\"bad param\"}"));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "failing_tool", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+
+        assertTrue("error payload must still set isError:true",
+            result.get("isError").getAsBoolean());
+        // structuredContent must be unchanged: still the original failure payload.
+        assertFalse("structuredContent must carry the unchanged failure",
+            result.getAsJsonObject("structuredContent").get("success").getAsBoolean());
+        assertEquals("structuredContent error must be unchanged", "bad param",
+            result.getAsJsonObject("structuredContent").get("error").getAsString());
+
+        String text = result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString();
+        assertTrue("error text must point the caller to get_tool_guide",
+            text.contains("get_tool_guide"));
+        assertTrue("error text hint must name the failing tool", text.contains("failing_tool"));
+    }
+
+    @Test
+    public void testGetToolGuideFailureDoesNotSuggestItself()
+    {
+        // The hint must be skipped when the FAILING tool is get_tool_guide itself,
+        // to avoid a circular suggestion.
+        registry.register(new StubJsonTool("get_tool_guide",
+            "{\"success\":false,\"error\":\"Unknown tool: zzz\"}"));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "get_tool_guide", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+
+        assertTrue("the get_tool_guide failure is still an error",
+            result.get("isError").getAsBoolean());
+        String text = result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString();
+        assertFalse("a get_tool_guide failure must NOT suggest itself",
+            text.contains("get_tool_guide("));
+    }
+
+    @Test
+    public void testSuccessfulJsonToolTextHasNoGuideHint()
+    {
+        // The hint is error-only: a successful JSON tool result must not carry it.
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+
+        String response = handler.processRequest(buildToolCallRequest(1, "ok_tool", null));
+        JsonObject result = parseResponse(response).getAsJsonObject("result");
+        String text = result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString();
+        assertFalse("a success result must not carry the guide hint",
+            text.contains("get_tool_guide"));
+    }
+
+    @Test
+    public void testGuideHintNamesToolAndPointsToGetToolGuide()
+    {
+        // Pure helper: the hint text references get_tool_guide and the tool name.
+        String hint = McpProtocolHandler.guideHint("write_module_source");
+        assertTrue("hint must reference get_tool_guide", hint.contains("get_tool_guide"));
+        assertTrue("hint must name the tool", hint.contains("write_module_source"));
+    }
+
     // === Tools/Call Error Cases ===
 
     @Test

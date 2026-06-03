@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetSubsystemContentTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetSymbolInfoTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTagsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTasksTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetToolGuideTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTranslationProjectInfoTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetVariablesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
@@ -98,6 +99,7 @@ public final class BuiltInToolRegistrar
         // Register built-in tools
         registry.register(new GetEdtVersionTool());
         registry.register(new GetServerStatusTool());
+        registry.register(new GetToolGuideTool());
         registry.register(new ListProjectsTool());
         registry.register(new GetConfigurationPropertiesTool());
         registry.register(new CleanProjectTool());

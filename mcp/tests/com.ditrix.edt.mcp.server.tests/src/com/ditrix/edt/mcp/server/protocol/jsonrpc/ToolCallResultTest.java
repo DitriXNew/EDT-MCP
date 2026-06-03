@@ -54,7 +54,10 @@ public class ToolCallResultTest
         ToolCallResult result = ToolCallResult.json(structured, true);
 
         assertEquals(Boolean.TRUE, result.getIsError());
-        assertEquals("Error", result.getContent().get(0).getText());
+        // The content text now carries the REAL error message (from the payload's
+        // error field), so a content-only client/model sees WHY it failed — not a
+        // bare "Error" placeholder.
+        assertEquals("boom", result.getContent().get(0).getText());
 
         String json = GsonProvider.toJson(result);
         JsonElement element = JsonParser.parseString(json);
@@ -122,11 +125,21 @@ public class ToolCallResultTest
     }
 
     @Test
-    public void testJsonErrorContentIsError()
+    public void testJsonErrorContentCarriesRealMessage()
     {
-        // The failure path is unchanged: the content fallback stays the literal
-        // "Error" (machine-detected via isError), never a success digest.
+        // The failure content fallback is the real error message (the payload's
+        // error field), never a success digest and never a bare "Error" placeholder.
         JsonElement structured = JsonParser.parseString("{\"success\":false,\"error\":\"boom\"}");
+        ToolCallResult result = ToolCallResult.json(structured, true);
+
+        assertEquals("boom", result.getContent().get(0).getText());
+    }
+
+    @Test
+    public void testJsonErrorWithoutMessageFallsBackToError()
+    {
+        // No usable error string in the payload -> the literal "Error" fallback.
+        JsonElement structured = JsonParser.parseString("{\"success\":false}");
         ToolCallResult result = ToolCallResult.json(structured, true);
 
         assertEquals("Error", result.getContent().get(0).getText());
