@@ -14,6 +14,11 @@ REAL params (GetPlatformDocumentationTool.getInputSchema / execute):
   projectName (string, optional - only picks the platform version)
   limit       (int, default 50, clamped to 200)
   language    (enum: en|ru, default 'en')
+  responseFormat (enum: concise|detailed, default 'concise') - concise keeps the
+                  header + Type Info block + every section/member heading but omits the
+                  verbose per-member body (parameters, overloads, return/property types,
+                  access flags); detailed returns the full rendering. An unrecognized
+                  value falls back to concise.
 
 Happy paths assert on real rendered content that MUST be present:
   - type lookup -> "# Array" header + "**Type Info:**" block + a member section
@@ -81,9 +86,12 @@ def test_membername_filter_narrows_members():
     # memberName is a case-insensitive partial filter. On 'Array', "Add" matches the
     # Add method but must NOT pull in the unrelated "Count" property. If the filter
     # were ignored (broken), the full member set (incl. Count) would render.
+    # responseFormat=detailed so the full member body (parameters / return type) is
+    # rendered alongside the H3 heading; the filter logic itself is format-independent.
     r = call("get_platform_documentation",
              {"projectName": PROJECT, "typeName": "Array",
-              "memberName": "Add", "memberType": "method"})
+              "memberName": "Add", "memberType": "method",
+              "responseFormat": "detailed"})
     assert_ok(r, "get_platform_documentation Array memberName=Add")
     assert_contains(r.text, "# Array", "filtered doc still carries the type header")
     # The matching member must be rendered as its own H3 entry.
@@ -110,6 +118,52 @@ def test_builtin_function_message_renders_doc():
                     "resolved builtin doc must carry the 'Built-in function' category line")
     assert_not_contains(r.text, "Built-in function not found",
                         "a successful builtin lookup must not emit the not-found banner")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# responseFormat contract — concise (default) is leaner than detailed
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_concise_default_is_leaner_than_detailed():
+    # The DEFAULT (no responseFormat) must be the concise rendering: it keeps the
+    # structural skeleton — type header, Type Info block and every member H3 heading
+    # (the inventory the caller drills into) — but omits the verbose per-member body.
+    # detailed must return strictly MORE text (the full signatures/parameters/types).
+    args = {"projectName": PROJECT, "typeName": "Array"}
+    concise = call("get_platform_documentation", args)
+    detailed = call("get_platform_documentation",
+                    {**args, "responseFormat": "detailed"})
+    assert_ok(concise, "default (concise) Array")
+    assert_ok(detailed, "detailed Array")
+
+    # Essential structure survives the default concise rendering.
+    assert_contains(concise.text, "# Array", "concise keeps the type header")
+    assert_contains(concise.text, "**Type Info:**", "concise keeps the Type Info block")
+    assert_contains(concise.text, "### Add",
+                    "concise keeps every member heading (the inventory)")
+
+    # detailed renders the verbose Add-method body (a Parameters block); concise drops
+    # it. This marker is the litmus test that concise actually shed the per-member detail.
+    assert_contains(detailed.text, "**Parameters:**",
+                    "detailed renders the verbose per-member Parameters body")
+    assert_not_contains(concise.text, "**Parameters:**",
+                        "concise must omit the verbose per-member Parameters body")
+
+    # The whole point: fewer tokens. concise must be strictly shorter than detailed.
+    assert len(concise.text) < len(detailed.text), (
+        "concise must be leaner than detailed (got concise=%d, detailed=%d chars)"
+        % (len(concise.text), len(detailed.text)))
+
+    # An unrecognized responseFormat value falls back to concise (no error), so it
+    # matches the default rendering rather than erroring or returning detailed.
+    bogus = call("get_platform_documentation",
+                 {**args, "responseFormat": "bogus_fmt_e2e"})
+    assert_ok(bogus, "unrecognized responseFormat falls back to concise")
+    assert_not_contains(bogus.text, "**Parameters:**",
+                        "an unrecognized responseFormat must default to concise, not detailed")
+
     assert_no_diff("a read tool must not touch the project on disk")
 
 

@@ -62,6 +62,10 @@ public class GetProfilingResultsTool implements IMcpTool
             .integerProperty("minFrequency", "Only include lines called at least N times (default: 1)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", //$NON-NLS-1$
                 "Debug session id; when set, reports active state for that session") //$NON-NLS-1$
+            .enumProperty("responseFormat", //$NON-NLS-1$
+                "concise (default) = leaner per-line rows (line, calls, pct only); " //$NON-NLS-1$
+                    + "detailed = full rows incl. code text, method signature and dur/pureDur timing", //$NON-NLS-1$
+                "concise", "detailed") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -86,13 +90,20 @@ public class GetProfilingResultsTool implements IMcpTool
             + "this threshold. Raise it to hide rarely-hit lines and focus on hot paths.\n" //$NON-NLS-1$
             + "- `applicationId` - optional debug session id. When supplied, the `profilingActive` field " //$NON-NLS-1$
             + "reflects that specific session's on/off state. When omitted, `profilingActive` reflects " //$NON-NLS-1$
-            + "whether ANY session is currently profiling, so a client can still tell a stop is pending.\n\n" //$NON-NLS-1$
+            + "whether ANY session is currently profiling, so a client can still tell a stop is pending.\n" //$NON-NLS-1$
+            + "- `responseFormat` - optional, `concise` (default) or `detailed`. `concise` returns lean " //$NON-NLS-1$
+            + "per-line rows (`line`, `calls`, `pct` only) to save tokens; `detailed` adds the verbose " //$NON-NLS-1$
+            + "extras `code` (source text), `method` (signature) and the `dur`/`pureDur` timing columns. " //$NON-NLS-1$
+            + "An unrecognized value falls back to `concise`. The top-level `count` / `profilingActive` / " //$NON-NLS-1$
+            + "`message` and the per-result `name` / `totalDurability` / `moduleCount` are identical in " //$NON-NLS-1$
+            + "both formats — only the per-line detail differs.\n\n" //$NON-NLS-1$
 
             + "## Output\n" //$NON-NLS-1$
             + "JSON with `count` (number of profiling result sets), `profilingActive` (boolean) and " //$NON-NLS-1$
             + "`results`. Each result has `name`, `totalDurability` and a `modules` map (module name -> " //$NON-NLS-1$
-            + "list of lines). Each line carries `line`, `calls` (frequency), `pct`, `dur`, `pureDur`, " //$NON-NLS-1$
-            + "`code` (source text, truncated to 120 chars) and `method` (the method signature).\n" //$NON-NLS-1$
+            + "list of lines). In `detailed`, each line carries `line`, `calls` (frequency), `pct`, " //$NON-NLS-1$
+            + "`dur`, `pureDur`, `code` (source text, truncated to 120 chars) and `method` (the method " //$NON-NLS-1$
+            + "signature); `concise` (the default) keeps only `line`, `calls` and `pct`.\n" //$NON-NLS-1$
             + "Output is capped at 200 lines per module to keep the response bounded; narrow with " //$NON-NLS-1$
             + "`moduleFilter` / `minFrequency` if you hit the cap.\n\n" //$NON-NLS-1$
 
@@ -121,6 +132,11 @@ public class GetProfilingResultsTool implements IMcpTool
         String moduleFilter = JsonUtils.extractStringArgument(params, "moduleFilter"); //$NON-NLS-1$
         int minFrequency = JsonUtils.extractIntArgument(params, "minFrequency", 1); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        // Output verbosity. Default (and any blank/unrecognized value) is concise: only
+        // detailed emits the verbose per-line extras (code text, method signature, dur/pureDur).
+        String responseFormat = JsonUtils.extractStringArgument(params, "responseFormat"); //$NON-NLS-1$
+        boolean detailed = "detailed".equalsIgnoreCase( //$NON-NLS-1$
+            responseFormat == null ? null : responseFormat.trim());
         // On/off state from the shared profiling state (single source of truth in
         // StartProfilingTool). When no applicationId is given we surface whether any
         // session is profiling so a client can still tell that a stop is pending.
@@ -240,16 +256,22 @@ public class GetProfilingResultsTool implements IMcpTool
                     lineInfo.put("line", getLineNo.invoke(lr)); //$NON-NLS-1$
                     lineInfo.put("calls", freq); //$NON-NLS-1$
                     lineInfo.put("pct", Math.round(((Number) getPercentage.invoke(lr)).doubleValue() * 100.0) / 100.0); //$NON-NLS-1$
-                    lineInfo.put("dur", Math.round(((Number) getDurability.invoke(lr)).doubleValue() * 1000.0) / 1000.0); //$NON-NLS-1$
-                    lineInfo.put("pureDur", Math.round(((Number) getPureDurability.invoke(lr)).doubleValue() * 1000.0) / 1000.0); //$NON-NLS-1$
 
-                    String code = (String) getLine.invoke(lr);
-                    if (code != null && code.length() > 120)
+                    // Verbose per-line extras only in detailed: the secondary timing columns
+                    // and the source text + method signature. concise keeps line/calls/pct.
+                    if (detailed)
                     {
-                        code = code.substring(0, 120) + "..."; //$NON-NLS-1$
+                        lineInfo.put("dur", Math.round(((Number) getDurability.invoke(lr)).doubleValue() * 1000.0) / 1000.0); //$NON-NLS-1$
+                        lineInfo.put("pureDur", Math.round(((Number) getPureDurability.invoke(lr)).doubleValue() * 1000.0) / 1000.0); //$NON-NLS-1$
+
+                        String code = (String) getLine.invoke(lr);
+                        if (code != null && code.length() > 120)
+                        {
+                            code = code.substring(0, 120) + "..."; //$NON-NLS-1$
+                        }
+                        lineInfo.put("code", code); //$NON-NLS-1$
+                        lineInfo.put("method", getMethodSignature.invoke(lr)); //$NON-NLS-1$
                     }
-                    lineInfo.put("code", code); //$NON-NLS-1$
-                    lineInfo.put("method", getMethodSignature.invoke(lr)); //$NON-NLS-1$
 
                     lines.add(lineInfo);
                 }

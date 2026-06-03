@@ -22,8 +22,8 @@ ProjectStateChecker):
 """
 
 from harness import (
-    call, assert_ok, assert_contains, assert_error, assert_error_quality,
-    assert_no_diff, e2e_test, PROJECT,
+    call, assert_ok, assert_contains, assert_not_contains, assert_error,
+    assert_error_quality, assert_no_diff, e2e_test, PROJECT, _fail,
 )
 
 # A checkId that cannot match any real check id or short UID, so EVERY marker is
@@ -66,6 +66,46 @@ def test_severity_and_object_filter_banner_echoed():
     # The banner reflects the accepted filters back to the caller.
     assert_contains(r.text, "MINOR", "severity filter must be echoed in the banner")
     assert_contains(r.text, "Catalog.Catalog", "objects filter must be echoed in the banner")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_concise_is_default_and_leaner_than_detailed():
+    """responseFormat contract: the DEFAULT (concise) output is never larger than the
+    explicit detailed output, and concise never carries the verbose 'Has docs' column.
+
+    Determinism: this runs an unfiltered scan whose marker count we cannot control, so the
+    invariants are written to hold for BOTH a populated and an empty marker set:
+      - the default call (omitting responseFormat) is byte-identical to an explicit
+        concise call (proves concise is the default);
+      - detailed is never shorter than concise (the only difference is an extra column);
+      - concise never contains the 'Has docs' column header.
+    When a table is actually rendered ('# Configuration Problems'), we additionally prove
+    the real token saving: detailed has the 'Has docs' column and concise omits it."""
+    default = call("get_project_errors", {"projectName": PROJECT})
+    concise = call("get_project_errors", {"projectName": PROJECT, "responseFormat": "concise"})
+    detailed = call("get_project_errors", {"projectName": PROJECT, "responseFormat": "detailed"})
+    assert_ok(default, "default (concise) scan")
+    assert_ok(concise, "explicit concise scan")
+    assert_ok(detailed, "detailed scan")
+
+    # Omitting responseFormat must behave exactly like concise (concise is the default).
+    if default.text != concise.text:
+        _fail("default output must equal explicit concise output (concise is the default)")
+
+    # The lean default never carries the secondary 'Has docs' column; detailed reintroduces it.
+    assert_not_contains(concise.text, "Has docs", "concise must omit the 'Has docs' column")
+
+    # Detailed is never smaller than concise: the only delta is an extra column.
+    if len(detailed.text) < len(concise.text):
+        _fail("detailed output must be >= concise output in length")
+
+    # When real problems are present a table is rendered: prove the genuine token saving.
+    if "# Configuration Problems" in detailed.text:
+        assert_contains(detailed.text, "Has docs", "detailed must include the 'Has docs' column")
+        # Same query, leaner output -> concise must be strictly smaller here.
+        if len(concise.text) >= len(detailed.text):
+            _fail("with problems present, concise must be strictly leaner than detailed")
     assert_no_diff("reading project errors must not touch the project on disk")
 
 

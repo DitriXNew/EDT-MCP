@@ -91,6 +91,9 @@ public class GetProjectErrorsTool implements IMcpTool
             .stringProperty("checkId", "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty("objects", "Filter by object FQNs, e.g. ['Catalog.Products']; English or Russian type names accepted (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("limit", "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$ //$NON-NLS-2$
+            .enumProperty("responseFormat", //$NON-NLS-1$
+                "Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs'", //$NON-NLS-1$
+                "concise", "detailed") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -126,14 +129,21 @@ public class GetProjectErrorsTool implements IMcpTool
             + "Matching is a case-insensitive substring test against the resolved object " //$NON-NLS-1$
             + "presentation.\n" //$NON-NLS-1$
             + "- `limit` - max rows; default 100, max 1000. When reached, the output appends a " //$NON-NLS-1$
-            + "limit-reached notice; narrow the filters to see the rest.\n\n" //$NON-NLS-1$
+            + "limit-reached notice; narrow the filters to see the rest.\n" //$NON-NLS-1$
+            + "- `responseFormat` - `concise` (default) or `detailed`. `concise` trims tokens " //$NON-NLS-1$
+            + "by dropping the secondary `Has docs` column; every actionable column " //$NON-NLS-1$
+            + "(`Description`, `Location`, `Module path`, `Line`, `Check code`) and the " //$NON-NLS-1$
+            + "unresolved-marker warnings are kept. `detailed` adds the `Has docs` column back " //$NON-NLS-1$
+            + "(true when `get_check_description` has detail for that check). An " //$NON-NLS-1$
+            + "absent/unrecognized value defaults to `concise`.\n\n" //$NON-NLS-1$
 
             + "## Output columns\n" //$NON-NLS-1$
             + "`Description` | `Location` | `Module path` | `Line` | `Check code` | `Has docs`. " //$NON-NLS-1$
             + "`Module path` + `Line` are populated only for problems that resolve to a `.bsl` " //$NON-NLS-1$
             + "module under `src/` (empty for metadata-only problems). `Check code` shows the " //$NON-NLS-1$
             + "symbolic id when known, else the short UID. `Has docs=true` means " //$NON-NLS-1$
-            + "`get_check_description` has detail for that check.\n\n" //$NON-NLS-1$
+            + "`get_check_description` has detail for that check (the `Has docs` column appears " //$NON-NLS-1$
+            + "only with `responseFormat: detailed`).\n\n" //$NON-NLS-1$
 
             + "## Bilingual (ru/en) note\n" //$NON-NLS-1$
             + "The `objects` filter accepts the TYPE token in English or Russian; each FQN is " //$NON-NLS-1$
@@ -172,6 +182,12 @@ public class GetProjectErrorsTool implements IMcpTool
         String checkId = JsonUtils.extractStringArgument(params, "checkId"); //$NON-NLS-1$
         String objectsJson = JsonUtils.extractStringArgument(params, "objects"); //$NON-NLS-1$
 
+        // Output verbosity: concise (default) trims the secondary 'Has docs' column;
+        // detailed renders the full historical table. Any absent/blank/unrecognized value
+        // falls back to concise (the lean default), never an error.
+        String responseFormat = JsonUtils.extractStringArgument(params, "responseFormat"); //$NON-NLS-1$
+        boolean detailed = responseFormat != null && responseFormat.equalsIgnoreCase("detailed"); //$NON-NLS-1$
+
         // Reject an out-of-set severity instead of silently widening the filter to "all".
         if (severity != null && !severity.isEmpty()
             && !SEVERITY_VALUES.contains(severity.toUpperCase()))
@@ -199,7 +215,7 @@ public class GetProjectErrorsTool implements IMcpTool
         int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
         limit = Pagination.clampLimit(limit, 1000);
 
-        return getProjectErrors(projectName, severity, checkId, objects, limit);
+        return getProjectErrors(projectName, severity, checkId, objects, limit, detailed);
     }
     
     /**
@@ -246,9 +262,13 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param checkId filter by check ID substring
      * @param objects filter by object FQNs (empty list for all objects)
      * @param limit maximum number of results
+     * @param detailed when {@code true} render the full table (incl. the secondary
+     *        {@code Has docs} column); when {@code false} (the default) render a leaner
+     *        table that omits {@code Has docs}. Only the table presentation changes — the
+     *        marker collection, model reads and transaction boundaries are identical.
      * @return Markdown formatted string with error details
      */
-    public static String getProjectErrors(String projectName, String severity, String checkId, List<String> objects, int limit)
+    public static String getProjectErrors(String projectName, String severity, String checkId, List<String> objects, int limit, boolean detailed)
     {
         try
         {
@@ -402,8 +422,20 @@ public class GetProjectErrorsTool implements IMcpTool
                 // Build table matching EDT's Configuration Problems view, plus a structural
                 // locator (Module path + Line) that feeds read_module_source / set_breakpoint.
                 // Built via the shared MarkdownUtils table builder so every cell is escaped.
-                md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
-                    "Module path", "Line", "Check code", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                // concise (default) drops the secondary 'Has docs' column to save tokens;
+                // detailed keeps the full historical set of columns. Every essential /
+                // actionable column (Description, Location, Module path, Line, Check code)
+                // is present in BOTH modes.
+                if (detailed)
+                {
+                    md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
+                        "Module path", "Line", "Check code", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                }
+                else
+                {
+                    md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
+                        "Module path", "Line", "Check code")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                }
 
                 for (ErrorInfo error : errors)
                 {
@@ -417,9 +449,17 @@ public class GetProjectErrorsTool implements IMcpTool
                     String modulePathCell = error.modulePath != null ? error.modulePath : ""; //$NON-NLS-1$
                     String lineCell = error.line != null ? error.line.toString() : ""; //$NON-NLS-1$
 
-                    md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
-                        modulePathCell, lineCell, checkCell,
-                        error.hasDocumentation ? "true" : "false")); //$NON-NLS-1$ //$NON-NLS-2$
+                    if (detailed)
+                    {
+                        md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
+                            modulePathCell, lineCell, checkCell,
+                            error.hasDocumentation ? "true" : "false")); //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                    else
+                    {
+                        md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
+                            modulePathCell, lineCell, checkCell));
+                    }
                 }
             }
             

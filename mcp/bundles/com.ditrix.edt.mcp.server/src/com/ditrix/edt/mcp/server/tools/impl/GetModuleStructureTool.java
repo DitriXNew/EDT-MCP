@@ -49,6 +49,9 @@ public class GetModuleStructureTool implements IMcpTool
 {
     public static final String NAME = "get_module_structure"; //$NON-NLS-1$
 
+    private static final String FORMAT_CONCISE = "concise"; //$NON-NLS-1$
+    private static final String FORMAT_DETAILED = "detailed"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -60,7 +63,11 @@ public class GetModuleStructureTool implements IMcpTool
     {
         return "Get structure of a BSL module: all procedures/functions with signatures, " + //$NON-NLS-1$
                "line numbers, regions, execution context (&AtServer, &AtClient), " + //$NON-NLS-1$
-               "export flag, and parameters."; //$NON-NLS-1$
+               "export flag, and parameters. " + //$NON-NLS-1$
+               "responseFormat=concise (default) returns a leaner methods table (drops the " + //$NON-NLS-1$
+               "verbose Parameters and Description columns; keeps type, name, export, context, " + //$NON-NLS-1$
+               "lines, region); responseFormat=detailed returns the full table with signatures " + //$NON-NLS-1$
+               "and doc-comments. Use detailed when you need parameter lists or descriptions."; //$NON-NLS-1$
     }
 
     @Override
@@ -75,6 +82,10 @@ public class GetModuleStructureTool implements IMcpTool
                 "Include module-level variable declarations. Default: false") //$NON-NLS-1$
             .booleanProperty("includeComments", //$NON-NLS-1$
                 "Include documentation comments for methods. Default: false") //$NON-NLS-1$
+            .enumProperty("responseFormat", //$NON-NLS-1$
+                "Output verbosity. concise (default) = leaner methods table (drops Parameters " //$NON-NLS-1$
+                + "and Description columns); detailed = full table with signatures and doc-comments.", //$NON-NLS-1$
+                FORMAT_CONCISE, FORMAT_DETAILED)
             .build();
     }
 
@@ -103,6 +114,9 @@ public class GetModuleStructureTool implements IMcpTool
         String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
         boolean includeVariables = JsonUtils.extractBooleanArgument(params, "includeVariables", false); //$NON-NLS-1$
         boolean includeComments = JsonUtils.extractBooleanArgument(params, "includeComments", false); //$NON-NLS-1$
+        // Output verbosity: any absent/blank/unrecognized value falls back to concise.
+        boolean detailed = FORMAT_DETAILED.equalsIgnoreCase(
+            JsonUtils.extractStringArgument(params, "responseFormat")); //$NON-NLS-1$
 
         String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
         if (err != null)
@@ -122,7 +136,7 @@ public class GetModuleStructureTool implements IMcpTool
         display.syncExec(() -> {
             try
             {
-                String result = getStructureInternal(projectName, modulePath, includeVariables, includeComments);
+                String result = getStructureInternal(projectName, modulePath, includeVariables, includeComments, detailed);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -143,7 +157,7 @@ public class GetModuleStructureTool implements IMcpTool
     }
 
     private String getStructureInternal(String projectName, String modulePath,
-        boolean includeVariables, boolean includeComments)
+        boolean includeVariables, boolean includeComments, boolean detailed)
     {
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
@@ -228,7 +242,7 @@ public class GetModuleStructureTool implements IMcpTool
             return sb.toString();
         }
 
-        appendMethodsTable(sb, methods);
+        appendMethodsTable(sb, methods, detailed);
 
         return sb.toString();
     }
@@ -237,10 +251,18 @@ public class GetModuleStructureTool implements IMcpTool
     /**
      * Appends a markdown methods table to the StringBuilder.
      * Shared between EMF and text-based paths to avoid duplication.
+     * <p>
+     * In {@code detailed} mode the table carries the full set of columns
+     * (including the verbose Parameters signature column and, when doc-comments
+     * were collected, a Description column). In concise mode those two verbose
+     * columns are dropped to save output tokens; every other column (type, name,
+     * export, context, lines, region) is kept so the caller can still act and
+     * read a specific method's signature via {@code read_method_source}.
      */
-    private void appendMethodsTable(StringBuilder sb, List<MethodInfo> methods)
+    private void appendMethodsTable(StringBuilder sb, List<MethodInfo> methods, boolean detailed)
     {
-        // Check if any method has doc-comments
+        // Check if any method has doc-comments (only ever populated when
+        // includeComments was requested; in concise mode the column is dropped).
         boolean hasComments = false;
         for (MethodInfo m : methods)
         {
@@ -250,17 +272,26 @@ public class GetModuleStructureTool implements IMcpTool
                 break;
             }
         }
+        boolean showComments = detailed && hasComments;
 
         sb.append("### Methods\n\n"); //$NON-NLS-1$
-        if (hasComments)
+        if (detailed)
         {
-            sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region | Description |\n"); //$NON-NLS-1$
-            sb.append("|---|------|------|--------|---------|-------|------------|--------|-------------|\n"); //$NON-NLS-1$
+            if (showComments)
+            {
+                sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region | Description |\n"); //$NON-NLS-1$
+                sb.append("|---|------|------|--------|---------|-------|------------|--------|-------------|\n"); //$NON-NLS-1$
+            }
+            else
+            {
+                sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region |\n"); //$NON-NLS-1$
+                sb.append("|---|------|------|--------|---------|-------|------------|--------|\n"); //$NON-NLS-1$
+            }
         }
         else
         {
-            sb.append("| # | Type | Name | Export | Context | Lines | Parameters | Region |\n"); //$NON-NLS-1$
-            sb.append("|---|------|------|--------|---------|-------|------------|--------|\n"); //$NON-NLS-1$
+            sb.append("| # | Type | Name | Export | Context | Lines | Region |\n"); //$NON-NLS-1$
+            sb.append("|---|------|------|--------|---------|-------|--------|\n"); //$NON-NLS-1$
         }
 
         int idx = 1;
@@ -272,9 +303,12 @@ public class GetModuleStructureTool implements IMcpTool
             sb.append(" | ").append(m.isExport ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             sb.append(" | ").append(m.executionContext != null ? MarkdownUtils.escapeForTable(m.executionContext) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
             sb.append(" | ").append(m.startLine).append("-").append(m.endLine); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append(" | ").append(MarkdownUtils.escapeForTable(m.paramsString)); //$NON-NLS-1$
+            if (detailed)
+            {
+                sb.append(" | ").append(MarkdownUtils.escapeForTable(m.paramsString)); //$NON-NLS-1$
+            }
             sb.append(" | ").append(m.region != null ? MarkdownUtils.escapeForTable(m.region) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (hasComments)
+            if (showComments)
             {
                 sb.append(" | ").append(m.docComment != null ? MarkdownUtils.escapeForTable(m.docComment) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
             }

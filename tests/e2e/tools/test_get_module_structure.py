@@ -15,7 +15,7 @@ each missing required parameter (projectName, modulePath).
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
-    assert_contains, assert_no_diff, e2e_test, PROJECT,
+    assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT,
 )
 
 
@@ -57,6 +57,44 @@ def test_structure_of_empty_module_succeeds():
     assert_contains(r.text, "No methods found in this module.",
                     "empty module must report the no-methods sentinel")
     assert_no_diff("a read on an empty module must not change the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# responseFormat contract: concise (default) is leaner than detailed
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_module_structure", kind="read")
+def test_responseFormat_concise_is_leaner_than_detailed():
+    # Same module, two formats. CommonModules/Calc/Module.bsl has methods (Add, Test),
+    # so both outputs carry a "### Methods" table and detailed carries the Parameters
+    # column. (The Error module is a single token with NO methods, so it has no methods
+    # table — wrong fixture for this contract test.)
+    args = {"projectName": PROJECT, "modulePath": "CommonModules/Calc/Module.bsl"}
+
+    # Default call (no responseFormat) must behave as concise.
+    concise = call("get_module_structure", args)
+    assert_ok(concise, "default (concise) structure of CommonModules/Calc/Module.bsl")
+    detailed = call("get_module_structure", dict(args, responseFormat="detailed"))
+    assert_ok(detailed, "detailed structure of CommonModules/Calc/Module.bsl")
+
+    # Essential fields concise KEEPS (and the default still emits them).
+    assert_contains(concise.text, "## Module Structure: CommonModules/Calc/Module.bsl",
+                    "concise must keep the report header")
+    assert_contains(concise.text, "**Total:**", "concise must keep the totals line")
+    assert_contains(concise.text, "### Methods", "concise must keep the methods table")
+
+    # detailed carries the verbose Parameters signature column; concise drops it.
+    assert_contains(detailed.text, "| Parameters |",
+                    "detailed must include the verbose Parameters column")
+    assert_not_contains(concise.text, "| Parameters |",
+                        "concise must omit the verbose Parameters column")
+
+    # Net effect: the default (concise) output is strictly shorter (fewer tokens).
+    if len(concise.text) >= len(detailed.text):
+        raise AssertionError(
+            "expected concise output to be leaner than detailed, but concise=%d >= detailed=%d chars"
+            % (len(concise.text), len(detailed.text)))
+    assert_no_diff("reading a module in either format must not change the project on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -738,7 +738,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get structure of a BSL module: all procedures/functions with signatures, line numbers, regions, execution context (&AtServer, &AtClient), export flag, and parameters.",
+    "description": "Get structure of a BSL module: all procedures/functions with signatures, line numbers, regions, execution context (&AtServer, &AtClient), export flag, and parameters. responseFormat=concise (default) returns a leaner methods table (drops the verbose Parameters and Description columns; keeps type, name, export, context, lines, region); responseFormat=detailed returns the full table with signatures and doc-comments. Use detailed when you need parameter lists or descriptions.",
     "inputSchema": {
       "properties": {
         "includeComments": {
@@ -755,6 +755,14 @@
         },
         "projectName": {
           "description": "EDT project name (required)",
+          "type": "string"
+        },
+        "responseFormat": {
+          "description": "Output verbosity. concise (default) = leaner methods table (drops Parameters and Description columns); detailed = full table with signatures and doc-comments.",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
           "type": "string"
         }
       },
@@ -847,6 +855,14 @@
           "description": "EDT project name to pin the platform version. Optional.",
           "type": "string"
         },
+        "responseFormat": {
+          "description": "'concise' (default) = leaner: headers + member names only; 'detailed' = full member signatures, parameters, types and flags.",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
+          "type": "string"
+        },
         "typeName": {
           "description": "Type or symbol name, English or Russian (e.g. 'ValueTable').",
           "type": "string"
@@ -898,6 +914,14 @@
         "moduleFilter": {
           "description": "Case-insensitive substring filter on module name",
           "type": "string"
+        },
+        "responseFormat": {
+          "description": "concise (default) = leaner per-line rows (line, calls, pct only); detailed = full rows incl. code text, method signature and dur/pureDur timing",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
+          "type": "string"
         }
       },
       "required": [],
@@ -931,6 +955,14 @@
         },
         "projectName": {
           "description": "Filter by EDT project name; omit to scan all projects (optional)",
+          "type": "string"
+        },
+        "responseFormat": {
+          "description": "Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs'",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
           "type": "string"
         },
         "severity": {

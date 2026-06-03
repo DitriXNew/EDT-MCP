@@ -64,6 +64,19 @@ public class GetProfilingResultsToolTest
     }
 
     @Test
+    public void testSchemaDeclaresResponseFormatEnum()
+    {
+        // responseFormat toggles concise (default, lean per-line rows) vs detailed
+        // (full rows incl. code/method/dur). It must be declared as a closed enum so
+        // schema-driven clients only offer the two accepted values, and to keep the
+        // schema<->execute parity ratchet (the value is read in execute()).
+        String schema = new GetProfilingResultsTool().getInputSchema();
+        assertTrue(schema.contains("\"responseFormat\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"concise\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"detailed\"")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testDescriptionMentionsActiveState()
     {
         // The tool surfaces whether profiling is currently active so a client can
@@ -88,5 +101,16 @@ public class GetProfilingResultsToolTest
         assertTrue(guide.length() > 0);
         assertTrue(guide.contains("minFrequency")); //$NON-NLS-1$
         assertTrue(guide.contains("profilingActive")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsResponseFormat()
+    {
+        // The guide must explain the concise/detailed split and what concise omits so a
+        // client knows the default is lean and how to opt into the full per-line readout.
+        String guide = new GetProfilingResultsTool().getGuide();
+        assertTrue(guide.contains("responseFormat")); //$NON-NLS-1$
+        assertTrue(guide.contains("concise")); //$NON-NLS-1$
+        assertTrue(guide.contains("detailed")); //$NON-NLS-1$
     }
 }

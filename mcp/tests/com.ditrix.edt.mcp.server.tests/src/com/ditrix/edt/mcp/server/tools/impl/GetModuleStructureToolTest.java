@@ -64,6 +64,19 @@ public class GetModuleStructureToolTest
         assertTrue(schema.contains("\"modulePath\"")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testSchemaDeclaresResponseFormatEnum()
+    {
+        // responseFormat must be declared in the schema (schema<->execute parity)
+        // and must expose exactly the concise/detailed enum values.
+        String schema = new GetModuleStructureTool().getInputSchema();
+        assertNotNull(schema);
+        assertTrue(schema.contains("\"responseFormat\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"concise\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"detailed\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"enum\"")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test

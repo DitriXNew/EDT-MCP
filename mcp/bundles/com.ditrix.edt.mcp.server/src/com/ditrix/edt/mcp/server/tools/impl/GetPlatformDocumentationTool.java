@@ -31,6 +31,10 @@ public class GetPlatformDocumentationTool implements IMcpTool
     /** Member type constant */
     private static final String MEMBER_ALL = "all"; //$NON-NLS-1$
 
+    /** Response format constants for the {@code responseFormat} parameter. */
+    private static final String FORMAT_CONCISE = "concise"; //$NON-NLS-1$
+    private static final String FORMAT_DETAILED = "detailed"; //$NON-NLS-1$
+
     /** Closed set of values accepted by the {@code memberType} filter parameter. */
     static final java.util.List<String> MEMBER_TYPE_VALUES =
         java.util.Arrays.asList("method", "property", "constructor", "event", "all"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
@@ -72,6 +76,10 @@ public class GetPlatformDocumentationTool implements IMcpTool
             .enumProperty("language", //$NON-NLS-1$
                 "Output language. Default: 'en'.", //$NON-NLS-1$
                 "en", "ru") //$NON-NLS-1$ //$NON-NLS-2$
+            .enumProperty("responseFormat", //$NON-NLS-1$
+                "'concise' (default) = leaner: headers + member names only; " //$NON-NLS-1$
+                + "'detailed' = full member signatures, parameters, types and flags.", //$NON-NLS-1$
+                "concise", "detailed") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -104,7 +112,13 @@ public class GetPlatformDocumentationTool implements IMcpTool
             + "- **limit**: maximum number of results. Default 50, clamped to a maximum of " //$NON-NLS-1$
             + "200.\n" //$NON-NLS-1$
             + "- **language**: `en` (default) or `ru` — the language of the returned " //$NON-NLS-1$
-            + "documentation text.\n\n" //$NON-NLS-1$
+            + "documentation text.\n" //$NON-NLS-1$
+            + "- **responseFormat**: `concise` (default) or `detailed`. `concise` keeps " //$NON-NLS-1$
+            + "the type/function header, the Type Info block and every section and member " //$NON-NLS-1$
+            + "heading (so you see the full member inventory), but omits the verbose " //$NON-NLS-1$
+            + "per-member body — parameter lists, overloads, return/property types and " //$NON-NLS-1$
+            + "access flags. Re-query with `detailed` (optionally narrowed by `memberName`) " //$NON-NLS-1$
+            + "to get the full signatures.\n\n" //$NON-NLS-1$
             + "## Examples\n\n" //$NON-NLS-1$
             + "- All members of a type: `typeName='ValueTable'`.\n" //$NON-NLS-1$
             + "- A specific method: `typeName='Array', memberName='Add'`.\n" //$NON-NLS-1$
@@ -144,6 +158,11 @@ public class GetPlatformDocumentationTool implements IMcpTool
         String memberType = JsonUtils.extractStringArgument(params, "memberType"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
+        String responseFormat = JsonUtils.extractStringArgument(params, "responseFormat"); //$NON-NLS-1$
+
+        // Output format: 'concise' (default) unless explicitly 'detailed'. Any other
+        // value (absent, blank, unrecognized) falls back to concise rather than erroring.
+        boolean detailed = FORMAT_DETAILED.equalsIgnoreCase(responseFormat);
 
         // Validate required parameter
         String err = JsonUtils.requireArgument(params, "typeName"); //$NON-NLS-1$
@@ -179,16 +198,99 @@ public class GetPlatformDocumentationTool implements IMcpTool
 
         PlatformDocumentationService service = new PlatformDocumentationService();
 
-        // Execute based on category
+        // Execute based on category. The data gathering / model reads are identical for
+        // both formats; only the rendered markdown is condensed afterwards for 'concise'.
+        String result;
         switch (category.toLowerCase())
         {
             case CATEGORY_TYPE:
-                return service.getTypeDocumentation(typeName, memberName, memberType, projectName, limit, useRussian);
+                result = service.getTypeDocumentation(typeName, memberName, memberType, projectName, limit, useRussian);
+                break;
             case CATEGORY_BUILTIN:
-                return service.getBuiltinFunctionDocumentation(typeName, useRussian);
+                result = service.getBuiltinFunctionDocumentation(typeName, useRussian);
+                break;
             default:
                 return ToolResult.error("Unknown category '" + category + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
                        "Supported: 'type', 'builtin'").toJson(); //$NON-NLS-1$
         }
+
+        return detailed ? result : condense(result);
+    }
+
+    /**
+     * Produces the leaner 'concise' rendering from the full 'detailed' markdown.
+     * <p>
+     * Keeps every structural / actionable line — the H1 type/function header, the
+     * {@code **Type Info:**} block, {@code **Collection element types:**}, the
+     * {@code **Category:**} line, every section ({@code ## ...}) and member
+     * ({@code ### ...}) heading, and the results-limit footer — so the full member
+     * inventory and the headers asserted by callers/e2e survive. It drops only the
+     * verbose per-member body: {@code **Parameters:**} and their bullet lines,
+     * {@code **Overload N:**}, {@code **Returns:** ...}, {@code **Type:** ...},
+     * {@code *Access: ...*}, {@code *Returns a value*} / {@code *Procedure ...*}
+     * flags and {@code *No parameters*}.
+     * <p>
+     * Pass-through (not condensed) when the input is not a rendered doc: a
+     * {@code ToolResult.error} JSON payload (starts with '{') or a soft "Error: ...
+     * not found" banner. A rendered doc always begins with the H1 marker "# ".
+     */
+    private static String condense(String full)
+    {
+        if (full == null || !full.startsWith("# ")) //$NON-NLS-1$
+        {
+            // Not a rendered doc (error JSON or a soft not-found banner) -> verbatim.
+            return full;
+        }
+
+        StringBuilder out = new StringBuilder();
+        boolean inTypeInfo = false;
+        boolean lastBlank = false;
+        for (String line : full.split("\n", -1)) //$NON-NLS-1$
+        {
+            String trimmed = line.trim();
+
+            // The "Type Info" bullets ("- Iterable: ...") look like parameter bullets,
+            // so track the block explicitly: it opens on its header and closes at the
+            // next blank line.
+            if (trimmed.equals("**Type Info:**")) //$NON-NLS-1$
+            {
+                inTypeInfo = true;
+            }
+            else if (trimmed.isEmpty())
+            {
+                inTypeInfo = false;
+            }
+
+            boolean keep = trimmed.isEmpty() // blank lines kept (collapsed below)
+                || line.startsWith("# ") //$NON-NLS-1$
+                || line.startsWith("## ") //$NON-NLS-1$
+                || line.startsWith("### ") //$NON-NLS-1$
+                || trimmed.equals("**Type Info:**") //$NON-NLS-1$
+                || (inTypeInfo && trimmed.startsWith("- ")) //$NON-NLS-1$
+                || trimmed.startsWith("**Collection element types:**") //$NON-NLS-1$
+                || trimmed.startsWith("**Category:**") //$NON-NLS-1$
+                || trimmed.startsWith("*Results limited to "); //$NON-NLS-1$
+
+            if (!keep)
+            {
+                continue;
+            }
+
+            // Collapse runs of blank lines so dropped bodies do not leave gaps.
+            if (trimmed.isEmpty())
+            {
+                if (lastBlank || out.length() == 0)
+                {
+                    continue;
+                }
+                lastBlank = true;
+            }
+            else
+            {
+                lastBlank = false;
+            }
+            out.append(line).append("\n"); //$NON-NLS-1$
+        }
+        return out.toString();
     }
 }

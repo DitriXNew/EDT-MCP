@@ -493,6 +493,31 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testSchemaDeclaresResponseFormatEnum()
+    {
+        // responseFormat is read in execute(), so it MUST be declared in the schema (the
+        // schema<->execute parity ratchet). It is an optional concise/detailed enum.
+        String schema = new GetProjectErrorsTool().getInputSchema();
+        assertTrue("schema must declare responseFormat", //$NON-NLS-1$
+            schema.contains("responseFormat")); //$NON-NLS-1$
+        assertTrue("responseFormat enum must list concise", //$NON-NLS-1$
+            schema.contains("\"concise\"")); //$NON-NLS-1$
+        assertTrue("responseFormat enum must list detailed", //$NON-NLS-1$
+            schema.contains("\"detailed\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideExplainsResponseFormat()
+    {
+        // The guide documents concise (default) vs detailed and what concise omits.
+        String guide = new GetProjectErrorsTool().getGuide();
+        assertTrue("guide should document responseFormat", //$NON-NLS-1$
+            guide.contains("responseFormat")); //$NON-NLS-1$
+        assertTrue("guide should name both format values", //$NON-NLS-1$
+            guide.contains("concise") && guide.contains("detailed")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testInvalidSeverityRejected()
     {
         // Validation runs before any project/BM access, so this is headless-safe.

@@ -280,3 +280,87 @@ def test_unknown_module_filter_yields_empty_not_error():
                     "non-matching filter must still surface the no-results sentinel")
 
     assert_no_diff("a profiling read must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# responseFormat CONTRACT (token-saving concise default vs full detailed)
+# ──────────────────────────────────────────────────────────────────────────────
+# responseFormat toggles ONLY the per-line verbosity of a POPULATED `results` array:
+#   - detailed -> each line carries the verbose extras code/method/dur/pureDur.
+#   - concise (the DEFAULT) -> each line keeps only line/calls/pct.
+# The top-level no-results sentinel (count/profilingActive/message) and the per-result
+# name/totalDurability/moduleCount are IDENTICAL in both formats — which is exactly why
+# every sentinel assertion above (the only path reachable headless) still passes under
+# the new concise default with no `responseFormat` added. We cannot exercise the
+# per-line difference headless (no debug session => empty `results`), so the contract
+# tests below prove the wiring that IS reachable: both formats are accepted, neither
+# regresses the benign sentinel, and an unrecognized value falls back to concise (no
+# is_error). A populated run would additionally show concise omitting code/method/
+# dur/pureDur while keeping line/calls/pct.
+@e2e_test(tool="get_profiling_results", kind="read")
+def test_detailed_format_accepted_and_matches_concise_sentinel():
+    """responseFormat=detailed is an accepted value (closed enum concise|detailed) and,
+    on the no-results path, returns the SAME benign sentinel as the concise default —
+    adding the verbosity toggle must not regress the count/profilingActive/message
+    contract. (The per-line code/method/dur extras only appear in a populated `results`
+    array, which is not reachable headless.)
+
+    Mutation thinking: a tool that rejected the documented `detailed` value as an error,
+    or that changed the sentinel when detailed was requested, would fail here.
+    """
+    r = call("get_profiling_results", {"responseFormat": "detailed"})
+    assert_ok(r, "responseFormat=detailed must be an accepted format, not an error")
+
+    s = _structured(r, "detailed no-results payload")
+    if s.get("count") != 0:
+        raise AssertionError("expected count==0 with no results; got %r" % s.get("count"))
+    if s.get("profilingActive") is not False:
+        raise AssertionError("expected profilingActive==False with no session; got %r"
+                             % s.get("profilingActive"))
+    assert_contains(str(s.get("message") or ""), "No profiling results available",
+                    "detailed format must still surface the no-results sentinel")
+
+    assert_no_diff("a profiling read must not touch the project on disk")
+
+
+@e2e_test(tool="get_profiling_results", kind="read")
+def test_concise_is_default_and_leaner_than_detailed():
+    """Contract: the DEFAULT call (no responseFormat) behaves as `concise`, and an
+    UNRECOGNIZED value falls back to concise too (no is_error) — never the verbose
+    `detailed` shape. We prove the token-saving default is wired without depending on a
+    populated run: the default call equals the explicit concise call, and a bogus value
+    degrades to that same lean contract rather than erroring or silently upgrading to
+    detailed.
+
+    On the headless no-results path the per-line extras are absent in BOTH formats, so
+    this asserts the reachable invariant (default == concise == bogus-fallback, all the
+    benign sentinel). A populated run would show concise's per-line rows omitting the
+    verbose code/method/dur/pureDur that detailed carries — strictly fewer tokens.
+
+    Mutation thinking: a tool that defaulted to detailed, that errored on an unrecognized
+    responseFormat instead of falling back to concise, or that diverged the default from
+    the explicit concise contract would fail here.
+    """
+    default_r = call("get_profiling_results", {})
+    concise_r = call("get_profiling_results", {"responseFormat": "concise"})
+    bogus_r = call("get_profiling_results", {"responseFormat": "verbose-please"})
+
+    assert_ok(default_r, "default (concise) call must succeed")
+    assert_ok(concise_r, "explicit concise call must succeed")
+    assert_ok(bogus_r, "unrecognized responseFormat must fall back to concise, not error")
+
+    ds = _structured(default_r, "default payload")
+    cs = _structured(concise_r, "explicit-concise payload")
+    bs = _structured(bogus_r, "bogus-format payload")
+
+    # The default IS concise: same benign sentinel as the explicit concise call.
+    for label, s in (("default", ds), ("concise", cs), ("bogus-fallback", bs)):
+        if s.get("count") != 0:
+            raise AssertionError("%s: expected count==0; got %r" % (label, s.get("count")))
+        if s.get("profilingActive") is not False:
+            raise AssertionError("%s: expected profilingActive==False; got %r"
+                                 % (label, s.get("profilingActive")))
+        assert_contains(str(s.get("message") or ""), "No profiling results available",
+                        "%s call must surface the no-results sentinel" % label)
+
+    assert_no_diff("a profiling read must not touch the project on disk")

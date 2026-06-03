@@ -88,6 +88,27 @@ public class GetPlatformDocumentationToolTest
         assertTrue(schema.contains("\"enum\":[\"en\",\"ru\"]")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testSchemaDeclaresResponseFormatEnum()
+    {
+        // The output-size control is advertised as a closed concise|detailed enum so
+        // schema-driven clients can pick a format. The execute() read of the value is
+        // schema<->code parity enforced.
+        String schema = new GetPlatformDocumentationTool().getInputSchema();
+        assertTrue(schema.contains("\"responseFormat\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"enum\":[\"concise\",\"detailed\"]")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsResponseFormat()
+    {
+        // The guide explains the concise default and what it omits vs detailed.
+        String guide = new GetPlatformDocumentationTool().getGuide();
+        assertTrue(guide.contains("responseFormat")); //$NON-NLS-1$
+        assertTrue(guide.contains("concise")); //$NON-NLS-1$
+        assertTrue(guide.contains("detailed")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live access needed) ====================
 
     @Test
