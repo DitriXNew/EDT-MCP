@@ -18,16 +18,17 @@ Two-phase contract (DeleteMetadataObjectTool):
     action="executed", message "Delete refactoring completed successfully.";
     the object is gone from the model and its references are cleaned.
 
-HOW THE EFFECT IS VERIFIED (this batch differs from the on-disk batches):
-metadata-write tools mutate EDT's IN-MEMORY BM model but do NOT flush the delete
-to disk synchronously, so git-diff is empty/partial and CANNOT prove the effect.
-We therefore verify VIA MODEL READ-BACK over the wire: after a confirmed delete we
-call get_metadata_objects and assert the object is GONE from the model (and its
-siblings remain). For a preview (no mutation) we assert the object is STILL present
-AND assert_no_diff() (a preview must never touch disk). assert_no_diff() stays a
-meaningful guardrail for preview/rejected/negative calls (a rejected write must
-change nothing); it is NOT used as the happy guardrail for a confirmed delete
-(the model changed while disk did not, so a clean git proves nothing there).
+HOW THE EFFECT IS VERIFIED (two ways — the model AND the disk):
+PRIMARY: MODEL READ-BACK over the wire — after a confirmed delete we call
+get_metadata_objects and assert the object is GONE from the model (and its siblings
+remain). ON DISK: a delete persists — the object's own files are removed and the
+Configuration.mdo collection reference is deleted; the confirmed-delete happy test
+asserts WHAT changed via poll_disk_path_gone (the object's .mdo removed) +
+poll_disk_lacks (the Configuration reference gone), with a poll for the ~1-2s lag.
+For a preview (no mutation) we assert the object is STILL present AND assert_no_diff()
+(a preview must never touch disk). assert_no_diff() stays a meaningful guardrail for
+preview/rejected/negative calls (a rejected write must change nothing); it is NOT the
+happy guardrail for a confirmed delete (which legitimately changes the tree).
 
 reset: kind="write-metadata" -> the orchestrator calls reset_model() (clean_project,
 which refreshes the model from disk and discards the unsaved delete) AFTER each
@@ -48,6 +49,8 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    poll_disk_path_gone,
+    poll_disk_lacks,
     e2e_test,
     PROJECT,
 )
@@ -104,6 +107,13 @@ def test_confirm_deletes_commonmodule_gone_from_model():
     # Siblings must survive -> proves the delete was targeted, not a wipe of the family.
     assert_contains(after, "OK", "sibling CommonModule.OK must still exist after deleting Calc")
     assert_contains(after, "Error", "sibling CommonModule.Error must still exist after deleting Calc")
+    # ON DISK: the delete persists — the object's own files are removed AND the
+    # Configuration.mdo collection reference is gone. Assert WHAT changed (the actual
+    # removals), not just that the model lost it. Removal lags a beat, so poll.
+    poll_disk_path_gone("src/CommonModules/Calc/Calc.mdo",
+                        ctx="delete must remove the object's own .mdo from disk")
+    poll_disk_lacks("src/Configuration/Configuration.mdo", "CommonModule.Calc",
+                    ctx="delete must remove the Configuration.mdo collection reference on disk")
 
 
 @e2e_test(tool="delete_metadata_object", kind="write-metadata")

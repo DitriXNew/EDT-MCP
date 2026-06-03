@@ -355,6 +355,36 @@ def poll_diff_contains(substr, timeout=10, ctx=""):
     assert_diff_contains(substr, ctx)  # final attempt raises with detail
 
 
+def poll_disk_path_gone(rel_path, timeout=10, ctx=""):
+    """Poll until a path under the fixture is REMOVED from disk (for delete tools — the
+    removal can lag a beat after the call returns, like the write export). rel_path is
+    relative to the project dir, e.g. 'src/CommonModules/Calc/Calc.mdo'."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not os.path.exists(full):
+            return
+        time.sleep(0.5)
+    _fail("expected %s to be deleted from disk [%s]" % (rel_path, ctx))
+
+
+def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
+    """Poll until a fixture file no longer contains substr (e.g. a removed collection
+    reference). A missing file also satisfies 'lacks'. Polls because the on-disk edit
+    can lag a beat after the call returns."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with open(full, encoding="utf-8", errors="replace") as f:
+                if substr not in f.read():
+                    return
+        except FileNotFoundError:
+            return
+        time.sleep(0.5)
+    _fail("expected %s to no longer contain %r [%s]" % (rel_path, substr, ctx))
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Test registry (per-tool files register via @e2e_test; the orchestrator runs them)
 # ──────────────────────────────────────────────────────────────────────────────

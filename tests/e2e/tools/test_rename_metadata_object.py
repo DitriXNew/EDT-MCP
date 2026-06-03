@@ -12,17 +12,19 @@ TWO-PHASE CONTRACT (RenameMetadataObjectTool + MetadataRenameService):
   * confirm=true          -> EXECUTE. Performs every enabled change point. Emits
     YAML "action: executed" and "# Rename Completed".
 
-HOW THE EFFECT IS VERIFIED (this batch is DIFFERENT):
-  Metadata-write tools mutate EDT's IN-MEMORY BM model but do NOT flush the rename
-  synchronously to disk, so `git diff` is empty/partial and CANNOT prove the
-  rename. We therefore verify VIA MODEL READ-BACK over the wire:
+HOW THE EFFECT IS VERIFIED (two ways — the model AND the disk):
+  PRIMARY: MODEL READ-BACK over the wire —
     - object rename  -> get_metadata_objects: NEW name present, OLD name absent.
     - attribute rename -> get_metadata_details(full=true): the renamed attribute
       row appears in the Attributes table, the old one is gone.
-  assert_no_diff() is NOT the happy-path guardrail here (the model changed while
-  disk did not, so git is trivially clean -> it would prove nothing). It IS used on
-  PREVIEW / REJECTED / NEGATIVE calls: a call that must not mutate must leave the
-  working tree clean.
+  ON DISK: a rename persists richly (the folder/.mdo are renamed Calc/ -> Compute/,
+  the old .mdo deleted, Configuration.mdo's collection reference updated). The
+  object-rename happy test additionally asserts WHAT changed on disk via
+  poll_diff_contains — the Configuration collection element gains the new FQN AND the
+  renamed object's own .mdo carries <name>Compute</name> (the export lags ~1-2s, hence
+  poll). assert_no_diff() is NOT the happy-path guardrail (a rename legitimately
+  changes the tree); it IS used on PREVIEW / REJECTED / NEGATIVE calls — a call that
+  must not mutate must leave the working tree clean.
 
   The orchestrator runs reset_model() (clean_project, which refreshes the model
   from disk and discards the unsaved rename) AFTER each write-metadata test, so
@@ -52,6 +54,7 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    poll_diff_contains,
     e2e_test,
     PROJECT,
 )
@@ -111,6 +114,15 @@ def test_confirm_renames_common_module_and_readback_shows_new_name():
     # the old object is gone from the model (not merely filtered out — a still-present
     # 'Calc' would match nameFilter='Calc' and re-appear here).
     assert_not_contains(after_old, "| Calc ", "the old module 'Calc' must be ABSENT after the rename")
+    # ON DISK: the rename persists (the folder/.mdo were renamed Calc/ -> Compute/, and
+    # Configuration.mdo's reference updated). Assert WHAT changed: the Configuration
+    # collection element gains the new FQN, and the renamed object's own .mdo carries
+    # <name>Compute</name>. The export lags a beat, so poll. ("Compute" appears nowhere
+    # in the fixture before the rename, so both substrings can only come from the rename.)
+    poll_diff_contains("<commonModules>CommonModule.Compute</commonModules>",
+                       ctx="rename must update the Configuration.mdo reference to the new name on disk")
+    poll_diff_contains("<name>Compute</name>",
+                       ctx="rename must write the renamed object's own .mdo (<name>Compute</name>) on disk")
 
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
