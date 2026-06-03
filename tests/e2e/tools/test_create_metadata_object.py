@@ -210,8 +210,11 @@ def test_create_persists_object_and_configuration_to_disk():
     # ON DISK: the new object's own .mdo carries its <name> (the half-create fix), and
     # Configuration.mdo gains the "Catalog.<name>" collection reference. The forceExport
     # flush can lag a beat after the call returns, so poll rather than a bare diff.
-    poll_diff_contains(name,
-                       ctx="create must write the new object's own .mdo on disk (half-create fix)")
+    # WHAT changed, not just that something did: the new object's own .mdo must carry
+    # its name as a proper <name>E2EPersistCatalog</name> element (the half-create fix —
+    # the object file is written, not just a Configuration entry).
+    poll_diff_contains("<name>%s</name>" % name,
+                       ctx="create must write the new object's own .mdo with a <name> element (half-create fix)")
     # Guard the DUAL-flush half specifically: the "<catalogs>Catalog.<name></catalogs>"
     # collection element appears ONLY in Configuration.mdo (not the object's own .mdo,
     # which would also contain "Catalog.<name>." in default StandardAttribute paths). A

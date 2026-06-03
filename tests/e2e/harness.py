@@ -290,10 +290,18 @@ def assert_no_diff(ctx=""):
 
 
 def assert_diff_contains(substr, ctx=""):
-    """The on-disk change includes substr (works for modified tracked files AND new untracked files)."""
+    """The on-disk change includes substr — in a modified TRACKED file (via `git diff`)
+    OR in a new UNTRACKED file, INCLUDING a file inside a brand-new untracked directory.
+
+    A newly-created metadata object lands as a whole new folder (e.g. Catalogs/<name>/),
+    which `git status --porcelain` collapses to the DIRECTORY line (`?? .../<name>/`),
+    so a plain os.path.isfile() on that path skips the object's own .mdo content. We
+    therefore enumerate untracked entries with --untracked-files=all, which lists each
+    untracked FILE individually, so the new object's own .mdo is searched, not skipped."""
     if substr in diff():
         return
-    for line in _status_porcelain().splitlines():
+    status = _git("status", "--porcelain", "--untracked-files=all", "--", PROJECT_REL).stdout
+    for line in status.splitlines():
         path = line[3:].strip()
         full = os.path.join(REPO_ROOT, path)
         if os.path.isfile(full):
@@ -304,7 +312,7 @@ def assert_diff_contains(substr, ctx=""):
             except Exception:
                 pass
     _fail("expected on-disk change to contain %r [%s]; diff:\n%s\nstatus:\n%s"
-          % (substr, ctx, diff()[:400], _status_porcelain()[:300]))
+          % (substr, ctx, diff()[:400], status[:300]))
 
 
 def assert_diff_paths(paths, ctx=""):

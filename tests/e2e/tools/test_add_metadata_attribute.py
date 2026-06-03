@@ -99,11 +99,13 @@ def test_add_attribute_appears_in_model_readback():
     # The pre-existing fixture attribute is still there (the add must not wipe it).
     assert_contains(after.text, "Attribute",
         "the pre-existing fixture attribute must remain after the add")
-    # ON DISK: the attribute must be serialized into the parent's .mdo, not just the
-    # in-memory model (the metadata-writes-not-persisted-to-disk fix). The forceExport
-    # flush can lag a beat after the call returns, so poll rather than a bare diff.
-    poll_diff_contains(new_attr,
-        ctx="add_metadata_attribute must persist the attribute into Catalog.mdo on disk")
+    # ON DISK: the attribute must be serialized into the parent's .mdo as a proper
+    # <name> element (not just the name appearing SOMEWHERE in the diff) — this asserts
+    # WHAT changed, the actual <name>E2EWeight</name> the .mdo gains, so a malformed or
+    # mislocated write fails. The probe name appears nowhere else (the catalog's own
+    # name is <name>Catalog</name>). forceExport can lag a beat, so poll.
+    poll_diff_contains("<name>%s</name>" % new_attr,
+        ctx="add_metadata_attribute must serialize the attribute as a <name> element in Catalog.mdo")
 
 
 @e2e_test(tool="add_metadata_attribute", kind="write-metadata")
