@@ -104,6 +104,25 @@ public class ToolContractConsistencyTest
     }
 
     @Test
+    public void testEveryToolHasANonEmptyDescription()
+    {
+        // The tool description is the always-loaded, client-facing text in tools/list
+        // (it is what an agent reads to pick a tool). An empty/blank one is a contract
+        // hole — a JSON-validity-clean schema with no description still ships a useless
+        // entry. (Per-property descriptions are checked separately below.)
+        List<String> problems = new ArrayList<>();
+        for (IMcpTool tool : registry.getAllTools())
+        {
+            String desc = tool.getDescription();
+            if (desc == null || desc.trim().isEmpty())
+            {
+                problems.add(describe(tool) + ": getDescription() is null/empty"); //$NON-NLS-1$
+            }
+        }
+        assertNoProblems("tool description contract", problems); //$NON-NLS-1$
+    }
+
+    @Test
     public void testInputSchemaIsAWellFormedObjectSchema()
     {
         List<String> problems = new ArrayList<>();

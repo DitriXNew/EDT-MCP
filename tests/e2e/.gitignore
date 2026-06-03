@@ -1,0 +1,5 @@
+# e2e run artifacts (debug output, not source of truth)
+tools_list.actual.json
+e2e-results.xml
+_*.log
+__pycache__/
