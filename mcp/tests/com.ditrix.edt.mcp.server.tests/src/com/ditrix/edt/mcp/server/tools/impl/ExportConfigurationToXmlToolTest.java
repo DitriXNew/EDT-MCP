@@ -27,7 +27,10 @@ public class ExportConfigurationToXmlToolTest
     @Test
     public void testResponseType()
     {
-        assertEquals(ResponseType.JSON, new ExportConfigurationToXmlTool().getResponseType());
+        // export_configuration_to_xml is an action tool with no round-trip ID and
+        // no machine-structured payload, so it returns MARKDOWN (see the
+        // "Response format policy" in edt-mcp-tool-conventions).
+        assertEquals(ResponseType.MARKDOWN, new ExportConfigurationToXmlTool().getResponseType());
     }
 
     @Test

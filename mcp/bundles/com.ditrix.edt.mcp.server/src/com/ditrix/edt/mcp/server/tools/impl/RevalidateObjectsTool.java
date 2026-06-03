@@ -31,6 +31,8 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
@@ -79,7 +81,7 @@ public class RevalidateObjectsTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        return ResponseType.JSON;
+        return ResponseType.MARKDOWN;
     }
     
     @Override
@@ -144,7 +146,8 @@ public class RevalidateObjectsTool implements IMcpTool
      * 
      * @param projectName name of the project
      * @param objectFqns list of object FQNs to revalidate (empty for full project)
-     * @return JSON string with result
+     * @return MARKDOWN summary on success, or a {@link ToolResult#error} JSON payload
+     *     on failure (the server delivers the latter as a structured tool error)
      */
     public static String revalidateObjects(String projectName, List<String> objectFqns)
     {
@@ -185,12 +188,17 @@ public class RevalidateObjectsTool implements IMcpTool
                 
                 // Wait for build jobs and derived data to complete
                 BuildUtils.waitForBuildAndDerivedData(project, monitor);
-                
-                return ToolResult.success()
+
+                // Action result: revalidation status only, no round-trip ID or
+                // machine-structured payload, so MARKDOWN is the right format (see the
+                // "Response format policy" in README / edt-mcp-tool-conventions).
+                return FrontMatter.create()
+                    .put("tool", NAME) //$NON-NLS-1$
+                    .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
                     .put("project", projectName) //$NON-NLS-1$
                     .put("mode", "full") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put("message", "Full project revalidation completed") //$NON-NLS-1$ //$NON-NLS-2$
-                    .toJson();
+                    .wrapContent("# Full project revalidation completed\n\n" //$NON-NLS-1$
+                        + "- Project: " + projectName + "\n"); //$NON-NLS-1$ //$NON-NLS-2$
             }
             else
             {
@@ -211,10 +219,11 @@ public class RevalidateObjectsTool implements IMcpTool
      * @param project the IProject to work with
      * @param objectFqns list of object FQNs to revalidate
      * @param monitor progress monitor
-     * @return JSON string with result
+     * @return MARKDOWN summary on success, or a {@link ToolResult#error} JSON payload
+     *     on failure
      * @throws CoreException on error
      */
-    private static String revalidateSpecificObjects(IProject project, List<String> objectFqns, 
+    private static String revalidateSpecificObjects(IProject project, List<String> objectFqns,
             IProgressMonitor monitor) throws CoreException
     {
         String projectName = project.getName();
@@ -322,26 +331,53 @@ public class RevalidateObjectsTool implements IMcpTool
         
         // Wait for build jobs and derived data to complete
         BuildUtils.waitForBuildAndDerivedData(project, monitor);
-        
-        // Build result using ToolResult
-        ToolResult result = ToolResult.success()
+
+        // Action result: counts + per-object outcome lists. No round-trip ID or
+        // machine-structured payload, so MARKDOWN is the right format (see the
+        // "Response format policy" in README / edt-mcp-tool-conventions). FQNs are
+        // user-supplied and may contain '|', so they go through the shared
+        // MarkdownUtils table builder, which escapes every cell.
+        FrontMatter fm = FrontMatter.create()
+            .put("tool", NAME) //$NON-NLS-1$
+            .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
             .put("project", projectName) //$NON-NLS-1$
             .put("mode", "objects") //$NON-NLS-1$ //$NON-NLS-2$
             .put("objectsRequested", objectFqns.size()) //$NON-NLS-1$
-            .put("objectsFound", found.size()) //$NON-NLS-1$
-            .put("objectsValidated", found) //$NON-NLS-1$
-            .put("message", "Revalidation completed"); //$NON-NLS-1$ //$NON-NLS-2$
-        
-        if (!notFound.isEmpty())
+            .put("objectsFound", found.size()); //$NON-NLS-1$
+
+        StringBuilder body = new StringBuilder();
+        body.append("# Revalidation completed\n\n"); //$NON-NLS-1$
+        body.append("- Project: ").append(projectName).append('\n'); //$NON-NLS-1$
+        body.append("- Objects requested: ").append(objectFqns.size()).append('\n'); //$NON-NLS-1$
+        body.append("- Objects found: ").append(found.size()).append('\n'); //$NON-NLS-1$
+
+        appendFqnSection(body, "Validated", found); //$NON-NLS-1$
+        appendFqnSection(body, "Not found", notFound); //$NON-NLS-1$
+        appendFqnSection(body, "Skipped (no persistent id)", skippedNullUri); //$NON-NLS-1$
+
+        return fm.wrapContent(body.toString());
+    }
+
+    /**
+     * Appends a "## {@code title}" section listing the given FQNs as a single-column
+     * Markdown table. Cells are escaped through {@link MarkdownUtils} so a user-supplied
+     * FQN containing {@code |} cannot break the table. An empty list emits no section.
+     *
+     * @param body the buffer to append to
+     * @param title the section heading
+     * @param fqns the FQNs to list (may be empty)
+     */
+    private static void appendFqnSection(StringBuilder body, String title, List<String> fqns)
+    {
+        if (fqns == null || fqns.isEmpty())
         {
-            result.put("objectsNotFound", notFound); //$NON-NLS-1$
+            return;
         }
-        
-        if (!skippedNullUri.isEmpty())
+        body.append("\n## ").append(title).append(" (").append(fqns.size()).append(")\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        body.append(MarkdownUtils.tableHeader("FQN")); //$NON-NLS-1$
+        for (String fqn : fqns)
         {
-            result.put("objectsSkippedNullUri", skippedNullUri); //$NON-NLS-1$
+            body.append(MarkdownUtils.tableRow(fqn));
         }
-        
-        return result.toJson();
     }
 }

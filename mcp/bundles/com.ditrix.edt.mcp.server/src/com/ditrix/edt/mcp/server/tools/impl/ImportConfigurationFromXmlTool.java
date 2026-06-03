@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 
 /**
  * Tool that wraps the EDT "Import → Configuration from XML Files" action.
@@ -73,7 +74,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        return ResponseType.JSON;
+        return ResponseType.MARKDOWN;
     }
 
     @Override
@@ -171,16 +172,32 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                 created.refreshLocal(IResource.DEPTH_INFINITE, monitor);
             }
 
-            ToolResult result = ToolResult.success()
-                .put("importPath", importPath.toString()) //$NON-NLS-1$
+            // Action result: status + the source path and the created project name.
+            // There is no round-trip ID, machine-structured position, declared
+            // outputSchema, or UI-bound payload here, so MARKDOWN is the right format
+            // (see the "Response format policy" in README / edt-mcp-tool-conventions).
+            FrontMatter fm = FrontMatter.create()
+                .put("tool", NAME) //$NON-NLS-1$
+                .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("project", projectName) //$NON-NLS-1$
-                .put("message", "Configuration imported from XML files."); //$NON-NLS-1$ //$NON-NLS-2$
+                .put("importPath", importPath.toString()); //$NON-NLS-1$
             if (outsideWorkspace)
             {
-                result.put("securityNote", //$NON-NLS-1$
-                    "importPath is outside the EDT workspace; ensure the caller is trusted."); //$NON-NLS-1$
+                fm.put("outsideWorkspace", true); //$NON-NLS-1$
             }
-            return result.toJson();
+
+            StringBuilder body = new StringBuilder();
+            body.append("# Configuration imported from XML files\n\n"); //$NON-NLS-1$
+            body.append("- Project: ").append(projectName).append('\n'); //$NON-NLS-1$
+            body.append("- Import path: ").append(importPath).append('\n'); //$NON-NLS-1$
+            if (outsideWorkspace)
+            {
+                body.append('\n')
+                    .append("> Note: importPath is outside the EDT workspace; ") //$NON-NLS-1$
+                    .append("ensure the caller is trusted.\n"); //$NON-NLS-1$
+            }
+
+            return fm.wrapContent(body.toString());
         }
         catch (InvocationTargetException e)
         {

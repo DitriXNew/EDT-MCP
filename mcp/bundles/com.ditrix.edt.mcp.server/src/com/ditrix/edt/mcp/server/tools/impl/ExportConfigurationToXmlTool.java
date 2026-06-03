@@ -18,6 +18,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.FrontMatter;
 
 import org.eclipse.core.resources.ResourcesPlugin;
 
@@ -65,7 +66,7 @@ public class ExportConfigurationToXmlTool implements IMcpTool
     @Override
     public ResponseType getResponseType()
     {
-        return ResponseType.JSON;
+        return ResponseType.MARKDOWN;
     }
 
     @Override
@@ -120,16 +121,32 @@ public class ExportConfigurationToXmlTool implements IMcpTool
                 String.class, Path.class);
             method.invoke(api, projectName, outputPath);
 
-            ToolResult result = ToolResult.success()
+            // Action result: status + the project and destination path. There is no
+            // round-trip ID, machine-structured position, declared outputSchema, or
+            // UI-bound payload here, so MARKDOWN is the right format (see the
+            // "Response format policy" in README / edt-mcp-tool-conventions).
+            FrontMatter fm = FrontMatter.create()
+                .put("tool", NAME) //$NON-NLS-1$
+                .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("project", projectName) //$NON-NLS-1$
-                .put("outputPath", outputPath.toString()) //$NON-NLS-1$
-                .put("message", "Configuration exported to XML files."); //$NON-NLS-1$ //$NON-NLS-2$
+                .put("outputPath", outputPath.toString()); //$NON-NLS-1$
             if (outsideWorkspace)
             {
-                result.put("securityNote", //$NON-NLS-1$
-                    "outputPath is outside the EDT workspace; ensure the caller is trusted."); //$NON-NLS-1$
+                fm.put("outsideWorkspace", true); //$NON-NLS-1$
             }
-            return result.toJson();
+
+            StringBuilder body = new StringBuilder();
+            body.append("# Configuration exported to XML files\n\n"); //$NON-NLS-1$
+            body.append("- Project: ").append(projectName).append('\n'); //$NON-NLS-1$
+            body.append("- Output path: ").append(outputPath).append('\n'); //$NON-NLS-1$
+            if (outsideWorkspace)
+            {
+                body.append('\n')
+                    .append("> Note: outputPath is outside the EDT workspace; ") //$NON-NLS-1$
+                    .append("ensure the caller is trusted.\n"); //$NON-NLS-1$
+            }
+
+            return fm.wrapContent(body.toString());
         }
         catch (InvocationTargetException e)
         {

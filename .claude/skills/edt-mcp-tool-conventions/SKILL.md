@@ -37,6 +37,29 @@ description: Cross-tool consistency contract for EDT-MCP tools — parameter nam
 - Поля JSON — единый стиль (не мешать camelCase/snake_case в аналогичных ответах).
 - not-found — единая семантика: пустой список для «список», ошибка для «получить конкретный». Не вперемешку null/пусто/ошибка.
 
+### Response format policy (Markdown vs JSON)
+
+`structuredContent`/JSON is for the client to consume (UI rendering, verbatim round-trip of identifiers, a future `outputSchema`), NOT for the agent to read. **MARKDOWN is the default** (token-efficient, readable).
+
+A tool returns JSON only when its result carries:
+
+- **(a)** round-trip IDs another tool consumes;
+- **(b)** machine-structured positions (e.g. error line/column);
+- **(c)** a declared `outputSchema`;
+- **(d)** UI-rendered data.
+
+Action/confirmation/status results with none of these return MARKDOWN. `write_module_source` is the reference MARKDOWN action tool; `AbstractMetadataWriteTool` subclasses stay JSON because they return the created object's round-trip FQN.
+
+Tool families that stay JSON, and why:
+
+- metadata-writes (`create_metadata_object`, `add_metadata_attribute`, `delete_metadata_object`) → created **FQN** *(a)*;
+- debug / profiling tools → launch / application / breakpoint **IDs** + live session state *(a)*;
+- `validate_query` → error **line/col** *(b)*;
+- `list_configurations` → config **identities** *(a)*;
+- `clean_project`, `update_database` → destructive status whose JSON shape is consumed by e2e *(d-like)*.
+
+Markdown action tools (`revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, `write_module_source`) emit status + paths/counts only — no round-trip data. Build the body with `FrontMatter` + a markdown summary; any table goes through `MarkdownUtils` (escapes every cell); errors still via `ToolResult.error(...)`.
+
 ## Пагинация
 
 Общий `Pagination` (единый дефолтный лимит, единый формат уведомления об обрезке). См. `standardize-pagination`. Не изобретать свою схему на инструмент.

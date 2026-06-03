@@ -38,9 +38,12 @@ public class RevalidateObjectsToolTest
     }
 
     @Test
-    public void testResponseTypeJson()
+    public void testResponseTypeMarkdown()
     {
-        assertEquals(ResponseType.JSON, new RevalidateObjectsTool().getResponseType());
+        // revalidate_objects is an action tool with no round-trip ID and no
+        // machine-structured payload, so it returns MARKDOWN (see the
+        // "Response format policy" in edt-mcp-tool-conventions).
+        assertEquals(ResponseType.MARKDOWN, new RevalidateObjectsTool().getResponseType());
     }
 
     @Test

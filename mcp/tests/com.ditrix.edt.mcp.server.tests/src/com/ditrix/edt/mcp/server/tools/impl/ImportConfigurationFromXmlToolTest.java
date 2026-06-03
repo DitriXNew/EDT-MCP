@@ -27,7 +27,10 @@ public class ImportConfigurationFromXmlToolTest
     @Test
     public void testResponseType()
     {
-        assertEquals(ResponseType.JSON, new ImportConfigurationFromXmlTool().getResponseType());
+        // import_configuration_from_xml is an action tool with no round-trip ID and
+        // no machine-structured payload, so it returns MARKDOWN (see the
+        // "Response format policy" in edt-mcp-tool-conventions).
+        assertEquals(ResponseType.MARKDOWN, new ImportConfigurationFromXmlTool().getResponseType());
     }
 
     @Test

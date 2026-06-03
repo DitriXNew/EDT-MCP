@@ -88,7 +88,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
   - `{projectName:"IRP", objects:["Catalog.Agreements"]}` → revalidates one object.
   - `{projectName:"IRP", objects:["Catalog.NoSuchXYZ"]}` → reports objectsFound 0.
   - missing `projectName` → validation error.
-- **Assert:** happy → `success==true`, `mode=="objects"`, `objectsFound==1`, `"Revalidation completed"`.
+- **Assert:** happy → Markdown frontmatter `status: success`, `mode: objects`, `objectsFound: 1`, body `"Revalidation completed"`.
 - **Validated 2026‑06‑01:** PASS — `objectsFound:1`, `objectsValidated:["Catalog.Agreements"]`.
 
 ### clean_project
