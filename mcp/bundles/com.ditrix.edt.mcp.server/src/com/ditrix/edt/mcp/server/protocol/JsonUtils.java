@@ -93,18 +93,130 @@ public final class JsonUtils
         return GsonProvider.toJson(response);
     }
     
+    /** Readiness {@code status}: server running and all core services present. */
+    public static final String HEALTH_STATUS_OK = "ok"; //$NON-NLS-1$
+
+    /** Readiness {@code status}: MCP server not yet running (startup race). */
+    public static final String HEALTH_STATUS_STARTING = "starting"; //$NON-NLS-1$
+
+    /** Readiness {@code status}: server running but a core service is missing. */
+    public static final String HEALTH_STATUS_DEGRADED = "degraded"; //$NON-NLS-1$
+
     /**
-     * Builds a health check JSON response.
-     * 
+     * Builds a legacy health check JSON response (no readiness probing).
+     * Retained for back-compatibility; prefer the readiness-aware overload
+     * {@link #buildHealthResponse(String, boolean, Map)}.
+     *
      * @param edtVersion EDT version
      * @return JSON response string
      */
     public static String buildHealthResponse(String edtVersion)
     {
         JsonObject response = new JsonObject();
-        response.addProperty("status", "ok"); //$NON-NLS-1$ //$NON-NLS-2$
+        response.addProperty("status", HEALTH_STATUS_OK); //$NON-NLS-1$
+        response.addProperty("live", true); //$NON-NLS-1$
         response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
         return GsonProvider.toJson(response);
+    }
+
+    /**
+     * Builds a readiness-aware health check JSON response.
+     * <p>
+     * The response is ADDITIVE and back-compatible: the top-level {@code status}
+     * stays a string and {@code edt_version} is preserved, so monitors that check
+     * for HTTP 200 + a {@code status} field keep working. New fields:
+     * <ul>
+     * <li>{@code live} — a cheap always-true liveness ping (the process answered),
+     * present regardless of readiness so a simple liveness check still works;</li>
+     * <li>{@code ready} — boolean readiness flag;</li>
+     * <li>{@code missingServices} — the names of the unavailable core services
+     * (empty when ready).</li>
+     * </ul>
+     * The {@code status} is {@link #HEALTH_STATUS_OK} only when {@code running}
+     * is true AND every reference in {@code coreServices} is non-null; it is
+     * {@link #HEALTH_STATUS_STARTING} when the server is not yet running, and
+     * {@link #HEALTH_STATUS_DEGRADED} when the server runs but a core service
+     * reference is null.
+     * <p>
+     * IMPORTANT: readiness is decided purely from the supplied {@code running}
+     * flag and the non-null-ness of the {@code coreServices} references. This
+     * method never reads/queries the EDT model and opens no transaction — a
+     * health probe must stay cheap.
+     *
+     * @param edtVersion the EDT version string (may be null)
+     * @param running whether the MCP server reports itself running
+     * @param coreServices ordered map of core service name to its reference
+     *            (a null value means the service is not yet available); may be null
+     * @return JSON response string
+     */
+    public static String buildHealthResponse(String edtVersion, boolean running,
+        Map<String, Object> coreServices)
+    {
+        List<String> missing = computeMissingServices(coreServices);
+        boolean ready = running && missing.isEmpty();
+
+        String status;
+        if (ready)
+        {
+            status = HEALTH_STATUS_OK;
+        }
+        else if (!running)
+        {
+            status = HEALTH_STATUS_STARTING;
+        }
+        else
+        {
+            status = HEALTH_STATUS_DEGRADED;
+        }
+
+        JsonObject response = new JsonObject();
+        response.addProperty("status", status); //$NON-NLS-1$
+        // Always-true liveness ping: the process is up and answered this request.
+        response.addProperty("live", true); //$NON-NLS-1$
+        response.addProperty("ready", ready); //$NON-NLS-1$
+        response.addProperty("running", running); //$NON-NLS-1$
+        response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
+
+        JsonArray missingArray = new JsonArray();
+        for (String name : missing)
+        {
+            missingArray.add(name);
+        }
+        response.add("missingServices", missingArray); //$NON-NLS-1$
+
+        return GsonProvider.toJson(response);
+    }
+
+    /**
+     * Pure, side-effect-free readiness helper: returns the names of the core
+     * services whose reference is {@code null} (i.e. not yet available), in the
+     * iteration order of {@code coreServices}. An empty result means every core
+     * service reference is present.
+     * <p>
+     * This is the testable core of the readiness decision (see
+     * {@link #buildHealthResponse(String, boolean, Map)}); it only inspects
+     * non-null-ness of the supplied references and never touches the EDT model.
+     *
+     * @param coreServices map of core service name to its reference (null value
+     *            means missing); may be null or empty
+     * @return the ordered list of missing service names (never null; empty when
+     *         all present)
+     */
+    public static List<String> computeMissingServices(Map<String, Object> coreServices)
+    {
+        List<String> missing = new ArrayList<>();
+        if (coreServices == null)
+        {
+            return missing;
+        }
+        for (Map.Entry<String, Object> entry : coreServices.entrySet())
+        {
+            if (entry.getValue() == null)
+            {
+                missing.add(entry.getKey());
+            }
+        }
+        return missing;
     }
     
     /**
