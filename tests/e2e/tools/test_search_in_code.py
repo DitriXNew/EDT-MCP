@@ -22,8 +22,11 @@ Fixture truth used (TestConfiguration/src, English Names — verified on disk):
     "// TEST DEBUG", procedures BeforeStart/OnStart, EndProcedure, and the string
     "Debug e2e OK". This file lives under Configuration/, which has NO metadataType
     folder, so the commonModules / catalogs metadata filters EXCLUDE it.
-  These are the ONLY three .bsl files in the fixture, so total match/file counts are
-  exactly knowable and used as discriminating signals (a broken search can't fake them).
+  Other .bsl files exist (CommonModules/Calc, plus the rename-cascade modules
+  CascadeEn / CascadeUser / Вычисление) but they use Russian keywords and custom
+  identifiers, so they contribute ZERO matches to the English-token / literal counts
+  asserted below. The totals therefore stay exactly knowable and remain discriminating
+  signals (a broken search can't fake them).
 
 Real execute() error paths targeted by the negative matrix (SearchInCodeTool.java):
   - missing projectName / query -> JsonUtils.requireArguments -> "<name> is required".

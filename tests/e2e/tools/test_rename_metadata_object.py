@@ -39,7 +39,9 @@ substrings (e.g. "is required", "not found", "Attribute"), never raw quoted
 fragments such as 'Catalog.Products'.
 
 Fixture (TestConfiguration, English Names): Catalog.Catalog (attribute "Attribute"),
-CommonModule.Error / OK / Calc.
+CommonModule.Error / OK / Calc. Cascade-only modules (dedicated, do not perturb the
+count-asserted objects): CommonModule.CascadeEn (English Name) and CommonModule.Вычисление
+(Russian Name), both called from CommonModule.CascadeUser — see the cascade section.
 """
 
 from harness import (
@@ -164,6 +166,102 @@ def test_confirm_renames_catalog_attribute_and_details_readback_shows_new_name()
     # renders the Name as a leading cell "| Attribute "; assert that exact marker is gone.
     assert_not_contains(details.text, "| Attribute ",
                         "the old attribute 'Attribute' must be ABSENT from the Attributes table")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cascade — the #1 corruption risk: a rename must rewrite BSL references too
+#
+# CascadeUser (a dedicated fixture module) calls CascadeEn.Marker() and
+# Вычисление.Маркер(). Renaming the OBJECT must update those call sites. The card
+# (e2e-rename-cascade-verification) calls this out as the single most valuable
+# missing test: a rename that updates the object but NOT the BSL reference is exactly
+# the silent corruption the tool exists to prevent. Verified the card's way —
+# search_in_code old-vs-new — plus a direct read of the rewritten source line.
+#
+# Timing assumption: the rename goes through EDT's LTK engine, which applies the
+# BSL text change SYNCHRONOUSLY inside the tool call (perform() completes before the
+# call returns), and the server is single-threaded, so the very next search/read sees
+# the rewrite without a poll. If a future EDT made that flush async and this flakes,
+# wrap the post-rename reads in a poll_* helper — do NOT weaken these assertions.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_cascade_rewrites_english_named_module_reference_in_bsl():
+    # New name "Reckoner" shares no substring with "CascadeEn", so the search
+    # assertions are unambiguous. A rename that left the BSL reference untouched would
+    # keep "CascadeEn.Marker" in the code and FAIL every cascade assertion below.
+    base = call("search_in_code", {"projectName": PROJECT,
+                                    "query": "CascadeEn.Marker", "outputMode": "files"})
+    assert_ok(base, "baseline search for CascadeEn.Marker")
+    assert_contains(base.text, "CommonModules/CascadeUser/Module.bsl",
+                    "fixture precondition: CascadeUser references CascadeEn.Marker before the rename")
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+    })
+    assert_ok(r, "execute rename CommonModule.CascadeEn -> Reckoner")
+    assert_contains(r.text, "action: executed", "the cascade rename must execute")
+
+    # CASCADE PROOF #1 (the card's chosen verifier): the OLD token is gone project-wide,
+    # the NEW token now appears in the caller.
+    gone = call("search_in_code", {"projectName": PROJECT,
+                                    "query": "CascadeEn.Marker", "outputMode": "count"})
+    assert_contains(gone.text, "Total matches:** 0",
+                    "after the cascade rename the old reference CascadeEn.Marker must be gone everywhere")
+    moved = call("search_in_code", {"projectName": PROJECT,
+                                    "query": "Reckoner.Marker", "outputMode": "files"})
+    assert_contains(moved.text, "CommonModules/CascadeUser/Module.bsl",
+                    "the rewritten reference Reckoner.Marker must appear in CascadeUser")
+    # CASCADE PROOF #2: the exact source line was rewritten (strongest single check).
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser source after the cascade rename")
+    assert_contains(src.text, "Reckoner.Marker()",
+                    "CascadeUser must now call the renamed module Reckoner.Marker()")
+    assert_not_contains(src.text, "CascadeEn",
+                        "CascadeUser must retain no trace of the old module name CascadeEn")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_cascade_rewrites_russian_named_module_reference_in_bsl():
+    # Bilingual cascade: the renamed object has a RUSSIAN (Cyrillic) Name. A cascade
+    # that mishandled the Cyrillic identifier — the exact failure mode this case exists
+    # to catch — would leave the old reference and FAIL. "Вычислитель" is not a
+    # substring of "Вычисление" past the shared "Вычисл" stem, so the dotted-method
+    # searches are unambiguous.
+    base = call("search_in_code", {"projectName": PROJECT,
+                                    "query": "Вычисление.Маркер", "outputMode": "files"})
+    assert_ok(base, "baseline search for Вычисление.Маркер")
+    assert_contains(base.text, "CommonModules/CascadeUser/Module.bsl",
+                    "fixture precondition: CascadeUser references Вычисление.Маркер before the rename")
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.Вычисление",
+        "newName": "Вычислитель",
+        "confirm": True,
+    })
+    assert_ok(r, "execute rename CommonModule.Вычисление -> Вычислитель")
+    assert_contains(r.text, "action: executed", "the bilingual cascade rename must execute")
+
+    gone = call("search_in_code", {"projectName": PROJECT,
+                                   "query": "Вычисление.Маркер", "outputMode": "count"})
+    assert_contains(gone.text, "Total matches:** 0",
+                    "after the cascade rename the old Cyrillic reference Вычисление.Маркер must be gone")
+    moved = call("search_in_code", {"projectName": PROJECT,
+                                    "query": "Вычислитель.Маркер", "outputMode": "files"})
+    assert_contains(moved.text, "CommonModules/CascadeUser/Module.bsl",
+                    "the rewritten Cyrillic reference Вычислитель.Маркер must appear in CascadeUser")
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser source after the bilingual cascade rename")
+    assert_contains(src.text, "Вычислитель.Маркер()",
+                    "CascadeUser must now call the renamed module Вычислитель.Маркер()")
+    assert_not_contains(src.text, "Вычисление",
+                        "CascadeUser must retain no trace of the old Cyrillic module name Вычисление")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
