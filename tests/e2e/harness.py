@@ -207,8 +207,16 @@ def _git(*args):
 
 
 def reset_fixture():
-    """Hard reset the fixture to the committed baseline. Called before EVERY test."""
-    _git("checkout", "--", PROJECT_REL)
+    """Hard reset the fixture to the committed baseline (HEAD). Called before EVERY test.
+
+    Metadata delete/rename/create operations persist to disk AND can leave the change
+    STAGED in the index (observed: a renamed-to module appears as `A` staged). The
+    revert therefore: (1) `reset` to UNSTAGE (staged add -> untracked; staged delete ->
+    unstaged delete), (2) `checkout HEAD --` to restore tracked files (undo deletions /
+    mods / renames-from), (3) `clean -fd` to remove the now-untracked files. Plain
+    `checkout --` (from the index) cannot undo staged changes, so all three are needed."""
+    _git("reset", "-q", "--", PROJECT_REL)
+    _git("checkout", "HEAD", "--", PROJECT_REL)
     _git("clean", "-fd", PROJECT_REL)
 
 

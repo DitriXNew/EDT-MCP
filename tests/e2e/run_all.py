@@ -97,9 +97,13 @@ def main():
         head = msg.splitlines()[0] if msg else ""
         print("[%-5s] %s::%s (%.2fs)%s" % (status.upper(), t["tool"], t["name"], dur,
                                            " - " + head if head else ""))
-        # Metadata-write tools mutate the in-memory BM model without flushing to disk,
-        # so a git reset alone cannot undo them; re-sync the model from disk after each.
+        # Metadata-write tools mutate the in-memory BM model AND can persist to disk
+        # (and EDT may async-autosave the model). Clean up IMMEDIATELY: revert the disk
+        # first (reset_fixture), then discard the in-memory change (reset_model =
+        # clean_project, which refreshes the model from the now-clean disk). Doing this
+        # right after the test (not before the next) closes the autosave race window.
         if t.get("kind") == "write-metadata":
+            harness.reset_fixture()
             harness.reset_model()
 
     # Final cleanliness guarantee.
