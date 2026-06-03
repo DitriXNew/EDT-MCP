@@ -97,6 +97,10 @@ def main():
         head = msg.splitlines()[0] if msg else ""
         print("[%-5s] %s::%s (%.2fs)%s" % (status.upper(), t["tool"], t["name"], dur,
                                            " - " + head if head else ""))
+        # Metadata-write tools mutate the in-memory BM model without flushing to disk,
+        # so a git reset alone cannot undo them; re-sync the model from disk after each.
+        if t.get("kind") == "write-metadata":
+            harness.reset_model()
 
     # Final cleanliness guarantee.
     harness.reset_fixture()

@@ -225,6 +225,21 @@ def read_disk(relpath):
         return f.read()
 
 
+def reset_model():
+    """Re-sync EDT's in-memory BM model to the on-disk baseline.
+
+    Metadata-write tools (create/add/delete/rename metadata) mutate the in-memory
+    BM model but do NOT flush every change to disk, so a git reset alone cannot
+    undo them — the model would carry the unsaved change into the next test.
+    clean_project refreshes files from disk + revalidates, discarding unsaved model
+    changes. The orchestrator calls this after each kind='write-metadata' test.
+    """
+    try:
+        call("clean_project", {"projectName": PROJECT})
+    except Exception:
+        pass
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Assertions
 # ──────────────────────────────────────────────────────────────────────────────
