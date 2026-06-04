@@ -97,6 +97,21 @@ public class CreateMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the object was created", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("fqn", "FQN of the created object, e.g. 'Catalog.Products'") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("metadataType", "Canonical metadata type of the created object") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("name", "Programmatic name of the created object") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("persisted", "Whether the change was saved to disk") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("synonym", "Display name written, when a synonym was provided") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("language", "Language code the synonym was written for") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "Creates one new top-level metadata object using the EDT model object factory, so it " //$NON-NLS-1$

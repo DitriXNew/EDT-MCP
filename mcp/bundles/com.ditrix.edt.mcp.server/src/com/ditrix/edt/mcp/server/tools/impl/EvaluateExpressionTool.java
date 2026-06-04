@@ -67,6 +67,18 @@ public class EvaluateExpressionTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("type", "BSL reference type name of the evaluated value") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("value", "String representation of the evaluated value (may be truncated)") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("truncated", "True when value was truncated to the max length") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("fullLength", "Full length of value before truncation") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

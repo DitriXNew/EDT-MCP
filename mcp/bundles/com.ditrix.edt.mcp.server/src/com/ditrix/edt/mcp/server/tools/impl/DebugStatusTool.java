@@ -62,6 +62,17 @@ public class DebugStatusTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("launches", "Active debug launches with state and frame info") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("count", "Number of active debug launches returned") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectProperty("registry", "Debug session registry snapshot counters") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

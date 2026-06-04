@@ -73,6 +73,23 @@ public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        // Two success branches: action="preview" (rich) and action="executed" (terse).
+        // The schema is the union; only success is always present.
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the request succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("action", "Either 'preview' or 'executed'") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("objectFqn", "FQN of the object targeted for deletion") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("refactoringTitle", "Title of the delete refactoring (preview)") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("items", "Metadata items the deletion would remove (preview)") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("affectedReferences", "References that would be affected (preview)") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("affectedReferencesCount", "Count of affected references (preview)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Human-readable description of the result") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "Deletes one metadata object or one of its child members and cascades the cleanup to " //$NON-NLS-1$

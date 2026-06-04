@@ -60,6 +60,21 @@ public class SetBreakpointTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("breakpointId", "Eclipse marker id of the created breakpoint (-1 if none)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("modulePath", "Module identifier as supplied (EDT path or absolute path)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("module", "Legacy alias echo of the module identifier") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("resolvedFile", "Workspace-relative path of the resolved .bsl file") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("lineNumber", "1-based line number where the breakpoint was set") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("degraded", "True when only a marker-only breakpoint could be created") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("warning", "Warning text when the breakpoint is degraded/marker-only") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

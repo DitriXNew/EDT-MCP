@@ -54,7 +54,20 @@ public class GetApplicationsTool implements IMcpTool
             .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
-    
+
+    @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("project", "EDT project name the applications belong to") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("applications", "Applications with id, name, type and update state") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("count", "Number of applications found") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Informational message when no applications are found") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("defaultApplicationId", "Id of the project's default application") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
     @Override
     public ResponseType getResponseType()
     {

@@ -70,6 +70,19 @@ public class GetProfilingResultsTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("count", "Number of profiling result sets returned") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("profilingActive", "Whether profiling is currently active") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Informational note when no results are available") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("results", //$NON-NLS-1$
+                "Per-result sets: name, totalDurability, moduleCount and modules map of lines") //$NON-NLS-1$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "Retrieve the accumulated 1C performance-measurement (profiling) readout: which BSL " //$NON-NLS-1$

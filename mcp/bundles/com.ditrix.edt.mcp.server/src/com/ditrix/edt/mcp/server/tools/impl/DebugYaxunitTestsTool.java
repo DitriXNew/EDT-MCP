@@ -98,6 +98,21 @@ public class DebugYaxunitTestsTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("launched", "Whether the debug launch was queued") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("projectName", "Effective EDT project name of the launched config") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", "Effective application id of the launched config") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("reportDir", "Directory where junit.xml will be written") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("junitXml", "Full path to the junit.xml report file") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("nextStep", "Hint for the next tool call in the debug cycle") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("preLaunch", "Summary of pre-launch terminations and DB update") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "# debug_yaxunit_tests\n\n" //$NON-NLS-1$

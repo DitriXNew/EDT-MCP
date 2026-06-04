@@ -56,6 +56,21 @@ public class StepTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("hit", "True if a suspend event was caught, false on timeout") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("reason", "Reason when not hit (e.g. timeout)") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("threadId", "Id of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("threadName", "Name of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", "Application id of the debug session") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("frames", "Stack frames: frameIndex, frameRef, name, line") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("topFrameRef", "Stable ref of the top stack frame") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

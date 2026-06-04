@@ -98,6 +98,22 @@ public class GetContentAssistTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("file", "Workspace-relative path of the module the proposals are for") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("line", "1-based line where proposals were computed") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("column", "1-based column where proposals were computed") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("totalProposals", "Total proposals offered before any filter") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("filteredOut", "Proposals removed by the contains filter") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("skipped", "Proposals consumed by the offset") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("returnedProposals", "Count of proposals returned in this page") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("proposals", "Proposals as { displayString[, documentation] }") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "# get_content_assist\n\n" //$NON-NLS-1$

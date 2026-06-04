@@ -18,12 +18,18 @@ public class ToolsListResult
     
     public void addTool(String name, String description, Object inputSchema)
     {
-        tools.add(new ToolInfo(name, description, inputSchema, null));
+        tools.add(new ToolInfo(name, description, inputSchema, null, null));
     }
 
     public void addTool(String name, String description, Object inputSchema, Object annotations)
     {
-        tools.add(new ToolInfo(name, description, inputSchema, annotations));
+        tools.add(new ToolInfo(name, description, inputSchema, annotations, null));
+    }
+
+    public void addTool(String name, String description, Object inputSchema, Object annotations,
+        Object outputSchema)
+    {
+        tools.add(new ToolInfo(name, description, inputSchema, annotations, outputSchema));
     }
 
     public List<ToolInfo> getTools()
@@ -40,18 +46,28 @@ public class ToolsListResult
         private String description;
         private Object inputSchema;
         private Object annotations;
+        // Serialized into tools/list only when non-null (the shared Gson omits null
+        // fields), so TEXT/MARKDOWN tools without structured output emit no outputSchema.
+        private Object outputSchema;
 
         public ToolInfo(String name, String description, Object inputSchema)
         {
-            this(name, description, inputSchema, null);
+            this(name, description, inputSchema, null, null);
         }
 
         public ToolInfo(String name, String description, Object inputSchema, Object annotations)
+        {
+            this(name, description, inputSchema, annotations, null);
+        }
+
+        public ToolInfo(String name, String description, Object inputSchema, Object annotations,
+            Object outputSchema)
         {
             this.name = name;
             this.description = description;
             this.inputSchema = inputSchema;
             this.annotations = annotations;
+            this.outputSchema = outputSchema;
         }
 
         public String getName()
@@ -72,6 +88,11 @@ public class ToolsListResult
         public Object getAnnotations()
         {
             return annotations;
+        }
+
+        public Object getOutputSchema()
+        {
+            return outputSchema;
         }
     }
 }

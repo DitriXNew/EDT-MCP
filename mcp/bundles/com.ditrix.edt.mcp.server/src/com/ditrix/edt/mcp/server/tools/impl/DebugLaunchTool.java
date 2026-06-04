@@ -86,6 +86,22 @@ public class DebugLaunchTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("launchConfiguration", "Name of the launched/running launch configuration") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("configurationType", "Launch configuration type id") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("attach", "True if this is an Attach (server-side debug) configuration") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("project", "EDT project name associated with the launch") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", "Application id of the launched configuration") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("alreadyRunning", "True if a matching session was already alive; re-launch skipped") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("mode", "Launch mode of the session (e.g. debug, run)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Human-readable status message") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "# debug_launch\n\n" //$NON-NLS-1$

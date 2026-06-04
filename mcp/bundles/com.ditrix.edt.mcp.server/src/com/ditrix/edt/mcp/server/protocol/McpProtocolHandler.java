@@ -648,7 +648,14 @@ public class McpProtocolHandler
             Object annotations = tool.getAnnotations() != null
                 ? tool.getAnnotations()
                 : ToolAnnotationClassifier.classify(tool.getName());
-            result.addTool(tool.getName(), tool.getDescription(), schema, annotations);
+            // JSON tools declare the shape of their structuredContent; other tools
+            // return content (not structured data) and leave outputSchema null, in
+            // which case the shared Gson omits the field entirely.
+            String outputSchemaJson = tool.getOutputSchema();
+            JsonElement outputSchema = outputSchemaJson != null
+                ? JsonParser.parseString(outputSchemaJson)
+                : null;
+            result.addTool(tool.getName(), tool.getDescription(), schema, annotations, outputSchema);
         }
         
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));

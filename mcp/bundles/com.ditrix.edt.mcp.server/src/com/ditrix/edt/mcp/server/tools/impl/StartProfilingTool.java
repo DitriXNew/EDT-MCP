@@ -126,6 +126,18 @@ public class StartProfilingTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("active", "Whether profiling is now active for this applicationId") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("started", "True if this call started profiling, false if already active") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", "Application id of the profiled debug session") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Human-readable status and next-step guidance") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

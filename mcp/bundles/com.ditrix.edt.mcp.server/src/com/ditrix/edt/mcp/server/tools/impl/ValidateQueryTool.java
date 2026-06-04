@@ -80,6 +80,21 @@ public class ValidateQueryTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("valid", "true when the query has zero issues") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("dcsMode", "Whether DCS validation mode was used") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("errorCount", "Number of ERROR-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("warningCount", "Number of WARNING-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("infoCount", "Number of INFO-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("issues", //$NON-NLS-1$
+                "Validation issues; each has severity, message, optional line/column/offset") //$NON-NLS-1$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "Validates 1C:Enterprise query language (QL) text in the context of a project, " //$NON-NLS-1$

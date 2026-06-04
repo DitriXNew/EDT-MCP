@@ -85,6 +85,20 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the attribute was added", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("parentFqn", "Normalized FQN of the parent object") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("attributeName", "Programmatic name of the added attribute") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("persisted", "Whether the change was saved to disk") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("synonym", "Display name written, when a synonym was provided") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("language", "Language code the synonym was written for") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "# add_metadata_attribute\n\n" //$NON-NLS-1$

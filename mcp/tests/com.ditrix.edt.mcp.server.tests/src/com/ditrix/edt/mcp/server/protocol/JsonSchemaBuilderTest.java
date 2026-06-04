@@ -142,4 +142,45 @@ public class JsonSchemaBuilderTest
         assertNotNull(map.get("properties"));
         assertNotNull(map.get("required"));
     }
+
+    @Test
+    public void testNumberProperty()
+    {
+        String schema = JsonSchemaBuilder.object()
+            .numberProperty("durationSeconds", "Elapsed time in seconds")
+            .build();
+
+        assertTrue(schema.contains("\"durationSeconds\""));
+        assertTrue(schema.contains("\"type\":\"number\""));
+        // Not required by default
+        assertTrue(schema.contains("\"required\":[]"));
+    }
+
+    @Test
+    public void testObjectProperty()
+    {
+        String schema = JsonSchemaBuilder.object()
+            .objectProperty("formRenderFlags", "Flag states keyed by name")
+            .build();
+
+        assertTrue(schema.contains("\"formRenderFlags\""));
+        assertTrue(schema.contains("\"type\":\"object\""));
+        assertTrue(schema.contains("\"description\":\"Flag states keyed by name\""));
+        // Inner shape is left unconstrained (permissive): no nested properties emitted.
+        assertFalse(schema.contains("\"items\""));
+    }
+
+    @Test
+    public void testObjectArrayProperty()
+    {
+        String schema = JsonSchemaBuilder.object()
+            .objectArrayProperty("configurations", "Launch configurations", true)
+            .build();
+
+        assertTrue(schema.contains("\"configurations\""));
+        assertTrue(schema.contains("\"type\":\"array\""));
+        // Elements are objects (a list of records), shape unconstrained.
+        assertTrue(schema.contains("\"items\":{\"type\":\"object\"}"));
+        assertTrue(schema.contains("\"required\":[\"configurations\"]"));
+    }
 }

@@ -62,7 +62,18 @@ public class CleanProjectTool implements IMcpTool
             .stringProperty("projectName", "Name of the project to clean (optional, cleans all EDT projects if not specified)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
-    
+
+    @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("projectsCleaned", "Number of projects that were cleaned") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("projects", "Names of the projects that were cleaned") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Human-readable completion message") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
     @Override
     public ResponseType getResponseType()
     {

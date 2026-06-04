@@ -75,6 +75,17 @@ public class ListConfigurationsTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("configurations", //$NON-NLS-1$
+                "Matching launch configurations with their state.") //$NON-NLS-1$
+            .integerProperty("count", "Number of configurations returned.") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public String getGuide()
     {
         return "Lists EDT launch configurations — runtime client, Attach (RemoteRuntime / " //$NON-NLS-1$

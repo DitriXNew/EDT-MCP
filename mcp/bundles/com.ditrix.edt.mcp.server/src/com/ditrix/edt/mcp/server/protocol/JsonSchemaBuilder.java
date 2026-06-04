@@ -218,8 +218,123 @@ public class JsonSchemaBuilder
     }
     
     /**
+     * Adds a number (floating-point) property to the schema. Use for values whose
+     * Java type is {@code double}/{@code float} (e.g. a duration in seconds, a
+     * percentage); use {@link #integerProperty} for {@code int}/{@code long}.
+     *
+     * @param name property name
+     * @param description property description
+     * @return this builder
+     */
+    public JsonSchemaBuilder numberProperty(String name, String description)
+    {
+        return numberProperty(name, description, false);
+    }
+
+    /**
+     * Adds a number (floating-point) property to the schema.
+     *
+     * @param name property name
+     * @param description property description
+     * @param required whether property is required
+     * @return this builder
+     */
+    public JsonSchemaBuilder numberProperty(String name, String description, boolean required)
+    {
+        Map<String, Object> prop = new LinkedHashMap<>();
+        prop.put("type", "number"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.put("description", description); //$NON-NLS-1$
+        properties.put(name, prop);
+
+        if (required)
+        {
+            this.required.add(name);
+        }
+        return this;
+    }
+
+    /**
+     * Adds an object property to the schema. The nested object's inner shape is left
+     * unconstrained ({@code {"type":"object"}}) on purpose: an {@code outputSchema}
+     * must stay permissive so a conformant client never rejects a valid payload whose
+     * nested fields are conditional. Use for a {@code Map}/nested-object field.
+     *
+     * @param name property name
+     * @param description property description
+     * @return this builder
+     */
+    public JsonSchemaBuilder objectProperty(String name, String description)
+    {
+        return objectProperty(name, description, false);
+    }
+
+    /**
+     * Adds an object property to the schema (inner shape unconstrained).
+     *
+     * @param name property name
+     * @param description property description
+     * @param required whether property is required
+     * @return this builder
+     */
+    public JsonSchemaBuilder objectProperty(String name, String description, boolean required)
+    {
+        Map<String, Object> prop = new LinkedHashMap<>();
+        prop.put("type", "object"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.put("description", description); //$NON-NLS-1$
+        properties.put(name, prop);
+
+        if (required)
+        {
+            this.required.add(name);
+        }
+        return this;
+    }
+
+    /**
+     * Adds an array-of-objects property to the schema. The element shape is declared
+     * as {@code {"items":{"type":"object"}}} only — deliberately not constraining the
+     * per-element fields, so the {@code outputSchema} describes "a list of records"
+     * without over-fitting to fields that may be conditional. Use for a
+     * {@code List<Map<...>>} field.
+     *
+     * @param name property name
+     * @param description property description
+     * @return this builder
+     */
+    public JsonSchemaBuilder objectArrayProperty(String name, String description)
+    {
+        return objectArrayProperty(name, description, false);
+    }
+
+    /**
+     * Adds an array-of-objects property to the schema (element shape unconstrained).
+     *
+     * @param name property name
+     * @param description property description
+     * @param required whether property is required
+     * @return this builder
+     */
+    public JsonSchemaBuilder objectArrayProperty(String name, String description, boolean required)
+    {
+        Map<String, Object> items = new LinkedHashMap<>();
+        items.put("type", "object"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Map<String, Object> prop = new LinkedHashMap<>();
+        prop.put("type", "array"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.put("items", items); //$NON-NLS-1$
+        prop.put("description", description); //$NON-NLS-1$
+        properties.put(name, prop);
+
+        if (required)
+        {
+            this.required.add(name);
+        }
+        return this;
+    }
+
+    /**
      * Builds the schema as a JSON string.
-     * 
+     *
      * @return JSON schema string
      */
     public String build()

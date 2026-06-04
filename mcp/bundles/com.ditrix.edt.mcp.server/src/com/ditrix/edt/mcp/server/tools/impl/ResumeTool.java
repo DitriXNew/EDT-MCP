@@ -56,6 +56,18 @@ public class ResumeTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("resumed", "Whether the thread or target was resumed") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("scope", "Resume scope: 'thread' or 'target'") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", "Application id of the resumed debug target") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("autoResolved", "Whether the lone active launch was auto-resolved") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

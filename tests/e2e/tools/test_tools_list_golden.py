@@ -8,8 +8,8 @@ The other tools/list test only checks ">0 tools + a few names"; ToolContractCons
 renamed (objectFqn -> fqn), a `required` entry dropped, an enum's allowed values
 changed, an annotation flipped, a description rewritten — passes CI unnoticed. This
 test pins the EXACT wire contract every MCP client sees (the serialized
-name + description + inputSchema + annotations for all 61 tools) against a committed
-golden file. Any change to that surface now shows up as a reviewable diff in this
+name + description + inputSchema + annotations + outputSchema for all tools) against a
+committed golden file. Any change to that surface now shows up as a reviewable diff in this
 file: intended changes are regenerated on purpose; unintended ones fail the suite.
 
 This guards the real SERIALIZED payload (what McpProtocolHandler emits over the wire),
@@ -41,7 +41,8 @@ def _canonical_tools_list():
     """Fetch the live tools/list and render it in a STABLE canonical form.
 
     Sorted by tool name, keys sorted recursively, UTF-8 preserved — so the only way
-    the text changes is a real change to a tool's name/description/inputSchema/annotations.
+    the text changes is a real change to a tool's
+    name/description/inputSchema/annotations/outputSchema.
     """
     raw = _post("tools/list", {})
     tools = (raw.get("result", {}) or {}).get("tools", []) or []
@@ -50,6 +51,9 @@ def _canonical_tools_list():
         "description": t.get("description", ""),
         "inputSchema": t.get("inputSchema"),
         "annotations": t.get("annotations"),
+        # outputSchema is present only on JSON tools (others omit it); capturing it
+        # here pins the structured-output contract against drift too.
+        "outputSchema": t.get("outputSchema"),
     } for t in sorted(tools, key=lambda t: t.get("name") or "")]
     return json.dumps(entries, sort_keys=True, ensure_ascii=False, indent=2) + "\n", len(entries)
 

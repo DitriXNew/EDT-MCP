@@ -52,10 +52,35 @@ public interface IMcpTool
     /**
      * Returns the JSON Schema for input parameters.
      * Used by MCP clients to validate input before calling the tool.
-     * 
+     *
      * @return input schema as JSON string
      */
     String getInputSchema();
+
+    /**
+     * Returns the JSON Schema (2020-12) describing this tool's {@code structuredContent}
+     * on success, or {@code null} when the tool returns no structured output.
+     * <p>
+     * Serialized into {@code tools/list} as the per-tool {@code outputSchema} so a
+     * client knows the shape of the structured result without calling the tool. The
+     * default is {@code null}: only {@link ResponseType#JSON} tools (which put their
+     * data in {@code structuredContent}) should override it; {@code TEXT}/{@code
+     * MARKDOWN}/{@code YAML}/{@code IMAGE} tools return content, not structured data,
+     * so they leave it {@code null}.
+     * <p>
+     * The schema MUST stay permissive — describe the success envelope ({@code success}
+     * plus the known top-level fields and their types) but do NOT set {@code
+     * additionalProperties:false} and do NOT mark conditional (branch-specific) fields
+     * as {@code required}. An over-strict schema would make a conformant client reject
+     * a valid response. Error results carry {@code isError:true} and are not validated
+     * against this schema. Build it with {@link com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder}.
+     *
+     * @return output schema as a JSON string, or {@code null} when there is none
+     */
+    default String getOutputSchema()
+    {
+        return null;
+    }
     
     /**
      * Executes the tool with the given parameters.

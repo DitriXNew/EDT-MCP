@@ -61,6 +61,16 @@ public class GetVariablesTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("variables", "Variables in the frame or expanded node, with name/value/type") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("count", "Number of variables returned") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

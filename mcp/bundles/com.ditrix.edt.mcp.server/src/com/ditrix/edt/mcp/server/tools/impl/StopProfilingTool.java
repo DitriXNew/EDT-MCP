@@ -68,6 +68,18 @@ public class StopProfilingTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("active", "Whether profiling is still active after the call") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("stopped", "Whether profiling was actually toggled off") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", "Application id the result refers to") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Human-readable summary of the outcome") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

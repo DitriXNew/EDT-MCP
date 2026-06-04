@@ -40,7 +40,43 @@
       ],
       "type": "object"
     },
-    "name": "add_metadata_attribute"
+    "name": "add_metadata_attribute",
+    "outputSchema": {
+      "properties": {
+        "attributeName": {
+          "description": "Programmatic name of the added attribute",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language code the synonym was written for",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable confirmation message",
+          "type": "string"
+        },
+        "parentFqn": {
+          "description": "Normalized FQN of the parent object",
+          "type": "string"
+        },
+        "persisted": {
+          "description": "Whether the change was saved to disk",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the attribute was added",
+          "type": "boolean"
+        },
+        "synonym": {
+          "description": "Display name written, when a synonym was provided",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -59,7 +95,34 @@
       "required": [],
       "type": "object"
     },
-    "name": "clean_project"
+    "name": "clean_project",
+    "outputSchema": {
+      "properties": {
+        "message": {
+          "description": "Human-readable completion message",
+          "type": "string"
+        },
+        "projects": {
+          "description": "Names of the projects that were cleaned",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "projectsCleaned": {
+          "description": "Number of projects that were cleaned",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -106,7 +169,47 @@
       ],
       "type": "object"
     },
-    "name": "create_metadata_object"
+    "name": "create_metadata_object",
+    "outputSchema": {
+      "properties": {
+        "fqn": {
+          "description": "FQN of the created object, e.g. 'Catalog.Products'",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language code the synonym was written for",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable confirmation message",
+          "type": "string"
+        },
+        "metadataType": {
+          "description": "Canonical metadata type of the created object",
+          "type": "string"
+        },
+        "name": {
+          "description": "Programmatic name of the created object",
+          "type": "string"
+        },
+        "persisted": {
+          "description": "Whether the change was saved to disk",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the object was created",
+          "type": "boolean"
+        },
+        "synonym": {
+          "description": "Display name written, when a synonym was provided",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -137,7 +240,51 @@
       "required": [],
       "type": "object"
     },
-    "name": "debug_launch"
+    "name": "debug_launch",
+    "outputSchema": {
+      "properties": {
+        "alreadyRunning": {
+          "description": "True if a matching session was already alive; re-launch skipped",
+          "type": "boolean"
+        },
+        "applicationId": {
+          "description": "Application id of the launched configuration",
+          "type": "string"
+        },
+        "attach": {
+          "description": "True if this is an Attach (server-side debug) configuration",
+          "type": "boolean"
+        },
+        "configurationType": {
+          "description": "Launch configuration type id",
+          "type": "string"
+        },
+        "launchConfiguration": {
+          "description": "Name of the launched/running launch configuration",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable status message",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Launch mode of the session (e.g. debug, run)",
+          "type": "string"
+        },
+        "project": {
+          "description": "EDT project name associated with the launch",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -156,7 +303,34 @@
       "required": [],
       "type": "object"
     },
-    "name": "debug_status"
+    "name": "debug_status",
+    "outputSchema": {
+      "properties": {
+        "count": {
+          "description": "Number of active debug launches returned",
+          "type": "integer"
+        },
+        "launches": {
+          "description": "Active debug launches with state and frame info",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "registry": {
+          "description": "Debug session registry snapshot counters",
+          "type": "object"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -199,7 +373,47 @@
       "required": [],
       "type": "object"
     },
-    "name": "debug_yaxunit_tests"
+    "name": "debug_yaxunit_tests",
+    "outputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Effective application id of the launched config",
+          "type": "string"
+        },
+        "junitXml": {
+          "description": "Full path to the junit.xml report file",
+          "type": "string"
+        },
+        "launched": {
+          "description": "Whether the debug launch was queued",
+          "type": "boolean"
+        },
+        "nextStep": {
+          "description": "Hint for the next tool call in the debug cycle",
+          "type": "string"
+        },
+        "preLaunch": {
+          "description": "Summary of pre-launch terminations and DB update",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "Effective EDT project name of the launched config",
+          "type": "string"
+        },
+        "reportDir": {
+          "description": "Directory where junit.xml will be written",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -229,7 +443,53 @@
       ],
       "type": "object"
     },
-    "name": "delete_metadata_object"
+    "name": "delete_metadata_object",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "Either 'preview' or 'executed'",
+          "type": "string"
+        },
+        "affectedReferences": {
+          "description": "References that would be affected (preview)",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "affectedReferencesCount": {
+          "description": "Count of affected references (preview)",
+          "type": "integer"
+        },
+        "items": {
+          "description": "Metadata items the deletion would remove (preview)",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "message": {
+          "description": "Human-readable description of the result",
+          "type": "string"
+        },
+        "objectFqn": {
+          "description": "FQN of the object targeted for deletion",
+          "type": "string"
+        },
+        "refactoringTitle": {
+          "description": "Title of the delete refactoring (preview)",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the request succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -255,7 +515,35 @@
       ],
       "type": "object"
     },
-    "name": "evaluate_expression"
+    "name": "evaluate_expression",
+    "outputSchema": {
+      "properties": {
+        "fullLength": {
+          "description": "Full length of value before truncation",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "truncated": {
+          "description": "True when value was truncated to the max length",
+          "type": "boolean"
+        },
+        "type": {
+          "description": "BSL reference type name of the evaluated value",
+          "type": "string"
+        },
+        "value": {
+          "description": "String representation of the evaluated value (may be truncated)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -281,7 +569,8 @@
       ],
       "type": "object"
     },
-    "name": "export_configuration_to_xml"
+    "name": "export_configuration_to_xml",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -311,7 +600,8 @@
       ],
       "type": "object"
     },
-    "name": "find_references"
+    "name": "find_references",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -364,7 +654,8 @@
       ],
       "type": "object"
     },
-    "name": "generate_translation_strings"
+    "name": "generate_translation_strings",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -385,7 +676,42 @@
       ],
       "type": "object"
     },
-    "name": "get_applications"
+    "name": "get_applications",
+    "outputSchema": {
+      "properties": {
+        "applications": {
+          "description": "Applications with id, name, type and update state",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "count": {
+          "description": "Number of applications found",
+          "type": "integer"
+        },
+        "defaultApplicationId": {
+          "description": "Id of the project's default application",
+          "type": "string"
+        },
+        "message": {
+          "description": "Informational message when no applications are found",
+          "type": "string"
+        },
+        "project": {
+          "description": "EDT project name the applications belong to",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -412,7 +738,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_bookmarks"
+    "name": "get_bookmarks",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -433,7 +760,8 @@
       ],
       "type": "object"
     },
-    "name": "get_check_description"
+    "name": "get_check_description",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -452,7 +780,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_configuration_properties"
+    "name": "get_configuration_properties",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -507,7 +836,54 @@
       ],
       "type": "object"
     },
-    "name": "get_content_assist"
+    "name": "get_content_assist",
+    "outputSchema": {
+      "properties": {
+        "column": {
+          "description": "1-based column where proposals were computed",
+          "type": "integer"
+        },
+        "file": {
+          "description": "Workspace-relative path of the module the proposals are for",
+          "type": "string"
+        },
+        "filteredOut": {
+          "description": "Proposals removed by the contains filter",
+          "type": "integer"
+        },
+        "line": {
+          "description": "1-based line where proposals were computed",
+          "type": "integer"
+        },
+        "proposals": {
+          "description": "Proposals as { displayString[, documentation] }",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "returnedProposals": {
+          "description": "Count of proposals returned in this page",
+          "type": "integer"
+        },
+        "skipped": {
+          "description": "Proposals consumed by the offset",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "totalProposals": {
+          "description": "Total proposals offered before any filter",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -521,7 +897,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_edt_version"
+    "name": "get_edt_version",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -556,7 +933,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_form_layout_snapshot"
+    "name": "get_form_layout_snapshot",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -583,7 +961,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_form_screenshot"
+    "name": "get_form_screenshot",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -613,7 +992,8 @@
       ],
       "type": "object"
     },
-    "name": "get_form_structure"
+    "name": "get_form_structure",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -650,7 +1030,8 @@
       ],
       "type": "object"
     },
-    "name": "get_metadata_details"
+    "name": "get_metadata_details",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -687,7 +1068,8 @@
       ],
       "type": "object"
     },
-    "name": "get_metadata_objects"
+    "name": "get_metadata_objects",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -730,7 +1112,8 @@
       ],
       "type": "object"
     },
-    "name": "get_method_call_hierarchy"
+    "name": "get_method_call_hierarchy",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -772,7 +1155,8 @@
       ],
       "type": "object"
     },
-    "name": "get_module_structure"
+    "name": "get_module_structure",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -805,7 +1189,8 @@
       ],
       "type": "object"
     },
-    "name": "get_objects_by_tags"
+    "name": "get_objects_by_tags",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -873,7 +1258,8 @@
       ],
       "type": "object"
     },
-    "name": "get_platform_documentation"
+    "name": "get_platform_documentation",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -892,7 +1278,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_problem_summary"
+    "name": "get_problem_summary",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -927,7 +1314,38 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_profiling_results"
+    "name": "get_profiling_results",
+    "outputSchema": {
+      "properties": {
+        "count": {
+          "description": "Number of profiling result sets returned",
+          "type": "integer"
+        },
+        "message": {
+          "description": "Informational note when no results are available",
+          "type": "string"
+        },
+        "profilingActive": {
+          "description": "Whether profiling is currently active",
+          "type": "boolean"
+        },
+        "results": {
+          "description": "Per-result sets: name, totalDurability, moduleCount and modules map of lines",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -982,7 +1400,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_project_errors"
+    "name": "get_project_errors",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -996,7 +1415,63 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_server_status"
+    "name": "get_server_status",
+    "outputSchema": {
+      "properties": {
+        "authEnabled": {
+          "description": "Whether bearer-token authentication is enabled",
+          "type": "boolean"
+        },
+        "checksFolderConfigured": {
+          "description": "Whether a checks folder path is configured",
+          "type": "boolean"
+        },
+        "edtVersion": {
+          "description": "Detected 1C:EDT version",
+          "type": "string"
+        },
+        "enabledTools": {
+          "description": "Number of tools currently enabled",
+          "type": "integer"
+        },
+        "formRenderFlags": {
+          "description": "Form-render JVM flag states keyed by flag name",
+          "type": "object"
+        },
+        "plainTextMode": {
+          "description": "Whether JSON responses are forced to plain text",
+          "type": "boolean"
+        },
+        "pluginVersion": {
+          "description": "Version of the EDT-MCP plugin",
+          "type": "string"
+        },
+        "port": {
+          "description": "TCP port the MCP server listens on",
+          "type": "integer"
+        },
+        "protocolVersion": {
+          "description": "MCP protocol version implemented by the server",
+          "type": "string"
+        },
+        "running": {
+          "description": "Whether the MCP server is currently running",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "totalTools": {
+          "description": "Total number of registered tools",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1030,7 +1505,8 @@
       ],
       "type": "object"
     },
-    "name": "get_subsystem_content"
+    "name": "get_subsystem_content",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1069,7 +1545,8 @@
       ],
       "type": "object"
     },
-    "name": "get_symbol_info"
+    "name": "get_symbol_info",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1090,7 +1567,8 @@
       ],
       "type": "object"
     },
-    "name": "get_tags"
+    "name": "get_tags",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1126,7 +1604,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_tasks"
+    "name": "get_tasks",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1147,7 +1626,8 @@
       ],
       "type": "object"
     },
-    "name": "get_tool_guide"
+    "name": "get_tool_guide",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1168,7 +1648,8 @@
       ],
       "type": "object"
     },
-    "name": "get_translation_project_info"
+    "name": "get_translation_project_info",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1199,7 +1680,30 @@
       "required": [],
       "type": "object"
     },
-    "name": "get_variables"
+    "name": "get_variables",
+    "outputSchema": {
+      "properties": {
+        "count": {
+          "description": "Number of variables returned",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "variables": {
+          "description": "Variables in the frame or expanded node, with name/value/type",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1233,7 +1737,8 @@
       ],
       "type": "object"
     },
-    "name": "go_to_definition"
+    "name": "go_to_definition",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1267,7 +1772,8 @@
       ],
       "type": "object"
     },
-    "name": "import_configuration_from_xml"
+    "name": "import_configuration_from_xml",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1286,7 +1792,30 @@
       "required": [],
       "type": "object"
     },
-    "name": "list_breakpoints"
+    "name": "list_breakpoints",
+    "outputSchema": {
+      "properties": {
+        "breakpoints": {
+          "description": "List of active line breakpoints",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "count": {
+          "description": "Number of breakpoints returned",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1314,7 +1843,30 @@
       "required": [],
       "type": "object"
     },
-    "name": "list_configurations"
+    "name": "list_configurations",
+    "outputSchema": {
+      "properties": {
+        "configurations": {
+          "description": "Matching launch configurations with their state.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "count": {
+          "description": "Number of configurations returned.",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1351,7 +1903,8 @@
       ],
       "type": "object"
     },
-    "name": "list_modules"
+    "name": "list_modules",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1365,7 +1918,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "list_projects"
+    "name": "list_projects",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1402,7 +1956,8 @@
       ],
       "type": "object"
     },
-    "name": "list_subsystems"
+    "name": "list_subsystems",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1433,7 +1988,8 @@
       ],
       "type": "object"
     },
-    "name": "read_method_source"
+    "name": "read_method_source",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1467,7 +2023,8 @@
       ],
       "type": "object"
     },
-    "name": "read_module_source"
+    "name": "read_module_source",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1502,7 +2059,23 @@
       "required": [],
       "type": "object"
     },
-    "name": "remove_breakpoint"
+    "name": "remove_breakpoint",
+    "outputSchema": {
+      "properties": {
+        "removed": {
+          "description": "True if a matching breakpoint was found and removed",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1545,7 +2118,8 @@
       ],
       "type": "object"
     },
-    "name": "rename_metadata_object"
+    "name": "rename_metadata_object",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1568,7 +2142,35 @@
       "required": [],
       "type": "object"
     },
-    "name": "resume"
+    "name": "resume",
+    "outputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Application id of the resumed debug target",
+          "type": "string"
+        },
+        "autoResolved": {
+          "description": "Whether the lone active launch was auto-resolved",
+          "type": "boolean"
+        },
+        "resumed": {
+          "description": "Whether the thread or target was resumed",
+          "type": "boolean"
+        },
+        "scope": {
+          "description": "Resume scope: 'thread' or 'target'",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1596,7 +2198,8 @@
       ],
       "type": "object"
     },
-    "name": "revalidate_objects"
+    "name": "revalidate_objects",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1643,7 +2246,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "run_yaxunit_tests"
+    "name": "run_yaxunit_tests",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1706,7 +2310,8 @@
       ],
       "type": "object"
     },
-    "name": "search_in_code"
+    "name": "search_in_code",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1739,7 +2344,47 @@
       ],
       "type": "object"
     },
-    "name": "set_breakpoint"
+    "name": "set_breakpoint",
+    "outputSchema": {
+      "properties": {
+        "breakpointId": {
+          "description": "Eclipse marker id of the created breakpoint (-1 if none)",
+          "type": "integer"
+        },
+        "degraded": {
+          "description": "True when only a marker-only breakpoint could be created",
+          "type": "boolean"
+        },
+        "lineNumber": {
+          "description": "1-based line number where the breakpoint was set",
+          "type": "integer"
+        },
+        "module": {
+          "description": "Legacy alias echo of the module identifier",
+          "type": "string"
+        },
+        "modulePath": {
+          "description": "Module identifier as supplied (EDT path or absolute path)",
+          "type": "string"
+        },
+        "resolvedFile": {
+          "description": "Workspace-relative path of the resolved .bsl file",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "warning": {
+          "description": "Warning text when the breakpoint is degraded/marker-only",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1760,7 +2405,35 @@
       ],
       "type": "object"
     },
-    "name": "start_profiling"
+    "name": "start_profiling",
+    "outputSchema": {
+      "properties": {
+        "active": {
+          "description": "Whether profiling is now active for this applicationId",
+          "type": "boolean"
+        },
+        "applicationId": {
+          "description": "Application id of the profiled debug session",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable status and next-step guidance",
+          "type": "string"
+        },
+        "started": {
+          "description": "True if this call started profiling, false if already active",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1795,7 +2468,50 @@
       ],
       "type": "object"
     },
-    "name": "step"
+    "name": "step",
+    "outputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Application id of the debug session",
+          "type": "string"
+        },
+        "frames": {
+          "description": "Stack frames: frameIndex, frameRef, name, line",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "hit": {
+          "description": "True if a suspend event was caught, false on timeout",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "Reason when not hit (e.g. timeout)",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "threadId": {
+          "description": "Id of the suspended thread",
+          "type": "integer"
+        },
+        "threadName": {
+          "description": "Name of the suspended thread",
+          "type": "string"
+        },
+        "topFrameRef": {
+          "description": "Stable ref of the top stack frame",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1816,7 +2532,35 @@
       ],
       "type": "object"
     },
-    "name": "stop_profiling"
+    "name": "stop_profiling",
+    "outputSchema": {
+      "properties": {
+        "active": {
+          "description": "Whether profiling is still active after the call",
+          "type": "boolean"
+        },
+        "applicationId": {
+          "description": "Application id the result refers to",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable summary of the outcome",
+          "type": "string"
+        },
+        "stopped": {
+          "description": "Whether profiling was actually toggled off",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1863,7 +2607,8 @@
       "required": [],
       "type": "object"
     },
-    "name": "terminate_launch"
+    "name": "terminate_launch",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1892,7 +2637,8 @@
       ],
       "type": "object"
     },
-    "name": "translate_configuration"
+    "name": "translate_configuration",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -1927,7 +2673,47 @@
       "required": [],
       "type": "object"
     },
-    "name": "update_database"
+    "name": "update_database",
+    "outputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Target application ID.",
+          "type": "string"
+        },
+        "applicationName": {
+          "description": "Display name of the target application.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable status message for the update.",
+          "type": "string"
+        },
+        "project": {
+          "description": "Target EDT project name.",
+          "type": "string"
+        },
+        "stateAfter": {
+          "description": "Application update state after the update.",
+          "type": "string"
+        },
+        "stateBefore": {
+          "description": "Application update state before the update.",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "updateType": {
+          "description": "Update mode applied: FULL or INCREMENTAL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1957,7 +2743,46 @@
       ],
       "type": "object"
     },
-    "name": "validate_query"
+    "name": "validate_query",
+    "outputSchema": {
+      "properties": {
+        "dcsMode": {
+          "description": "Whether DCS validation mode was used",
+          "type": "boolean"
+        },
+        "errorCount": {
+          "description": "Number of ERROR-severity issues",
+          "type": "integer"
+        },
+        "infoCount": {
+          "description": "Number of INFO-severity issues",
+          "type": "integer"
+        },
+        "issues": {
+          "description": "Validation issues; each has severity, message, optional line/column/offset",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "valid": {
+          "description": "true when the query has zero issues",
+          "type": "boolean"
+        },
+        "warningCount": {
+          "description": "Number of WARNING-severity issues",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -1980,7 +2805,54 @@
       "required": [],
       "type": "object"
     },
-    "name": "wait_for_break"
+    "name": "wait_for_break",
+    "outputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Application id of the debug session waited on",
+          "type": "string"
+        },
+        "autoResolved": {
+          "description": "True if applicationId was auto-resolved",
+          "type": "boolean"
+        },
+        "frames": {
+          "description": "Stack frames of the suspended thread",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "hit": {
+          "description": "True if a suspend was observed, false on timeout",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "Reason when no suspend occurred (e.g. 'timeout')",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "threadId": {
+          "description": "Id of the suspended thread",
+          "type": "integer"
+        },
+        "threadName": {
+          "description": "Name of the suspended thread",
+          "type": "string"
+        },
+        "topFrameRef": {
+          "description": "Stable frame reference of the top stack frame",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -2063,6 +2935,7 @@
       ],
       "type": "object"
     },
-    "name": "write_module_source"
+    "name": "write_module_source",
+    "outputSchema": null
   }
 ]

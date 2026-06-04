@@ -71,6 +71,22 @@ public class WaitForBreakTool implements IMcpTool
     }
 
     @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("hit", "True if a suspend was observed, false on timeout") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("reason", "Reason when no suspend occurred (e.g. 'timeout')") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationId", "Application id of the debug session waited on") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("autoResolved", "True if applicationId was auto-resolved") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("threadId", "Id of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("threadName", "Name of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("frames", "Stack frames of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("topFrameRef", "Stable frame reference of the top stack frame") //$NON-NLS-1$ //$NON-NLS-2$
+            .build();
+    }
+
+    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;
