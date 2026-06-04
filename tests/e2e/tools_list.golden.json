@@ -1893,7 +1893,25 @@
           "type": "integer"
         },
         "metadataType": {
-          "description": "Type filter, default 'all'. One of: all, documents, catalogs, commonModules, informationRegisters, accumulationRegisters, reports, dataProcessors, exchangePlans, businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices",
+          "description": "Type filter, default 'all' (case-insensitive).",
+          "enum": [
+            "all",
+            "documents",
+            "catalogs",
+            "commonModules",
+            "informationRegisters",
+            "accumulationRegisters",
+            "reports",
+            "dataProcessors",
+            "exchangePlans",
+            "businessProcesses",
+            "tasks",
+            "constants",
+            "commonCommands",
+            "commonForms",
+            "webServices",
+            "httpServices"
+          ],
           "type": "string"
         },
         "nameFilter": {

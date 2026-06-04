@@ -148,6 +148,14 @@ public class ListConfigurationsTool implements IMcpTool
         String typeFilter = JsonUtils.extractStringArgument(params, "type"); //$NON-NLS-1$
         String projectFilter = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
 
+        // Reject an out-of-set type instead of silently treating it as 'all' (the
+        // schema declares the enum; honour it at runtime too).
+        if (typeFilter != null && !typeFilter.isEmpty() && !isKnownTypeFilter(typeFilter))
+        {
+            return ToolResult.error("Invalid type: '" + typeFilter //$NON-NLS-1$
+                + "'. Must be one of: all, attach, client.").toJson(); //$NON-NLS-1$
+        }
+
         try
         {
             ILaunchManager launchManager = LaunchConfigUtils.getLaunchManager();
@@ -229,6 +237,19 @@ public class ListConfigurationsTool implements IMcpTool
         }
     }
 
+    /**
+     * Whether {@code filter} is an accepted type token. {@code all}/{@code attach}/
+     * {@code client} are the schema enum; {@code runtime}/{@code runtimeClient} are
+     * tolerated aliases of {@code client}. A genuinely-unknown value is rejected in
+     * {@link #execute} before the listing loop runs.
+     */
+    private static boolean isKnownTypeFilter(String filter)
+    {
+        return "all".equalsIgnoreCase(filter) || "attach".equalsIgnoreCase(filter) //$NON-NLS-1$ //$NON-NLS-2$
+            || "client".equalsIgnoreCase(filter) || "runtime".equalsIgnoreCase(filter) //$NON-NLS-1$ //$NON-NLS-2$
+            || "runtimeClient".equalsIgnoreCase(filter); //$NON-NLS-1$
+    }
+
     private static boolean matchesTypeFilter(String filter, boolean isAttach, boolean isClient)
     {
         if (filter == null || filter.isEmpty() || "all".equalsIgnoreCase(filter)) //$NON-NLS-1$
@@ -244,7 +265,8 @@ public class ListConfigurationsTool implements IMcpTool
         {
             return isClient;
         }
-        // Unknown filter — be permissive.
+        // Unreachable for unknown values: execute() rejects them upstream via
+        // isKnownTypeFilter. Kept as a defensive default.
         return true;
     }
 

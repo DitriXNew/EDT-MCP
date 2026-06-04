@@ -60,6 +60,9 @@ public class ListModulesToolTest
         assertNotNull(schema);
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"metadataType\"")); //$NON-NLS-1$
+        // metadataType is now a declared enum (schema honours the closed value set).
+        assertTrue("metadataType must declare an enum", schema.contains("\"enum\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("enum must list a known value", schema.contains("commonModules")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

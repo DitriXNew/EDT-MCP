@@ -30,7 +30,7 @@ AUDIT notes below for where the tool is intentionally lenient (no error path on
 bad input) — those are recorded, not papered over.
 """
 
-from harness import call, assert_ok, assert_no_diff, e2e_test
+from harness import call, assert_ok, assert_error, assert_error_quality, assert_no_diff, e2e_test
 
 
 def _configs_and_count(r, ctx):
@@ -141,28 +141,17 @@ def test_nonexistent_project_filter_returns_empty_not_garbage():
 
 
 @e2e_test(tool="list_configurations", kind="read")
-def test_unknown_type_filter_is_handled_not_crashing():
+def test_unknown_type_filter_is_rejected_not_silently_all():
     """An out-of-enum 'type' value: the schema declares enum {attach,client,all},
-    but execute()'s matchesTypeFilter is deliberately PERMISSIVE for unknown
-    filters (returns true -> behaves like 'all'). So a bad type must NOT crash and
-    must NOT silently drop valid configs — it must match the unfiltered listing."""
-    full = call("list_configurations", {})
-    assert_ok(full, "unfiltered baseline")
-    _, full_count = _configs_and_count(full, "unfiltered baseline")
-
-    r = call("list_configurations", {"type": "bogus_enum_value_e2e"})
-    # The tool itself never validates 'type', so this should succeed (behaving as
-    # 'all'). If a future schema-level enforcement rejects it, this assertion will
-    # surface that change instead of silently passing.
-    assert_ok(r, "unknown type filter should be permissive (behaves as 'all')")
-    _, count = _configs_and_count(r, "unknown type filter")
-    if count != full_count:
-        raise AssertionError(
-            "permissive unknown type must equal unfiltered count: %d != %d" % (count, full_count))
-    # AUDIT: the schema advertises type as a closed enum {attach,client,all}, but
-    # the implementation accepts ANY value and silently treats unknown filters as
-    # 'all' (matchesTypeFilter fall-through, ListConfigurationsTool.java:188-189).
-    # An out-of-enum value is neither rejected nor flagged — the schema enum is
-    # not enforced. A real validation error naming the bad value and listing the
-    # accepted set ({attach,client,all}) would be more actionable.
-    assert_no_diff("a read/list tool must not mutate the project on disk")
+    and execute() now HONOURS it — a genuinely-unknown filter is rejected with an
+    actionable error (it used to be silently treated as 'all', hiding a typo). The
+    accepted set is all/attach/client (+ the runtime/runtimeClient aliases of
+    client); only a value outside that set errors."""
+    bad = "bogus_enum_value_e2e"
+    r = call("list_configurations", {"type": bad})
+    e = assert_error(r, "out-of-enum type filter is rejected, not silently 'all'")
+    # Names the rejected value AND lists the valid set (delimiter-free anchors;
+    # Gson escapes the surrounding apostrophes but the value text is intact).
+    assert_error_quality(e, names=[bad], suggests=["attach", "client"],
+                         ctx="unknown type names the bad value and lists the valid set")
+    assert_no_diff("a rejected list call must not mutate the project on disk")

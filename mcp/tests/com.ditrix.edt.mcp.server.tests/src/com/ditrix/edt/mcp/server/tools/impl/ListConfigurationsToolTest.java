@@ -10,6 +10,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -17,10 +20,9 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 /**
  * Tests for {@link ListConfigurationsTool}.
  * <p>
- * Both parameters are optional and {@code execute()} goes straight to the live
- * launch manager, so there is no argument-validation branch reachable before
- * live access. The headless surface is the static contract; the configuration
- * list is covered by the E2E suite.
+ * Both parameters are optional. The out-of-enum {@code type} guard runs BEFORE the
+ * live launch-manager access, so it is the one argument-validation branch reachable
+ * headlessly; the configuration list itself is covered by the E2E suite.
  */
 public class ListConfigurationsToolTest
 {
@@ -57,6 +59,20 @@ public class ListConfigurationsToolTest
         assertNotNull(schema);
         assertTrue(schema.contains("\"type\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInvalidTypeRejected()
+    {
+        // The out-of-enum 'type' guard runs before any live launch-manager access,
+        // so it is headless-reachable: a genuinely-unknown value is rejected (not
+        // silently treated as 'all'), naming the value and the valid set.
+        Map<String, String> params = new HashMap<>();
+        params.put("type", "bogus_enum_value"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new ListConfigurationsTool().execute(params);
+        assertTrue("must be a structured error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must name the failing param value", result.contains("Invalid type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must echo the rejected value", result.contains("bogus_enum_value")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

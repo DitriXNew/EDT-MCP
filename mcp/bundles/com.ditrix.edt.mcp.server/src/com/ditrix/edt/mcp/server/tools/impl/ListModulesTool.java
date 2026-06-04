@@ -79,10 +79,12 @@ public class ListModulesTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
-            .stringProperty("metadataType", //$NON-NLS-1$
-                "Type filter, default 'all'. One of: all, documents, catalogs, commonModules, " + //$NON-NLS-1$
-                "informationRegisters, accumulationRegisters, reports, dataProcessors, exchangePlans, " + //$NON-NLS-1$
-                "businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices") //$NON-NLS-1$
+            .enumProperty("metadataType", //$NON-NLS-1$
+                "Type filter, default 'all' (case-insensitive).", //$NON-NLS-1$
+                "all", "documents", "catalogs", "commonModules", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "informationRegisters", "accumulationRegisters", "reports", "dataProcessors", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "exchangePlans", "businessProcesses", "tasks", "constants", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "commonCommands", "commonForms", "webServices", "httpServices") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .stringProperty("objectName", //$NON-NLS-1$
                 "Programmatic Name of one object to scope to, e.g. 'Products' (case-insensitive)") //$NON-NLS-1$
             .stringProperty("nameFilter", //$NON-NLS-1$
