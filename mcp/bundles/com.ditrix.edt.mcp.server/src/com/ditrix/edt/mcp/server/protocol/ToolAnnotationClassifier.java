@@ -48,7 +48,7 @@ public final class ToolAnnotationClassifier
      * recoverable operations as irreversible. They classify as ordinary non-destructive writes.</p>
      */
     private static final Set<String> DESTRUCTIVE_TOOLS = Set.of(
-        "delete_metadata_object", //$NON-NLS-1$
+        "delete_metadata", //$NON-NLS-1$
         "update_database", //$NON-NLS-1$
         "rename_metadata_object", //$NON-NLS-1$
         "delete_form_item", //$NON-NLS-1$

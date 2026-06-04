@@ -189,7 +189,7 @@ public class ToolGroupTest
     {
         List<String> tools = ToolGroup.REFACTORING.getToolNames();
         assertTrue(tools.contains("rename_metadata_object"));
-        assertTrue(tools.contains("delete_metadata_object"));
+        assertTrue(tools.contains("delete_metadata"));
         // create_metadata is the unified FQN-addressed create (folded the former
         // create_metadata_object + add_metadata_attribute).
         assertTrue(tools.contains("create_metadata"));

@@ -23,7 +23,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * files from disk.
  *
  * <p>Destructive: guarded by a confirm-preview (mirroring
- * {@link DeleteMetadataObjectTool} / {@link DeleteFormItemTool}). A bare call
+ * {@link DeleteMetadataTool} / {@link DeleteFormItemTool}). A bare call
  * resolves the project and reports what would be removed WITHOUT changing
  * anything; only {@code confirm:true} performs the deletion.
  *
@@ -88,7 +88,7 @@ public class DeleteProjectTool implements IMcpTool
             + "## Think twice - destructive (confirm-preview)\n\n" //$NON-NLS-1$
             + "Removing a project is destructive. With `deleteContent=true` the project's files are " //$NON-NLS-1$
             + "ALSO deleted from disk and cannot be recovered. The tool is guarded by a two-phase " //$NON-NLS-1$
-            + "workflow (mirroring delete_metadata_object):\n" //$NON-NLS-1$
+            + "workflow (mirroring delete_metadata):\n" //$NON-NLS-1$
             + "1. **Preview** (`confirm` omitted / false, the default): resolves the project and " //$NON-NLS-1$
             + "returns `action='preview'`, `confirmationRequired=true`, the project name and the " //$NON-NLS-1$
             + "`deleteContent` flag - WITHOUT removing anything.\n" //$NON-NLS-1$
@@ -141,7 +141,7 @@ public class DeleteProjectTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        // Confirm-preview gate (mirrors delete_metadata_object / delete_form_item): a bare call
+        // Confirm-preview gate (mirrors delete_metadata / delete_form_item): a bare call
         // resolves the project and reports what would be removed WITHOUT changing anything; only
         // confirm=true performs the removal. The project is confirmed to exist above, so the
         // preview is trustworthy.

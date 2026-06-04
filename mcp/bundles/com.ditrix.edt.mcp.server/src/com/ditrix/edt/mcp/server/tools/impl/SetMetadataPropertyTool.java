@@ -65,7 +65,7 @@ public class SetMetadataPropertyTool extends AbstractMetadataWriteTool
             .stringProperty("objectFqn", //$NON-NLS-1$
                 "FQN of the object to edit, e.g. 'Catalog.Products' (required; TYPE token may be " + //$NON-NLS-1$
                 "en/ru; object part is the programmatic Name, not the synonym). Canonical FQN " + //$NON-NLS-1$
-                "parameter, shared with find_references / delete_metadata_object / " + //$NON-NLS-1$
+                "parameter, shared with find_references / delete_metadata / " + //$NON-NLS-1$
                 "rename_metadata_object / create_metadata.", true) //$NON-NLS-1$
             .stringProperty("attributeName", //$NON-NLS-1$
                 "Optional name of an attribute of objectFqn to edit instead of the object itself; " + //$NON-NLS-1$
@@ -114,7 +114,7 @@ public class SetMetadataPropertyTool extends AbstractMetadataWriteTool
             // The escape below spells the Russian Catalog token (Spravochnik).
             + "`\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.Products`); the object " //$NON-NLS-1$
             + "part is the programmatic Name, NOT the synonym / display name. `objectFqn` is the " //$NON-NLS-1$
-            + "canonical FQN parameter shared with find_references / delete_metadata_object / " //$NON-NLS-1$
+            + "canonical FQN parameter shared with find_references / delete_metadata / " //$NON-NLS-1$
             + "rename_metadata_object / create_metadata.\n" //$NON-NLS-1$
             + "- `attributeName` (optional) - name of an attribute of `objectFqn` to edit INSTEAD of " //$NON-NLS-1$
             + "the object itself. Matched case-insensitively by its programmatic Name. When omitted, " //$NON-NLS-1$

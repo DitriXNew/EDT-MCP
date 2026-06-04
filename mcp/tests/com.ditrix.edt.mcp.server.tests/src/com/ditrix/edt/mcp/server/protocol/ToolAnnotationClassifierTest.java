@@ -20,7 +20,7 @@ public class ToolAnnotationClassifierTest
     @Test
     public void testDestructiveTool()
     {
-        ToolAnnotations a = ToolAnnotationClassifier.classify("delete_metadata_object");
+        ToolAnnotations a = ToolAnnotationClassifier.classify("delete_metadata");
         assertEquals("destructive tool must be destructiveHint=true",
             Boolean.TRUE, a.getDestructiveHint());
         assertEquals("destructive tool must be readOnlyHint=false",
@@ -31,7 +31,7 @@ public class ToolAnnotationClassifierTest
     public void testAllDestructiveTools()
     {
         for (String name : new String[] {
-            "delete_metadata_object",
+            "delete_metadata",
             "update_database",
             "rename_metadata_object",
             "delete_form_item",
@@ -100,7 +100,7 @@ public class ToolAnnotationClassifierTest
         assertEquals(Boolean.FALSE,
             ToolAnnotationClassifier.classify("write_module_source").getOpenWorldHint());
         assertEquals(Boolean.FALSE,
-            ToolAnnotationClassifier.classify("delete_metadata_object").getOpenWorldHint());
+            ToolAnnotationClassifier.classify("delete_metadata").getOpenWorldHint());
     }
 
     @Test

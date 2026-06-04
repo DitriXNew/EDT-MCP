@@ -187,7 +187,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             // check the underlying EDT API still throws (with a less direct
             // message) and we'd surface it via the catch block — but a clean
             // up-front error is friendlier and matches the validation pattern
-            // used elsewhere (DeleteMetadataObjectTool, CleanProjectTool, etc.).
+            // used elsewhere (DeleteMetadataTool, CleanProjectTool, etc.).
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             IProject existing = workspace.getRoot().getProject(projectName);
             if (existing != null && existing.exists())

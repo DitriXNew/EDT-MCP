@@ -107,7 +107,7 @@ public class UpdateDatabaseTool implements IMcpTool
             + "This tool mutates the infobase and is **irreversible**. Run it ONLY on an explicit " //$NON-NLS-1$
             + "user request. A full update can drop/recreate database structures; back up or be " //$NON-NLS-1$
             + "sure the infobase is disposable.\n\n" //$NON-NLS-1$
-            + "It is guarded by a two-phase workflow (mirroring delete_metadata_object):\n" //$NON-NLS-1$
+            + "It is guarded by a two-phase workflow (mirroring delete_metadata):\n" //$NON-NLS-1$
             + "1. **Preview** (`confirm` omitted / false, the default): resolves the target and " //$NON-NLS-1$
             + "returns `action='preview'`, `confirmationRequired=true`, the resolved " //$NON-NLS-1$
             + "project/applicationId/applicationName, the `updateType` (FULL/INCREMENTAL) and " //$NON-NLS-1$
@@ -290,7 +290,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     ? ApplicationUpdateType.FULL
                     : ApplicationUpdateType.INCREMENTAL;
 
-            // Confirm-preview gate (mirrors delete_metadata_object / delete_form_item): a bare call
+            // Confirm-preview gate (mirrors delete_metadata / delete_form_item): a bare call
             // resolves the target and reports the exact IRREVERSIBLE action WITHOUT touching the
             // infobase; only confirm=true actually applies it. All validation above (project open,
             // application exists, not already being updated) has run, so the preview is trustworthy.

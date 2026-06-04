@@ -44,7 +44,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
  * the caller should re-read the form with {@code get_form_structure} afterwards.
  * <p>
  * A mandatory confirm-preview guards the deletion (mirroring
- * {@link DeleteMetadataObjectTool}): when {@code confirm} is not {@code true} the
+ * {@link DeleteMetadataTool}): when {@code confirm} is not {@code true} the
  * tool returns a PREVIEW of exactly what WOULD be removed - the item, its type,
  * and its contained descendant items (name + type) with a count - and makes NO
  * model change at all (it opens NO write transaction). Only {@code confirm:true}
