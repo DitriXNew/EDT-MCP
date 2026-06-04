@@ -5,7 +5,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Add a new attribute to a metadata object (Catalog, Document, register, etc.) with default properties, persisted to disk. Use to extend an object's data model; the parentFqn TYPE token may be English or Russian. Full parameters and examples: call get_tool_guide('add_metadata_attribute').",
+    "description": "Add a new attribute to a metadata object (Catalog, Document, register, etc.) with default properties, persisted to disk. Use to extend an object's data model; the objectFqn TYPE token may be English or Russian (alias: parentFqn). Full parameters and examples: call get_tool_guide('add_metadata_attribute').",
     "inputSchema": {
       "properties": {
         "attributeName": {
@@ -20,8 +20,12 @@
           "description": "Optional language code for the synonym, e.g. 'ru'/'en' (default: config default)",
           "type": "string"
         },
+        "objectFqn": {
+          "description": "FQN of the object to extend, e.g. 'Catalog.Products' (TYPE token may be en/ru; object part is the programmatic Name, not the synonym). Canonical FQN parameter, shared with find_references / delete_metadata_object / rename_metadata_object. Provide objectFqn OR its alias parentFqn.",
+          "type": "string"
+        },
         "parentFqn": {
-          "description": "FQN of the parent object, e.g. 'Catalog.Products' (TYPE token may be en/ru; object part is the programmatic Name, not the synonym)",
+          "description": "Deprecated alias of 'objectFqn', kept for backward compatibility.",
           "type": "string"
         },
         "projectName": {
@@ -35,7 +39,6 @@
       },
       "required": [
         "projectName",
-        "parentFqn",
         "attributeName"
       ],
       "type": "object"
@@ -55,8 +58,12 @@
           "description": "Human-readable confirmation message",
           "type": "string"
         },
+        "objectFqn": {
+          "description": "Normalized FQN of the object (canonical)",
+          "type": "string"
+        },
         "parentFqn": {
-          "description": "Normalized FQN of the parent object",
+          "description": "Normalized FQN of the object (deprecated alias of objectFqn)",
           "type": "string"
         },
         "persisted": {
@@ -747,11 +754,15 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get detailed description of an EDT check by its ID. Returns markdown content with check explanation, examples, and how to fix. Requires a configured check-descriptions folder (MCP preferences); without it the tool returns a configuration error.",
+    "description": "Get detailed description of an EDT check by its ID. Returns markdown content with check explanation, examples, and how to fix. Accepts the symbolic check id OR the short UID code shown by get_project_errors (pass projectName so the UID can be resolved). Requires a configured check-descriptions folder (MCP preferences); without it the tool returns a configuration error.",
     "inputSchema": {
       "properties": {
         "checkId": {
-          "description": "Check ID (e.g. 'begin-transaction', 'ql-temp-table-index')",
+          "description": "Check id: the symbolic dash-cased id (e.g. 'begin-transaction', 'ql-temp-table-index') OR the short UID code from get_project_errors (e.g. 'SU23'); a UID is resolved when projectName is also supplied. Precondition: a check-descriptions folder must be configured in MCP preferences, else the tool returns a configuration error.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "Optional EDT project name. Required only to resolve a short UID checkId (e.g. 'SU23') to its symbolic id; ignored when checkId is already symbolic.",
           "type": "string"
         }
       },

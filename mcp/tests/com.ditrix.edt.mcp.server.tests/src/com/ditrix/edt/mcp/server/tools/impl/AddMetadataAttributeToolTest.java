@@ -56,6 +56,9 @@ public class AddMetadataAttributeToolTest
         String schema = new AddMetadataAttributeTool().getInputSchema();
         assertNotNull(schema);
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
+        // Canonical 'objectFqn' (aligned with find_references/delete/rename) plus the
+        // back-compat 'parentFqn' alias — both declared (and both read by execute()).
+        assertTrue(schema.contains("\"objectFqn\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"parentFqn\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"attributeName\"")); //$NON-NLS-1$
         // Optional synonym/language for writing a localized display name.
@@ -87,8 +90,25 @@ public class AddMetadataAttributeToolTest
         assertTrue("schema must declare required array", requiredIdx >= 0); //$NON-NLS-1$
         String tail = schema.substring(requiredIdx);
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("parentFqn must be required", tail.contains("\"parentFqn\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("attributeName must be required", tail.contains("\"attributeName\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        // objectFqn / parentFqn are NOT individually required: exactly one of them is
+        // required at runtime (the JSON schema cannot express that XOR), so neither
+        // appears in the required[] array.
+        assertFalse("objectFqn must NOT be in required (runtime XOR with parentFqn)", //$NON-NLS-1$
+            tail.contains("\"objectFqn\"")); //$NON-NLS-1$
+        assertFalse("parentFqn must NOT be in required (alias of objectFqn)", //$NON-NLS-1$
+            tail.contains("\"parentFqn\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testObjectFqnIsCanonicalWithParentFqnAlias()
+    {
+        // The schema must declare both the canonical objectFqn and its back-compat
+        // alias parentFqn; the SchemaExecuteParamParityTest separately enforces that
+        // both are read by execute().
+        String schema = new AddMetadataAttributeTool().getInputSchema();
+        assertTrue("objectFqn must be declared", schema.contains("\"objectFqn\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("parentFqn alias must be declared", schema.contains("\"parentFqn\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

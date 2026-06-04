@@ -156,6 +156,38 @@ def test_add_attribute_russian_type_token_resolves_same_parent():
         "the Russian type token must resolve to the same Catalog object (attribute present)")
 
 
+@e2e_test(tool="add_metadata_attribute", kind="write-metadata")
+def test_add_attribute_via_canonical_objectfqn_param():
+    # objectFqn is the CANONICAL FQN parameter (shared with find_references /
+    # delete_metadata_object / rename_metadata_object); parentFqn is now a back-compat
+    # alias (still exercised by the other tests in this file). This proves the
+    # canonical key works end-to-end AND stays bilingual: the Russian Catalog type
+    # token "Справочник" normalizes to "Catalog" and resolves to the same object. A
+    # regression in the alias precedence (objectFqn ?: parentFqn) or the bilingual
+    # resolver would make this miss -> "objectFqn is required" or "Parent object not
+    # found".
+    parent_ru = "Справочник.Catalog"  # Справочник.Catalog (Russian Catalog token)
+    new_attr = "E2EObjectFqnCanonical"
+
+    before = _details_full("Catalog.Catalog")
+    assert_ok(before, "read parent before canonical-objectFqn add")
+    assert_not_contains(before.text, new_attr, "probe attribute absent before the add")
+
+    r = call("add_metadata_attribute", {
+        "projectName": PROJECT,
+        "objectFqn": parent_ru,
+        "attributeName": new_attr,
+    })
+    assert_ok(r, "add via canonical objectFqn param + Russian type token")
+
+    after = _details_full("Catalog.Catalog")
+    assert_ok(after, "read Catalog.Catalog after canonical-objectFqn add")
+    assert_contains(after.text, new_attr,
+        "the canonical objectFqn param must resolve the same object (attribute present)")
+    poll_diff_contains("<name>%s</name>" % new_attr,
+        ctx="canonical objectFqn add persists to Catalog.mdo")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — missing required params (whole-call errors)
 # Each rejected write must also leave the project clean on disk.

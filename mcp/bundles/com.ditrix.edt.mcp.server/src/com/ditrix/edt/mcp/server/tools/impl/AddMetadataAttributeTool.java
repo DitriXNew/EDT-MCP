@@ -59,7 +59,7 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
     {
         return "Add a new attribute to a metadata object (Catalog, Document, register, etc.) " + //$NON-NLS-1$
                "with default properties, persisted to disk. Use to extend an object's data model; " + //$NON-NLS-1$
-               "the parentFqn TYPE token may be English or Russian. " + //$NON-NLS-1$
+               "the objectFqn TYPE token may be English or Russian (alias: parentFqn). " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('add_metadata_attribute')."; //$NON-NLS-1$
     }
 
@@ -69,9 +69,13 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required)", true) //$NON-NLS-1$
+            .stringProperty("objectFqn", //$NON-NLS-1$
+                "FQN of the object to extend, e.g. 'Catalog.Products' (TYPE token may be en/ru; " + //$NON-NLS-1$
+                "object part is the programmatic Name, not the synonym). Canonical FQN parameter, " + //$NON-NLS-1$
+                "shared with find_references / delete_metadata_object / rename_metadata_object. " + //$NON-NLS-1$
+                "Provide objectFqn OR its alias parentFqn.") //$NON-NLS-1$
             .stringProperty("parentFqn", //$NON-NLS-1$
-                "FQN of the parent object, e.g. 'Catalog.Products' (TYPE token may be en/ru; " + //$NON-NLS-1$
-                "object part is the programmatic Name, not the synonym)", true) //$NON-NLS-1$
+                "Deprecated alias of 'objectFqn', kept for backward compatibility.") //$NON-NLS-1$
             .stringProperty("attributeName", //$NON-NLS-1$
                 "Name for the new attribute (required)", true) //$NON-NLS-1$
             .stringProperty("synonym", //$NON-NLS-1$
@@ -89,7 +93,8 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the attribute was added", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("parentFqn", "Normalized FQN of the parent object") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("objectFqn", "Normalized FQN of the object (canonical)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("parentFqn", "Normalized FQN of the object (deprecated alias of objectFqn)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("attributeName", "Programmatic name of the added attribute") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("persisted", "Whether the change was saved to disk") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("synonym", "Display name written, when a synonym was provided") //$NON-NLS-1$ //$NON-NLS-2$
@@ -117,11 +122,14 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             + "(or one without an attribute collection) is rejected.\n\n" //$NON-NLS-1$
             + "## Parameters\n\n" //$NON-NLS-1$
             + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
-            + "- `parentFqn` (required) - FQN of the parent object as `Type.Name`. The TYPE token " //$NON-NLS-1$
+            + "- `objectFqn` (required; alias `parentFqn`) - FQN of the object to extend as " //$NON-NLS-1$
+            + "`Type.Name`. The TYPE token " //$NON-NLS-1$
             + "may be English or Russian (e.g. `Catalog.Products` or the Russian Catalog token " //$NON-NLS-1$
             // The escape below spells the Russian Catalog token (Spravochnik).
             + "`\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.Products`); the object " //$NON-NLS-1$
-            + "part is the programmatic Name, NOT the synonym / display name.\n" //$NON-NLS-1$
+            + "part is the programmatic Name, NOT the synonym / display name. `objectFqn` is the " //$NON-NLS-1$
+            + "canonical FQN parameter shared with find_references / delete_metadata_object / " //$NON-NLS-1$
+            + "rename_metadata_object; `parentFqn` is a back-compat alias.\n" //$NON-NLS-1$
             + "- `attributeName` (required) - new attribute name. Must be a valid 1C identifier: " //$NON-NLS-1$
             + "start with a letter or `_`, then letters / digits / `_` only. Cyrillic letters are " //$NON-NLS-1$
             + "valid. Case-insensitive duplicate of an existing attribute is rejected.\n" //$NON-NLS-1$
@@ -134,7 +142,7 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             + "## Bilingual (ru/en) notes\n\n" //$NON-NLS-1$
             + "The synonym EMap is keyed by the language CODE (`ru`/`en`), never the language " //$NON-NLS-1$
             + "name. If you pass `language`, pass the code. The parent object is resolved by its " //$NON-NLS-1$
-            + "programmatic Name; only the TYPE token in `parentFqn` is dialect-aware.\n\n" //$NON-NLS-1$
+            + "programmatic Name; only the TYPE token in `objectFqn` is dialect-aware.\n\n" //$NON-NLS-1$
             + "## expectedNotExists (stale-intent guard)\n\n" //$NON-NLS-1$
             + "Set `true` to assert that, per the snapshot you last read, the parent has NO " //$NON-NLS-1$
             + "attribute with this name. If one already exists, the add is rejected with a " //$NON-NLS-1$
@@ -144,20 +152,21 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
             + "snapshot. The authoritative duplicate check still runs inside the write " //$NON-NLS-1$
             + "transaction (TOCTOU guard).\n\n" //$NON-NLS-1$
             + "## Result\n\n" //$NON-NLS-1$
-            + "JSON with `parentFqn`, `attributeName`, `persisted` (true once the parent `.mdo` was " //$NON-NLS-1$
+            + "JSON with `objectFqn` (and `parentFqn` as a back-compat alias of the same value), " //$NON-NLS-1$
+            + "`attributeName`, `persisted` (true once the parent `.mdo` was " //$NON-NLS-1$
             + "exported to disk), and a `message`. When a synonym was written, `synonym` and the " //$NON-NLS-1$
             + "resolved `language` code are echoed back so you can confirm the localized name " //$NON-NLS-1$
             + "without a second read.\n\n" //$NON-NLS-1$
             + "## Examples\n\n" //$NON-NLS-1$
-            + "Minimal: `{projectName: 'MyProject', parentFqn: 'Catalog.Products', " //$NON-NLS-1$
+            + "Minimal: `{projectName: 'MyProject', objectFqn: 'Catalog.Products', " //$NON-NLS-1$
             + "attributeName: 'Weight'}`\n\n" //$NON-NLS-1$
             + "With a localized synonym: `{projectName: 'MyProject', " //$NON-NLS-1$
-            + "parentFqn: 'Document.SalesOrder', attributeName: 'Discount', synonym: 'Discount', " //$NON-NLS-1$
+            + "objectFqn: 'Document.SalesOrder', attributeName: 'Discount', synonym: 'Discount', " //$NON-NLS-1$
             + "language: 'en'}`\n\n" //$NON-NLS-1$
-            + "Guarded add: `{projectName: 'MyProject', parentFqn: 'Catalog.Products', " //$NON-NLS-1$
+            + "Guarded add: `{projectName: 'MyProject', objectFqn: 'Catalog.Products', " //$NON-NLS-1$
             + "attributeName: 'Weight', expectedNotExists: true}`\n\n" //$NON-NLS-1$
             + "## Gotchas\n\n" //$NON-NLS-1$
-            + "- `parentFqn` not found -> error pointing to get_metadata_objects; check `Type.Name` " //$NON-NLS-1$
+            + "- `objectFqn` not found -> error pointing to get_metadata_objects; check `Type.Name` " //$NON-NLS-1$
             + "and that you used the Name, not the synonym.\n" //$NON-NLS-1$
             + "- Attribute is created with DEFAULT type/length; adjust afterwards.\n" //$NON-NLS-1$
             + "- If `persisted` is false the in-memory model changed but the `.mdo` write did not " //$NON-NLS-1$
@@ -168,27 +177,31 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
     protected String executeOnUiThread(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        // Canonical 'objectFqn' (aligned with find_references / delete_metadata_object /
+        // rename_metadata_object); 'parentFqn' is a back-compat alias. Prefer objectFqn
+        // when present, else fall back to the alias.
+        String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
         String parentFqn = JsonUtils.extractStringArgument(params, "parentFqn"); //$NON-NLS-1$
+        String effectiveFqn = (objectFqn != null && !objectFqn.isEmpty()) ? objectFqn : parentFqn;
         String attributeName = JsonUtils.extractStringArgument(params, "attributeName"); //$NON-NLS-1$
         String synonym = JsonUtils.extractStringArgument(params, "synonym"); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
         boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, "expectedNotExists", false); //$NON-NLS-1$
 
         String err = JsonUtils.requireArgument(params, "projectName", //$NON-NLS-1$
-            ". Usage: {projectName: 'MyProject', parentFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
+            ". Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
         }
-        err = JsonUtils.requireArgument(params, "parentFqn", //$NON-NLS-1$
-            ". Examples: 'Catalog.Products', 'Document.SalesOrder'. " //$NON-NLS-1$
-            + "Usage: {parentFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
-        if (err != null)
+        if (effectiveFqn == null || effectiveFqn.isEmpty())
         {
-            return err;
+            return ToolResult.error("objectFqn is required (alias: parentFqn). " //$NON-NLS-1$
+                + "Examples: 'Catalog.Products', 'Document.SalesOrder'. " //$NON-NLS-1$
+                + "Usage: {objectFqn: 'Catalog.Products', attributeName: 'Weight'}").toJson(); //$NON-NLS-1$
         }
         err = JsonUtils.requireArgument(params, "attributeName", //$NON-NLS-1$
-            ". Usage: {parentFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
+            ". Usage: {objectFqn: 'Catalog.Products', attributeName: 'Weight'}"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
@@ -199,7 +212,7 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
                 "A name must start with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
 
-        return executeInternal(projectName, parentFqn, attributeName, synonym, language,
+        return executeInternal(projectName, effectiveFqn, attributeName, synonym, language,
             expectedNotExists);
     }
 
@@ -336,7 +349,10 @@ public class AddMetadataAttributeTool extends AbstractMetadataWriteTool
         // lost on refresh / clean_project / EDT restart. Runs AFTER the write commit.
         boolean persisted = BmTransactions.forceExportToDisk(project, normalizedParentFqn);
 
+        // objectFqn is the canonical key; parentFqn echoes the same value as a
+        // back-compat alias so existing chains keep reading it.
         ToolResult result = ToolResult.success()
+            .put("objectFqn", normalizedParentFqn) //$NON-NLS-1$
             .put("parentFqn", normalizedParentFqn) //$NON-NLS-1$
             .put("attributeName", attributeName) //$NON-NLS-1$
             .put("persisted", persisted); //$NON-NLS-1$
