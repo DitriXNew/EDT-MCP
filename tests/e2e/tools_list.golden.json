@@ -2430,6 +2430,88 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Set the Comment and/or Synonym of an existing metadata object (or one of its attributes via attributeName), persisted to disk. The objectFqn TYPE token may be English or Russian; the synonym is keyed by language code. To change OTHER properties (type, flags, ...) use the export_configuration_to_xml -> edit XML -> import_configuration_from_xml path. Full parameters and examples: call get_tool_guide('set_metadata_property').",
+    "inputSchema": {
+      "properties": {
+        "attributeName": {
+          "description": "Optional name of an attribute of objectFqn to edit instead of the object itself; when omitted, the object itself is the target",
+          "type": "string"
+        },
+        "comment": {
+          "description": "Optional new Comment (plain text). Provide comment and/or synonym (at least one)",
+          "type": "string"
+        },
+        "language": {
+          "description": "Optional language code for the synonym, e.g. 'ru'/'en' (default: config default)",
+          "type": "string"
+        },
+        "objectFqn": {
+          "description": "FQN of the object to edit, e.g. 'Catalog.Products' (required; TYPE token may be en/ru; object part is the programmatic Name, not the synonym). Canonical FQN parameter, shared with find_references / delete_metadata_object / rename_metadata_object / add_metadata_attribute.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name (required)",
+          "type": "string"
+        },
+        "synonym": {
+          "description": "Optional new Synonym (display name), written for 'language' or the config default",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "objectFqn"
+      ],
+      "type": "object"
+    },
+    "name": "set_metadata_property",
+    "outputSchema": {
+      "properties": {
+        "attributeName": {
+          "description": "Name of the edited attribute, when one was targeted",
+          "type": "string"
+        },
+        "comment": {
+          "description": "Comment written, when a comment was provided",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language code the synonym was written for",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable confirmation message",
+          "type": "string"
+        },
+        "objectFqn": {
+          "description": "Normalized FQN of the object (canonical)",
+          "type": "string"
+        },
+        "persisted": {
+          "description": "Whether the change was saved to disk",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the property was set",
+          "type": "boolean"
+        },
+        "synonym": {
+          "description": "Synonym written, when a synonym was provided",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Start performance measurement (замер производительности) on the active debug target. Enables line-level profiling: call counts and timing for every executed BSL line. Start-only and idempotent: if profiling is already active for this applicationId it stays on. Call stop_profiling to stop, then get_profiling_results to see which code was covered. Requires an active debug session (debug_launch or debug_yaxunit_tests).",
     "inputSchema": {
       "properties": {
