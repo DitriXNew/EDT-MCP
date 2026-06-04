@@ -56,8 +56,9 @@ mutation-sensitive against the SPECIFIC message, not just is_error):
 Parameter shape (from getInputSchema / execute) — all OPTIONAL at the schema level;
 the required-ness is conditional and enforced in code:
     launchConfigurationName (str), projectName (str), applicationId (str),
-    extensions (str), modules (str), tests (str), timeout (int, default 60,
-    clamped to >=1), updateBeforeLaunch (bool, default true).
+    extensions (array), modules (array), tests (array) -- each declared type:array
+    but a comma-separated string is also accepted (shared extractArrayArgument),
+    timeout (int, default 60, clamped to >=1), updateBeforeLaunch (bool, default true).
 There is NO closed enum and NO declared XOR pair; the real conditional-required
 branches (projectName/applicationId vs launchConfigurationName) ARE exercised below.
 

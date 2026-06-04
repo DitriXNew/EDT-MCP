@@ -100,9 +100,9 @@ public class RunYaxunitTestsTool implements IMcpTool
             .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted).") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", //$NON-NLS-1$
                 "Application ID from get_applications (required if launchConfigurationName is omitted).") //$NON-NLS-1$
-            .stringProperty("extensions", "Comma-separated extension names to filter tests.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("modules", "Comma-separated module names to filter tests.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("tests", "Comma-separated test names in Module.Method format.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("extensions", "Extension names to filter tests (array; a comma-separated string is also accepted).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("modules", "Module names to filter tests (array; a comma-separated string is also accepted).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("tests", "Test names in Module.Method format (array; a comma-separated string is also accepted).") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("timeout", "Polling window in seconds (default: 60); on expiry returns Pending.") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
                 "Auto-chain (default: true): terminate a live client and run a silent DB update first.") //$NON-NLS-1$
@@ -130,7 +130,8 @@ public class RunYaxunitTestsTool implements IMcpTool
             + "`list_configurations`. When set, `projectName` and `applicationId` are derived from it.\n" //$NON-NLS-1$
             + "- `projectName` + `applicationId` — required together when `launchConfigurationName` is " //$NON-NLS-1$
             + "omitted. Get the application id from `get_applications`.\n\n" //$NON-NLS-1$
-            + "Optional test filters (comma-separated, AND-combined):\n\n" //$NON-NLS-1$
+            + "Optional test filters (each an array of names, AND-combined; a " //$NON-NLS-1$
+            + "comma-separated string is also accepted):\n\n" //$NON-NLS-1$
             + "- `extensions` — restrict to tests in these extensions.\n" //$NON-NLS-1$
             + "- `modules` — restrict to these test modules.\n" //$NON-NLS-1$
             + "- `tests` — individual tests in `Module.Method` format.\n\n" //$NON-NLS-1$
@@ -163,7 +164,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             + "Run by project + application, filtered to two modules:\n\n" //$NON-NLS-1$
             + "```json\n" //$NON-NLS-1$
             + "{ \"projectName\": \"MyProject\", \"applicationId\": \"<id-from-get_applications>\", " //$NON-NLS-1$
-            + "\"modules\": \"Tests_Catalog, Tests_Document\" }\n" //$NON-NLS-1$
+            + "\"modules\": [\"Tests_Catalog\", \"Tests_Document\"] }\n" //$NON-NLS-1$
             + "```\n\n" //$NON-NLS-1$
             + "Run a single test method with a longer window:\n\n" //$NON-NLS-1$
             + "```json\n" //$NON-NLS-1$
@@ -196,9 +197,13 @@ public class RunYaxunitTestsTool implements IMcpTool
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
-        String extensions = JsonUtils.extractStringArgument(params, "extensions"); //$NON-NLS-1$
-        String modules = JsonUtils.extractStringArgument(params, "modules"); //$NON-NLS-1$
-        String tests = JsonUtils.extractStringArgument(params, "tests"); //$NON-NLS-1$
+        // extensions/modules/tests are declared as arrays but threaded internally as
+        // comma-strings (cache key, retry, buildParamsJson). extractArrayArgument accepts
+        // BOTH a JSON array and a comma-separated string; re-join to the canonical comma
+        // form so the downstream String plumbing is unchanged.
+        String extensions = joinList(JsonUtils.extractArrayArgument(params, "extensions")); //$NON-NLS-1$
+        String modules = joinList(JsonUtils.extractArrayArgument(params, "modules")); //$NON-NLS-1$
+        String tests = joinList(JsonUtils.extractArrayArgument(params, "tests")); //$NON-NLS-1$
         int timeout = JsonUtils.extractIntArgument(params, "timeout", DEFAULT_TIMEOUT); //$NON-NLS-1$
         if (timeout < 1)
         {
@@ -765,6 +770,16 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
         }
         return result;
+    }
+
+    /**
+     * Joins a list-valued argument back to the canonical comma-separated string used
+     * internally (filter, cache key, retry). Returns {@code null} when the list is
+     * null/empty so the existing "no filter" branches keep working unchanged.
+     */
+    private static String joinList(List<String> values)
+    {
+        return (values == null || values.isEmpty()) ? null : String.join(",", values); //$NON-NLS-1$
     }
 
     /**

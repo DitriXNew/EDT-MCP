@@ -2226,24 +2226,33 @@
           "type": "string"
         },
         "extensions": {
-          "description": "Comma-separated extension names to filter tests.",
-          "type": "string"
+          "description": "Extension names to filter tests (array; a comma-separated string is also accepted).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "launchConfigurationName": {
           "description": "Exact runtime-client launch config name (preferred; from list_configurations).",
           "type": "string"
         },
         "modules": {
-          "description": "Comma-separated module names to filter tests.",
-          "type": "string"
+          "description": "Module names to filter tests (array; a comma-separated string is also accepted).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "projectName": {
           "description": "EDT project name (required if launchConfigurationName is omitted).",
           "type": "string"
         },
         "tests": {
-          "description": "Comma-separated test names in Module.Method format.",
-          "type": "string"
+          "description": "Test names in Module.Method format (array; a comma-separated string is also accepted).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "timeout": {
           "description": "Polling window in seconds (default: 60); on expiry returns Pending.",

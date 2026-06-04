@@ -41,10 +41,6 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
 
 /**
  * Tool to get detailed project errors with optional filters.
@@ -181,7 +177,6 @@ public class GetProjectErrorsTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String severity = JsonUtils.extractStringArgument(params, "severity"); //$NON-NLS-1$
         String checkId = JsonUtils.extractStringArgument(params, "checkId"); //$NON-NLS-1$
-        String objectsJson = JsonUtils.extractStringArgument(params, "objects"); //$NON-NLS-1$
 
         // Output verbosity: concise (default) trims the secondary 'Has docs' column;
         // detailed renders the full historical table. Any absent/blank/unrecognized value
@@ -207,9 +202,14 @@ public class GetProjectErrorsTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
         
-        // Parse objects filter
-        List<String> objects = parseObjectsList(objectsJson);
-        
+        // Objects filter: accepts a JSON array (["Catalog.Products"]) or a
+        // comma-separated string, via the shared extractArrayArgument helper.
+        List<String> objects = JsonUtils.extractArrayArgument(params, "objects"); //$NON-NLS-1$
+        if (objects == null)
+        {
+            objects = new ArrayList<>();
+        }
+
         int defaultLimit = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
 
@@ -217,42 +217,6 @@ public class GetProjectErrorsTool implements IMcpTool
         limit = Pagination.clampLimit(limit, 1000);
 
         return getProjectErrors(projectName, severity, checkId, objects, limit, detailed);
-    }
-    
-    /**
-     * Parses the objects array from JSON string using Gson JsonParser.
-     * 
-     * @param objectsJson JSON array string like ["Document.SalesOrder", "Catalog.Products"]
-     * @return list of object FQNs
-     */
-    private List<String> parseObjectsList(String objectsJson)
-    {
-        List<String> result = new ArrayList<>();
-        if (objectsJson == null || objectsJson.isEmpty())
-        {
-            return result;
-        }
-        
-        try
-        {
-            JsonElement element = JsonParser.parseString(objectsJson);
-            if (element.isJsonArray())
-            {
-                JsonArray array = element.getAsJsonArray();
-                for (JsonElement item : array)
-                {
-                    if (item.isJsonPrimitive() && item.getAsJsonPrimitive().isString())
-                    {
-                        result.add(item.getAsString());
-                    }
-                }
-            }
-        }
-        catch (JsonParseException e)
-        {
-            Activator.logError("Error parsing objects JSON: " + objectsJson, e); //$NON-NLS-1$
-        }
-        return result;
     }
     
     /**

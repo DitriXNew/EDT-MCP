@@ -37,10 +37,6 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
 
 /**
  * Tool to revalidate EDT project or specific objects by their FQN.
@@ -88,8 +84,7 @@ public class RevalidateObjectsTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String objectsJson = JsonUtils.extractStringArgument(params, "objects"); //$NON-NLS-1$
-        
+
         // Refuse only the transient BUILDING state; a missing/closed project
         // falls through to the value-naming 'Project not found' below.
         if (projectName != null && !projectName.isEmpty())
@@ -100,46 +95,17 @@ public class RevalidateObjectsTool implements IMcpTool
                 return ToolResult.error(building).toJson();
             }
         }
-        
-        List<String> objects = parseObjectsList(objectsJson);
-        
+
+        // Objects filter: accepts a JSON array (["Document.SalesOrder"]) or a
+        // comma-separated string, via the shared extractArrayArgument helper.
+        // null (param absent) is normalized to an empty list = full-project revalidation.
+        List<String> objects = JsonUtils.extractArrayArgument(params, "objects"); //$NON-NLS-1$
+        if (objects == null)
+        {
+            objects = new ArrayList<>();
+        }
+
         return revalidateObjects(projectName, objects);
-    }
-    
-    /**
-     * Parses the objects array from JSON string using Gson JsonParser.
-     * 
-     * @param objectsJson JSON array string like ["obj1", "obj2"]
-     * @return list of object FQNs
-     */
-    private List<String> parseObjectsList(String objectsJson)
-    {
-        List<String> result = new ArrayList<>();
-        if (objectsJson == null || objectsJson.isEmpty())
-        {
-            return result;
-        }
-        
-        try
-        {
-            JsonElement element = JsonParser.parseString(objectsJson);
-            if (element.isJsonArray())
-            {
-                JsonArray array = element.getAsJsonArray();
-                for (JsonElement item : array)
-                {
-                    if (item.isJsonPrimitive() && item.getAsJsonPrimitive().isString())
-                    {
-                        result.add(item.getAsString());
-                    }
-                }
-            }
-        }
-        catch (JsonParseException e)
-        {
-            Activator.logError("Error parsing objects JSON: " + objectsJson, e); //$NON-NLS-1$
-        }
-        return result;
     }
     
     /**

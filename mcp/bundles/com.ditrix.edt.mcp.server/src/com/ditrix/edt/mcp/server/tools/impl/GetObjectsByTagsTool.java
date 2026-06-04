@@ -25,10 +25,6 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
 
 /**
  * Tool to get metadata objects filtered by tags.
@@ -71,7 +67,6 @@ public class GetObjectsByTagsTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String tagsJson = JsonUtils.extractStringArgument(params, "tags"); //$NON-NLS-1$
 
         String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
         if (err != null)
@@ -88,9 +83,10 @@ public class GetObjectsByTagsTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        // Parse tags array
-        List<String> tagNames = parseTagsList(tagsJson);
-        if (tagNames.isEmpty())
+        // Tags list: accepts a JSON array (["Important","NeedsReview"]) or a
+        // comma-separated string, via the shared extractArrayArgument helper.
+        List<String> tagNames = JsonUtils.extractArrayArgument(params, "tags"); //$NON-NLS-1$
+        if (tagNames == null || tagNames.isEmpty())
         {
             return ToolResult.error("Tags array is required. Example: [\"Important\", \"NeedsReview\"]").toJson(); //$NON-NLS-1$
         }
@@ -116,41 +112,6 @@ public class GetObjectsByTagsTool implements IMcpTool
         }
     }
     
-    /**
-     * Parses the tags array from JSON string.
-     * 
-     * @param tagsJson JSON array string like ["Important", "NeedsReview"]
-     * @return list of tag names
-     */
-    private List<String> parseTagsList(String tagsJson)
-    {
-        List<String> result = new ArrayList<>();
-        if (tagsJson == null || tagsJson.isEmpty())
-        {
-            return result;
-        }
-        
-        try
-        {
-            JsonElement element = JsonParser.parseString(tagsJson);
-            if (element.isJsonArray())
-            {
-                JsonArray array = element.getAsJsonArray();
-                for (JsonElement item : array)
-                {
-                    if (item.isJsonPrimitive() && item.getAsJsonPrimitive().isString())
-                    {
-                        result.add(item.getAsString());
-                    }
-                }
-            }
-        }
-        catch (JsonParseException e)
-        {
-            Activator.logError("Error parsing tags JSON: " + tagsJson, e); //$NON-NLS-1$
-        }
-        return result;
-    }
     
     /**
      * Gets objects filtered by tags.

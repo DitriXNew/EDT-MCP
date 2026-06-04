@@ -23,8 +23,12 @@ fire (GetObjectsByTagsTool.execute):
      ProjectContext.notFoundMessage branch -> "Project not found: <name>. Use
      list_projects to see available projects." (NAMES the bad value AND points at
      list_projects as the discovery next step).
-  3. empty/missing tags (valid project) -> parseTagsList() empty ->
+  3. empty/missing tags (valid project) -> extractArrayArgument empty ->
      "Tags array is required. Example: [\"Important\", \"NeedsReview\"]"
+
+The tags filter is read via the shared JsonUtils.extractArrayArgument, so it accepts
+BOTH a JSON array (["Important"]) and a comma-separated string ("a,b") — see the
+both-forms test below.
 
 Fixture inventory (TestConfiguration, English Names): Catalog.Catalog,
 CommonModule.Error, CommonModule.OK, CommonForm.Form, Subsystem.Subsystem,
@@ -71,6 +75,25 @@ def test_unknown_tag_yields_wellformed_empty_state():
 
 
 @e2e_test(tool="get_objects_by_tags", kind="read")
+def test_tags_accepts_comma_separated_string_form():
+    # Array convention (array-schema card): the tags filter is read via the shared
+    # extractArrayArgument, which accepts BOTH a JSON array and a comma-separated
+    # string. A comma-string of two unknown tags must be SPLIT and looked up (not
+    # rejected as "Tags array is required", and not treated as one blob): both are
+    # absent in the fixture, so the well-formed result is the 0/0 empty banner with
+    # BOTH probe tags echoed in the not-found section. This proves the comma form is
+    # accepted and split end-to-end (it was rejected before the unification).
+    t1, t2 = "e2e_CommaTagA_ZZZ", "e2e_CommaTagB_ZZZ"
+    r = call("get_objects_by_tags", {"projectName": PROJECT, "tags": t1 + "," + t2})
+    assert_ok(r, "comma-separated tags string is accepted (both input forms supported)")
+    assert_contains(r.text, t1, "first comma-split tag must reach the lookup")
+    assert_contains(r.text, t2, "second comma-split tag must reach the lookup (it was split, not one blob)")
+    assert_contains(r.text, "Found 0 objects across 0 tags",
+                    "both unknown tags -> 0/0 empty banner (comma form parsed correctly)")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_objects_by_tags", kind="read")
 def test_multiple_unknown_tags_all_listed_in_not_found():
     # Two distinct unknown tags -> BOTH must appear in the not-found section and
     # the summary must still be 0/0. Proves the tool iterates the whole tags
@@ -105,7 +128,7 @@ def test_missing_projectname_errors_clearly():
 
 @e2e_test(tool="get_objects_by_tags", kind="read")
 def test_missing_tags_errors_actionably():
-    # Valid project but no `tags` array -> parseTagsList() returns empty ->
+    # Valid project but no `tags` array -> extractArrayArgument returns null/empty ->
     # "Tags array is required. Example: [\"Important\", \"NeedsReview\"]".
     # This error IS actionable: it shows an example of the expected shape.
     r = call("get_objects_by_tags", {"projectName": PROJECT})

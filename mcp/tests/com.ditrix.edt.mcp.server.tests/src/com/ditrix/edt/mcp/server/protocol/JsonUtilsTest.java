@@ -350,6 +350,20 @@ public class JsonUtilsTest
         assertNull(JsonUtils.extractArrayArgument(params, "missing"));
     }
 
+    @Test
+    public void testExtractArrayArgumentEmptyJsonArrayYieldsEmptyList()
+    {
+        // An explicit empty JSON array "[]" is a VALID, present value: it must yield an
+        // empty list (NOT null), distinct from an absent param (null). Tools rely on
+        // this to treat [] as "empty filter" the same as a missing param after their
+        // own null-guard.
+        Map<String, String> params = new HashMap<>();
+        params.put("objects", "[]");
+        List<String> result = JsonUtils.extractArrayArgument(params, "objects");
+        assertNotNull(result);
+        assertEquals(0, result.size());
+    }
+
     // --- buildJsonRpcError ---
 
     @Test
