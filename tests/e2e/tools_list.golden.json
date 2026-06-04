@@ -850,6 +850,67 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Remove an EDT project from the workspace, optionally deleting its files from disk (deleteContent). Destructive: guarded by a confirm-preview - call without confirm to preview what would be removed (no change), then confirm=true to delete. The inverse of import_configuration_from_xml. Full parameters: call get_tool_guide('delete_project').",
+    "inputSchema": {
+      "properties": {
+        "confirm": {
+          "description": "true = perform the removal; default false = preview only (what would be removed, no change).",
+          "type": "boolean"
+        },
+        "deleteContent": {
+          "description": "true = also delete the project's files from disk; default false = only unregister the project from the workspace (files stay on disk).",
+          "type": "boolean"
+        },
+        "projectName": {
+          "description": "Name of the EDT project to remove from the workspace.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "delete_project",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "Either 'preview' (nothing changed) or 'deleted' (removed).",
+          "type": "string"
+        },
+        "confirmationRequired": {
+          "description": "true on a preview (no change made); absent/false once deleted.",
+          "type": "boolean"
+        },
+        "deleteContent": {
+          "description": "Whether disk files were (or would be) deleted too.",
+          "type": "boolean"
+        },
+        "message": {
+          "description": "Human-readable status message.",
+          "type": "string"
+        },
+        "project": {
+          "description": "Name of the targeted project.",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false

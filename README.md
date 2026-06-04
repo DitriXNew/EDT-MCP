@@ -179,11 +179,11 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 68 tools are organized into 9 semantic groups:
+All 69 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
-| **Core / Project** | EDT version, server self-diagnosis, on-demand tool guides, project listing, configuration, validation, XML export/import | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml` |
+| **Core / Project** | EDT version, server self-diagnosis, on-demand tool guides, project listing, configuration, validation, XML export/import, project removal | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml`, `delete_project` |
 | **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 68 tools enabled (default) |
+| **All Tools** | All 69 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -383,6 +383,7 @@ Add to `claude_desktop_config.json`:
 | `validate_query` | Validate 1C query text in project context (syntax + semantic errors, optional DCS mode) |
 | `export_configuration_to_xml` | Export an EDT configuration project to a directory of XML files (EDT menu: Export → Configuration to XML Files) |
 | `import_configuration_from_xml` | Import a configuration from a directory of XML files into a new EDT project (reverse of export) |
+| `delete_project` | Remove an EDT project from the workspace, optionally deleting its files from disk (deleteContent). Destructive — guarded by a confirm-preview (call without confirm to preview, then confirm=true); the inverse of import_configuration_from_xml |
 | `generate_translation_strings` | LanguageTool: generate translation strings (.lstr/.trans/.dict) for a configuration project, with translation storage and collection options. EDT menu: Translation → Generate translation strings |
 | `translate_configuration` | LanguageTool: propagate dictionary changes from the configured dictionary storage projects (or from in-configuration storages) into translated artifacts. EDT menu: Translation → Translate configuration |
 | `get_translation_project_info` | LanguageTool diagnostics: project translation storages and available translation provider IDs |

@@ -18,6 +18,7 @@ import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteFormItemTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataObjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.DeleteProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ExportConfigurationToXmlTool;
 import com.ditrix.edt.mcp.server.tools.impl.FindReferencesTool;
@@ -112,6 +113,7 @@ public final class BuiltInToolRegistrar
         registry.register(new RevalidateObjectsTool());
         registry.register(new ExportConfigurationToXmlTool());
         registry.register(new ImportConfigurationFromXmlTool());
+        registry.register(new DeleteProjectTool());
         registry.register(new GetProblemSummaryTool());
         registry.register(new GetProjectErrorsTool());
         registry.register(new GetBookmarksTool());
