@@ -217,10 +217,10 @@ def test_missing_projectname_errors_and_names_param():
     (projectName is checked before objectFqn) -> "projectName is required"."""
     r = call("find_references", {"objectFqn": "Catalog.Catalog"})
     e = assert_error(r, "missing projectName")
-    # AUDIT: names the missing param but offers NO next step (no list_projects hint
-    # to discover a valid project name). suggests=[] is intentional -> fix-card.
-    assert_error_quality(e, names=["projectName"], suggests=[],
-                         ctx="missing projectName names the param")
+    # The shared required-arg guard maps projectName -> list_projects, so the error names the
+    # missing param AND points at the tool that enumerates valid project names.
+    assert_error_quality(e, names=["projectName"], suggests=["list_projects"],
+                         ctx="missing projectName names the param + steers to list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 
@@ -231,11 +231,10 @@ def test_missing_objectfqn_errors_and_names_param():
     wins first)."""
     r = call("find_references", {"projectName": PROJECT})
     e = assert_error(r, "missing objectFqn")
-    # AUDIT: names the missing param but gives no example FQN shape ('Catalog.Foo')
-    # to guide the caller — the happy-path schema has examples, the error does not.
-    # suggests=[] is intentional -> fix-card.
-    assert_error_quality(e, names=["objectFqn"], suggests=[],
-                         ctx="missing objectFqn names the param")
+    # The shared required-arg guard maps objectFqn -> get_metadata_objects, so the error names
+    # the missing param AND points at the tool that enumerates object FQNs.
+    assert_error_quality(e, names=["objectFqn"], suggests=["get_metadata_objects"],
+                         ctx="missing objectFqn names the param + steers to get_metadata_objects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

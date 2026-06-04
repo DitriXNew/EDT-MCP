@@ -117,10 +117,10 @@ def test_missing_projectname_errors_clearly():
     # Required param omitted -> "projectName is required".
     r = call("list_modules", {})
     e = assert_error(r, "missing required projectName")
-    # AUDIT: the message names the missing param but offers no next step (which
-    # sibling tool to call, e.g. list_projects, to discover a valid project).
-    # Keeping suggests=[] rather than weakening to a fake suggestion.
-    assert_error_quality(e, names=["projectName"], suggests=[],
+    # "projectName is required" now carries an actionable discovery hint pointing at the
+    # sibling tool that enumerates valid project names (the shared requireArgument guard maps
+    # canonical, enumerable params to their discovery tool).
+    assert_error_quality(e, names=["projectName"], suggests=["list_projects"],
                          ctx="missing projectName")
     assert_no_diff("a rejected call must not touch the project on disk")
 
@@ -132,10 +132,9 @@ def test_nonexistent_project_errors_clearly():
     r = call("list_modules", {"projectName": bad})
     e = assert_error(r, "non-existent project")
     assert_contains(e, "not found", "error must say the project was not found")
-    # AUDIT: the message names the bad project but does not point to a sibling
-    # tool (list_projects) to enumerate valid project names. suggests=[] kept
-    # honest; this is a fix-card to make the not-found error actionable.
-    assert_error_quality(e, names=[bad], suggests=[],
+    # The shared ProjectContext.notFoundMessage names the bad value AND points at the sibling
+    # tool that enumerates valid project names, so the not-found error is actionable.
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
                          ctx="non-existent project")
     assert_no_diff("a rejected call must not touch the project on disk")
 

@@ -181,12 +181,10 @@ def test_missing_projectname_errors_clearly():
     required" delivered as a structured isError."""
     r = call("get_applications", {})
     err = assert_error(r, "missing required projectName")
-    # The message names the missing parameter.
-    # AUDIT: "projectName is required" names the param but offers NO next step
-    # (no mention of list_projects to discover a valid project name). suggests=[]
-    # is deliberate; fix-card: make the required-arg guard actionable.
-    assert_error_quality(err, names=["projectName"], suggests=[],
-                         ctx="missing projectName names the param")
+    # The message names the missing parameter AND steers to the discovery tool: the shared
+    # required-arg guard maps projectName -> list_projects, so the error is actionable.
+    assert_error_quality(err, names=["projectName"], suggests=["list_projects"],
+                         ctx="missing projectName names the param + steers to list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 
@@ -198,9 +196,8 @@ def test_empty_projectname_errors_like_missing():
     blow up deeper in the EDT lookup with an opaque error)."""
     r = call("get_applications", {"projectName": ""})
     err = assert_error(r, "empty-string projectName")
-    # Same canonical guard as the missing case.
-    # AUDIT: as above, names the param but is not actionable -> suggests=[].
-    assert_error_quality(err, names=["projectName"], suggests=[],
+    # Same canonical guard as the missing case - and the same actionable list_projects hint.
+    assert_error_quality(err, names=["projectName"], suggests=["list_projects"],
                          ctx="empty projectName hits the required-arg guard")
     assert_no_diff("an invalid call must not touch the project on disk")
 

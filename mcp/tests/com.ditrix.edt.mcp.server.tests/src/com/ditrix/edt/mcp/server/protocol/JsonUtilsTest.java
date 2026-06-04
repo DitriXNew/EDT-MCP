@@ -74,6 +74,51 @@ public class JsonUtilsTest
         assertTrue(err.contains("objectFqn is required"));
     }
 
+    // --- requireArgument discovery hint (actionable "<name> is required") ---
+
+    @Test
+    public void testRequireArgumentProjectNameCarriesDiscoveryHint()
+    {
+        // A bare "<name> is required" for a canonical, enumerable param now steers the caller to the
+        // discovery tool (projectName -> list_projects), making the error actionable.
+        String err = JsonUtils.requireArgument(new HashMap<>(), "projectName");
+        assertNotNull(err);
+        assertTrue(err.contains("projectName is required"));
+        assertTrue("projectName-required must steer to list_projects", err.contains("list_projects"));
+    }
+
+    @Test
+    public void testRequireArgumentMappedParamsCarryTheirOwnDiscoveryTool()
+    {
+        assertTrue(JsonUtils.requireArgument(new HashMap<>(), "modulePath").contains("list_modules"));
+        assertTrue(JsonUtils.requireArgument(new HashMap<>(), "methodName").contains("get_module_structure"));
+        assertTrue(JsonUtils.requireArgument(new HashMap<>(), "objectFqn").contains("get_metadata_objects"));
+        assertTrue(JsonUtils.requireArgument(new HashMap<>(), "applicationId").contains("get_applications"));
+    }
+
+    @Test
+    public void testRequireArgumentUnmappedParamHasNoDiscoveryHint()
+    {
+        // A free-form value (no enumerable source) keeps the canonical message with NO "Use <tool>"
+        // hint - inventing a wrong discovery tool would be worse than none.
+        String err = JsonUtils.requireArgument(new HashMap<>(), "queryText");
+        assertNotNull(err);
+        assertTrue(err.contains("queryText is required"));
+        assertFalse("an unmapped param must not invent a discovery tool", err.contains("Use "));
+    }
+
+    @Test
+    public void testRequireArgumentsVariadicInheritsDiscoveryHint()
+    {
+        // The variadic form delegates to the 1-arg guard, so the missing arg's hint comes through.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "P");
+        String err = JsonUtils.requireArguments(params, "projectName", "modulePath");
+        assertNotNull(err);
+        assertTrue(err.contains("modulePath is required"));
+        assertTrue(err.contains("list_modules"));
+    }
+
     // --- requireArgument(Map, String, detail) ---
 
     @Test

@@ -430,9 +430,45 @@ public final class JsonUtils
         String value = extractStringArgument(params, argumentName);
         if (value == null || value.isEmpty())
         {
-            return ToolResult.error(argumentName + " is required").toJson(); //$NON-NLS-1$
+            return ToolResult.error(argumentName + " is required" + discoveryHint(argumentName)).toJson(); //$NON-NLS-1$
         }
         return null;
+    }
+
+    /**
+     * Returns an actionable {@code ". Use <tool> to ..."} discovery suffix for a small set of
+     * canonical, ENUMERABLE parameter names, so a bare {@code "<name> is required"} error points the
+     * caller at the tool that lists valid values; returns an empty string for any other name. Only
+     * parameters whose valid values are discoverable via one specific tool are mapped - free-form
+     * values (a query, an expression, a path) get no hint, since a wrong hint is worse than none.
+     * The variadic {@link #requireArguments} inherits this automatically (it delegates here), and the
+     * two-arg {@link #requireArgument(Map, String, String)} keeps its caller-supplied detail instead.
+     *
+     * @param argumentName the required-argument name (may be {@code null})
+     * @return the discovery suffix (with a leading {@code ". "}) or {@code ""} when there is no
+     *     unambiguous discovery source
+     */
+    private static String discoveryHint(String argumentName)
+    {
+        if (argumentName == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        switch (argumentName)
+        {
+            case "projectName": //$NON-NLS-1$
+                return ". Use list_projects to see available project names."; //$NON-NLS-1$
+            case "modulePath": //$NON-NLS-1$
+                return ". Use list_modules to find a module path in the project."; //$NON-NLS-1$
+            case "methodName": //$NON-NLS-1$
+                return ". Use get_module_structure to list the module's procedures and functions."; //$NON-NLS-1$
+            case "objectFqn": //$NON-NLS-1$
+                return ". Use get_metadata_objects to find an object's FQN."; //$NON-NLS-1$
+            case "applicationId": //$NON-NLS-1$
+                return ". Use get_applications to list available application IDs."; //$NON-NLS-1$
+            default:
+                return ""; //$NON-NLS-1$
+        }
     }
 
     /**
