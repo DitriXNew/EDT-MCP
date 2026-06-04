@@ -59,7 +59,8 @@ public enum ToolGroup
         "Metadata create, rename, delete, attribute management, and form item editing", //$NON-NLS-1$
         "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "create_metadata_object", "set_metadata_property", "add_form_attribute", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "set_form_item_property", "add_form_command", "delete_form_item"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "set_form_item_property", "add_form_command", "delete_form_item", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "add_form_item"), //$NON-NLS-1$
 
     TRANSLATION("translation", "Translation (LanguageTool)", //$NON-NLS-1$ //$NON-NLS-2$
         "LanguageTool: translation strings generation, configuration sync, project info", //$NON-NLS-1$

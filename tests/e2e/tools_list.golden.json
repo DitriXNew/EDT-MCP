@@ -163,6 +163,112 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Add a visual ITEM (a group container or a decoration/label, what get_form_structure lists under ## Items) to an existing managed form, persisted to disk. Optionally nest it under an existing container via parentId. itemType is an enum: 'group' and 'decoration' are supported; 'field' and 'button' are reserved (they need a data/command binding - edit those in EDT). To edit an existing item use set_form_item_property; to delete one use delete_form_item. Full parameters and examples: call get_tool_guide('add_form_item').",
+    "inputSchema": {
+      "properties": {
+        "attributeName": {
+          "description": "Optional. RESERVED: only applies to a 'field' (which is reserved). The form attribute a field would display; not wired by this version. See the guide.",
+          "type": "string"
+        },
+        "commandName": {
+          "description": "Optional. RESERVED: only applies to a 'button' (which is reserved). The form command a button would invoke; not wired by this version. See the guide.",
+          "type": "string"
+        },
+        "formPath": {
+          "description": "Form FQN: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName' (e.g. 'Catalog.Products.Forms.ItemForm'). Names are the programmatic Name, not the synonym; the TYPE token may be en/ru. (required)",
+          "type": "string"
+        },
+        "itemType": {
+          "description": "Kind of item to add (required). 'group' = a FormGroup container; 'decoration' = a Decoration label. 'field' and 'button' are RESERVED: they need a data/command binding and are rejected - add them in the EDT form editor.",
+          "enum": [
+            "group",
+            "decoration",
+            "field",
+            "button"
+          ],
+          "type": "string"
+        },
+        "language": {
+          "description": "Optional language code for the title, e.g. 'ru'/'en' (default: config default)",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name for the new form item (required). A valid 1C identifier.",
+          "type": "string"
+        },
+        "parentId": {
+          "description": "Optional itemId (programmatic Name) of an existing CONTAINER item (group/table) to nest the new item under. Omit to add at the form root. The parent is searched across the whole nested items tree; a non-container parent is rejected.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name (required)",
+          "type": "string"
+        },
+        "title": {
+          "description": "Optional display title; written for 'language' or the config default language",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "formPath",
+        "name",
+        "itemType"
+      ],
+      "type": "object"
+    },
+    "name": "add_form_item",
+    "outputSchema": {
+      "properties": {
+        "formPath": {
+          "description": "Normalized FQN of the form",
+          "type": "string"
+        },
+        "itemType": {
+          "description": "The itemType created ('group' or 'decoration')",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language code the title was written for",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable confirmation message",
+          "type": "string"
+        },
+        "name": {
+          "description": "Programmatic name of the added form item",
+          "type": "string"
+        },
+        "parentId": {
+          "description": "The parent container itemId, when the item was nested",
+          "type": "string"
+        },
+        "persisted": {
+          "description": "Whether the change was saved to the form file on disk",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the form item was added",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "Display title written, when a title was provided",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Add a new attribute to a metadata object (Catalog, Document, register, etc.) with default properties, persisted to disk. Use to extend an object's data model; the objectFqn TYPE token may be English or Russian (alias: parentFqn). Full parameters and examples: call get_tool_guide('add_metadata_attribute').",
     "inputSchema": {
       "properties": {

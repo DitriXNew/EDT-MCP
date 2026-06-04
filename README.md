@@ -179,7 +179,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 67 tools are organized into 9 semantic groups:
+All 68 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -190,7 +190,7 @@ All 67 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_structure`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add form attributes/commands, edit/delete form items | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property`, `add_form_command`, `delete_form_item` |
+| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add/edit/delete form attributes, commands and items | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property`, `add_form_command`, `delete_form_item`, `add_form_item` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 67 tools enabled (default) |
+| **All Tools** | All 68 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -370,6 +370,7 @@ Add to `claude_desktop_config.json`:
 | `set_form_item_property` | Set the Title (bilingual), Visible flag and/or ReadOnly flag of an existing form ITEM (field/group/button/decoration/table) addressed by its itemId, persisted to the form file on disk |
 | `add_form_command` | Add a FORM command (a FormCommand, what get_form_structure lists under Commands) to an existing managed form, persisted to the form file on disk. Sets name + bilingual title; the action handler and button binding are out of scope |
 | `delete_form_item` | Delete a visual form ITEM (field/group/table/button/decoration) addressed by its itemId, persisted to the form file on disk. DESTRUCTIVE (deleting a group/table removes its whole subtree); requires a confirm-preview (call without confirm to preview, then confirm=true to apply) |
+| `add_form_item` | Add a visual form ITEM to an existing managed form, optionally nested under an existing container via parentId, persisted to the form file on disk. `itemType` enum: `group` and `decoration` are implemented; `field` and `button` are reserved (they need a data/command binding - add them in the EDT editor) |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
 | `read_module_source` | Read BSL module source code with YAML frontmatter metadata (full file or line range) |
@@ -766,6 +767,31 @@ The title is keyed by the language **code** (never the language name). Read the 
 | `confirm` | No | `true` = execute the deletion; default `false` = preview only (what would be removed, including any contained descendant items for a group/table). No change is made on a preview |
 
 Deleting the form's only item leaves an empty form (allowed) - re-validate with `get_project_errors` afterwards. Ordinary/legacy (non-managed) forms have no editable model and are rejected.
+
+#### Add Form Item Tool
+
+**`add_form_item`** - Add a **visual ITEM** (something `get_form_structure` lists under `## Items`) to an existing managed form via a BM write transaction, optionally nested under an existing container item, then persist the change to the form's `Form.form` file on disk. The concrete item EClass is created reflectively from the form model EPackage, mirroring the platform's own form factory.
+
+**Implemented vs reserved `itemType`s:**
+- **`group`** (implemented) - a `FormGroup` (a `UsualGroup`, with a default `UsualGroupExtInfo`). A group is itself a **container**, so later items can nest under it via `parentId`.
+- **`decoration`** (implemented) - a `Decoration` (a `Label`, with a default `LabelDecorationExtInfo`).
+- **`field`** (reserved) - a `FormField` needs a value type **and** a `dataPath` bound to a form attribute (a complex containment chain in the form model, not a plain string). Building it reflectively is risky, so it is **rejected** with a clear message - add a field in the EDT form editor, then edit it with `set_form_item_property`.
+- **`button`** (reserved) - a `Button` needs a command binding (the same complex chain `add_form_command` defers for its action). **Rejected** - add a button in EDT.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `formPath` | Yes | Form FQN: `MetadataType.ObjectName.Forms.FormName` (e.g. `Catalog.Products.Forms.ItemForm`) or `CommonForm.FormName`. The TYPE token may be English or Russian; names are the programmatic Name, not the synonym |
+| `name` | Yes | Name for the new form item (must be a valid 1C identifier; a case-insensitive duplicate of any existing item anywhere in the items tree is rejected) |
+| `itemType` | Yes | Enum: `group`, `decoration`, `field`, `button`. Only `group` and `decoration` are created; `field` and `button` are reserved (rejected) |
+| `parentId` | No | itemId (programmatic Name) of an existing **container** item (group/table) to nest the new item under, searched across the whole nested items tree. Omit to add at the form root. A non-existent parentId, or one that is not a container (no `items` collection), is rejected |
+| `title` | No | Display title; written for `language` or the configuration default language |
+| `language` | No | Language code for the title (e.g. `ru`, `en`). Only consulted when `title` is supplied. Defaults to the configuration default language |
+| `attributeName` | No | Reserved. Only applies to a (reserved) `field` - the form attribute it would display; not wired by this version |
+| `commandName` | No | Reserved. Only applies to a (reserved) `button` - the form command it would invoke; not wired by this version |
+
+The title is keyed by the language **code** (never the language name). Read the form first with `get_form_structure` to see existing item names and the container itemIds you can use as `parentId`. Ordinary/legacy (non-managed) forms have no editable model and are rejected. To **edit** an existing item use `set_form_item_property`; to **delete** one use `delete_form_item`.
 
 ### Tag Management Tools
 
