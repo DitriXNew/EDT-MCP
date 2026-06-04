@@ -88,7 +88,10 @@ public class GetTranslationProjectInfoTool implements IMcpTool
             + "## Storage IDs\n" //$NON-NLS-1$
             + "Storage IDs look like `edit:default`, `dictionary:common-camelcase`, " //$NON-NLS-1$
             + "`dictionary:common`, `context:model`, `context:interface`. The exact set " //$NON-NLS-1$
-            + "depends on what is attached to the configuration.\n\n" //$NON-NLS-1$
+            + "depends on what is attached to the configuration. Each storage and provider " //$NON-NLS-1$
+            + "id is rendered VERBATIM in backticks so you can copy it straight into " //$NON-NLS-1$
+            + "`generate_translation_strings` (a storage id -> its `storageId`, a provider " //$NON-NLS-1$
+            + "id -> its `providerId`) without scraping the prose.\n\n" //$NON-NLS-1$
 
             + "## Attaching a storage (manual, no MCP tool)\n" //$NON-NLS-1$
             + "If the storages list is empty, a storage must be set up by the user in EDT - " //$NON-NLS-1$
@@ -180,9 +183,11 @@ public class GetTranslationProjectInfoTool implements IMcpTool
             }
             else
             {
+                // IDs are wrapped in backticks so they round-trip VERBATIM into
+                // generate_translation_strings.storageId without the agent scraping prose.
                 for (String storage : storages)
                 {
-                    body.append("- ").append(storage).append('\n'); //$NON-NLS-1$
+                    body.append("- `").append(storage).append("`\n"); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
             body.append("\n## Translation providers\n\n"); //$NON-NLS-1$
@@ -192,9 +197,11 @@ public class GetTranslationProjectInfoTool implements IMcpTool
             }
             else
             {
+                // Backticked for the same reason: a provider id feeds
+                // generate_translation_strings.providerId verbatim.
                 for (String provider : providers)
                 {
-                    body.append("- ").append(provider).append('\n'); //$NON-NLS-1$
+                    body.append("- `").append(provider).append("`\n"); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
 
