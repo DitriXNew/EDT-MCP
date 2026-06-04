@@ -188,7 +188,7 @@ public class GetProjectErrorsTool implements IMcpTool
         if (severity != null && !severity.isEmpty()
             && !SEVERITY_VALUES.contains(severity.toUpperCase()))
         {
-            return ToolResult.error("severity must be one of: " //$NON-NLS-1$
+            return ToolResult.error("Invalid severity: '" + severity + "'. Must be one of: " //$NON-NLS-1$ //$NON-NLS-2$
                 + String.join(", ", SEVERITY_VALUES)).toJson(); //$NON-NLS-1$
         }
 

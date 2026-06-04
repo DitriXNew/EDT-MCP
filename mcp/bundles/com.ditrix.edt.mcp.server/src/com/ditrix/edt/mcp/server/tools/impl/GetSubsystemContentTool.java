@@ -214,7 +214,9 @@ public class GetSubsystemContentTool implements IMcpTool
         Subsystem subsystem = SubsystemUtils.resolveByFqn(config, subsystemFqn);
         if (subsystem == null)
         {
-            return ToolResult.error("Subsystem not found: " + subsystemFqn).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Subsystem not found: " + subsystemFqn //$NON-NLS-1$
+                + ". Check the FQN is 'Subsystem.<Name>' (type token must be 'Subsystem'); " //$NON-NLS-1$
+                + "use list_subsystems to see available subsystems.").toJson(); //$NON-NLS-1$
         }
 
         String effectiveLanguage = SubsystemUtils.resolveLanguage(language, config);

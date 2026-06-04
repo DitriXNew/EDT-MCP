@@ -288,7 +288,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             return "Invalid FQN. Expected format: Type.Name (e.g. Catalog.Products)"; //$NON-NLS-1$
         }
-        return "Object not found"; //$NON-NLS-1$
+        return "Object not found - use get_metadata_objects to list valid FQNs"; //$NON-NLS-1$
     }
 
     /**

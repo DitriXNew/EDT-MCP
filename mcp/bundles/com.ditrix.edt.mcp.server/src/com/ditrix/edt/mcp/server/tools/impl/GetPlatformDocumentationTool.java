@@ -183,7 +183,9 @@ public class GetPlatformDocumentationTool implements IMcpTool
         else if (!MEMBER_TYPE_VALUES.contains(memberType.toLowerCase()))
         {
             // Reject an out-of-set memberType instead of silently matching no members.
-            return ToolResult.error("memberType must be one of: " //$NON-NLS-1$
+            // Echo the rejected value so the caller sees WHAT it sent that was wrong.
+            return ToolResult.error("Invalid memberType: '" + memberType //$NON-NLS-1$
+                + "'. Must be one of: " //$NON-NLS-1$
                 + String.join(", ", MEMBER_TYPE_VALUES)).toJson(); //$NON-NLS-1$
         }
         if (language == null || language.isEmpty())
@@ -212,6 +214,19 @@ public class GetPlatformDocumentationTool implements IMcpTool
             default:
                 return ToolResult.error("Unknown category '" + category + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
                        "Supported: 'type', 'builtin'").toJson(); //$NON-NLS-1$
+        }
+
+        // The service signals a not-found by returning a soft markdown banner that
+        // begins "Error: Type not found: <name>" / "Error: Built-in function not
+        // found: <name>" followed by the available-types/functions list. Returned as
+        // plain markdown it would reach the client as isError=false (a contract
+        // violation: a machine client cannot detect the miss). Surface it as a real
+        // ToolResult.error, preserving the bad value AND the actionable list as the
+        // error body. The banner detect/strip lives in the service so this tool holds
+        // no bare "Error:" literal (BareErrorStringRatchetTest scans tool classes).
+        if (PlatformDocumentationService.isNotFoundBanner(result))
+        {
+            return ToolResult.error(PlatformDocumentationService.stripNotFoundBanner(result)).toJson();
         }
 
         return detailed ? result : condense(result);

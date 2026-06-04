@@ -127,7 +127,10 @@ public class GetMetadataDetailsToolTest
     {
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         String reason = tool.describeResolutionFailure("Catalog.NoSuchObject"); //$NON-NLS-1$
-        assertEquals("Object not found", reason); //$NON-NLS-1$
+        // The reason is actionable: it states the object was not found AND points at the
+        // discovery tool (get_metadata_objects) to obtain a valid FQN.
+        assertTrue(reason.contains("Object not found")); //$NON-NLS-1$
+        assertTrue(reason.contains("get_metadata_objects")); //$NON-NLS-1$
     }
 
     /**

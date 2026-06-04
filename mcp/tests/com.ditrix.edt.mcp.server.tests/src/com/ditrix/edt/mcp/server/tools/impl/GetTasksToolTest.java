@@ -82,8 +82,11 @@ public class GetTasksToolTest
         params.put("priority", "urgent"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new GetTasksTool().execute(params);
         // Delimiter-free substrings only: Gson HTML-escapes apostrophes / '>=' in
-        // JSON tool output, but "priority must be one of" and the bare values are safe.
-        assertTrue(result.contains("priority must be one of")); //$NON-NLS-1$
+        // JSON tool output, but "Must be one of", the echoed bad value and the bare
+        // valid values are safe. The message now echoes the rejected value so the
+        // caller knows which input was wrong.
+        assertTrue(result.contains("urgent")); //$NON-NLS-1$
+        assertTrue(result.contains("Must be one of")); //$NON-NLS-1$
         assertTrue(result.contains("high")); //$NON-NLS-1$
         assertTrue(result.contains("normal")); //$NON-NLS-1$
         assertTrue(result.contains("low")); //$NON-NLS-1$

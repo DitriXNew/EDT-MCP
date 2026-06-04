@@ -15,9 +15,11 @@ Real error paths in GetSubsystemContentTool.execute / getSubsystemContentInterna
   - missing projectName     -> "projectName is required"
   - missing subsystemFqn    -> "subsystemFqn is required (e.g. 'Subsystem.Sales')"
   - project not found        -> "Project not found: <name>"
-  - subsystem not resolvable -> "Subsystem not found: <fqn>"  (covers both a
-    non-existent subsystem AND a malformed FQN — wrong type token / missing name,
-    because SubsystemUtils.resolveByFqn returns null for all of them).
+  - subsystem not resolvable -> "Subsystem not found: <fqn>. Check the FQN is
+    'Subsystem.<Name>' (type token must be 'Subsystem'); use list_subsystems to
+    see available subsystems."  (covers both a non-existent subsystem AND a
+    malformed FQN — wrong type token / missing name, because
+    SubsystemUtils.resolveByFqn returns null for all of them).
 """
 
 from harness import (
@@ -120,10 +122,9 @@ def test_nonexistent_project_errors_clearly():
         "subsystemFqn": "Subsystem.Subsystem",
     })
     e = assert_error(r, "non-existent project")
-    # Message must name the bad project value.
-    # AUDIT: "Project not found: <name>" names the value but suggests no next step
-    # (e.g. list_projects to find a valid name) -> suggests=[]. Fix-card.
-    assert_error_quality(e, names=[bad], suggests=[])
+    # Message names the bad project value AND is actionable: ProjectContext.notFoundMessage
+    # appends "Use list_projects to see available projects."
+    assert_error_quality(e, names=[bad], suggests=["list_projects"])
     assert_no_diff()
 
 
@@ -136,10 +137,8 @@ def test_nonexistent_subsystem_errors_clearly():
         "subsystemFqn": bad,
     })
     e = assert_error(r, "non-existent subsystem")
-    # Message must name the bad FQN.
-    # AUDIT: "Subsystem not found: <fqn>" names the value but offers no next step
-    # (e.g. list_subsystems to discover valid FQNs) -> suggests=[]. Fix-card.
-    assert_error_quality(e, names=[bad], suggests=[])
+    # Message must name the bad FQN and point at the discovery tool.
+    assert_error_quality(e, names=[bad], suggests=["list_subsystems"])
     assert_no_diff()
 
 
@@ -154,10 +153,7 @@ def test_malformed_fqn_wrong_type_token_errors_clearly():
         "subsystemFqn": bad,
     })
     e = assert_error(r, "wrong type token in FQN")
-    # The bad FQN value must appear in the message.
-    # AUDIT: the error is the generic "Subsystem not found: <fqn>"; it does not
-    # distinguish a malformed/wrong-type-token FQN from a missing subsystem, and
-    # offers no next step -> suggests=[]. A clearer message would say the type
-    # token must be 'Subsystem.' and point to list_subsystems. Fix-card.
-    assert_error_quality(e, names=[bad], suggests=[])
+    # The bad FQN value must appear in the message, and the message must point at
+    # the discovery tool so a wrong-type-token FQN has an actionable next step.
+    assert_error_quality(e, names=[bad], suggests=["list_subsystems"])
     assert_no_diff()

@@ -133,12 +133,9 @@ def test_nonexistent_object_reported_in_errors_table_not_as_whole_call_error():
     assert_contains(r.text, "## Errors", "non-existent FQN must produce the ## Errors section")
     assert_contains(r.text, bad, "the failures table must name the missing FQN")
     assert_contains(r.text, "Object not found", "the reason must say the object was not found")
-    # AUDIT: the per-object "Object not found" reason names the FQN but offers NO
-    # next step (no sibling tool such as get_metadata_objects / list_modules to find
-    # a valid name). Sibling tools (DeleteMetadataObjectTool, MetadataReferenceService)
-    # DO append such guidance to their "Object not found"; this tool does not. The
-    # error-quality bar (name + actionable next step) is therefore only half met for
-    # the in-band channel. Fix-card: append a discovery hint to describeResolutionFailure.
+    # The reason is actionable: it names the discovery tool (get_metadata_objects) to
+    # obtain a valid FQN, matching the sibling tools' "Object not found" guidance.
+    assert_contains(r.text, "get_metadata_objects", "the reason must point at a discovery next-step")
     assert_no_diff("a lookup miss must not change the project")
 
 
@@ -210,9 +207,8 @@ def test_nonexistent_project_is_error():
         "objectFqns": ["Catalog.Catalog"],
     })
     e = assert_error(r, "non-existent project")
-    # ProjectContext.exists() == false -> "Project not found: <name>".
-    assert_error_quality(e, names=[bogus], suggests=["not found"])
-    # AUDIT: "Project not found: <name>" names the bad project but offers no next
-    # step (e.g. "use list_projects to see available projects"). Names-but-not-
-    # actionable. Fix-card: append a list_projects hint.
+    # ProjectContext.exists() == false -> ProjectContext.notFoundMessage: "Project not
+    # found: <name>. Use list_projects to see available projects." Names the value AND
+    # points at the discovery tool.
+    assert_error_quality(e, names=[bogus], suggests=["not found", "list_projects"])
     assert_no_diff("a rejected call must not change the project")

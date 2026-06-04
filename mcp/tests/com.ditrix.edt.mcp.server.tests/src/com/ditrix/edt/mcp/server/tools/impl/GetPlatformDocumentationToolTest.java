@@ -129,7 +129,9 @@ public class GetPlatformDocumentationToolTest
         params.put("memberType", "field"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new GetPlatformDocumentationTool().execute(params);
         // Delimiter-free substrings only (Gson HTML-escapes apostrophes / '>=').
-        assertTrue(result.contains("memberType must be one of")); //$NON-NLS-1$
+        // The message now ECHOES the rejected value and lists the valid set.
+        assertTrue(result.contains("Invalid memberType")); //$NON-NLS-1$
+        assertTrue("rejected value must be echoed", result.contains("field")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(result.contains("method")); //$NON-NLS-1$
         assertTrue(result.contains("property")); //$NON-NLS-1$
     }

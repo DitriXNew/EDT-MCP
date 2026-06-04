@@ -111,19 +111,17 @@ def test_explicit_project_returns_synonym_and_runmode():
 
 @e2e_test(tool="get_configuration_properties", kind="read")
 def test_nonexistent_project_errors_and_names_value():
-    # configProject == null branch ->
-    # ToolResult.error("No configuration project found with name: <name>").toJson().
-    # Delivered as structured JSON even though the success path is YAML.
+    # configProject == null + the name does not resolve to an existing project ->
+    # ToolResult.error(ProjectContext.notFoundMessage(name)) = "Project not found:
+    # <name>. Use list_projects to see available projects." (an existing-but-not-a-
+    # configuration project instead yields "Project '<name>' is not a configuration
+    # project. Use list_projects ...".) Delivered as structured JSON even though the
+    # success path is YAML.
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_configuration_properties", {"projectName": bad})
     err = assert_error(r, "non-existent projectName")
-    # The error MUST name the bad value (which project was wrong).
-    # AUDIT: the message names the bad project but is NOT actionable — it does not
-    # point at list_projects (the sibling tool that enumerates valid project names),
-    # nor say "omit projectName to use the first configuration project". suggests=[]
-    # is deliberate (rule §5.1/§5.2: do not fudge a bad error) -> fix-card: add a
-    # next-step hint to GetConfigurationPropertiesTool's "No configuration project
-    # found" message.
-    assert_error_quality(err, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # The error MUST name the bad value (which project was wrong) AND be actionable:
+    # it points at list_projects, the sibling tool that enumerates valid project names.
+    assert_error_quality(err, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")

@@ -25,23 +25,19 @@ Happy paths assert on real rendered content that MUST be present:
   - builtin lookup -> "Built-in function" header line
   - memberName filter narrows the rendered members (mutation guard).
 
-Negative matrix targets the tool's REAL execute() / service paths. Two CLASSES
-of failure exist and they behave DIFFERENTLY on the wire:
-
-  (A) machine-detectable errors via ToolResult.error(...).toJson() -> is_error=true:
+Negative matrix targets the tool's REAL execute() / service paths. Every failure
+is a machine-detectable is_error via ToolResult.error(...).toJson():
         - missing required typeName  -> "typeName is required"
-        - invalid memberType enum    -> "memberType must be one of: method, ..."
+        - invalid memberType enum    -> "Invalid memberType: '<bad>'. Must be one of: ..."
         - unknown category           -> "Unknown category '<cat>'. Supported: 'type', 'builtin'"
+        - type not found             -> "Type not found: <name>\n\nAvailable types (...)"
+        - builtin not found          -> "Built-in function not found: <name>\n\nAvailable global methods (...)"
 
-  (B) SOFT errors: PlatformDocumentationService returns a PLAIN markdown string
-      beginning "Error: Type not found: <name>" / "Error: Built-in function not
-      found: <name>". These are NOT wrapped in ToolResult.error, do NOT start
-      with '{', so the protocol's isJsonErrorPayload diversion does not fire and
-      the result is delivered as a normal markdown resource with is_error=FALSE.
-      => assert_error() would WRONGLY fail here, so these are asserted as a
-         successful response whose text carries the bad value + the actionable
-         "Available types/methods" list, and flagged with # AUDIT (they SHOULD be
-         a real is_error so a machine client can detect the not-found).
+The not-found cases are NOT-FOUND banners that PlatformDocumentationService builds
+as plain markdown ("Error: Type not found: <name>\n\n<available list>"); execute()
+detects that soft banner and surfaces it through ToolResult.error(...) so the miss
+is is_error=TRUE on the wire (a machine MCP client can detect it), while the
+actionable available-types/functions list is preserved as the error body.
 
 'Array' / 'Message' are universal platform symbols present for every platform
 version, so the happy paths do not depend on the (minimal) fixture content.
@@ -195,11 +191,10 @@ def test_invalid_membertype_enum_errors_actionably():
     r = call("get_platform_documentation",
              {"projectName": PROJECT, "typeName": "Array", "memberType": bad})
     err = assert_error(r, "invalid memberType enum")
-    # AUDIT: the message lists the valid set but does NOT echo the rejected value
-    # (`bad`), so a caller cannot see WHAT it sent that was wrong. names=["memberType"]
-    # asserts the param is named; the rejected literal is intentionally NOT required.
-    assert_error_quality(err, names=["memberType"], suggests=["property"],
-                         ctx="invalid memberType names the param and lists valid values")
+    # The message echoes the rejected value AND lists the valid set, so a caller sees
+    # both WHAT it sent that was wrong and the actionable alternatives.
+    assert_error_quality(err, names=[bad], suggests=["property"],
+                         ctx="invalid memberType names the bad value and lists valid values")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 
@@ -223,37 +218,29 @@ def test_unknown_category_errors_actionably():
 
 @e2e_test(tool="get_platform_documentation", kind="read")
 def test_nonexistent_type_reports_not_found_with_suggestions():
-    # PlatformDocumentationService returns a PLAIN string "Error: Type not found:
-    # <name>\n\nAvailable types (...)". It is NOT a ToolResult.error JSON, so
-    # is_error stays FALSE -> assert the SUCCESSFUL response's text content instead.
+    # PlatformDocumentationService builds a "Type not found: <name>\n\nAvailable
+    # types (...)" banner. execute() now detects the soft banner and surfaces it via
+    # ToolResult.error(...) -> is_error=TRUE, so a machine MCP client can detect the
+    # miss. The actionable available-types list is preserved as the error body.
     bad = "NoSuchType_ZZZ_e2e"
     r = call("get_platform_documentation", {"projectName": PROJECT, "typeName": bad})
-    # AUDIT: a not-found is delivered as is_error=FALSE (a "successful" markdown
-    # whose body merely starts with "Error:"). A machine MCP client cannot detect
-    # the failure. This SHOULD be a ToolResult.error so is_error=true. Fix-card.
-    assert_ok(r, "type not found is (wrongly) a non-error response")
-    # The banner must name the bad value (so a human sees WHAT was not found)...
-    assert_contains(r.text, "Type not found", "soft error must say the type was not found")
-    assert_contains(r.text, bad, "soft error must name the bad type value")
-    # ...and be actionable: the service lists the available type names to choose from.
-    assert_contains(r.text, "Available types",
-                    "soft error must list available types as the actionable next step")
+    err = assert_error(r, "nonexistent type is a real is_error")
+    # The error must name the bad value AND list the available types as the next step.
+    assert_error_quality(err, names=[bad], suggests=["Available types"],
+                         ctx="type not found names the bad value and lists available types")
     assert_no_diff("an invalid lookup must not touch the project on disk")
 
 
 @e2e_test(tool="get_platform_documentation", kind="read")
 def test_nonexistent_builtin_reports_not_found_with_suggestions():
-    # Same soft-error shape on the builtin branch: "Error: Built-in function not
-    # found: <name>\n\nAvailable global methods (...)". is_error stays FALSE.
+    # Same shape on the builtin branch: "Built-in function not found: <name>\n\n
+    # Available global methods (...)". execute() now surfaces the soft banner via
+    # ToolResult.error(...) -> is_error=TRUE, preserving the available-methods list.
     bad = "NoSuchBuiltin_ZZZ_e2e"
     r = call("get_platform_documentation",
              {"projectName": PROJECT, "typeName": bad, "category": "builtin"})
-    # AUDIT: as above, this not-found is is_error=FALSE -> not machine-detectable.
-    # Should be a ToolResult.error. Fix-card.
-    assert_ok(r, "builtin not found is (wrongly) a non-error response")
-    assert_contains(r.text, "Built-in function not found",
-                    "soft error must say the builtin was not found")
-    assert_contains(r.text, bad, "soft error must name the bad function value")
-    assert_contains(r.text, "Available global methods",
-                    "soft error must list available global methods as the next step")
+    err = assert_error(r, "nonexistent builtin is a real is_error")
+    # The error must name the bad value AND list the available global methods.
+    assert_error_quality(err, names=[bad], suggests=["Available global methods"],
+                         ctx="builtin not found names the bad value and lists available methods")
     assert_no_diff("an invalid lookup must not touch the project on disk")

@@ -82,7 +82,8 @@ public class GetTasksTool implements IMcpTool
         if (priority != null && !priority.isEmpty()
             && !PRIORITY_VALUES.contains(priority.toLowerCase()))
         {
-            return ToolResult.error("priority must be one of: " //$NON-NLS-1$
+            return ToolResult.error("Invalid priority: '" + priority //$NON-NLS-1$
+                + "'. Must be one of: " //$NON-NLS-1$
                 + String.join(", ", PRIORITY_VALUES)).toJson(); //$NON-NLS-1$
         }
 

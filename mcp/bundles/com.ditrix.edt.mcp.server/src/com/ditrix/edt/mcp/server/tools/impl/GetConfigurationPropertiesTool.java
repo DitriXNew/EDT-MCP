@@ -29,6 +29,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to get 1C:Enterprise configuration properties.
@@ -164,12 +165,24 @@ public class GetConfigurationPropertiesTool implements IMcpTool
             
             if (configProject == null)
             {
-                String errorMsg = "No configuration project found"; //$NON-NLS-1$
                 if (projectName != null && !projectName.isEmpty())
                 {
-                    errorMsg += " with name: " + projectName; //$NON-NLS-1$
+                    // Distinguish "no such project" from "exists but is not a
+                    // configuration project" so the message is accurate; both name
+                    // the value and point at list_projects as the next step.
+                    if (!ProjectContext.of(projectName).exists())
+                    {
+                        return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+                    }
+                    return ToolResult.error("Project '" + projectName //$NON-NLS-1$
+                        + "' is not a configuration project. " //$NON-NLS-1$
+                        + "Use list_projects to see available projects.").toJson(); //$NON-NLS-1$
                 }
-                return ToolResult.error(errorMsg).toJson();
+                // No projectName given and the workspace holds no configuration
+                // project at all — nothing to name; keep the message clear and tell
+                // the caller how to discover projects.
+                return ToolResult.error("No configuration project found in the workspace. " //$NON-NLS-1$
+                    + "Use list_projects to see available projects.").toJson(); //$NON-NLS-1$
             }
 
             // Get configuration object

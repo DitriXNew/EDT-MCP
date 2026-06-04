@@ -120,15 +120,13 @@ def test_invalid_severity_enum_is_rejected_with_valid_set():
     bad = "WARNINGS"  # not in {ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL, NONE}
     r = call("get_project_errors", {"projectName": PROJECT, "severity": bad})
     err = assert_error(r, "invalid severity enum value")
-    # Actionable: the message enumerates the accepted values. The fix is to pick one.
-    # AUDIT: the message does NOT echo the bad value ("WARNINGS"); it only lists the
-    # allowed set. names=[] reflects that gap. Fix-card: include the rejected value,
-    # e.g. "severity 'WARNINGS' is invalid; must be one of: ...".
+    # Actionable: the message echoes the rejected value AND enumerates the accepted
+    # values. The fix is to pick one of the listed values.
     assert_error_quality(
         err,
-        names=[],
+        names=["WARNINGS"],
         suggests=["severity", "ERRORS", "MINOR"],
-        ctx="invalid severity lists the valid set",
+        ctx="invalid severity echoes the bad value and lists the valid set",
     )
     assert_no_diff("a rejected read must not touch the project on disk")
 

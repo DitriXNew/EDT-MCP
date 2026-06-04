@@ -524,7 +524,9 @@ public class GetProjectErrorsToolTest
         Map<String, String> params = new HashMap<>();
         params.put("severity", "NOTASEVERITY"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new GetProjectErrorsTool().execute(params);
-        assertTrue(result.contains("severity must be one of")); //$NON-NLS-1$
+        // The message now ECHOES the rejected value alongside the valid set.
+        assertTrue(result.contains("Invalid severity")); //$NON-NLS-1$
+        assertTrue("rejected value must be echoed", result.contains("NOTASEVERITY")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ========== on-demand guide (detail moved out of description/schema) ==========

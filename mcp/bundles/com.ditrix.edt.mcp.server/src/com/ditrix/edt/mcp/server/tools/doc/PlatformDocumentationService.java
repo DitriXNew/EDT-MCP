@@ -51,6 +51,35 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  */
 public class PlatformDocumentationService
 {
+    /**
+     * Whether a rendered doc is the soft "not found" banner (it begins
+     * {@code "Error: <kind> not found: <name>"} followed by an available-items
+     * list). Lives here, not in the tool, so the tool can detect/strip the banner
+     * without embedding a bare {@code "Error:"} literal of its own — that literal
+     * is the exact anti-pattern {@code BareErrorStringRatchetTest} scans tool
+     * classes for, and this service is not a tool.
+     *
+     * @param rendered the rendered markdown returned by a get*Documentation call
+     * @return {@code true} when it is a not-found banner rather than a real doc
+     */
+    public static boolean isNotFoundBanner(String rendered)
+    {
+        return rendered != null && rendered.startsWith("Error:"); //$NON-NLS-1$
+    }
+
+    /**
+     * Strips the soft-banner {@code "Error:"} prefix, returning the actionable
+     * body (the {@code "<kind> not found: <name>"} line plus the available-items
+     * list) so the caller can wrap it in a real {@code ToolResult.error}.
+     *
+     * @param rendered a banner for which {@link #isNotFoundBanner} is true
+     * @return the body without the leading {@code "Error:"} token
+     */
+    public static String stripNotFoundBanner(String rendered)
+    {
+        return rendered.substring("Error:".length()).trim(); //$NON-NLS-1$
+    }
+
     /** Member type constants */
     private static final String MEMBER_ALL = "all"; //$NON-NLS-1$
     private static final String MEMBER_METHOD = "method"; //$NON-NLS-1$

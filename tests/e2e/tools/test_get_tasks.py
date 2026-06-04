@@ -130,13 +130,11 @@ def test_invalid_priority_enum_is_rejected_actionably():
     bad = "urgent_e2e"
     r = call("get_tasks", {"priority": bad})
     err = assert_error(r, "out-of-set priority enum")
-    # AUDIT: the error lists the valid values (actionable) but does NOT echo the
-    # rejected value the caller passed ("urgent_e2e"), so names=[bad] is NOT
-    # assertable here — the message cannot identify which bad input was supplied
-    # when several params are in play. We assert the actionable valid-value list
-    # via suggests and flag the missing bad-value echo as a fix-card.
-    assert_error_quality(err, names=[], suggests=["high", "normal", "low"],
-                         ctx="invalid priority lists the valid enum values")
+    # The message both echoes the rejected value AND enumerates the valid values,
+    # so it is fully actionable: the caller sees which bad input was supplied and
+    # the closed set to self-correct to.
+    assert_error_quality(err, names=[bad], suggests=["high", "normal", "low"],
+                         ctx="invalid priority echoes the bad value and lists the valid enum values")
     # Mutation guard: the rejection must be real, not a swallowed filter. A tool
     # that silently ignored the bad priority would have produced the success
     # report instead — assert the success header is absent from the error text.
