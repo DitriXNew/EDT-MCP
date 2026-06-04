@@ -18,11 +18,9 @@ so each test ends with assert_no_diff().
 Negative matrix targets the tool's REAL execute() error paths, IN THE ORDER they
 fire (GetObjectsByTagsTool.execute):
   1. missing projectName        -> JsonUtils.requireArgument -> "projectName is required"
-  2. ProjectStateChecker.checkReadyOrError(projectName) -- for a NON-existent
-     project name this fires FIRST (project.exists()==false) and returns
-     "Project does not exist. Please wait and retry." So the later
-     "Project not found: <name>" branch (line 102) is effectively unreachable
-     for a bad name -- see AUDIT below.
+  2. ProjectStateChecker.buildingErrorOrNull(projectName) guards only the transient
+     BUILDING state, so a NON-existent project name falls through to the
+     "Project not found: <name>" branch, which NAMES the bad value.
   3. empty/missing tags (valid project) -> parseTagsList() empty ->
      "Tags array is required. Example: [\"Important\", \"NeedsReview\"]"
 
@@ -134,29 +132,18 @@ def test_empty_tags_array_errors_actionably():
 
 @e2e_test(tool="get_objects_by_tags", kind="read")
 def test_nonexistent_project_errors():
-    # A non-existent project. In execute() the ProjectStateChecker readiness gate
-    # runs BEFORE the "Project not found" branch: for a name whose IProject does
-    # not exist, checkProjectState returns NOT_AVAILABLE("Project does not exist")
-    # and checkReadyOrError appends ". Please wait and retry." -> that is the
-    # error actually returned.
+    # A non-existent project. execute() now guards only the transient BUILDING state
+    # (ProjectStateChecker.buildingErrorOrNull), so a name whose IProject does not
+    # exist falls through to the "Project not found: <name>" branch, which NAMES the
+    # bad value (no longer the misleading "Project does not exist. Please wait and
+    # retry." that implied a transient build).
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_objects_by_tags", {"projectName": bad, "tags": [_ABSENT_TAG]})
     err = assert_error(r, "non-existent project")
-    # The error must at least be a clear, non-bare message about the project not
-    # being available (this still fails if the tool wrongly treated the bad name
-    # as valid and produced a 0/0 success banner).
-    assert_contains(err, "Project does not exist",
-                    "must report the project as unavailable, not silently succeed")
-    # AUDIT (two gaps, both fix-cards):
-    #   (a) the error does NOT name the bad project value (`bad`) -- it cannot,
-    #       because ProjectStateChecker only has a generic message; so we cannot
-    #       set names=[bad]. The later, more specific "Project not found: <name>"
-    #       branch (GetObjectsByTagsTool line 102) is unreachable for a bad name.
-    #   (b) the message is NOT actionable and is in fact MISLEADING: "Please wait
-    #       and retry" implies a transient build state, but a non-existent project
-    #       will never appear by retrying; it should instead point at list_projects.
-    # Hence names/suggests are omitted here; the assert_contains above keeps the
-    # test meaningful without papering over the bad wording.
-    assert_error_quality(err, names=[], suggests=[],
-                         ctx="non-existent project: message is non-bare but vague (see AUDIT)")
+    # The error names the offending value (this still fails if the tool wrongly
+    # treated the bad name as valid and produced a 0/0 success banner). suggests=[]
+    # remains: the message names the value but does not yet point at list_projects —
+    # that discovery tail is the separate systemic "actionable error tails" fix-card.
+    assert_error_quality(err, names=[bad], suggests=[],
+                         ctx="non-existent project: names the bad value via 'Project not found'")
     assert_no_diff("an invalid call must not touch the project on disk")

@@ -66,11 +66,14 @@ public class GetTagsTool implements IMcpTool
             return err;
         }
         
-        // Check if project is ready for operations
-        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-        if (notReadyError != null)
+        // Refuse only the transient BUILDING state; a missing/closed project falls
+        // through to the value-naming "Project not found: <name>" below instead of a
+        // misleading "Project does not exist. Please wait and retry." (a retry never
+        // resolves a genuinely missing project).
+        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        if (building != null)
         {
-            return ToolResult.error(notReadyError).toJson();
+            return ToolResult.error(building).toJson();
         }
         
         ProjectContext ctx = ProjectContext.of(projectName);

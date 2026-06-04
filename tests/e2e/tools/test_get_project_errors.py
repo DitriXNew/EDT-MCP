@@ -16,8 +16,8 @@ mutate the project on disk.
 
 Real error paths exercised by the negative matrix (read from GetProjectErrorsTool /
 ProjectStateChecker):
-  - non-existent projectName -> ProjectStateChecker.checkReadyOrError -> "Project does
-    not exist. Please wait and retry." (runs BEFORE the nicer "Project not found: <name>")
+  - non-existent projectName -> ProjectStateChecker.buildingErrorOrNull guards only the
+    transient BUILDING state, so it falls through to "Project not found: <name>" (names the value)
   - out-of-set severity     -> "severity must be one of: ERRORS, BLOCKER, ..."
 """
 
@@ -136,28 +136,23 @@ def test_invalid_severity_enum_is_rejected_with_valid_set():
 @e2e_test(tool="get_project_errors", kind="read")
 def test_nonexistent_project_is_rejected():
     """A non-existent projectName must error (not silently return all-projects output).
-    The readiness pre-check runs first and rejects it before scanning markers."""
+    The BUILDING-only readiness pre-check lets it fall through to the value-naming
+    "Project not found: <name>" rejection."""
     bad = "NoSuchProject_e2e_xyz"
     r = call("get_project_errors", {"projectName": bad})
     err = assert_error(r, "non-existent projectName")
-    # AUDIT: for a typo'd/non-existent project the tool hits ProjectStateChecker first,
-    # which returns "Project does not exist. Please wait and retry." That message:
-    #   (a) does NOT name the offending project value -> names=[] (cannot assert the value);
-    #   (b) is MISLEADING ("Please wait and retry" implies a transient build state) and
-    #       points at NO sibling tool, so suggests=[] is genuine, not laziness.
-    # The clearer "Project not found: <name>" + a pointer to list_projects in
-    # GetProjectErrorsTool.getProjectErrors is never reached for this case.
-    # Fix-card: short-circuit non-existent projects with a message that names the value
-    # and points to list_projects, e.g. "Project not found: 'NoSuchProject_e2e_xyz' —
-    # use list_projects to see available projects."
-    # We still assert a real, non-bare, non-stacktrace message (mutation-sensitive: a
-    # broken tool that returned success or an empty string would fail assert_error /
-    # assert_error_quality).
+    # execute() now guards only the transient BUILDING state (buildingErrorOrNull), so a
+    # non-existent project reaches getProjectErrors' "Project not found: <name>" branch,
+    # which NAMES the bad value -- no longer the misleading "Project does not exist.
+    # Please wait and retry." (which implied a transient build a retry would resolve).
+    # suggests=[] remains: the message names the value but does not yet point at
+    # list_projects -- that discovery tail is the separate systemic "actionable error
+    # tails" fix-card.
     assert_error_quality(
         err,
-        names=[],
+        names=[bad],
         suggests=[],
-        ctx="non-existent project produces a clear (if non-actionable) error",
+        ctx="non-existent project: names the bad value via 'Project not found'",
     )
     # Independent, value-specific check that is NOT trivially true: the rejection text
     # must speak about the project not existing (catches a tool that errors for an

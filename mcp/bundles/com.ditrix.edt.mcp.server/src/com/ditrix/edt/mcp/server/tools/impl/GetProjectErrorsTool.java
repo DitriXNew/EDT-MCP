@@ -196,14 +196,14 @@ public class GetProjectErrorsTool implements IMcpTool
                 + String.join(", ", SEVERITY_VALUES)).toJson(); //$NON-NLS-1$
         }
 
-        // Check if project is ready for operations
-        if (projectName != null && !projectName.isEmpty())
+        // Refuse only the transient BUILDING state (buildingErrorOrNull skips a
+        // null/empty name itself); a missing/closed project falls through to the
+        // value-naming "Project not found: <name>" in getProjectErrors instead of a
+        // misleading "Project does not exist. Please wait and retry."
+        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        if (building != null)
         {
-            String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-            if (notReadyError != null)
-            {
-                return ToolResult.error(notReadyError).toJson();
-            }
+            return ToolResult.error(building).toJson();
         }
         
         // Parse objects filter

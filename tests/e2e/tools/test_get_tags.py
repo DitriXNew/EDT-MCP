@@ -18,11 +18,10 @@ Negative matrix targets GetTagsTool.execute()'s REAL error paths. The tool has a
 SINGLE parameter (projectName, required) — no XOR, no enum, no conditional-required
 params — so the matrix is exactly:
   - missing required projectName -> JsonUtils.requireArgument -> "projectName is required"
-  - non-existent project         -> ProjectStateChecker.checkReadyOrError runs FIRST and,
-                                     because the handle does not exist, returns
-                                     "Project does not exist. Please wait and retry."
-                                     (the ProjectContext "Project not found: <name>" branch
-                                     is unreachable for a bad name — the state check fires first).
+  - non-existent project         -> ProjectStateChecker.buildingErrorOrNull guards only the
+                                     transient BUILDING state, so a non-existent name falls
+                                     through to the ProjectContext branch:
+                                     "Project not found: <name>" (names the bad value).
 
 Fixture inventory (TestConfiguration, English Names): Catalog.Catalog,
 CommonModule.Error, CommonModule.OK, CommonForm.Form, Subsystem.Subsystem,
@@ -83,24 +82,17 @@ def test_missing_projectname_errors_clearly():
 
 @e2e_test(tool="get_tags", kind="read")
 def test_nonexistent_project_errors():
-    # A non-empty but non-existent project name. execute() calls
-    # ProjectStateChecker.checkReadyOrError(projectName) BEFORE ProjectContext, and
-    # the workspace handle's exists() is false -> checkProjectState returns
-    # NOT_AVAILABLE "Project does not exist" -> the returned message is
-    # "Project does not exist. Please wait and retry." (the ProjectContext
-    # "Project not found: <name>" branch is never reached for a bad name).
+    # A non-empty but non-existent project name. execute() now guards only the
+    # transient BUILDING state (ProjectStateChecker.buildingErrorOrNull), so a name
+    # whose IProject does not exist falls through to the ProjectContext branch and
+    # the message NAMES the bad value: "Project not found: <name>".
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_tags", {"projectName": bad})
     err = assert_error(r, "non-existent project")
-    # AUDIT: this error is BOTH non-actionable AND misleading. It does NOT name the
-    # bad project value, and "Please wait and retry" implies a transient build
-    # state when the project simply does not exist — a caller would loop forever.
-    # It should instead name the bad value and point at list_projects. We assert
-    # only the stable, discriminating substring "does not exist" (proves the
-    # not-available branch fired, distinguishing it from the empty-tags happy path);
-    # names=[] / suggests=[] are deliberate, NOT a weakened bar — see fix-card.
-    assert_contains(err, "does not exist",
-                    "non-existent project must report the not-available state")
-    assert_error_quality(err, names=[], suggests=[],
-                         ctx="non-existent project: error fires but is vague (audited)")
+    # The error names the offending value (no longer the misleading "Project does not
+    # exist. Please wait and retry.", which implied a transient build). suggests=[]
+    # remains: the message names the value but still does not point at list_projects —
+    # that discovery tail is the separate systemic "actionable error tails" fix-card.
+    assert_error_quality(err, names=[bad], suggests=[],
+                         ctx="non-existent project: names the bad value via 'Project not found'")
     assert_no_diff("an invalid call must not touch the project on disk")
