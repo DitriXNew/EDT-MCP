@@ -5,6 +5,85 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Add a FORM attribute (the form's own data-model attribute, NOT an attribute of the underlying object) to an existing managed form, persisted to disk. Use get_form_structure to inspect the form's attributes/items first; to add an OBJECT attribute use add_metadata_attribute. The attribute is created with a default type. Full parameters and examples: call get_tool_guide('add_form_attribute').",
+    "inputSchema": {
+      "properties": {
+        "formPath": {
+          "description": "Form FQN: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName' (e.g. 'Catalog.Products.Forms.ItemForm'). Names are the programmatic Name, not the synonym; the TYPE token may be en/ru. (required)",
+          "type": "string"
+        },
+        "language": {
+          "description": "Optional language code for the title, e.g. 'ru'/'en' (default: config default)",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name for the new form attribute (required). A valid 1C identifier.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name (required)",
+          "type": "string"
+        },
+        "synonym": {
+          "description": "Optional display title; written for 'language' or the config default language",
+          "type": "string"
+        },
+        "type": {
+          "description": "Optional. Reserved: this version always creates the form model's DEFAULT (empty) type; set the concrete type afterwards in EDT. See the guide.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "formPath",
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "add_form_attribute",
+    "outputSchema": {
+      "properties": {
+        "formPath": {
+          "description": "Normalized FQN of the form",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language code the title was written for",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable confirmation message",
+          "type": "string"
+        },
+        "name": {
+          "description": "Programmatic name of the added form attribute",
+          "type": "string"
+        },
+        "persisted": {
+          "description": "Whether the change was saved to the form file on disk",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the form attribute was added",
+          "type": "boolean"
+        },
+        "synonym": {
+          "description": "Display title written, when a synonym was provided",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Add a new attribute to a metadata object (Catalog, Document, register, etc.) with default properties, persisted to disk. Use to extend an object's data model; the objectFqn TYPE token may be English or Russian (alias: parentFqn). Full parameters and examples: call get_tool_guide('add_metadata_attribute').",
     "inputSchema": {
       "properties": {

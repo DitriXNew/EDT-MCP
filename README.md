@@ -179,7 +179,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 62 tools are organized into 9 semantic groups:
+All 64 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -190,7 +190,7 @@ All 62 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_structure`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create, rename, delete, add attributes, set properties | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property` |
+| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add form attributes | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 62 tools enabled (default) |
+| **All Tools** | All 64 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -366,6 +366,7 @@ Add to `claude_desktop_config.json`:
 | `get_form_structure` | Read a form's editable model tree: items (groups/fields/tables) with name, id and type; attributes (name, type); commands (name, title). Reads the BM model, does not open the editor |
 | `get_form_layout_snapshot` | Return YAML with calculated WYSIWYG form element bounds, types, and display properties (`mode`: compact/full) |
 | `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
+| `add_form_attribute` | Add a FORM attribute (the form's own data-model attribute) to an existing managed form, persisted to the form file on disk. Created with a default type |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
 | `read_module_source` | Read BSL module source code with YAML frontmatter metadata (full file or line range) |
@@ -691,6 +692,22 @@ After creating an object, run `get_project_errors` to verify (or `revalidate_obj
 | `language` | No | Language code for the synonym (e.g. `ru`, `en`). Defaults to the configuration default language |
 
 At least one of `comment` / `synonym` must be provided. The synonym is keyed by the language **code**, so setting a synonym for one language does not remove the synonym stored for another.
+
+#### Add Form Attribute Tool
+
+**`add_form_attribute`** - Add a **form attribute** (the form's own data-model attribute, what `get_form_structure` lists under `## Attributes`) to an existing managed form via a BM write transaction, then persist the change to the form's `Form.form` file on disk. This is **not** the same as an attribute of the underlying metadata object - to add that, use `add_metadata_attribute`.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `formPath` | Yes | Form FQN: `MetadataType.ObjectName.Forms.FormName` (e.g. `Catalog.Products.Forms.ItemForm`) or `CommonForm.FormName`. The TYPE token may be English or Russian; names are the programmatic Name, not the synonym |
+| `name` | Yes | Name for the new form attribute (must be a valid 1C identifier) |
+| `type` | No | Reserved. This version always creates the form model's default (empty) type; set the concrete type afterwards in the EDT form editor |
+| `synonym` | No | Display title; written for `language` or the configuration default language |
+| `language` | No | Language code for the title (e.g. `ru`, `en`). Defaults to the configuration default language |
+
+The title is keyed by the language **code** (never the language name). The attribute is created with the default (empty) type, mirroring the platform's own form factory; building an arbitrary 1C type description is out of scope for this first version. Read the form first with `get_form_structure` to see existing attribute names - a duplicate name (case-insensitive) is rejected. Ordinary/legacy (non-managed) forms have no editable model and are rejected.
 
 ### Tag Management Tools
 
