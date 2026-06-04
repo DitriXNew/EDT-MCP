@@ -5,7 +5,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Add a FORM attribute (the form's own data-model attribute, NOT an attribute of the underlying object) to an existing managed form, persisted to disk. Use get_form_structure to inspect the form's attributes/items first; to add an OBJECT attribute use add_metadata_attribute. The attribute is created with a default type. Full parameters and examples: call get_tool_guide('add_form_attribute').",
+    "description": "Add a FORM attribute (the form's own data-model attribute, NOT an attribute of the underlying object) to an existing managed form, persisted to disk. Use get_form_structure to inspect the form's attributes/items first; to add an OBJECT attribute use create_metadata. The attribute is created with a default type. Full parameters and examples: call get_tool_guide('add_form_attribute').",
     "inputSchema": {
       "properties": {
         "formPath": {
@@ -269,92 +269,6 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Add a new attribute to a metadata object (Catalog, Document, register, etc.) with default properties, persisted to disk. Use to extend an object's data model; the objectFqn TYPE token may be English or Russian (alias: parentFqn). Full parameters and examples: call get_tool_guide('add_metadata_attribute').",
-    "inputSchema": {
-      "properties": {
-        "attributeName": {
-          "description": "Name for the new attribute (required)",
-          "type": "string"
-        },
-        "expectedNotExists": {
-          "description": "Optional stale-intent guard (default false): assert no such attribute exists yet; if it does, fail with a re-read steer instead of the generic duplicate error",
-          "type": "boolean"
-        },
-        "language": {
-          "description": "Optional language code for the synonym, e.g. 'ru'/'en' (default: config default)",
-          "type": "string"
-        },
-        "objectFqn": {
-          "description": "FQN of the object to extend, e.g. 'Catalog.Products' (TYPE token may be en/ru; object part is the programmatic Name, not the synonym). Canonical FQN parameter, shared with find_references / delete_metadata_object / rename_metadata_object. Provide objectFqn OR its alias parentFqn.",
-          "type": "string"
-        },
-        "parentFqn": {
-          "description": "Deprecated alias of 'objectFqn', kept for backward compatibility.",
-          "type": "string"
-        },
-        "projectName": {
-          "description": "EDT project name (required)",
-          "type": "string"
-        },
-        "synonym": {
-          "description": "Optional display name; written for 'language' or the config default language",
-          "type": "string"
-        }
-      },
-      "required": [
-        "projectName",
-        "attributeName"
-      ],
-      "type": "object"
-    },
-    "name": "add_metadata_attribute",
-    "outputSchema": {
-      "properties": {
-        "attributeName": {
-          "description": "Programmatic name of the added attribute",
-          "type": "string"
-        },
-        "language": {
-          "description": "Language code the synonym was written for",
-          "type": "string"
-        },
-        "message": {
-          "description": "Human-readable confirmation message",
-          "type": "string"
-        },
-        "objectFqn": {
-          "description": "Normalized FQN of the object (canonical)",
-          "type": "string"
-        },
-        "parentFqn": {
-          "description": "Normalized FQN of the object (deprecated alias of objectFqn)",
-          "type": "string"
-        },
-        "persisted": {
-          "description": "Whether the change was saved to disk",
-          "type": "boolean"
-        },
-        "success": {
-          "description": "Whether the attribute was added",
-          "type": "boolean"
-        },
-        "synonym": {
-          "description": "Display name written, when a synonym was provided",
-          "type": "string"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "type": "object"
-    }
-  },
-  {
-    "annotations": {
-      "destructiveHint": false,
-      "openWorldHint": false,
-      "readOnlyHint": false
-    },
     "description": "Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation.",
     "inputSchema": {
       "properties": {
@@ -401,50 +315,48 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a new top-level metadata object (Catalog, Document, register, etc.) with EDT default content, the same as the 'New' wizard. Use when adding an object to a configuration; supported types: Catalog, Document, InformationRegister, AccumulationRegister, Enum, CommonModule, Report, DataProcessor (Russian type names also accepted). Full parameters and examples: call get_tool_guide('create_metadata_object').",
+    "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Full parameters and examples: call get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
-        "comment": {
-          "description": "Optional comment for the new object.",
-          "type": "string"
-        },
         "expectedNotExists": {
-          "description": "Optional stale-intent guard (default false): assert the object does not yet exist for a sharper precondition error. A real duplicate is always rejected anyway.",
+          "description": "Optional stale-intent guard (default false): assert the node does not yet exist for a sharper precondition error. A real duplicate is always rejected anyway.",
           "type": "boolean"
         },
-        "language": {
-          "description": "Optional language code for the synonym (e.g. 'ru', 'en'); defaults to config default language.",
-          "type": "string"
-        },
-        "metadataType": {
-          "description": "Type to create: 'Catalog', 'Document', 'InformationRegister', 'AccumulationRegister', 'Enum', 'CommonModule', 'Report', 'DataProcessor' (Russian names also accepted).",
-          "type": "string"
-        },
-        "name": {
-          "description": "Name for the new object; must be a valid 1C identifier (e.g. 'Products').",
+        "fqn": {
+          "description": "Full-name FQN of the node to create (required). Top object: 'Type.Name' (e.g. 'Catalog.Products'). Member: 'Type.Name.Kind.Name' (e.g. 'Catalog.Products.Attribute.Weight'). The trailing Name is the new node's programmatic Name; type / kind tokens may be English or Russian.",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name.",
+          "description": "EDT project name (required).",
           "type": "string"
         },
-        "synonym": {
-          "description": "Optional display name; written for the config default language unless 'language' is set.",
-          "type": "string"
+        "properties": {
+          "description": "Optional properties to apply at creation, as [{name, value, language?}]. This version applies 'synonym' (with optional 'language' code) and 'comment'; other property names are rejected (set them via modify_metadata).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
         }
       },
       "required": [
         "projectName",
-        "metadataType",
-        "name"
+        "fqn"
       ],
       "type": "object"
     },
-    "name": "create_metadata_object",
+    "name": "create_metadata",
     "outputSchema": {
       "properties": {
+        "action": {
+          "description": "'created' on success",
+          "type": "string"
+        },
         "fqn": {
-          "description": "FQN of the created object, e.g. 'Catalog.Products'",
+          "description": "Normalized full-name FQN of the created node",
+          "type": "string"
+        },
+        "kind": {
+          "description": "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')",
           "type": "string"
         },
         "language": {
@@ -455,24 +367,20 @@
           "description": "Human-readable confirmation message",
           "type": "string"
         },
-        "metadataType": {
-          "description": "Canonical metadata type of the created object",
-          "type": "string"
-        },
         "name": {
-          "description": "Programmatic name of the created object",
+          "description": "Programmatic name of the created node",
           "type": "string"
         },
         "persisted": {
-          "description": "Whether the change was saved to disk",
+          "description": "Whether the change was exported to disk",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the object was created",
+          "description": "Whether the node was created",
           "type": "boolean"
         },
         "synonym": {
-          "description": "Display name written, when a synonym was provided",
+          "description": "Display name written, when a synonym property was provided",
           "type": "string"
         }
       },
@@ -2948,7 +2856,7 @@
           "type": "string"
         },
         "objectFqn": {
-          "description": "FQN of the object to edit, e.g. 'Catalog.Products' (required; TYPE token may be en/ru; object part is the programmatic Name, not the synonym). Canonical FQN parameter, shared with find_references / delete_metadata_object / rename_metadata_object / add_metadata_attribute.",
+          "description": "FQN of the object to edit, e.g. 'Catalog.Products' (required; TYPE token may be en/ru; object part is the programmatic Name, not the synonym). Canonical FQN parameter, shared with find_references / delete_metadata_object / rename_metadata_object / create_metadata.",
           "type": "string"
         },
         "projectName": {

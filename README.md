@@ -179,7 +179,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 69 tools are organized into 9 semantic groups:
+All 68 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -190,7 +190,7 @@ All 69 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_structure`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add/edit/delete form attributes, commands and items | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property`, `add_form_command`, `delete_form_item`, `add_form_item` |
+| **Refactoring** | Metadata create (objects + members), rename, delete, set properties, add/edit/delete form attributes, commands and items | `create_metadata`, `rename_metadata_object`, `delete_metadata_object`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property`, `add_form_command`, `delete_form_item`, `add_form_item` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 69 tools enabled (default) |
+| **All Tools** | All 68 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -339,8 +339,7 @@ Add to `claude_desktop_config.json`:
 | `find_references` | Find all references to a metadata object (in metadata, BSL code, forms, roles, etc.) — top-level objects only |
 | `rename_metadata_object` | Rename a metadata object or attribute with full refactoring: cascading updates in BSL code, forms, and metadata. Preview + confirm workflow |
 | `delete_metadata_object` | Delete a metadata object or attribute with reference cleanup. Preview + confirm workflow |
-| `add_metadata_attribute` | Add a new attribute to a metadata object (Catalog, Document, Register, etc.) |
-| `create_metadata_object` | Create a new top-level metadata object (Catalog, Document, InformationRegister, AccumulationRegister, Enum, CommonModule, Report, DataProcessor) with EDT default content |
+| `create_metadata` | Create a metadata node by 1C full-name FQN: a top-level object (Catalog, Document, InformationRegister, AccumulationRegister, Enum, CommonModule, Report, DataProcessor) or a member (Attribute, TabularSection, Dimension, Resource, EnumValue) |
 | `set_metadata_property` | Set the Comment and/or Synonym of an existing metadata object or one of its attributes |
 | `get_tags` | Get list of all tags defined in the project with descriptions and object counts |
 | `get_objects_by_tags` | Get metadata objects filtered by tags with tag descriptions and object FQNs |
@@ -649,36 +648,21 @@ Add to `claude_desktop_config.json`:
 | `objectFqn` | Yes | FQN of the object to delete (e.g. `Catalog.Products`, `Document.SalesOrder.Attribute.Amount`) |
 | `confirm` | No | `true` to execute the deletion. Default `false` = preview only |
 
-#### Add Metadata Attribute Tool
+#### Create Metadata Tool
 
-**`add_metadata_attribute`** - Add a new attribute to a metadata object via BM write transaction. The attribute is created with default properties.
-
-**Parameters:**
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `projectName` | Yes | EDT project name |
-| `parentFqn` | Yes | FQN of the parent object (e.g. `Catalog.Products`, `Document.SalesOrder`) |
-| `attributeName` | Yes | Name for the new attribute |
-
-**Supported parent types:** `Catalog`, `Document`, `ExchangePlan`, `ChartOfCharacteristicTypes`, `ChartOfAccounts`, `ChartOfCalculationTypes`, `BusinessProcess`, `Task`, `DataProcessor`, `Report`, `InformationRegister`, `AccumulationRegister`, `AccountingRegister`
-
-#### Create Metadata Object Tool
-
-**`create_metadata_object`** - Create a new top-level metadata object with the same default content as the EDT "New" wizard (correct UUID and `producedTypes` are generated automatically). The object is created via the EDT `IModelObjectFactory` and registered as a BM top object, then persisted into a new `.mdo` file.
+**`create_metadata`** - Create a metadata node addressed by a 1C full-name FQN: a top-level object (`Catalog.Products`) or a subordinate member (`Catalog.Products.Attribute.Weight`, `InformationRegister.Prices.Resource.Sum`, `Enum.Colors.EnumValue.Red`). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Top objects are created via the EDT `IModelObjectFactory` (correct UUID + `producedTypes`); members via the EMF containment feature. The change is force-exported to the owner's `.mdo` on disk. This folds the former `create_metadata_object` and `add_metadata_attribute` tools.
 
 **Parameters:**
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `projectName` | Yes | EDT project name |
-| `metadataType` | Yes | Type to create. Russian type names are also supported |
-| `name` | Yes | Name for the new object (must be a valid 1C identifier) |
-| `synonym` | No | Synonym (display name); set for the configuration default language unless `language` is given |
-| `comment` | No | Comment for the new object |
-| `language` | No | Language code for the synonym (e.g. `ru`, `en`). Defaults to the configuration default language |
+| `fqn` | Yes | Full-name FQN of the node to create. Top object: `Type.Name`; member: `Type.Name.Kind.Name` (Kind = Attribute / TabularSection / Dimension / Resource / EnumValue) |
+| `properties` | No | Properties to apply at creation, as `[{name, value, language?}]`. This version applies `synonym` (with optional language code) and `comment`; other property names are rejected (set them via `modify_metadata`) |
+| `expectedNotExists` | No | Stale-intent guard (default false): assert the node does not yet exist for a sharper precondition error |
 
-**Supported types:** `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor`
+**Supported top-level types:** `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor`. **Member kinds:** Attribute, TabularSection, Dimension, Resource, EnumValue (on the owner types that declare them). Members of a nested object (e.g. a tabular-section attribute) are not yet supported.
 
-After creating an object, run `get_project_errors` to verify (or `revalidate_objects` on the new object if validation looks stale).
+After creating a node, run `get_project_errors` to verify.
 
 #### Set Metadata Property Tool
 
@@ -700,7 +684,7 @@ At least one of `comment` / `synonym` must be provided. The synonym is keyed by 
 
 #### Add Form Attribute Tool
 
-**`add_form_attribute`** - Add a **form attribute** (the form's own data-model attribute, what `get_form_structure` lists under `## Attributes`) to an existing managed form via a BM write transaction, then persist the change to the form's `Form.form` file on disk. This is **not** the same as an attribute of the underlying metadata object - to add that, use `add_metadata_attribute`.
+**`add_form_attribute`** - Add a **form attribute** (the form's own data-model attribute, what `get_form_structure` lists under `## Attributes`) to an existing managed form via a BM write transaction, then persist the change to the form's `Form.form` file on disk. This is **not** the same as an attribute of the underlying metadata object - to add that, use `create_metadata` (e.g. `fqn: 'Catalog.Products.Attribute.Weight'`).
 
 **Parameters:**
 | Parameter | Required | Description |
@@ -1267,7 +1251,7 @@ An action/confirmation/status result with **none** of these returns **Markdown**
 
 Which tool families stay JSON, and why:
 
-- **metadata-writes** (`create_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `delete_metadata_object`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*;
+- **metadata-writes** (`create_metadata`, `set_metadata_property`, `delete_metadata_object`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*;
 - **debug / profiling tools** — return launch / application / breakpoint IDs and live session state consumed by follow-up calls *(a)*;
 - **`validate_query`** — returns the error **line/column** *(b)*;
 - **`list_configurations`** — returns config **identities** consumed by other tools *(a)*;
@@ -1277,7 +1261,7 @@ Errors are reported the same way regardless of a tool's normal format — see th
 
 - **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects`, `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_form_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
 - **YAML tools**: `get_configuration_properties` — returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`).
-- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `debug_yaxunit_tests`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `delete_metadata_object`).
+- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `debug_yaxunit_tests`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `set_metadata_property`, `delete_metadata_object`).
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.
 - **Image tools**: `get_form_screenshot` — returns the rendered form as an EmbeddedResource with an `image/*` `mimeType`.
 
@@ -1296,7 +1280,7 @@ Every tool in the `tools/list` response carries an `annotations` object with the
 | `destructiveHint` | The tool may perform a destructive or irreversible update | `true` for `delete_metadata_object`, `clean_project`, `update_database`, `rename_metadata_object`, `import_configuration_from_xml` |
 | `openWorldHint` | The tool interacts with an external/open world | always `false` — the server operates only on the local EDT workspace |
 
-Only hints that apply are emitted; unset hints are omitted from the JSON. Tools that write but are not destructive (for example `write_module_source`, `create_metadata_object`) carry `readOnlyHint: false` and `destructiveHint: false`.
+Only hints that apply are emitted; unset hints are omitted from the JSON. Tools that write but are not destructive (for example `write_module_source`, `create_metadata`) carry `readOnlyHint: false` and `destructiveHint: false`.
 
 </details>
 

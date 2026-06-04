@@ -23,7 +23,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Language;
  * wrong for non-Russian configurations.
  * <p>
  * This class centralises logic previously duplicated across
- * {@code CreateMetadataObjectTool}, {@code GetMetadataObjectsTool},
+ * {@code CreateMetadataTool}, {@code GetMetadataObjectsTool},
  * {@code GetMetadataDetailsTool}, {@code SubsystemUtils} and
  * {@code AbstractMetadataFormatter}.
  */
@@ -37,7 +37,7 @@ public final class MetadataLanguageUtils
     /**
      * Resolves the synonym language CODE for the given configuration.
      * <p>
-     * Precedence (mirrors the verified {@code CreateMetadataObjectTool.resolveLanguage}):
+     * Precedence (the established synonym language-resolution order, used by create_metadata):
      * <ol>
      * <li>If {@code explicit} is non-empty, it is returned as-is.</li>
      * <li>Otherwise the default language's {@link Language#getLanguageCode()} if non-empty.</li>

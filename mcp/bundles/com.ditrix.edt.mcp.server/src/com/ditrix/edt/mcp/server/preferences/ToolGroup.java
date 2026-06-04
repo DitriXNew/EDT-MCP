@@ -58,8 +58,8 @@ public enum ToolGroup
 
     REFACTORING("refactoring", "Refactoring", //$NON-NLS-1$ //$NON-NLS-2$
         "Metadata create, rename, delete, attribute management, and form item editing", //$NON-NLS-1$
-        "rename_metadata_object", "delete_metadata_object", "add_metadata_attribute", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "create_metadata_object", "set_metadata_property", "add_form_attribute", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "rename_metadata_object", "delete_metadata_object", "create_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "set_metadata_property", "add_form_attribute", //$NON-NLS-1$ //$NON-NLS-2$
         "set_form_item_property", "add_form_command", "delete_form_item", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "add_form_item"), //$NON-NLS-1$
 

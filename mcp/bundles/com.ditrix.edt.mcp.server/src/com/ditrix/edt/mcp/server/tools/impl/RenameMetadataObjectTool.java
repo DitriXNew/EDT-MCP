@@ -87,8 +87,8 @@ public class RenameMetadataObjectTool implements IMcpTool
             + "request. After execute, verify with get_project_errors.\n\n" //$NON-NLS-1$
             + "## When to use\n" //$NON-NLS-1$
             + "Use to rename an existing object or member and have all callers updated automatically. " //$NON-NLS-1$
-            + "To create an object use create_metadata_object; to add a member use " //$NON-NLS-1$
-            + "add_metadata_attribute; to delete use delete_metadata_object.\n\n" //$NON-NLS-1$
+            + "To create an object or member use create_metadata; to delete use " //$NON-NLS-1$
+            + "delete_metadata_object.\n\n" //$NON-NLS-1$
             + "## Two-phase workflow\n" //$NON-NLS-1$
             + "1. Preview (confirm omitted / false, the default): returns a Markdown report with a " //$NON-NLS-1$
             + "change-points table. Each row has a '#' index, the file/location, a description, whether " //$NON-NLS-1$

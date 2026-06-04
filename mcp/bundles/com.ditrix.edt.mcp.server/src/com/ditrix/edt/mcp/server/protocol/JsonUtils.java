@@ -299,8 +299,57 @@ public final class JsonUtils
     }
     
     /**
+     * Extracts an array-of-objects argument from the params map. A complex argument arrives here as
+     * its JSON text (the protocol layer re-serializes nested JSON values into the string map), so a
+     * {@code properties} array like {@code [{"name":"synonym","value":"X","language":"ru"}]} is
+     * returned as a list of {@link JsonObject}. Non-object array elements are skipped.
+     *
+     * @param params the params map
+     * @param argumentName the argument name to extract
+     * @return the list of objects (never null; empty when the argument is absent, blank, not a JSON
+     *     array, or unparseable)
+     */
+    public static List<JsonObject> extractObjectArray(Map<String, String> params, String argumentName)
+    {
+        List<JsonObject> result = new ArrayList<>();
+        if (params == null || argumentName == null)
+        {
+            return result;
+        }
+        String value = params.get(argumentName);
+        if (value == null)
+        {
+            return result;
+        }
+        value = value.trim();
+        if (!value.startsWith("[")) //$NON-NLS-1$
+        {
+            return result;
+        }
+        try
+        {
+            JsonElement element = JsonParser.parseString(value);
+            if (element.isJsonArray())
+            {
+                for (JsonElement item : element.getAsJsonArray())
+                {
+                    if (item.isJsonObject())
+                    {
+                        result.add(item.getAsJsonObject());
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            // Malformed JSON: return what was collected (typically empty); the caller validates.
+        }
+        return result;
+    }
+
+    /**
      * Extracts a boolean argument from params map.
-     * 
+     *
      * @param params the params map
      * @param argumentName the argument name to extract
      * @param defaultValue the default value if not found or invalid

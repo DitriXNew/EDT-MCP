@@ -190,8 +190,11 @@ public class ToolGroupTest
         List<String> tools = ToolGroup.REFACTORING.getToolNames();
         assertTrue(tools.contains("rename_metadata_object"));
         assertTrue(tools.contains("delete_metadata_object"));
-        assertTrue(tools.contains("add_metadata_attribute"));
-        assertTrue(tools.contains("create_metadata_object"));
+        // create_metadata is the unified FQN-addressed create (folded the former
+        // create_metadata_object + add_metadata_attribute).
+        assertTrue(tools.contains("create_metadata"));
+        assertFalse(tools.contains("create_metadata_object"));
+        assertFalse(tools.contains("add_metadata_attribute"));
         // Metadata/form property writers also belong here.
         assertTrue(tools.contains("set_metadata_property"));
         assertTrue(tools.contains("add_form_attribute"));
@@ -199,6 +202,6 @@ public class ToolGroupTest
         assertTrue(tools.contains("add_form_command"));
         assertTrue(tools.contains("delete_form_item"));
         assertTrue(tools.contains("add_form_item"));
-        assertEquals(10, tools.size());
+        assertEquals(9, tools.size());
     }
 }

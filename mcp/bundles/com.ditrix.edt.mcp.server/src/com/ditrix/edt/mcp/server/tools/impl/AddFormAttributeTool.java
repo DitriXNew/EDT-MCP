@@ -74,7 +74,7 @@ public class AddFormAttributeTool extends AbstractMetadataWriteTool
         return "Add a FORM attribute (the form's own data-model attribute, NOT an attribute of the " + //$NON-NLS-1$
                "underlying object) to an existing managed form, persisted to disk. Use " + //$NON-NLS-1$
                "get_form_structure to inspect the form's attributes/items first; to add an OBJECT " + //$NON-NLS-1$
-               "attribute use add_metadata_attribute. The attribute is created with a default type. " + //$NON-NLS-1$
+               "attribute use create_metadata. The attribute is created with a default type. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('add_form_attribute')."; //$NON-NLS-1$
     }
 
@@ -125,7 +125,8 @@ public class AddFormAttributeTool extends AbstractMetadataWriteTool
             + "## Form attribute vs object attribute\n\n" //$NON-NLS-1$
             + "A FORM attribute lives in the form's data model (what `get_form_structure` lists " //$NON-NLS-1$
             + "under `## Attributes`). It is NOT the same as an attribute of the underlying metadata " //$NON-NLS-1$
-            + "object (Catalog/Document/...) - to add THAT, use `add_metadata_attribute`. This tool " //$NON-NLS-1$
+            + "object (Catalog/Document/...) - to add THAT, use `create_metadata` (e.g. " //$NON-NLS-1$
+            + "`fqn: 'Catalog.Products.Attribute.Weight'`). This tool " //$NON-NLS-1$
             + "only touches the `Form.form` model.\n\n" //$NON-NLS-1$
             + "## When to use\n\n" //$NON-NLS-1$
             + "Use to extend a managed form's data model with a new attribute. Read the form first " //$NON-NLS-1$
@@ -524,10 +525,9 @@ public class AddFormAttributeTool extends AbstractMetadataWriteTool
      * Checks that a name is a valid 1C identifier: starts with a letter or underscore
      * and contains only letters, digits and underscores.
      * <p>
-     * Mirrors {@code AddMetadataAttributeTool.isValidIdentifier} (and
-     * {@code CreateMetadataObjectTool.isValidIdentifier}); replicated here because
-     * those are not yet extracted into a shared util. They must stay in sync until the
-     * shared helper exists.
+     * Mirrors {@code CreateMetadataTool.isValidIdentifier}; replicated here because it
+     * is not yet extracted into a shared util. They must stay in sync until the shared
+     * helper exists.
      *
      * @param name the candidate attribute name
      * @return {@code true} if the name is a valid identifier

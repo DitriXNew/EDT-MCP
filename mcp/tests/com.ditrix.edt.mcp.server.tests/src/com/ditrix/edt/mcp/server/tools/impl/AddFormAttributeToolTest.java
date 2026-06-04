@@ -123,9 +123,9 @@ public class AddFormAttributeToolTest
         assertNotNull(guide);
         assertFalse("guide must be non-empty", guide.isEmpty()); //$NON-NLS-1$
         // It must distinguish the form attribute from the object attribute and steer to
-        // add_metadata_attribute for the latter.
-        assertTrue("guide should contrast with add_metadata_attribute", //$NON-NLS-1$
-            guide.contains("add_metadata_attribute")); //$NON-NLS-1$
+        // create_metadata for the latter.
+        assertTrue("guide should contrast with create_metadata", //$NON-NLS-1$
+            guide.contains("create_metadata")); //$NON-NLS-1$
         // The default-type reservation note must be present (type is not yet wired).
         assertTrue("guide should explain the default-type reservation", //$NON-NLS-1$
             guide.toLowerCase().contains("default")); //$NON-NLS-1$

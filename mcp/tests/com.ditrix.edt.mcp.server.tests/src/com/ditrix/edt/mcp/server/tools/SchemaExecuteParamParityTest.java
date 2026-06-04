@@ -50,7 +50,7 @@ public class SchemaExecuteParamParityTest
 {
     /** Single-key accessors: extract*Argument(params, "key" ...) and requireArgument(params, "key" ...). */
     private static final Pattern SINGLE_KEY = Pattern.compile(
-        "(?:extractStringArgument|extractArrayArgument|extractBooleanArgument|extractLongArgument|" //$NON-NLS-1$
+        "(?:extractStringArgument|extractArrayArgument|extractObjectArray|extractBooleanArgument|extractLongArgument|" //$NON-NLS-1$
             + "extractIntArgument|extractDoubleArgument|requireArgument)\\s*\\(\\s*params\\s*,\\s*\"([a-zA-Z][a-zA-Z0-9]*)\""); //$NON-NLS-1$
 
     /** Varargs: requireArguments(params, "a", "b", ...). Captures the whole quoted-list tail. */

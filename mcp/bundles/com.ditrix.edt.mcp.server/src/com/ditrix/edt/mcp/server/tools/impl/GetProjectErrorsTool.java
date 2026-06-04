@@ -329,7 +329,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 // Resolve the project's BM model so getObjectPresentation() can lazily
                 // resolve the marker target inside a read transaction. The getModel(IProject)
                 // overload is the idiomatic path used across the plugin (FindReferencesTool,
-                // AddMetadataAttributeTool, tag tools), so no IDtProjectManager is needed.
+                // CreateMetadataTool, tag tools), so no IDtProjectManager is needed.
                 IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
                 
                 Runnable collector = () -> projectMarkers.stream()

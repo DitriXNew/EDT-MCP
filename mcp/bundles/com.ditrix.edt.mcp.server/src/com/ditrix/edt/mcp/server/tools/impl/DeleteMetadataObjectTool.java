@@ -104,8 +104,8 @@ public class DeleteMetadataObjectTool extends AbstractMetadataWriteTool
             + "execute, verify with get_project_errors.\n\n" //$NON-NLS-1$
             + "## When to use\n" //$NON-NLS-1$
             + "Use to remove an existing object or member and have all references cleaned automatically. " //$NON-NLS-1$
-            + "To rename instead use rename_metadata_object; to create use create_metadata_object; to add " //$NON-NLS-1$
-            + "a member use add_metadata_attribute.\n\n" //$NON-NLS-1$
+            + "To rename instead use rename_metadata_object; to create an object or member use " //$NON-NLS-1$
+            + "create_metadata.\n\n" //$NON-NLS-1$
             + "## Two-phase workflow\n" //$NON-NLS-1$
             + "1. Preview (confirm omitted / false, the default): returns the refactoring title, the list " //$NON-NLS-1$
             + "of refactoring items, and the affected references (referencingObject, reference feature, " //$NON-NLS-1$
