@@ -586,6 +586,92 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Delete a visual ITEM (field / group / table / button / decoration) from an existing managed form, persisted to disk. Address the item by its itemId - the programmatic name get_form_structure lists. DESTRUCTIVE: deleting a group/table removes its whole subtree. Use the two-phase workflow: call WITHOUT confirm to preview what would be removed, review, then call with confirm=true to apply. Deleting form attributes/commands is out of scope. Full parameters and examples: call get_tool_guide('delete_form_item').",
+    "inputSchema": {
+      "properties": {
+        "confirm": {
+          "description": "true = execute the deletion; default false = preview only (what would be removed, including any contained descendant items for a group/table).",
+          "type": "boolean"
+        },
+        "formPath": {
+          "description": "Form FQN: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName' (e.g. 'Catalog.Products.Forms.ItemForm'). Names are the programmatic Name, not the synonym; the TYPE token may be en/ru. (required)",
+          "type": "string"
+        },
+        "itemId": {
+          "description": "Programmatic name of the form ITEM to delete - the item Name get_form_structure lists (searched across the whole nested items tree). (required)",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name (required)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "formPath",
+        "itemId"
+      ],
+      "type": "object"
+    },
+    "name": "delete_form_item",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "Either 'preview' or 'deleted'",
+          "type": "string"
+        },
+        "confirmationRequired": {
+          "description": "true on a preview (no change made); absent/false once deleted",
+          "type": "boolean"
+        },
+        "descendantCount": {
+          "description": "Count of contained descendant items (preview)",
+          "type": "integer"
+        },
+        "descendants": {
+          "description": "Contained descendant items that would be removed with a group/table (preview)",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "formPath": {
+          "description": "Normalized FQN of the form",
+          "type": "string"
+        },
+        "itemId": {
+          "description": "Programmatic name of the targeted form item",
+          "type": "string"
+        },
+        "itemType": {
+          "description": "EClass type of the targeted item (e.g. Decoration, FormGroup)",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable description of the result",
+          "type": "string"
+        },
+        "persisted": {
+          "description": "Whether the change was saved to the form file on disk",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the request succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Delete a metadata object or attribute, cascading the cleanup of all references in BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm to preview affected references, review, then call with confirm=true to apply (deletion is hard to reverse). Full parameters and examples: call get_tool_guide('delete_metadata_object').",
     "inputSchema": {
       "properties": {

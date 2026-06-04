@@ -15,6 +15,7 @@ import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
+import com.ditrix.edt.mcp.server.tools.impl.DeleteFormItemTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ExportConfigurationToXmlTool;
@@ -165,6 +166,7 @@ public final class BuiltInToolRegistrar
         registry.register(new GetFormScreenshotTool());
         registry.register(new AddFormAttributeTool());
         registry.register(new AddFormCommandTool());
+        registry.register(new DeleteFormItemTool());
         registry.register(new ValidateQueryTool());
 
         // Metadata refactoring tools

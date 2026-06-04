@@ -179,7 +179,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 66 tools are organized into 9 semantic groups:
+All 67 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -190,7 +190,7 @@ All 66 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_structure`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add form attributes/commands, edit form items | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property`, `add_form_command` |
+| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add form attributes/commands, edit/delete form items | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property`, `add_form_command`, `delete_form_item` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 66 tools enabled (default) |
+| **All Tools** | All 67 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -369,6 +369,7 @@ Add to `claude_desktop_config.json`:
 | `add_form_attribute` | Add a FORM attribute (the form's own data-model attribute) to an existing managed form, persisted to the form file on disk. Created with a default type |
 | `set_form_item_property` | Set the Title (bilingual), Visible flag and/or ReadOnly flag of an existing form ITEM (field/group/button/decoration/table) addressed by its itemId, persisted to the form file on disk |
 | `add_form_command` | Add a FORM command (a FormCommand, what get_form_structure lists under Commands) to an existing managed form, persisted to the form file on disk. Sets name + bilingual title; the action handler and button binding are out of scope |
+| `delete_form_item` | Delete a visual form ITEM (field/group/table/button/decoration) addressed by its itemId, persisted to the form file on disk. DESTRUCTIVE (deleting a group/table removes its whole subtree); requires a confirm-preview (call without confirm to preview, then confirm=true to apply) |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
 | `read_module_source` | Read BSL module source code with YAML frontmatter metadata (full file or line range) |
@@ -747,6 +748,24 @@ At least one of `title` / `visible` / `readOnly` must be provided. The title is 
 | `action` | No | Reserved. The command's action (handler) is a complex containment chain in the form model, not a plain string; this version does not wire it. Wire the handler afterwards in the EDT form editor |
 
 The title is keyed by the language **code** (never the language name). Read the form first with `get_form_structure` to see existing command names - a duplicate name (case-insensitive) is rejected. Ordinary/legacy (non-managed) forms have no editable model and are rejected.
+
+#### Delete Form Item Tool
+
+**`delete_form_item`** - Delete a **visual ITEM** of a managed form (a field / group / table / button / decoration), addressed by its `itemId`, via a BM write transaction, then persist the change to the form's `Form.form` file on disk. The `itemId` is the item's programmatic Name - exactly what `get_form_structure` lists - and is searched across the whole nested `items` tree.
+
+**Destructive - confirm-preview required:** this is the highest-risk form-write class. When `confirm` is **not** `true` the tool returns a **preview** (the target item, its type, and the contained descendant items + a count that would be removed) and makes **no** change at all - it opens no write transaction. Only `confirm: true` performs the delete. Deleting a **container** item (a group or table) removes its **whole subtree** of contained items, because `items` is a containment reference and the removal cascades. Cross-references from elsewhere are **not** rewritten (e.g. a command bound to a deleted button is left dangling) - re-read the form with `get_form_structure` afterwards.
+
+**Scope:** deletes a visual item only (something `get_form_structure` lists under `## Items`). Deleting a form **attribute** or a form **command** is out of scope. To edit an item instead of removing it use `set_form_item_property`.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `formPath` | Yes | Form FQN: `MetadataType.ObjectName.Forms.FormName` (e.g. `Catalog.Products.Forms.ItemForm`) or `CommonForm.FormName`. The TYPE token may be English or Russian; names are the programmatic Name, not the synonym |
+| `itemId` | Yes | Programmatic Name of the form item to delete - the item Name `get_form_structure` lists (searched across the whole nested items tree, matched case-insensitively) |
+| `confirm` | No | `true` = execute the deletion; default `false` = preview only (what would be removed, including any contained descendant items for a group/table). No change is made on a preview |
+
+Deleting the form's only item leaves an empty form (allowed) - re-validate with `get_project_errors` afterwards. Ordinary/legacy (non-managed) forms have no editable model and are rejected.
 
 ### Tag Management Tools
 

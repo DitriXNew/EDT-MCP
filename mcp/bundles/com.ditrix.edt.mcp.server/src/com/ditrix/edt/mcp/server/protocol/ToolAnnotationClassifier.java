@@ -45,7 +45,8 @@ public final class ToolAnnotationClassifier
         "clean_project", //$NON-NLS-1$
         "update_database", //$NON-NLS-1$
         "rename_metadata_object", //$NON-NLS-1$
-        "import_configuration_from_xml" //$NON-NLS-1$
+        "import_configuration_from_xml", //$NON-NLS-1$
+        "delete_form_item" //$NON-NLS-1$
     );
 
     private ToolAnnotationClassifier()
