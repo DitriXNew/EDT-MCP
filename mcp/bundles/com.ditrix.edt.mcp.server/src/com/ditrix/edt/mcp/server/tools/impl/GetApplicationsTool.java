@@ -86,11 +86,12 @@ public class GetApplicationsTool implements IMcpTool
             return err;
         }
         
-        // Check if project is ready for operations
-        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-        if (notReadyError != null)
+        // Refuse only the transient BUILDING state; a missing/closed project
+        // falls through to the value-naming 'Project not found' below.
+        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        if (building != null)
         {
-            return ToolResult.error(notReadyError).toJson();
+            return ToolResult.error(building).toJson();
         }
         
         return getApplications(projectName);

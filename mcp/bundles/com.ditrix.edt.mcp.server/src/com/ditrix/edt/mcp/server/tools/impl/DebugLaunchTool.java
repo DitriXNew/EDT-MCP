@@ -195,10 +195,12 @@ public class DebugLaunchTool implements IMcpTool
                 + "or pass launchConfigurationName to start a config by name (e.g. an Attach config).").toJson(); //$NON-NLS-1$
         }
 
-        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-        if (notReadyError != null)
+        // Refuse only the transient BUILDING state; a missing/closed project falls
+        // through to the value-naming "Project not found" below.
+        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        if (building != null)
         {
-            return ToolResult.error(notReadyError).toJson();
+            return ToolResult.error(building).toJson();
         }
 
         return launchDebug(projectName, applicationId, updateBeforeLaunch);

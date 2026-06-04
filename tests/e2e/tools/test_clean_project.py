@@ -35,11 +35,12 @@ pair, and NO conditional-required parameter, so the "invalid enum" /
 here (documented, not skipped). The reachable negatives are driven entirely by the
 project-state pre-check:
 
-  - non-existent project -> ProjectStateChecker.checkReadyOrError(projectName) fires
-    FIRST in execute() and returns "Project does not exist. Please wait and retry."
-    The more actionable "Project not found: <name>" branch inside cleanProject() is
-    SHADOWED by this readiness pre-check and is unreachable for a name absent from
-    the workspace (see the AUDIT note on test_nonexistent_project_*).
+  - non-existent project -> the readiness pre-check is now
+    ProjectStateChecker.buildingErrorOrNull(projectName), which refuses ONLY the
+    transient BUILDING state and returns null for a missing/closed/unknown project.
+    So a name absent from the workspace falls through to cleanProject(), where
+    ProjectContext.of(name).exists()==false returns the actionable, value-naming
+    "Project not found: <name>" error (see test_nonexistent_project_*).
   - empty-string projectName -> NOT an error: extractStringArgument returns "" ,
     `projectName != null && !projectName.isEmpty()` is false, the readiness check is
     skipped, and the tool falls through to the "clean ALL projects" branch (the same
@@ -198,32 +199,28 @@ def test_nonexistent_project_errors_and_does_not_mutate():
     """A syntactically valid but non-existent project name must error, not silently
     clean nothing and report success.
 
-    ORDERING NOTE: in execute() ProjectStateChecker.checkReadyOrError(projectName) runs
-    BEFORE cleanProject(). For a name that is not a workspace project,
-    ResourcesPlugin...getProject(name) yields a handle whose exists()==false, so the
-    readiness checker returns "Project does not exist. Please wait and retry." and that
-    is the error the client sees — the "Project not found: <name>" branch inside
-    cleanProject() is shadowed and never reached for this input.
+    ORDERING NOTE: in execute() the readiness pre-check is now
+    ProjectStateChecker.buildingErrorOrNull(projectName), which refuses ONLY the
+    transient BUILDING state and returns null for a missing/closed/unknown project. So
+    for a name that is not a workspace project the pre-check no longer shadows the
+    downstream branch: control falls through to cleanProject(), where
+    ProjectContext.of(name).exists()==false yields the actionable, value-naming
+    "Project not found: <name>" error the client sees.
 
-    AUDIT: the reachable error ("Project does not exist. Please wait and retry.") does
-    NOT name the offending project value and points at no sibling tool. The more
-    actionable "Project not found: <bad>" message inside cleanProject() is unreachable
-    here because the readiness pre-check intercepts first. So:
-      - names=["does not exist"] asserts the REAL, observed message text (a broken tool
-        that returned a fake empty-success instead of an error fails assert_error
-        outright; a tool whose message regressed to a bare 'Error'/stacktrace fails the
-        error-quality bareness/stacktrace check);
-      - names cannot include the bad project value because the reachable error never
-        emits it -> fix-card: have the readiness pre-check (or clean_project) name the
-        bad project and point at list_projects;
-      - suggests=[] (no next-step tool in the reachable message)."""
+    names=[bad] asserts that REAL downstream message echoes the offending project value
+    (a broken tool that returned a fake empty-success instead of an error fails
+    assert_error outright; a tool whose message regressed to a bare 'Error'/stacktrace
+    fails the error-quality bareness/stacktrace check). suggests=[] — the reachable
+    message does not point at a next-step tool (the list_projects discovery tail is a
+    separate change)."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("clean_project", {"projectName": bad})
     err = assert_error(r, "non-existent project")
-    # Assert the REAL message contract (the readiness pre-check wins). Still fails loudly
-    # if the tool stopped erroring on an unknown project (e.g. cleaned all + faked success).
-    assert_error_quality(err, names=["does not exist"], suggests=[],
-                         ctx="non-existent project is rejected by the readiness pre-check")
+    # Assert the REAL downstream message contract ("Project not found: <bad>"), which now
+    # names the offending value. Still fails loudly if the tool stopped erroring on an
+    # unknown project (e.g. cleaned all + faked success).
+    assert_error_quality(err, names=[bad], suggests=[],
+                         ctx="non-existent project surfaces the value-naming 'Project not found' error")
     # A rejected clean must not have touched any tracked file.
     assert_no_diff("a rejected clean must not touch the project on disk")
 
@@ -231,21 +228,23 @@ def test_nonexistent_project_errors_and_does_not_mutate():
 @e2e_test(tool="clean_project", kind="action")
 def test_whitespace_project_name_errors_and_does_not_mutate():
     """Boundary: a whitespace-only projectName ("   ") is non-empty, so the named
-    branch IS taken: the guard `!projectName.isEmpty()` is true, the readiness
-    pre-check runs on a handle for project "   " whose exists()==false, and the tool
-    returns "Project does not exist. Please wait and retry.". This proves the tool does
-    not strip/coerce a blank name into clean-all or into a real project (either would be
-    a silent-success bug). A tool that trimmed "   " to "" would instead fall through to
-    clean-all and succeed — which would fail assert_error here.
+    branch IS taken: the guard `!projectName.isEmpty()` is true, the BUILDING-only
+    readiness pre-check (buildingErrorOrNull) returns null for the "   " handle (it is
+    not building, just not an existing project), and control falls through to
+    cleanProject(), where ProjectContext.of("   ").exists()==false returns
+    "Project not found:    ". This proves the tool does not strip/coerce a blank name
+    into clean-all or into a real project (either would be a silent-success bug). A tool
+    that trimmed "   " to "" would instead fall through to clean-all and succeed — which
+    would fail assert_error here.
 
-    AUDIT: same gap as the non-existent case — the reachable error neither echoes the
-    blank value (awkward to match through JSON whitespace anyway) nor points at
-    list_projects. We assert the stable, delimiter-free message text; suggests=[]."""
+    The reachable error is the downstream "Project not found: <value>"; we assert its
+    stable, delimiter-free "Project not found" text rather than the raw blank value
+    (awkward to match through JSON whitespace). suggests=[]."""
     bad = "   "
     r = call("clean_project", {"projectName": bad})
     err = assert_error(r, "whitespace-only projectName")
-    # The whitespace handle is not an existing project -> the readiness message fires.
-    # Asserting the stable text (not the blank value) is the robust signal.
-    assert_error_quality(err, names=["does not exist"], suggests=[],
-                         ctx="whitespace projectName surfaces as a not-existing project")
+    # The whitespace handle is not an existing project -> the downstream not-found error
+    # fires. Asserting the stable text (not the blank value) is the robust signal.
+    assert_error_quality(err, names=["Project not found"], suggests=[],
+                         ctx="whitespace projectName surfaces the 'Project not found' error")
     assert_no_diff("a rejected clean must not touch the project on disk")

@@ -28,7 +28,9 @@ test below isolates exactly ONE bad field):
   2. targetLanguages null/empty          -> "targetLanguages is required (e.g. [\"en\"])"
   3. ctx.exists() false                  -> "Project not found: <name>"
   4. ctx.isOpen() false                  -> "Project is closed: <name>"
-  5. ProjectStateChecker not ready       -> (ready-state error text)
+  5. ProjectStateChecker BUILDING        -> (building "...Please wait and retry."
+                                            only while derived data is building;
+                                            missing/closed fall through to guards 3-4)
   6. dtProject == null                   -> "Not an EDT project: <name>"
   7. getSynchronizeProjectApi() == null  -> "LanguageTool ISynchronizeProjectApi
                                              is not available. Install LanguageTool in EDT."
@@ -191,10 +193,11 @@ def test_empty_target_languages_array_errors_clearly():
 def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped args, but the project does not exist (guard #3).
 
-    targetLanguages is valid and the name is well-formed but unknown, so
-    ctx.exists() is false -> "Project not found: <name>". The bad value MUST be
-    echoed; a broken resolver that silently translated the wrong project, or
-    emitted a generic "Not an EDT project", would fail this.
+    targetLanguages is valid and the name is well-formed but unknown. The
+    BUILDING pre-check (guard #5) returns null for a missing project, so control
+    falls through to ctx.exists() being false -> "Project not found: <name>".
+    The bad value MUST be echoed; a broken resolver that silently translated the
+    wrong project, or emitted a generic "Not an EDT project", would fail this.
     """
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("translate_configuration", {
@@ -202,9 +205,8 @@ def test_nonexistent_project_errors_and_names_value():
         "targetLanguages": ["en"],
     })
     e = assert_error(r, "non-existent project")
-    # AUDIT: "Project not found: <name>" names the bad value but is NOT actionable
-    # — it does not point at list_projects (the sibling tool that enumerates valid
-    # open project names). suggests=[] is deliberate; fix-card.
+    # "Project not found: <name>" names the bad value. suggests=[] is deliberate:
+    # the list_projects discovery tail is a SEPARATE change, not asserted here.
     assert_error_quality(e, names=[bad], suggests=[],
                          ctx="non-existent project names the bad value")
     assert_no_diff("a rejected call must not touch the project on disk")

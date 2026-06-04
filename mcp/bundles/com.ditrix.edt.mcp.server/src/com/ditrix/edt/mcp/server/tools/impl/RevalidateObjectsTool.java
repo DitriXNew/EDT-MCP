@@ -90,13 +90,14 @@ public class RevalidateObjectsTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String objectsJson = JsonUtils.extractStringArgument(params, "objects"); //$NON-NLS-1$
         
-        // Check if project is ready for operations
+        // Refuse only the transient BUILDING state; a missing/closed project
+        // falls through to the value-naming 'Project not found' below.
         if (projectName != null && !projectName.isEmpty())
         {
-            String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-            if (notReadyError != null)
+            String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+            if (building != null)
             {
-                return ToolResult.error(notReadyError).toJson();
+                return ToolResult.error(building).toJson();
             }
         }
         

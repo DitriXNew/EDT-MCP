@@ -129,10 +129,8 @@ public class GetTranslationProjectInfoTool implements IMcpTool
         try
         {
             // Resolve the IProject first so AI clients get a specific
-            // "Project not found or closed" diagnostic for unknown names
-            // instead of the generic "Not an EDT project" message that
-            // ProjectStateChecker.checkReadyOrError returns for missing
-            // projects.
+            // "Project not found or closed" diagnostic (naming the value) for
+            // unknown names.
             ProjectContext ctx = ProjectContext.of(projectName);
             if (!ctx.isOpen())
             {
@@ -140,10 +138,12 @@ public class GetTranslationProjectInfoTool implements IMcpTool
             }
             IProject project = ctx.project();
 
-            String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-            if (notReadyError != null)
+            // The project is resolved and open above; refuse only the transient
+            // BUILDING state here (a missing/closed name was already named above).
+            String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+            if (building != null)
             {
-                return ToolResult.error(notReadyError).toJson();
+                return ToolResult.error(building).toJson();
             }
 
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();

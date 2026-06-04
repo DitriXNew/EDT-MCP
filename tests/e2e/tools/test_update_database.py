@@ -42,9 +42,10 @@ Targeting is XOR-ish: pass launchConfigurationName (preferred) OR projectName+ap
   - launchConfigurationName that does not exist
         -> "Launch configuration not found: '<name>'. Use list_configurations to see what's available."
   - projectName+applicationId, project does not exist
-        -> ProjectStateChecker.checkReadyOrError -> "Project does not exist. Please wait and retry."
-           (NB: this guard fires BEFORE updateDatabase()'s own "Project not found: <name>",
-            and it does NOT echo the bad project name — see AUDIT below.)
+        -> the readiness pre-check (ProjectStateChecker.buildingErrorOrNull) refuses ONLY the
+           transient BUILDING state and returns null for a missing project, so the call falls
+           through to updateDatabase()'s own value-naming branch:
+           -> "Project not found: <name>"
   - real open project + non-existent applicationId
         -> "Application not found: <id>. Use get_applications to get valid application IDs."
 """
@@ -166,19 +167,14 @@ def test_nonexistent_launch_configuration_errors_and_names_value():
 @e2e_test(tool="update_database", kind="action")
 def test_nonexistent_project_is_rejected_without_mutating():
     """Valid-shaped target (projectName + applicationId) but the project does not exist.
-    ProjectStateChecker.checkReadyOrError fires before updateDatabase() and returns
-    "Project does not exist. Please wait and retry.". The call must be rejected and the
-    real fixture must be untouched.
+    The readiness pre-check (ProjectStateChecker.buildingErrorOrNull) refuses ONLY the
+    transient BUILDING state and returns null for a missing project, so the call falls
+    through to updateDatabase()'s own value-naming branch, which returns
+    "Project not found: <name>". That message ECHOES the bad project name, so we can
+    assert names=[bad]. The call must be rejected and the real fixture untouched.
 
-    AUDIT: the ProjectStateChecker guard does NOT echo the bad project name (its message
-    is the fixed "Project does not exist. Please wait and retry.") and offers no next step
-    (e.g. list_projects to find a valid project). It also misleadingly says "Please wait
-    and retry" for a genuinely non-existent project, where retrying will never succeed.
-    So names=[bad-project] cannot be asserted here; we pin the stable, distinguishing
-    phrase instead. Fix-card: when the project simply does not exist, return a dedicated,
-    name-echoing, actionable message (point at list_projects) rather than the shared
-    "building/not-ready -> wait and retry" text. (The downstream updateDatabase() branch
-    "Project not found: <name>" DOES name the value, but is unreachable behind this guard.)
+    suggests=[] here intentionally: the downstream branch names the value but does not yet
+    append a list_projects discovery tail (that tail is a SEPARATE change).
     """
     bad = "NoSuchProject_e2e_zzz"
     r = call("update_database", {
@@ -186,8 +182,10 @@ def test_nonexistent_project_is_rejected_without_mutating():
         "applicationId": BOGUS_APP_ID,
     })
     e = assert_error(r, "non-existent project")
-    assert_error_quality(e, names=["Project does not exist"], suggests=[],
-                         ctx="non-existent project surfaces via the ready-gate guard")
+    assert_error_quality(e, names=[bad], suggests=[],
+                         ctx="non-existent project surfaces the value-naming 'Project not found: <name>'")
     # Distinguish this from the application-not-found path: a non-existent project must be
     # stopped at the project gate, never reaching the application lookup.
+    assert_contains(e, "Project not found",
+                    "a non-existent project must hit the value-naming not-found branch")
     assert_no_diff("a rejected update must not touch the project on disk")

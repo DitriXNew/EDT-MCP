@@ -249,10 +249,12 @@ public class DebugYaxunitTestsTool implements IMcpTool
                     + "' has no project attribute set").toJson(); //$NON-NLS-1$
             }
 
-            String notReady = ProjectStateChecker.checkReadyOrError(projectName);
-            if (notReady != null)
+            // Refuse only the transient BUILDING state; a missing/closed project
+            // falls through to the value-naming "Project not found" below.
+            String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+            if (building != null)
             {
-                return ToolResult.error(notReady).toJson();
+                return ToolResult.error(building).toJson();
             }
 
             ProjectContext ctx = ProjectContext.of(projectName);

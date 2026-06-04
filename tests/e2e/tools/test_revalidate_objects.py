@@ -37,13 +37,12 @@ REAL ERROR / SENTINEL PATHS (read from the Java):
       ProjectStateChecker pre-check, then revalidateObjects() hits the guard
       `return ToolResult.error("projectName is required")`.
   - projectName non-existent:
-      execute() calls ProjectStateChecker.checkReadyOrError(projectName) FIRST. For an
-      unknown name the workspace handle's exists() is false -> checkProjectState returns
-      NOT_AVAILABLE("Project does not exist") -> checkReadyOrError appends
-      ". Please wait and retry." => the error is "Project does not exist. Please wait
-      and retry." (NOTE: this pre-check fires BEFORE revalidateObjects' own
-      "Project not found: <name>" branch, so the user sees the ProjectStateChecker
-      message, which does NOT echo the bad name — see AUDIT below).
+      execute() calls ProjectStateChecker.buildingErrorOrNull(projectName) FIRST. That
+      pre-check refuses ONLY the transient BUILDING state and returns null for an unknown
+      name, so control falls through to revalidateObjects' own resolution:
+      ProjectContext.of(name).exists() is false ->
+      ToolResult.error("Project not found: <name>"). The user therefore sees the
+      value-naming "Project not found: <name>" error that echoes the bad name.
 """
 
 from harness import (
@@ -206,13 +205,13 @@ def test_empty_project_name_errors_clearly():
 @e2e_test(tool="revalidate_objects", kind="action")
 def test_nonexistent_project_errors_clearly():
     """Valid-shaped args, but the project does not exist. execute() runs
-    ProjectStateChecker.checkReadyOrError(projectName) FIRST; for an unknown name the
-    workspace handle's exists() is false -> NOT_AVAILABLE("Project does not exist") ->
-    the returned error is "Project does not exist. Please wait and retry."
+    ProjectStateChecker.buildingErrorOrNull(projectName) FIRST; that pre-check refuses
+    ONLY the transient BUILDING state and returns null for an unknown name, so control
+    falls through to revalidateObjects' own resolution: ProjectContext.of(bad).exists()
+    is false -> ToolResult.error("Project not found: <name>").
 
-    This pre-check message is the one the user actually sees (it fires before
-    revalidateObjects' own "Project not found: <name>" branch). Assert the real,
-    stable text of that pre-check error.
+    Assert the real, value-naming downstream error -- it echoes the bad name the caller
+    passed, which is the diagnostic the user actually needs.
     """
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("revalidate_objects", {
@@ -220,33 +219,27 @@ def test_nonexistent_project_errors_clearly():
         "objects": ["Catalog.Catalog"],
     })
     e = assert_error(r, "non-existent project")
-    # The real error surfaced here is the ProjectStateChecker sentinel
-    # "Project does not exist. Please wait and retry." -- it is a clear, non-stacktrace
-    # diagnostic, so we assert that stable phrase.
-    # AUDIT: this pre-check message does NOT echo the bad project name (the unknown
-    # name is dropped) and is NOT actionable (no pointer to list_projects to discover a
-    # valid open project). It also masks revalidateObjects' own name-bearing
-    # "Project not found: <name>" branch, which is therefore dead for this path.
-    # names=[bad]/suggests=[] are intentionally empty because the message provides
-    # neither -- weakening would hide the gap. Fix-card: in the unknown-project
-    # pre-check, echo the requested name and point at list_projects.
-    assert_error_quality(e, names=["Project does not exist"], suggests=[],
-                         ctx="non-existent project surfaces the state-checker sentinel")
+    # The error surfaced is revalidateObjects' own name-bearing branch
+    # "Project not found: <name>" -- it echoes the bad project name the caller passed.
+    # suggests=[] intentionally: the list_projects discovery tail is a SEPARATE change.
+    assert_error_quality(e, names=[bad], suggests=[],
+                         ctx="non-existent project names the bad value in 'Project not found'")
     assert_no_diff("a rejected call must not touch the project tree")
 
 
 @e2e_test(tool="revalidate_objects", kind="action")
 def test_nonexistent_project_with_full_mode_errors_clearly():
-    """Same unknown-project guard, but via the FULL-mode path (no `objects` at all),
-    to prove the pre-check rejects an unknown project regardless of mode (a full
-    revalidation of a non-existent project must NOT silently "succeed").
+    """Same unknown-project case, but via the FULL-mode path (no `objects` at all),
+    to prove an unknown project is rejected regardless of mode (a full revalidation of
+    a non-existent project must NOT silently "succeed"). The BUILDING-only pre-check
+    returns null for an unknown name, so revalidateObjects' own resolution emits the
+    same value-naming "Project not found: <name>" error as the partial-mode case.
     """
     bad = "GhostProject_full_e2e"
     r = call("revalidate_objects", {"projectName": bad})
     e = assert_error(r, "non-existent project, full mode")
-    # Same ProjectStateChecker pre-check sentinel as the partial-mode case.
-    # AUDIT (same as above): the message neither echoes the bad name nor points to a
-    # discovery tool. suggests=[] / no name assertion is deliberate, not a weakening.
-    assert_error_quality(e, names=["Project does not exist"], suggests=[],
-                         ctx="full-mode unknown project is rejected by the state pre-check")
+    # Same name-bearing "Project not found: <name>" branch as the partial-mode case.
+    # suggests=[] intentionally: the list_projects discovery tail is a SEPARATE change.
+    assert_error_quality(e, names=[bad], suggests=[],
+                         ctx="full-mode unknown project names the bad value in 'Project not found'")
     assert_no_diff("a rejected call must not touch the project tree")

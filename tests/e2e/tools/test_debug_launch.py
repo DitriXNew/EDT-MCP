@@ -58,8 +58,9 @@ Negative matrix coverage (all reachable branches in execute())
         -> "Application not found: <id>. Use get_applications to get valid
             application IDs."
   - Mode 2: non-existent projectName (+ some applicationId)
-        -> readiness pre-check fires first: "Project does not exist. Please wait
-            and retry."  (AUDIT: does not name the bad project / no sibling tool)
+        -> readiness pre-check now refuses only the transient BUILDING state, so a
+            missing project falls through to launchDebug's value-naming branch:
+            "Project not found: <name>"
   - empty-string projectName behaves like missing (execute() checks isEmpty()).
 
 Fixture inventory used (TestConfiguration, English Names): the project itself
@@ -131,8 +132,10 @@ def test_launch_by_unknown_config_name_returns_actionable_sentinel():
 def test_mode2_unknown_application_points_at_get_applications():
     """Mode 2 against the REAL, ready fixture project but a non-existent applicationId.
 
-    The project IS ready, so ProjectStateChecker.checkReadyOrError passes and control
-    reaches launchDebug -> appManager.getApplication(project, id) returns empty ->
+    The project IS ready, so the BUILDING-only readiness gate
+    (ProjectStateChecker.buildingErrorOrNull) returns null and control reaches
+    launchDebug -> ctx.exists() passes -> appManager.getApplication(project, id)
+    returns empty ->
     "Application not found: <id>. Use get_applications to get valid application IDs."
     This is the no-infobase sentinel for the legacy path: it names the bad id and
     routes the caller to the discovery tool that yields valid ids.
@@ -232,31 +235,26 @@ def test_mode2_missing_application_id_points_at_get_applications():
 @e2e_test(tool="debug_launch", kind="read")
 def test_mode2_nonexistent_project_is_rejected_before_launch():
     """Mode 2 with a syntactically valid but NON-EXISTENT projectName (+ some
-    applicationId). The readiness pre-check runs FIRST in execute():
-    ProjectStateChecker.checkReadyOrError(projectName) -> project.exists()==false ->
-    "Project does not exist" + ". Please wait and retry." So the client sees
-    "Project does not exist. Please wait and retry." and NO launch is attempted.
+    applicationId). The readiness pre-check in execute() now refuses ONLY the
+    transient BUILDING state (ProjectStateChecker.buildingErrorOrNull), which returns
+    null for a missing project. So control falls THROUGH to launchDebug, whose first
+    act is ctx.exists()==false -> "Project not found: <name>". The client therefore
+    sees a value-naming error that echoes the bad projectName, and NO launch happens.
 
-    AUDIT: the reachable message does NOT name the offending project value and points
-    at no sibling tool (list_projects). The readiness pre-check intercepts before the
-    more specific "Project not found: <name>" branch inside launchDebug, which is
-    therefore unreachable for this input. So:
-      - names=["does not exist"] asserts the REAL observed message (a tool that
-        stopped rejecting unknown projects, or that proceeded to launch, fails
-        assert_error outright — still mutation-sensitive);
-      - the bad project value cannot be asserted because the reachable error never
-        emits it -> fix-card: have the readiness pre-check name the bad project and
-        point at list_projects;
-      - suggests=[] (no next-step tool in the reachable message).
+    Mutation sense: a tool that stopped rejecting unknown projects, or that proceeded
+    to launch, fails assert_error outright; and the named bad value pins that the
+    sharper downstream branch (not the building gate) is the one that fired.
+    suggests=[] — the list_projects discovery tail is a SEPARATE change, not asserted
+    here.
     """
     bad_proj = "NoSuchProject_ZZZ_e2e"
     r = call("debug_launch", {"projectName": bad_proj, "applicationId": "AppId"})
     err = assert_error(r, "Mode 2 non-existent project")
     assert_error_quality(
         err,
-        names=["does not exist"],
+        names=[bad_proj, "Project not found"],
         suggests=[],
-        ctx="non-existent project is rejected by the readiness pre-check before launch",
+        ctx="non-existent project falls through to the value-naming 'Project not found' branch",
     )
     assert_no_diff("a rejected launch must not touch the project source")
 

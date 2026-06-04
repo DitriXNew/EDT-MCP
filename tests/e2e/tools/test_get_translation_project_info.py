@@ -119,15 +119,18 @@ def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped arg, but the project does not exist -> ProjectContext.isOpen()
     is false -> "Project not found or closed: <name>".
 
-    The bad value MUST be echoed; a broken resolver that returned a generic
-    "Not an EDT project" (or succeeded against the wrong project) would fail this.
+    The bad value MUST be echoed. The readiness pre-check uses
+    ProjectStateChecker.buildingErrorOrNull, which only refuses the transient
+    BUILDING state and returns null for a missing/closed/unknown project, so a
+    non-existent name is NOT intercepted by a generic "still building" / "Not an
+    EDT project" message — it falls through to (here, is caught earlier by) the
+    value-naming "Project not found or closed" branch.
     """
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_translation_project_info", {"projectName": bad})
     e = assert_error(r, "non-existent project")
-    # AUDIT: "Project not found or closed: <name>" names the bad value but is NOT
-    # actionable — it does not point at list_projects (the sibling tool that
-    # enumerates valid open project names). suggests=[] is deliberate; fix-card.
+    # "Project not found or closed: <name>" names the bad value. suggests=[] is
+    # deliberate — the list_projects discovery tail is a SEPARATE change.
     assert_error_quality(e, names=[bad], suggests=[],
                          ctx="non-existent project names the bad value")
     assert_no_diff("an invalid call must not touch the project on disk")

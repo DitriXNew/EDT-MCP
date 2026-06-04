@@ -240,9 +240,9 @@ public class GenerateTranslationStringsTool implements IMcpTool
         {
             // Resolve the IProject first so AI clients get the most specific
             // diagnostic ("Project not found" / "Project is closed") for bad
-            // names instead of the generic "Not an EDT project" message that
-            // ProjectStateChecker.checkReadyOrError returns for unknown
-            // projects.
+            // names. The readiness pre-check below refuses only the transient
+            // BUILDING state and returns null for a missing/closed/unknown
+            // project, so a bad name reaches these value-naming branches.
             ProjectContext ctx = ProjectContext.of(projectName);
             if (!ctx.exists())
             {
@@ -254,10 +254,12 @@ public class GenerateTranslationStringsTool implements IMcpTool
             }
             IProject project = ctx.project();
 
-            String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-            if (notReadyError != null)
+            // Refuse only the transient BUILDING state; a missing/closed project
+            // falls through to the value-naming "Project not found" below.
+            String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+            if (building != null)
             {
-                return ToolResult.error(notReadyError).toJson();
+                return ToolResult.error(building).toJson();
             }
 
             // Reject dictionary storage projects, extensions and any

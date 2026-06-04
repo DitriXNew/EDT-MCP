@@ -52,11 +52,10 @@ NO XOR pair, and NO conditional-required parameter on this tool, so the
 matrix do not apply here (documented, not skipped). The reachable negatives are:
   - missing required projectName  -> requireArgument -> "projectName is required"
   - empty-string projectName      -> same guard (extractStringArgument -> isEmpty)
-  - non-existent project          -> ProjectStateChecker.checkReadyOrError fires
-    FIRST in execute() and returns "Project does not exist. Please wait and retry."
-    (see the AUDIT note on test_nonexistent_project_* below — the "Project not
-    found: <name>" branch inside getApplications is shadowed by the state check
-    for a project that is not in the workspace).
+  - non-existent project          -> the readiness pre-check
+    (ProjectStateChecker.buildingErrorOrNull) returns null for a non-building name,
+    so control falls through to getApplications, where ProjectContext.of(name)
+    has exists()==false and the tool returns "Project not found: <name>".
 """
 
 from harness import (
@@ -211,29 +210,24 @@ def test_nonexistent_project_errors_and_does_not_mutate():
     """A syntactically valid but non-existent project name must error, not return a
     bogus empty success.
 
-    ORDERING NOTE: in execute() the ProjectStateChecker.checkReadyOrError(projectName)
-    runs BEFORE getApplications(). For a name that is not a workspace project,
-    ResourcesPlugin...getProject(name) yields a handle whose exists()==false, so the
-    state checker returns "Project does not exist. Please wait and retry." and that
-    is the error the client sees — the "Project not found: <name>" branch inside
-    getApplications is shadowed and never reached for this input.
+    ORDERING NOTE: in execute() the readiness pre-check
+    ProjectStateChecker.buildingErrorOrNull(projectName) refuses ONLY the transient
+    BUILDING state and returns null otherwise. For a name that is not a workspace
+    project it returns null, so control falls through to getApplications, where
+    ProjectContext.of(name) has exists()==false and the tool returns the
+    value-naming "Project not found: <name>".
 
-    AUDIT: the actual error ("Project does not exist. Please wait and retry.") does
-    NOT name the offending project value and points at no sibling tool. The more
-    actionable "Project not found: <bad>" message that exists in getApplications is
-    unreachable here because the readiness pre-check intercepts first. So:
-      - names=["does not exist"] asserts the real, observed message text (a broken
-        tool that returned a fake empty-success envelope instead of an error would
-        fail assert_error outright);
-      - names cannot include the bad project value because the reachable error never
-        emits it -> fix-card: have the readiness pre-check (or get_applications)
-        name the bad project and point at list_projects.
-      - suggests=[] (no next-step tool in the message)."""
+    The error names the offending project value, so:
+      - names=[bad] asserts the reachable "Project not found: <bad>" message text (a
+        broken tool that returned a fake empty-success envelope instead of an error
+        would fail assert_error outright);
+      - suggests=[] (no next-step tool in the message; the list_projects discovery
+        tail is a separate change)."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_applications", {"projectName": bad})
     err = assert_error(r, "non-existent project")
-    # Assert the REAL message contract (the readiness pre-check wins). This still
-    # fails loudly if the tool stopped erroring on an unknown project.
-    assert_error_quality(err, names=["does not exist"], suggests=[],
-                         ctx="non-existent project is rejected by the readiness pre-check")
+    # Assert the reachable, value-naming not-found message. This still fails loudly
+    # if the tool stopped erroring on an unknown project.
+    assert_error_quality(err, names=[bad], suggests=[],
+                         ctx="non-existent project is named in the not-found error")
     assert_no_diff("an invalid call must not touch the project on disk")

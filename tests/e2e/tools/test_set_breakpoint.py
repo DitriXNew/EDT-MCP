@@ -39,11 +39,13 @@ Real execute() error paths (SetBreakpointTool.java, all via ToolResult.error):
   - lineNumber < 1 (incl. omitted=-1)    -> "lineNumber must be >= 1"
   - module-relative path but no project  -> "projectName is required when
                                             modulePath is given as an EDT module path"
-  - project not ready/absent (module-rel)-> ProjectStateChecker.checkReadyOrError:
-                                            "Project does not exist. Please wait and
-                                            retry." (NOTE: does NOT echo the name -> AUDIT)
+  - project BUILDING (module-rel only)   -> ProjectStateChecker.buildingErrorOrNull:
+                                            "...building... Please wait and retry."
+                                            (transient state ONLY; a missing/closed
+                                            project falls THROUGH to the not-found branch)
   - file does not resolve/exist          -> "Module file not found: <module>
-                                            [ in project <projectName>]"
+                                            [ in project <projectName>]" (a non-existent
+                                            project lands here and IS named)
 
 Fixture inventory used (TestConfiguration, English Names):
   CommonModule.Calc -> src/CommonModules/Calc/Module.bsl, with
@@ -240,28 +242,22 @@ def test_module_relative_path_without_project_errors_actionably():
 
 @e2e_test(tool="set_breakpoint", kind="read")
 def test_nonexistent_project_errors():
-    """A module-relative path with a project that does not exist -> the project
-    readiness check (ProjectStateChecker.checkReadyOrError) fires before file
-    resolution -> "Project does not exist. Please wait and retry."
-
-    AUDIT: this message is NOT actionable for a typo'd project name — it does NOT
-    echo the bad project name and does NOT point at list_projects (the sibling tool
-    that enumerates valid open projects). It also reads as a transient "wait and
-    retry" hint, which is misleading for a genuinely non-existent project. We
-    assert the SPECIFIC sentinel text (mutation-sensitive: a no-op or a wrong
-    branch would not produce it) but cannot assert the bad value is named, because
-    it is not. Fix-card: name the project + point at list_projects, and drop the
-    "wait and retry" wording for the not-found case.
+    """A module-relative path with a project that does not exist. The readiness
+    check now refuses ONLY the transient BUILDING state
+    (ProjectStateChecker.buildingErrorOrNull), so a non-existent project falls
+    THROUGH it to file resolution, which cannot resolve the module under a
+    non-existent project -> "Module file not found: <module> in project
+    <projectName>". The bad project name IS echoed, so the error names the value.
     """
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("set_breakpoint", {
         "projectName": bad, "modulePath": CALC_MODULE, "lineNumber": 2,
     })
     e = assert_error(r, "non-existent project")
-    # Assert the exact, specific sentinel (delimiter-free substring) so the test is
-    # mutation-sensitive even though the bad value is not echoed.
-    assert_contains(e, "Project does not exist",
-                    "non-existent project must hit the readiness 'does not exist' sentinel")
+    # The downstream not-found branch names BOTH the module and the bad project.
+    # suggests=[] — the list_projects discovery tail is a separate change.
+    assert_error_quality(e, names=[CALC_MODULE, bad], suggests=[],
+                         ctx="non-existent project falls through to module-not-found, naming the project")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

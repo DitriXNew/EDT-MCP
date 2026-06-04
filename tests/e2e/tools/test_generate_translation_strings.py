@@ -39,7 +39,10 @@ VALIDATION ORDER in execute() (this is what makes the negatives env-robust):
                                                 Use get_translation_project_info to list available providers."
   4. ProjectContext.of(name).!exists()     -> "Project not found: <name>"
   5. !isOpen()                             -> "Project is closed: <name>"
-  6. ProjectStateChecker.checkReadyOrError
+  6. ProjectStateChecker.buildingErrorOrNull (refuses ONLY the transient BUILDING
+                                              state; missing/closed/unknown fall
+                                              through to step 4/5/7 — a non-existent
+                                              project is already caught at step 4)
   7. !hasNature(V8ConfigurationNature)     -> "Not a V8 configuration project: <name>. ..."
   8. dtProject == null                     -> "EDT has not yet resolved an IDtProject for: <name>. ..."
   9. api == null                           -> the LanguageTool-absent sentinel
@@ -207,10 +210,15 @@ def test_from_provider_without_provider_id_errors_clearly():
 def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped args (real language list) but the project does not exist.
     With targetLanguages supplied, validation reaches ProjectContext.of(<bad>),
-    !exists() -> "Project not found: <name>". This runs BEFORE the LanguageTool
-    check, so the bad value is reported regardless of whether LanguageTool is
-    installed. A broken resolver that succeeded against the wrong project, or
-    emitted a generic message, would fail this.
+    !exists() -> "Project not found: <name>". This name-resolution branch runs
+    BEFORE both the readiness pre-check and the LanguageTool check, so the bad
+    value is reported regardless of build state or whether LanguageTool is
+    installed. The readiness pre-check is buildingErrorOrNull(), which refuses
+    ONLY the transient BUILDING state and returns null for a missing project, so
+    it cannot intercept this case with a vague "...building... Please wait and
+    retry." message — the value-naming "Project not found" is what the caller
+    sees. A broken resolver that succeeded against the wrong project, or emitted
+    a generic message, would fail this.
     """
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("generate_translation_strings", {
@@ -218,9 +226,9 @@ def test_nonexistent_project_errors_and_names_value():
         "targetLanguages": ["en"],
     })
     e = assert_error(r, "non-existent project")
-    # AUDIT: "Project not found: <name>" names the bad value but is NOT actionable
-    # — it does not point at list_projects (the sibling tool that enumerates valid
-    # project names). suggests=[] is deliberate; fix-card to make it actionable.
+    # Downstream not-found branch NAMES the offending value. suggests=[] is
+    # deliberate: the list_projects discovery tail is a SEPARATE change, not part
+    # of this assertion.
     assert_error_quality(e, names=[bad], suggests=[],
                          ctx="non-existent project names the bad value")
     assert_no_diff("a rejected call must not touch the project on disk")
