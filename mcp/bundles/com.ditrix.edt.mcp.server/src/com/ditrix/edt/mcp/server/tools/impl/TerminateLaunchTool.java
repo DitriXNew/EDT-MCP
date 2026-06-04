@@ -105,9 +105,11 @@ public class TerminateLaunchTool implements IMcpTool
             .booleanProperty("force", //$NON-NLS-1$
                 "On polite-termination timeout, escalate to an OS-level process kill; " //$NON-NLS-1$
                     + "may lose unsaved 1С state. Default false. Ignored for Attach.") //$NON-NLS-1$
-            .integerProperty("timeoutSeconds", //$NON-NLS-1$
-                "Polite-wait window per launch, clamped to [1, 120]. " //$NON-NLS-1$
+            .integerProperty("timeout", //$NON-NLS-1$
+                "Polite-wait window per launch in seconds, clamped to [1, 120]. " //$NON-NLS-1$
                     + "Default from EDT preferences (factory default 10).") //$NON-NLS-1$
+            .integerProperty("timeoutSeconds", //$NON-NLS-1$
+                "Deprecated alias of 'timeout' (kept for backward compatibility).") //$NON-NLS-1$
             .booleanProperty("includeAttach", //$NON-NLS-1$
                 "Whether to act on Attach configs (disconnected, server keeps running). " //$NON-NLS-1$
                     + "Default true; set false to skip them.") //$NON-NLS-1$
@@ -147,7 +149,8 @@ public class TerminateLaunchTool implements IMcpTool
             + "- **all** (boolean, default false) — terminate every live EDT launch; needs confirm.\n" //$NON-NLS-1$
             + "- **confirm** (boolean, default false) — must be true when all=true.\n" //$NON-NLS-1$
             + "- **force** (boolean, default false) — see Force escalation below; ignored for Attach.\n" //$NON-NLS-1$
-            + "- **timeoutSeconds** (integer) — polite-wait window per launch, clamped to [1, 120]. " //$NON-NLS-1$
+            + "- **timeout** (integer, seconds; alias `timeoutSeconds`) — polite-wait window per launch, " //$NON-NLS-1$
+            + "clamped to [1, 120]. " //$NON-NLS-1$
             + "Default comes from EDT preferences (MCP Server -> Tools -> terminate_launch), " //$NON-NLS-1$
             + "factory default 10.\n" //$NON-NLS-1$
             + "- **includeAttach** (boolean, default true) — see Attach behaviour below.\n\n" //$NON-NLS-1$
@@ -158,7 +161,7 @@ public class TerminateLaunchTool implements IMcpTool
             + "A detach is reported as `detached`. Set `includeAttach=false` to skip Attach " //$NON-NLS-1$
             + "launches entirely.\n\n" //$NON-NLS-1$
             + "## Force escalation\n\n" //$NON-NLS-1$
-            + "By default the tool waits up to `timeoutSeconds` for a polite " //$NON-NLS-1$
+            + "By default the tool waits up to `timeout` for a polite " //$NON-NLS-1$
             + "`ILaunch.terminate()`. With `force=true`, an unfinished termination escalates to an " //$NON-NLS-1$
             + "OS-level `IProcess.terminate()` on the launch's processes (plus a short grace " //$NON-NLS-1$
             + "window). This can lose unsaved 1C state. `force` is ignored for Attach launches.\n\n" //$NON-NLS-1$
@@ -172,7 +175,7 @@ public class TerminateLaunchTool implements IMcpTool
             + "- All for one project, runtime only: `all=true`, `confirm=true`, " //$NON-NLS-1$
             + "`projectName=\"MyProject\"`, `includeAttach=false`.\n" //$NON-NLS-1$
             + "- Force-kill a stuck launch: `launchConfigurationName=\"MyApp\"`, `force=true`, " //$NON-NLS-1$
-            + "`timeoutSeconds=5`.\n\n" //$NON-NLS-1$
+            + "`timeout=5`.\n\n" //$NON-NLS-1$
             + "## Gotchas\n\n" //$NON-NLS-1$
             + "- Nothing matched returns a `not_found` result, not an error — verify the name/appId " //$NON-NLS-1$
             + "against `list_configurations`/`get_applications`.\n" //$NON-NLS-1$
@@ -238,7 +241,10 @@ public class TerminateLaunchTool implements IMcpTool
         boolean includeAttach = JsonUtils.extractBooleanArgument(params, "includeAttach", true); //$NON-NLS-1$
         int configuredDefault = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS); //$NON-NLS-1$
-        int timeoutSeconds = JsonUtils.extractIntArgument(params, "timeoutSeconds", configuredDefault); //$NON-NLS-1$
+        // Canonical 'timeout' (aligned with run_yaxunit_tests); 'timeoutSeconds' is a
+        // back-compat alias. Prefer 'timeout' when present, else the alias, else the default.
+        int timeoutSeconds = JsonUtils.extractIntArgument(params, "timeout", //$NON-NLS-1$
+            JsonUtils.extractIntArgument(params, "timeoutSeconds", configuredDefault)); //$NON-NLS-1$
         if (timeoutSeconds < 1)
         {
             timeoutSeconds = 1;

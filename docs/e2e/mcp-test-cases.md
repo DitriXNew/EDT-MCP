@@ -362,7 +362,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 
 ### terminate_launch
 - **Type:** app/launch · **Runnable on IRP:** SKIPPED — **not in this session's tool registry**
-- **Cases:** by config name; by project+app; `all:true`+`confirm:true` (mass, guarded); `force`, `timeoutSeconds`, `includeAttach`.
+- **Cases:** by config name; by project+app; `all:true`+`confirm:true` (mass, guarded); `force`, `timeout` (canonical; alias `timeoutSeconds`), `includeAttach`.
 - **Assert:** `all:true` without `confirm` → guard error; no live launch → `not_found` success body. (Validate when the server tool list is refreshed — it was absent here because the server was down at session start.)
 - **Validated 2026‑06‑01:** not callable (stale tool registry). Re‑validate with a fresh connection.
 

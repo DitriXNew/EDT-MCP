@@ -781,12 +781,13 @@ After creating an object, run `get_project_errors` to verify (or `revalidate_obj
 | `all` | One mode | Terminate every live EDT launch. Requires `confirm=true`. Default: `false` |
 | `confirm` | When `all=true` | Must be `true` to actually perform mass termination — guard against accidents |
 | `force` | No | On polite timeout, escalate to `IProcess.terminate()` (OS-level kill). May lose unsaved 1С state. Default: `false`. Ignored for Attach |
-| `timeoutSeconds` | No | Polite-wait window per launch. Default: `10`, clamped to `[1, 120]` |
+| `timeout` | No | Polite-wait window per launch, in seconds. Default: `10` (from EDT preferences), clamped to `[1, 120]` |
+| `timeoutSeconds` | No | Deprecated alias of `timeout`, kept for backward compatibility |
 | `includeAttach` | No | Whether to act on Attach configurations (RemoteRuntime / LocalRuntime). When `true` (default), Attach launches are **disconnected** — the 1С cluster keeps running |
 
 **Behaviour notes:**
 
-- **Runtime-client launches** are stopped via `ILaunch.terminate()`. If the launch does not become terminated within `timeoutSeconds`, the result is `timeout` (unless `force=true`, which then triggers `IProcess.terminate()`).
+- **Runtime-client launches** are stopped via `ILaunch.terminate()`. If the launch does not become terminated within `timeout`, the result is `timeout` (unless `force=true`, which then triggers `IProcess.terminate()`).
 - **Attach launches** are disconnected via `IDisconnect.disconnect()` on each debug target. The 1С server (`ragent` / `rphost`) is never killed by this tool. `force=true` is ignored for Attach.
 - **`already_terminated`** launches are reported as such (not an error) — useful when the same call is retried.
 - **`not_found`** is returned (as a success response with empty list and explanatory body) when no live launch matches the request. This lets agents probe idempotently.

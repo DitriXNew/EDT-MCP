@@ -85,6 +85,9 @@ public class TerminateLaunchToolTest
         assertTrue(schema.contains("\"all\""));
         assertTrue(schema.contains("\"confirm\""));
         assertTrue(schema.contains("\"force\""));
+        // Canonical 'timeout' (aligned with run_yaxunit_tests) plus the back-compat
+        // 'timeoutSeconds' alias — both declared (and both read by execute()).
+        assertTrue(schema.contains("\"timeout\""));
         assertTrue(schema.contains("\"timeoutSeconds\""));
         assertTrue(schema.contains("\"includeAttach\""));
     }
