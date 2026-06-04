@@ -38,14 +38,19 @@ public final class ToolAnnotationClassifier
 {
     /**
      * Tools whose effect is destructive or irreversible (delete / overwrite /
-     * cascade-rename / DB update). These get {@code destructiveHint=true}.
+     * cascade-rename / DB update / project removal). These get {@code destructiveHint=true}.
+     *
+     * <p>Deliberately NOT here, despite mutating state: {@code clean_project} (a rebuild /
+     * revalidation - it discards only UNSAVED model changes, which is recoverable, and does not
+     * delete persisted data) and {@code import_configuration_from_xml} (creates a NEW project and
+     * REFUSES to overwrite an existing one, so it is recoverable by deleting the new project).
+     * Marking those {@code destructiveHint=true} would mislead a client into treating safe,
+     * recoverable operations as irreversible. They classify as ordinary non-destructive writes.</p>
      */
     private static final Set<String> DESTRUCTIVE_TOOLS = Set.of(
         "delete_metadata_object", //$NON-NLS-1$
-        "clean_project", //$NON-NLS-1$
         "update_database", //$NON-NLS-1$
         "rename_metadata_object", //$NON-NLS-1$
-        "import_configuration_from_xml", //$NON-NLS-1$
         "delete_form_item", //$NON-NLS-1$
         "delete_project" //$NON-NLS-1$
     );

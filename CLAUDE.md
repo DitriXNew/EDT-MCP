@@ -28,7 +28,8 @@ This file is about **what NOT to do** and **where to stop and think twice**. For
 |---|---|---|
 | `RenameMetadataObjectTool` | **Cascading edits across the whole configuration** — BSL code, forms, metadata (README:50). A mistake = mass corruption. | Run on a test configuration; verify the cascade scope; don't run it without an explicit request. |
 | BM write tools (`Create`/`Add`/`Delete`/`Rename`Metadata) | Model mutation + transactions + cascade. | Check the transaction boundary and reversibility. |
-| `update_database`, `clean_project`, `delete_metadata_object` | Destructive / irreversible. | Only on an explicit user request. |
+| `update_database`, `delete_metadata_object`, `delete_project` | Destructive / irreversible (DB update / object delete / project removal). | Only on an explicit user request. |
+| `clean_project` | A rebuild/revalidation — discards UNSAVED model changes (recoverable, NOT destructive; `destructiveHint=false`). | Save unsaved edits first; otherwise safe to run. |
 | `McpServer` (~1000 lines) | Transport + SSE + interruption + tool registry are tangled together. | Change one responsibility without touching the others. |
 | `Activator` | Service-locator hub + static logging — almost everything depends on it. | Be careful with init/dispose order and signatures. |
 | `tags/*` ↔ `groups/*` | Mirror stacks with no shared base: a change in one is almost always needed in the other. | Change both features in sync (until the shared base is extracted). |
@@ -99,7 +100,7 @@ Build + unit tests prove Java logic; **runtime behaviour, the `tools/list` schem
 - **Verify the class/method/helper actually exists** before referencing or calling it. During the review, agents invented non-existent classes — `grep`/`Read` before asserting.
 - **Do not present an undone refactor as fact.** Describe the target state as target; the current code may still duplicate.
 - **No drive-by "I'll tidy everything" edits.** The refactor proceeds one topic at a time.
-- **Destructive actions (metadata rename/delete, update_database, clean_project) — only on an explicit request.**
+- **Destructive actions (metadata rename/delete, update_database, delete_project) — only on an explicit request.**
 
 ---
 

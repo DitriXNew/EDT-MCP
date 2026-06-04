@@ -32,15 +32,28 @@ public class ToolAnnotationClassifierTest
     {
         for (String name : new String[] {
             "delete_metadata_object",
-            "clean_project",
             "update_database",
             "rename_metadata_object",
-            "import_configuration_from_xml",
             "delete_form_item",
             "delete_project" })
         {
             ToolAnnotations a = ToolAnnotationClassifier.classify(name);
             assertEquals(name + " must be destructiveHint=true", Boolean.TRUE, a.getDestructiveHint());
+            assertEquals(name + " must be readOnlyHint=false", Boolean.FALSE, a.getReadOnlyHint());
+        }
+    }
+
+    @Test
+    public void testRecoverableWritesAreNotDestructive()
+    {
+        // clean_project (a rebuild that discards only UNSAVED changes) and
+        // import_configuration_from_xml (creates a NEW project, refuses to overwrite) mutate
+        // state but cause no irreversible damage, so they are non-destructive writes, NOT
+        // destructive. Marking them destructive would mislead clients about safe operations.
+        for (String name : new String[] { "clean_project", "import_configuration_from_xml" })
+        {
+            ToolAnnotations a = ToolAnnotationClassifier.classify(name);
+            assertEquals(name + " must be destructiveHint=false", Boolean.FALSE, a.getDestructiveHint());
             assertEquals(name + " must be readOnlyHint=false", Boolean.FALSE, a.getReadOnlyHint());
         }
     }

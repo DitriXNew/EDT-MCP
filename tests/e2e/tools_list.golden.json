@@ -351,7 +351,7 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
     },
@@ -2164,7 +2164,7 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
     },
