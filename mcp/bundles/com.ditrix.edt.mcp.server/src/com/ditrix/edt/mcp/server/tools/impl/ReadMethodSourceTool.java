@@ -47,7 +47,8 @@ public class ReadMethodSourceTool implements IMcpTool
     public String getDescription()
     {
         return "Read a specific procedure/function from a BSL module by name. " + //$NON-NLS-1$
-               "Returns source code with metadata. Lists available methods if not found."; //$NON-NLS-1$
+               "Returns source code with metadata. Lists available methods if not found. " + //$NON-NLS-1$
+               "Use this for one method body; to read the whole module source use read_module_source."; //$NON-NLS-1$
     }
 
     @Override

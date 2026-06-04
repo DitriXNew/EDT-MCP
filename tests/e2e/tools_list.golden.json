@@ -578,7 +578,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Find every place a metadata object is used: BSL code modules (with line numbers), other metadata, forms, roles, subsystems, etc. Pass the object FQN; the type token may be English or Russian (e.g. 'Catalog.Products' or its Russian spelling). Full parameters and examples: call get_tool_guide('find_references').",
+    "description": "Find every place a metadata object is used: BSL code modules (with line numbers), other metadata, forms, roles, subsystems, etc. Pass the object FQN; the type token may be English or Russian (e.g. 'Catalog.Products' or its Russian spelling). Use this for all USAGES of a symbol; for where it is DEFINED use go_to_definition, for a literal (non-symbol) text scan use search_in_code. Full parameters and examples: call get_tool_guide('find_references').",
     "inputSchema": {
       "properties": {
         "limit": {
@@ -1001,7 +1001,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. Full parameters and examples: call get_tool_guide('get_metadata_details').",
+    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
         "full": {
@@ -1039,7 +1039,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get a flat list of 1C configuration metadata objects (Name, Synonym, Comment, Type, ObjectModule, ManagerModule) as a Markdown table. Use it to discover what objects exist; filter by metadataType and/or nameFilter (Name only). Full parameters and examples: call get_tool_guide('get_metadata_objects').",
+    "description": "Get a flat list of 1C configuration metadata objects (Name, Synonym, Comment, Type, ObjectModule, ManagerModule) as a Markdown table. Use it to discover what objects exist; filter by metadataType and/or nameFilter (Name only). Use this to list objects; for the full properties of one named object use get_metadata_details. Full parameters and examples: call get_tool_guide('get_metadata_objects').",
     "inputSchema": {
       "properties": {
         "language": {
@@ -1121,7 +1121,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get structure of a BSL module: all procedures/functions with signatures, line numbers, regions, execution context (&AtServer, &AtClient), export flag, and parameters. responseFormat=concise (default) returns a leaner methods table (drops the verbose Parameters and Description columns; keeps type, name, export, context, lines, region); responseFormat=detailed returns the full table with signatures and doc-comments. Use detailed when you need parameter lists or descriptions.",
+    "description": "Get structure of a BSL module: all procedures/functions with signatures, line numbers, regions, execution context (&AtServer, &AtClient), export flag, and parameters. responseFormat=concise (default) returns a leaner methods table (drops the verbose Parameters and Description columns; keeps type, name, export, context, lines, region); responseFormat=detailed returns the full table with signatures and doc-comments. Use detailed when you need parameter lists or descriptions. Use this for the structure of ONE module; to discover module paths across a project use list_modules.",
     "inputSchema": {
       "properties": {
         "includeComments": {
@@ -1267,7 +1267,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get problem summary with counts grouped by project and EDT severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL).",
+    "description": "Get problem summary with counts grouped by project and EDT severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). Use this for severity totals only; for the detailed per-marker list call get_project_errors.",
     "inputSchema": {
       "properties": {
         "projectName": {
@@ -1353,7 +1353,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Object FQN filters accept English or Russian type names (e.g. 'Catalog.Products'). Full parameters and examples: call get_tool_guide('get_project_errors').",
+    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Object FQN filters accept English or Russian type names (e.g. 'Catalog.Products'). Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
     "inputSchema": {
       "properties": {
         "checkId": {
@@ -1711,7 +1711,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Go to the definition of a symbol (the inverse of find_references): a qualified method 'ModuleName.MethodName', a bare 'MethodName' (also pass modulePath), or a metadata FQN like 'Catalog.Products'. A bare method name requires modulePath. Full parameters and examples: call get_tool_guide('go_to_definition').",
+    "description": "Go to the definition of a symbol (the inverse of find_references): a qualified method 'ModuleName.MethodName', a bare 'MethodName' (also pass modulePath), or a metadata FQN like 'Catalog.Products'. A bare method name requires modulePath. Use this for where a symbol is DEFINED; for all its USAGES use find_references, for a literal (non-symbol) text scan use search_in_code. Full parameters and examples: call get_tool_guide('go_to_definition').",
     "inputSchema": {
       "properties": {
         "includeSource": {
@@ -1874,7 +1874,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). Use it to discover module paths before reading or editing code; filter by metadataType, objectName or nameFilter. Full parameters and examples: call get_tool_guide('list_modules').",
+    "description": "List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). Use it to discover module paths before reading or editing code; filter by metadataType, objectName or nameFilter. Use this to enumerate a project's modules; for the methods/regions inside one module use get_module_structure. Full parameters and examples: call get_tool_guide('list_modules').",
     "inputSchema": {
       "properties": {
         "limit": {
@@ -1965,7 +1965,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Read a specific procedure/function from a BSL module by name. Returns source code with metadata. Lists available methods if not found.",
+    "description": "Read a specific procedure/function from a BSL module by name. Returns source code with metadata. Lists available methods if not found. Use this for one method body; to read the whole module source use read_module_source.",
     "inputSchema": {
       "properties": {
         "methodName": {
@@ -1997,7 +1997,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Read BSL module source code from an EDT project, whole file or a line range. Returns YAML frontmatter (including a contentHash revision token to round-trip into write_module_source's expectedHash) followed by clean source in a fenced bsl block. Full parameters and examples: call get_tool_guide('read_module_source').",
+    "description": "Read BSL module source code from an EDT project, whole file or a line range. Returns YAML frontmatter (including a contentHash revision token to round-trip into write_module_source's expectedHash) followed by clean source in a fenced bsl block. Use this for the whole module; to read just one procedure/function body use read_method_source. Full parameters and examples: call get_tool_guide('read_module_source').",
     "inputSchema": {
       "properties": {
         "endLine": {
@@ -2255,7 +2255,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Literal/regex full-text search across all BSL modules in a project. Matching is purely textual and NOT ru/en dialect-aware, so a query in one BSL language won't find the other spelling; for identifier lookup use get_symbol_info, find_references or get_method_call_hierarchy instead. Full parameters and examples: call get_tool_guide('search_in_code').",
+    "description": "Literal/regex full-text search across all BSL modules in a project. Matching is purely textual and NOT ru/en dialect-aware, so a query in one BSL language won't find the other spelling; for identifier lookup use get_symbol_info, find_references or get_method_call_hierarchy instead. Use this for a literal text scan; for a symbol's USAGES use find_references, for where it is DEFINED use go_to_definition. Full parameters and examples: call get_tool_guide('search_in_code').",
     "inputSchema": {
       "properties": {
         "caseSensitive": {
@@ -2599,8 +2599,12 @@
           "description": "EDT project name; pair with applicationId for one launch, or with all=true.",
           "type": "string"
         },
+        "timeout": {
+          "description": "Polite-wait window per launch in seconds, clamped to [1, 120]. Default from EDT preferences (factory default 10).",
+          "type": "integer"
+        },
         "timeoutSeconds": {
-          "description": "Polite-wait window per launch, clamped to [1, 120]. Default from EDT preferences (factory default 10).",
+          "description": "Deprecated alias of 'timeout' (kept for backward compatibility).",
           "type": "integer"
         }
       },

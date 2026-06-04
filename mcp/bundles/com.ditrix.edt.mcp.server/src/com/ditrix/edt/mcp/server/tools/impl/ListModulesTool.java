@@ -69,6 +69,7 @@ public class ListModulesTool implements IMcpTool
     {
         return "List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). " //$NON-NLS-1$
             + "Use it to discover module paths before reading or editing code; filter by metadataType, objectName or nameFilter. " //$NON-NLS-1$
+            + "Use this to enumerate a project's modules; for the methods/regions inside one module use get_module_structure. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('list_modules')."; //$NON-NLS-1$
     }
 

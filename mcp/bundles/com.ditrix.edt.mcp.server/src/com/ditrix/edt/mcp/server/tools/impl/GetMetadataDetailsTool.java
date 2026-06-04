@@ -50,6 +50,7 @@ public class GetMetadataDetailsTool implements IMcpTool
                "or every reflected section with 'full: true'). Use it after get_metadata_objects to " + //$NON-NLS-1$
                "inspect a known object's attributes/forms/commands; in full mode each section is " + //$NON-NLS-1$
                "capped so request fewer FQNs to keep the response small. " + //$NON-NLS-1$
+               "Use this for the full properties of one named object; to list objects by type use get_metadata_objects. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
 

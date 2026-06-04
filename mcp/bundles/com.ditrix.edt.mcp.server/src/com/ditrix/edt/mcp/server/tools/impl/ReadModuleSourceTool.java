@@ -48,6 +48,7 @@ public class ReadModuleSourceTool implements IMcpTool
         return "Read BSL module source code from an EDT project, whole file or a line range. " + //$NON-NLS-1$
                "Returns YAML frontmatter (including a contentHash revision token to round-trip into " + //$NON-NLS-1$
                "write_module_source's expectedHash) followed by clean source in a fenced bsl block. " + //$NON-NLS-1$
+               "Use this for the whole module; to read just one procedure/function body use read_method_source. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('read_module_source')."; //$NON-NLS-1$
     }
 

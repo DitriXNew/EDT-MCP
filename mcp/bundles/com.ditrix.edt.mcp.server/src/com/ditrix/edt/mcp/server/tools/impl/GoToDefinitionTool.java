@@ -58,6 +58,8 @@ public class GoToDefinitionTool implements IMcpTool
         return "Go to the definition of a symbol (the inverse of find_references): a qualified " + //$NON-NLS-1$
                "method 'ModuleName.MethodName', a bare 'MethodName' (also pass modulePath), or a " + //$NON-NLS-1$
                "metadata FQN like 'Catalog.Products'. A bare method name requires modulePath. " + //$NON-NLS-1$
+               "Use this for where a symbol is DEFINED; for all its USAGES use find_references, " + //$NON-NLS-1$
+               "for a literal (non-symbol) text scan use search_in_code. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('go_to_definition')."; //$NON-NLS-1$
     }
 

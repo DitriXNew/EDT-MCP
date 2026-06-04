@@ -78,6 +78,7 @@ public class GetProjectErrorsTool implements IMcpTool
         return "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. " + //$NON-NLS-1$
                "Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
                "Object FQN filters accept English or Russian type names (e.g. 'Catalog.Products'). " + //$NON-NLS-1$
+               "Use this for the detailed marker list; for severity totals only call get_problem_summary. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_project_errors')."; //$NON-NLS-1$
     }
     

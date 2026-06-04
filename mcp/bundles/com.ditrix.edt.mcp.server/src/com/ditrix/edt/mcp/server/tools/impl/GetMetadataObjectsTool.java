@@ -83,6 +83,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         return "Get a flat list of 1C configuration metadata objects (Name, Synonym, Comment, Type, " + //$NON-NLS-1$
                "ObjectModule, ManagerModule) as a Markdown table. " + //$NON-NLS-1$
                "Use it to discover what objects exist; filter by metadataType and/or nameFilter (Name only). " + //$NON-NLS-1$
+               "Use this to list objects; for the full properties of one named object use get_metadata_details. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_metadata_objects')."; //$NON-NLS-1$
     }
     

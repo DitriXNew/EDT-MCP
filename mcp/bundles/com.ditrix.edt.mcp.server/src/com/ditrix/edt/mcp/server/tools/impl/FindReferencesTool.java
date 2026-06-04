@@ -39,6 +39,8 @@ public class FindReferencesTool implements IMcpTool
         return "Find every place a metadata object is used: BSL code modules (with line numbers), " + //$NON-NLS-1$
                "other metadata, forms, roles, subsystems, etc. Pass the object FQN; the type token " + //$NON-NLS-1$
                "may be English or Russian (e.g. 'Catalog.Products' or its Russian spelling). " + //$NON-NLS-1$
+               "Use this for all USAGES of a symbol; for where it is DEFINED use go_to_definition, " + //$NON-NLS-1$
+               "for a literal (non-symbol) text scan use search_in_code. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('find_references')."; //$NON-NLS-1$
     }
 
