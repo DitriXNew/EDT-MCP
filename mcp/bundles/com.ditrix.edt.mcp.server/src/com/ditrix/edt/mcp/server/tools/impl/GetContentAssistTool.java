@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +67,32 @@ public class GetContentAssistTool implements IMcpTool
      * Xtext reconciler (which loads/parses the resource) can make progress.
      */
     private static final long READINESS_POLL_DELAY_MS = 50L;
+
+    /**
+     * Maximum total time (ms) to spend stabilizing the proposal set. Even after the resource
+     * has parsed, the BSL global scope/index can still be warming, so the content-assist
+     * processor may return an empty or growing set on the first compute(s). We re-poll until the
+     * count stops growing, bounded by this cap (then accept whatever we have).
+     */
+    private static final long PROPOSAL_STABILIZE_TIMEOUT_MS = 2500L;
+
+    /** Delay (ms) between proposal-stabilization re-computes; the UI loop is pumped between them. */
+    private static final long PROPOSAL_STABILIZE_POLL_MS = 75L;
+
+    /** Shared empty result for the stabilization loop (null/exception compute -> "not ready yet"). */
+    private static final ICompletionProposal[] EMPTY_PROPOSALS = new ICompletionProposal[0];
+
+    /**
+     * Deterministic proposal ordering. The engine can return proposals in a warm-up-dependent
+     * order, so a caller paginating with {@code offset} would otherwise see different items per
+     * call. Order by display string (case-insensitive, then case-sensitive as a stable tie-break)
+     * so {@code offset}/{@code limit} page reproducibly. Null display strings sort last.
+     */
+    private static final Comparator<ICompletionProposal> PROPOSAL_ORDER =
+        Comparator.comparing(GetContentAssistTool::displayStringOf,
+            Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER))
+            .thenComparing(GetContentAssistTool::displayStringOf,
+                Comparator.nullsLast(Comparator.<String>naturalOrder()));
 
     @Override
     public String getName()
@@ -205,7 +233,6 @@ public class GetContentAssistTool implements IMcpTool
         }
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
         String columnStr = JsonUtils.extractStringArgument(params, "column"); //$NON-NLS-1$
-        String offsetStr = JsonUtils.extractStringArgument(params, "offset"); //$NON-NLS-1$
         String containsFilter = JsonUtils.extractStringArgument(params, "contains"); //$NON-NLS-1$
         String extendedDocStr = JsonUtils.extractStringArgument(params, "extendedDocumentation"); //$NON-NLS-1$
         
@@ -242,18 +269,11 @@ public class GetContentAssistTool implements IMcpTool
         int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
         limit = Pagination.clampLimit(limit, 1000);
 
-        int offset = 0;
-        if (offsetStr != null && !offsetStr.isEmpty())
-        {
-            try
-            {
-                offset = Math.max(0, (int) Double.parseDouble(offsetStr));
-            }
-            catch (NumberFormatException e)
-            {
-                // Use default 0
-            }
-        }
+        // Read offset the SAME way as limit (declare-and-read consistency, CLAUDE.md don't #6):
+        // the schema declares offset as integer, so parse it via extractIntArgument (accepts
+        // "5"/"5.0", rejects "5.7"/"abc" -> 0) rather than the old extractStringArgument +
+        // (int) Double.parseDouble path, which silently truncated "5.7" to 5 while limit rejected it.
+        int offset = Math.max(0, JsonUtils.extractIntArgument(params, "offset", 0)); //$NON-NLS-1$
         
         boolean extendedDocumentation = "true".equalsIgnoreCase(extendedDocStr); //$NON-NLS-1$
         
@@ -440,11 +460,103 @@ public class GetContentAssistTool implements IMcpTool
             return ToolResult.error("No content assist processor for content type: " + contentType).toJson(); //$NON-NLS-1$
         }
         
-        ICompletionProposal[] proposals = processor.computeCompletionProposals(sourceViewer, offset);
+        ICompletionProposal[] proposals = computeStableProposals(processor, sourceViewer, offset);
 
         // Format results
         return formatProposals(proposals, maxProposals, proposalOffset, containsFilter, extendedDocumentation,
                                line, column, file.getFullPath().toString());
+    }
+
+    /**
+     * Computes the content-assist proposals, stabilizing the set against the global-scope/index
+     * warm-up race. Even after the resource has parsed, the Xtext processor can return an empty or
+     * partial proposal list on the first compute(s) while the BSL scope is still warming, which made
+     * {@code totalProposals}/{@code skipped} non-deterministic across calls (a position with
+     * proposals would intermittently report 0). We re-compute (pumping the UI loop between tries),
+     * keep the LARGEST set seen, and stop once the count is non-empty and no longer growing, bounded
+     * by {@link #PROPOSAL_STABILIZE_TIMEOUT_MS}. A genuinely empty position keeps returning empty and
+     * is accepted when the bound elapses.
+     *
+     * @param processor the content-assist processor for the content type at the offset
+     * @param viewer the source viewer
+     * @param offset the document offset to complete at
+     * @return the stabilized proposal array (never null; empty only if the position truly has none)
+     */
+    private ICompletionProposal[] computeStableProposals(IContentAssistProcessor processor,
+        ISourceViewer viewer, int offset)
+    {
+        long deadline = System.currentTimeMillis() + PROPOSAL_STABILIZE_TIMEOUT_MS;
+        ICompletionProposal[] best = safeCompute(processor, viewer, offset);
+        while (System.currentTimeMillis() < deadline)
+        {
+            int bestCount = best.length;
+            pumpUi(viewer);
+            sleepQuietly(PROPOSAL_STABILIZE_POLL_MS);
+            ICompletionProposal[] next = safeCompute(processor, viewer, offset);
+            if (next.length > bestCount)
+            {
+                best = next; // still warming - more proposals appeared; keep the larger set and retry
+                continue;
+            }
+            if (bestCount > 0)
+            {
+                break; // non-empty and no longer growing -> warmed and stable
+            }
+            // still empty -> keep polling until the bound, then accept the (genuinely-empty) result
+        }
+        return best;
+    }
+
+    /**
+     * Computes proposals once, never returning null and never throwing - a null result or an
+     * exception becomes an empty array so the stabilization loop treats it as "not ready yet".
+     */
+    private static ICompletionProposal[] safeCompute(IContentAssistProcessor processor,
+        ISourceViewer viewer, int offset)
+    {
+        try
+        {
+            ICompletionProposal[] proposals = processor.computeCompletionProposals(viewer, offset);
+            return proposals != null ? proposals : EMPTY_PROPOSALS;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error computing content-assist proposals", e); //$NON-NLS-1$
+            return EMPTY_PROPOSALS;
+        }
+    }
+
+    /** Drains queued UI events so the asynchronous Xtext scope/index build can make progress. */
+    private static void pumpUi(ISourceViewer viewer)
+    {
+        Display display = viewer.getTextWidget() != null ? viewer.getTextWidget().getDisplay()
+            : Display.getCurrent();
+        if (display != null)
+        {
+            while (display.readAndDispatch())
+            {
+                // drain queued events
+            }
+        }
+    }
+
+    /** Sleeps without propagating interruption as a checked exception (restores the interrupt flag). */
+    private static void sleepQuietly(long millis)
+    {
+        try
+        {
+            Thread.sleep(millis);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Display-string accessor for {@link #PROPOSAL_ORDER}; may be null (the comparator sorts those last). */
+    private static String displayStringOf(ICompletionProposal proposal)
+    {
+        return proposal == null ? null : proposal.getDisplayString();
     }
 
     /**
@@ -547,6 +659,14 @@ public class GetContentAssistTool implements IMcpTool
                                    String containsFilter, boolean extendedDocumentation,
                                    int line, int column, String filePath)
     {
+        // Deterministic page order (see PROPOSAL_ORDER): sort BEFORE applying offset/limit so a
+        // caller paginating with offset sees the same items per call, independent of the engine's
+        // warm-up-dependent return order. totalProposals (= proposals.length) is unaffected.
+        if (proposals != null)
+        {
+            Arrays.sort(proposals, PROPOSAL_ORDER);
+        }
+
         // Parse contains filter into lowercase parts
         String[] filterParts = null;
         if (containsFilter != null && !containsFilter.isEmpty())

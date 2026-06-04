@@ -187,6 +187,24 @@ public class GetContentAssistToolTest
     }
 
     @Test
+    public void testFormatProposalsSortsForDeterministicPagination()
+    {
+        // Proposals can arrive in a warm-up-dependent order; formatProposals sorts them
+        // case-insensitively BEFORE offset/limit so pagination is reproducible. Unsorted input
+        // [Delta, alpha, Charlie, bravo] -> sorted [alpha, bravo, Charlie, Delta]; with offset 1,
+        // limit 2 the page is bravo, Charlie - NOT the input's positional slice.
+        ICompletionProposal[] props = //$NON-NLS-1$
+            {proposal("Delta"), proposal("alpha"), proposal("Charlie"), proposal("bravo")}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        String json = GetContentAssistTool.formatProposals(props, 2, 1, null, false, 1, 1, "/f"); //$NON-NLS-1$
+        assertTrue(json.contains("\"skipped\":1")); //$NON-NLS-1$
+        assertTrue(json.contains("\"returnedProposals\":2")); //$NON-NLS-1$
+        assertTrue(json.contains("\"displayString\":\"bravo\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"displayString\":\"Charlie\"")); //$NON-NLS-1$
+        assertFalse(json.contains("\"displayString\":\"alpha\"")); // consumed by offset //$NON-NLS-1$
+        assertFalse(json.contains("\"displayString\":\"Delta\"")); // beyond the limit //$NON-NLS-1$
+    }
+
+    @Test
     public void testFormatProposalsContainsFilter()
     {
         ICompletionProposal[] props = {proposal("GetName"), proposal("SetName"), proposal("GetValue")}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

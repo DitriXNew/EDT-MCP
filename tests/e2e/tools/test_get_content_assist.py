@@ -212,33 +212,56 @@ def test_resolves_local_variable_in_managed_app_module():
 
 
 @e2e_test(tool="get_content_assist", kind="read")
-def test_offset_param_accepted_pagination_nondeterministic_audit():
-    """offset paging is ACCEPTED but NON-DETERMINISTIC in this build, so we do not
-    pin a flaky skip count.
-
-    AUDIT (tool finding -> fix-card): get_content_assist's offset/skip behaviour is
-    racy. The SAME {position, limit, offset} request returns different
-    (totalProposals, skipped) across calls and across client encodings — observed
-    live: a numeric offset and a string offset each produced totalProposals=0 on
-    one run and a real skipped=1 on another, because the proposal index is
-    stateful/async-warmed and offset interacts with it racily. There is also a
-    numeric-vs-string inconsistency: offset is read via extractStringArgument while
-    limit uses extractIntArgument. A strict "skipped == 1" assertion is therefore
-    inherently flaky; we assert only that the offset parameter is ACCEPTED (the call
-    does not error) and the read does not mutate. The flaky pagination is the
-    finding, not a value to pin. (limit, which IS deterministic, is asserted
-    strictly in test_limit_caps_returned_proposals.)
-    """
-    args = {
+def test_offset_pages_the_sorted_list_deterministically():
+    """offset paging is now DETERMINISTIC and pins a strict skip count (was an AUDIT
+    of racy behaviour). The fix: proposals are stabilized against the index warm-up
+    (so a position with proposals never intermittently reports totalProposals:0) and
+    SORTED case-insensitively before offset/limit, and offset is read as an int like
+    limit. So repeated identical requests return the same (totalProposals, skipped),
+    offset=N skips exactly N, and the page is the sorted baseline minus its first N.
+    A regression to the old racy/string-offset behaviour would flake the skip count or
+    shift the page."""
+    base = {
         "projectName": PROJECT,
         "modulePath": CALC_MODULE,
         "line": ADD_CALL_LINE,
         "column": ADD_CALL_COL_AFTER,
-        "limit": 5,
+        "limit": 50,
     }
-    _warm_for_proposals(args, "offset baseline (warmed)")
-    r = call("get_content_assist", dict(args, offset=1))
-    assert_ok(r, "content assist must accept an offset parameter without erroring")
+    # Warm once, then capture the full sorted page (offset 0).
+    full = _warm_for_proposals(base, "offset baseline (warmed)")
+    fs = full.structured
+    total = int(fs.get("totalProposals", 0))
+    assert total >= 3, "need >=3 proposals at this position to exercise offset; got %r" % total
+    full_names = [p.get("displayString") for p in (fs.get("proposals") or [])]
+    # Order guarantee: the lowercased sequence is non-decreasing (case-insensitive sort).
+    lowered = [(n or "").lower() for n in full_names]
+    assert lowered == sorted(lowered), \
+        "proposals must come back in a stable case-insensitive sorted order: %r" % full_names
+
+    skip = 2
+    # Two identical offset calls (NOT externally warmed — the fix makes each call self-stable)
+    # must agree, proving determinism.
+    r1 = call("get_content_assist", dict(base, offset=skip))
+    assert_ok(r1, "offset call 1")
+    r2 = call("get_content_assist", dict(base, offset=skip))
+    assert_ok(r2, "offset call 2")
+    s1, s2 = r1.structured, r2.structured
+    assert int(s1.get("skipped")) == skip == int(s2.get("skipped")), \
+        "offset=%d must skip EXACTLY %d on every call, got %r and %r" \
+        % (skip, skip, s1.get("skipped"), s2.get("skipped"))
+    assert int(s1.get("totalProposals")) == total == int(s2.get("totalProposals")), \
+        "totalProposals must be stable across calls (baseline %r, got %r/%r)" \
+        % (total, s1.get("totalProposals"), s2.get("totalProposals"))
+    names1 = [p.get("displayString") for p in (s1.get("proposals") or [])]
+    names2 = [p.get("displayString") for p in (s2.get("proposals") or [])]
+    assert names1 == names2, \
+        "repeated offset calls must return the IDENTICAL page: %r vs %r" % (names1, names2)
+    # offset=N returns exactly the sorted baseline minus its first N entries.
+    assert names1 == full_names[skip:], \
+        "offset=%d must return the sorted baseline minus its first %d entries: %r vs %r" \
+        % (skip, skip, names1, full_names[skip:])
+
     assert_no_diff("a read tool must not touch the project on disk")
 
 
