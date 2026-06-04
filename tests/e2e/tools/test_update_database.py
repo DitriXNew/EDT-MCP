@@ -44,8 +44,9 @@ Targeting is XOR-ish: pass launchConfigurationName (preferred) OR projectName+ap
   - projectName+applicationId, project does not exist
         -> the readiness pre-check (ProjectStateChecker.buildingErrorOrNull) refuses ONLY the
            transient BUILDING state and returns null for a missing project, so the call falls
-           through to updateDatabase()'s own value-naming branch:
-           -> "Project not found: <name>"
+           through to updateDatabase()'s own value-naming branch (the shared
+           ProjectContext.notFoundMessage):
+           -> "Project not found: <name>. Use list_projects to see available projects."
   - real open project + non-existent applicationId
         -> "Application not found: <id>. Use get_applications to get valid application IDs."
 """
@@ -169,12 +170,12 @@ def test_nonexistent_project_is_rejected_without_mutating():
     """Valid-shaped target (projectName + applicationId) but the project does not exist.
     The readiness pre-check (ProjectStateChecker.buildingErrorOrNull) refuses ONLY the
     transient BUILDING state and returns null for a missing project, so the call falls
-    through to updateDatabase()'s own value-naming branch, which returns
-    "Project not found: <name>". That message ECHOES the bad project name, so we can
-    assert names=[bad]. The call must be rejected and the real fixture untouched.
-
-    suggests=[] here intentionally: the downstream branch names the value but does not yet
-    append a list_projects discovery tail (that tail is a SEPARATE change).
+    through to updateDatabase()'s own value-naming branch, which returns the shared
+    ProjectContext.notFoundMessage(projectName):
+    "Project not found: <name>. Use list_projects to see available projects." That
+    message ECHOES the bad project name (names=[bad]) AND appends the actionable
+    list_projects discovery tail (suggests=["list_projects"]). The call must be
+    rejected and the real fixture untouched.
     """
     bad = "NoSuchProject_e2e_zzz"
     r = call("update_database", {
@@ -182,8 +183,8 @@ def test_nonexistent_project_is_rejected_without_mutating():
         "applicationId": BOGUS_APP_ID,
     })
     e = assert_error(r, "non-existent project")
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="non-existent project surfaces the value-naming 'Project not found: <name>'")
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project surfaces the value-naming 'Project not found: <name>' with a list_projects tail")
     # Distinguish this from the application-not-found path: a non-existent project must be
     # stopped at the project gate, never reaching the application lookup.
     assert_contains(e, "Project not found",

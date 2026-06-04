@@ -217,17 +217,19 @@ def test_nonexistent_project_errors_and_does_not_mutate():
     ProjectContext.of(name) has exists()==false and the tool returns the
     value-naming "Project not found: <name>".
 
-    The error names the offending project value, so:
+    The not-found wording is the shared ProjectContext.notFoundMessage(projectName),
+    which both names the value AND points at the next-step discovery tool:
+    "Project not found: <bad>. Use list_projects to see available projects." So:
       - names=[bad] asserts the reachable "Project not found: <bad>" message text (a
         broken tool that returned a fake empty-success envelope instead of an error
         would fail assert_error outright);
-      - suggests=[] (no next-step tool in the message; the list_projects discovery
-        tail is a separate change)."""
+      - suggests=["list_projects"] asserts the actionable next-step tail is present."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_applications", {"projectName": bad})
     err = assert_error(r, "non-existent project")
-    # Assert the reachable, value-naming not-found message. This still fails loudly
-    # if the tool stopped erroring on an unknown project.
-    assert_error_quality(err, names=[bad], suggests=[],
+    # Assert the reachable, value-naming not-found message AND its actionable tail.
+    # This still fails loudly if the tool stopped erroring on an unknown project, and
+    # now also pins the shared ProjectContext.notFoundMessage list_projects next-step.
+    assert_error_quality(err, names=[bad], suggests=["list_projects"],
                          ctx="non-existent project is named in the not-found error")
     assert_no_diff("an invalid call must not touch the project on disk")

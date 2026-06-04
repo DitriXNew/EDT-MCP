@@ -297,7 +297,9 @@ def test_nonexistent_module_file_errors_and_names_path():
 def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped args but the project does not exist -> ProjectContext.exists()
     is false (in readMethodViaEmf, before any module load) ->
-    ToolResult.error("Project not found: <name>") -> is_error TRUE."""
+    ToolResult.error(ProjectContext.notFoundMessage(name)) -> is_error TRUE. The
+    message both names the bad value AND points at list_projects (the migrated,
+    actionable wording shared by every project-not-found site)."""
     bad_project = "NoSuchProject_ZZZ_e2e"
     r = call("read_method_source", {
         "projectName": bad_project,
@@ -305,11 +307,10 @@ def test_nonexistent_project_errors_and_names_value():
         "methodName": "Add",
     })
     e = assert_error(r, "non-existent project")
-    # AUDIT: names the bad project but is not actionable — no pointer to
-    # list_projects (the sibling that enumerates valid projects). suggests=[] is
-    # intentional -> fix-card.
-    assert_error_quality(e, names=[bad_project], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # Actionable: names the bad project AND points at list_projects (the sibling
+    # that enumerates valid projects) — the shared ProjectContext.notFoundMessage.
+    assert_error_quality(e, names=[bad_project], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

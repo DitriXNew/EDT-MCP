@@ -128,12 +128,11 @@ def test_nonexistent_project_errors_clearly():
         "modulePath": "CommonModules/Error/Module.bsl",
     })
     e = assert_error(r, "non-existent project")
-    # Real message: "Project not found: NoSuchProjectXYZ". It names the bad
-    # project but offers NO next step (no sibling tool to discover valid names).
-    # AUDIT: GetModuleStructureTool.getStructureInternal "Project not found"
-    # error is not actionable — it should point to list_projects. suggests=[]
-    # kept empty deliberately (do not weaken to a substring that is always there).
-    assert_error_quality(e, names=[bad_project], suggests=[])
+    # Real message: "Project not found: NoSuchProjectXYZ. Use list_projects to
+    # see available projects." (GetModuleStructureTool.getStructureInternal goes
+    # through the shared ProjectContext.notFoundMessage). It names the bad project
+    # AND points at the sibling discovery tool (list_projects) as the next step.
+    assert_error_quality(e, names=[bad_project], suggests=["list_projects"])
     assert_no_diff("a failed read must not change the project on disk")
 
 

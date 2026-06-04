@@ -21,7 +21,9 @@ params — so the matrix is exactly:
   - non-existent project         -> ProjectStateChecker.buildingErrorOrNull guards only the
                                      transient BUILDING state, so a non-existent name falls
                                      through to the ProjectContext branch:
-                                     "Project not found: <name>" (names the bad value).
+                                     "Project not found: <name>. Use list_projects to see
+                                     available projects." (names the bad value AND points at
+                                     the discovery tool).
 
 Fixture inventory (TestConfiguration, English Names): Catalog.Catalog,
 CommonModule.Error, CommonModule.OK, CommonForm.Form, Subsystem.Subsystem,
@@ -89,10 +91,9 @@ def test_nonexistent_project_errors():
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_tags", {"projectName": bad})
     err = assert_error(r, "non-existent project")
-    # The error names the offending value (no longer the misleading "Project does not
-    # exist. Please wait and retry.", which implied a transient build). suggests=[]
-    # remains: the message names the value but still does not point at list_projects —
-    # that discovery tail is the separate systemic "actionable error tails" fix-card.
-    assert_error_quality(err, names=[bad], suggests=[],
-                         ctx="non-existent project: names the bad value via 'Project not found'")
+    # The error both names the offending value AND points at the discovery tool: the
+    # shared ProjectContext.notFoundMessage emits "Project not found: <name>. Use
+    # list_projects to see available projects." so the caller gets a concrete next step.
+    assert_error_quality(err, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project: names the bad value and suggests list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")

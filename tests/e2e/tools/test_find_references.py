@@ -53,7 +53,9 @@ Name and is unchanged. Verified live:
 Real execute()/findReferences error paths exercised below (live-confirmed text):
   - projectName missing        -> "projectName is required"
   - objectFqn missing          -> "objectFqn is required"
-  - project not found          -> "Project not found: <name>"
+  - project not found          -> "Project not found: <name>. Use list_projects
+                                  to see available projects." (shared
+                                  ProjectContext.notFoundMessage — actionable)
   - object not found (2 parts) -> "Object not found: <fqn>"
   - sub-object FQN (>2 parts)  -> "Object not found: <fqn>. find_references only
                                   supports top-level metadata objects (...). Sub-objects
@@ -240,14 +242,17 @@ def test_missing_objectfqn_errors_and_names_param():
 @e2e_test(tool="find_references", kind="read")
 def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped args but the project does not exist -> ProjectContext.exists()
-    is false -> "Project not found: <name>"."""
+    is false -> the shared ProjectContext.notFoundMessage:
+    "Project not found: <name>. Use list_projects to see available projects."
+    The error both names the bad value AND points at list_projects (the sibling
+    tool that enumerates valid project names), so it is actionable."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("find_references", {"projectName": bad, "objectFqn": "Catalog.Catalog"})
     e = assert_error(r, "non-existent project")
-    # AUDIT: names the bad project but is not actionable — no pointer to list_projects
-    # (the sibling tool that enumerates valid project names). suggests=[] -> fix-card.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # Names the bad project AND is actionable: the migrated message carries the
+    # list_projects discovery tail.
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

@@ -145,14 +145,13 @@ def test_nonexistent_project_is_rejected():
     # non-existent project reaches getProjectErrors' "Project not found: <name>" branch,
     # which NAMES the bad value -- no longer the misleading "Project does not exist.
     # Please wait and retry." (which implied a transient build a retry would resolve).
-    # suggests=[] remains: the message names the value but does not yet point at
-    # list_projects -- that discovery tail is the separate systemic "actionable error
-    # tails" fix-card.
+    # The shared ProjectContext.notFoundMessage now appends the discovery tail, so the
+    # error both names the value AND points the caller at list_projects.
     assert_error_quality(
         err,
         names=[bad],
-        suggests=[],
-        ctx="non-existent project: names the bad value via 'Project not found'",
+        suggests=["list_projects"],
+        ctx="non-existent project: names the bad value and points at list_projects",
     )
     # Independent, value-specific check that is NOT trivially true: the rejection text
     # must speak about the project not existing (catches a tool that errors for an

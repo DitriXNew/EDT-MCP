@@ -110,7 +110,7 @@ public class TranslateConfigurationTool implements IMcpTool
             ProjectContext ctx = ProjectContext.of(projectName);
             if (!ctx.exists())
             {
-                return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
+                return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
             }
             if (!ctx.isOpen())
             {

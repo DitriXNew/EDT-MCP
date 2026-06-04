@@ -22,7 +22,8 @@ TODO row is non-deterministic and is NOT on-disk truth. The empty/near-empty
 test ends with assert_no_diff() — a read tool must never mutate the project.
 
 Negative matrix targets the tool's REAL execute() error paths:
-  - non-existent project          -> "Project not found: <name>"
+  - non-existent project          -> "Project not found: <name>. Use list_projects
+                                      to see available projects." (actionable tail)
   - out-of-set priority enum      -> "priority must be one of: high, normal, low"
 There is intentionally NO "missing required parameter" case: every parameter is
 optional, so call("get_tasks", {}) is a HAPPY path, not an error (covered below).
@@ -105,17 +106,18 @@ def test_valid_priority_enum_is_accepted():
 @e2e_test(tool="get_tasks", kind="read")
 def test_nonexistent_project_errors_and_names_value():
     # projectName resolves via ProjectContext; a missing project ->
-    # ToolResult.error("Project not found: <name>"). The error MUST name the bad
-    # value so the caller knows which project was wrong.
+    # ToolResult.error(ProjectContext.notFoundMessage(name)) ==
+    # "Project not found: <name>. Use list_projects to see available projects."
+    # The error MUST name the bad value so the caller knows which project was wrong
+    # AND point at list_projects, the sibling tool that enumerates valid names.
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_tasks", {"projectName": bad})
     err = assert_error(r, "non-existent project")
-    # AUDIT: the error names the bad project but is NOT actionable — it gives no
-    # next step (no pointer to list_projects, the sibling tool that enumerates
-    # valid project names). suggests=[] is deliberate; this is a fix-card to add a
-    # "use list_projects to find a valid name" hint to the message.
-    assert_error_quality(err, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # The migrated message is actionable: it names the bad project AND gives the
+    # next step (call list_projects to find a valid name), so we assert both the
+    # echoed bad value and the list_projects pointer.
+    assert_error_quality(err, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

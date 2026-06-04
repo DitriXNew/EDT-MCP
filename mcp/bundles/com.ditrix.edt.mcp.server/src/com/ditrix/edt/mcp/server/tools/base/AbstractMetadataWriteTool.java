@@ -120,7 +120,10 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
         {
-            ctx.error = ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
+            // FQN: this class has its own nested ProjectContext, so the shared resolver's
+            // standard not-found message is referenced fully-qualified.
+            ctx.error = ToolResult.error(
+                com.ditrix.edt.mcp.server.utils.ProjectContext.notFoundMessage(projectName)).toJson();
             return ctx;
         }
 

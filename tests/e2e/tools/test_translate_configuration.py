@@ -205,10 +205,11 @@ def test_nonexistent_project_errors_and_names_value():
         "targetLanguages": ["en"],
     })
     e = assert_error(r, "non-existent project")
-    # "Project not found: <name>" names the bad value. suggests=[] is deliberate:
-    # the list_projects discovery tail is a SEPARATE change, not asserted here.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # "Project not found: <name>. Use list_projects to see available projects."
+    # names the bad value AND points at list_projects as the discovery next step
+    # (the shared ProjectContext.notFoundMessage wording).
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("a rejected call must not touch the project on disk")
 
 
@@ -227,9 +228,10 @@ def test_nonproject_name_errors_and_names_value():
         "targetLanguages": ["en"],
     })
     e = assert_error(r, "metadata-object name passed as projectName")
-    # AUDIT: same generic "Project not found: <name>" — names the value, not actionable.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="object FQN as projectName is rejected and echoed")
+    # Same "Project not found: <name>. Use list_projects ..." wording: names the
+    # value AND points at list_projects (shared ProjectContext.notFoundMessage).
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="object FQN as projectName is rejected, echoed, and points at list_projects")
     assert_no_diff("a rejected call must not touch the project on disk")
 
 

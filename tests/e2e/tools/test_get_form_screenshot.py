@@ -232,14 +232,14 @@ def test_nonexistent_project_errors_and_names_value():
         "formPath": "CommonForm.Form",
     })
     err = assert_error(r, "non-existent project")
-    # AUDIT: "Project not found: <name>" names the bad value but offers NO next
-    # step (it does not point at list_projects to discover a valid project name).
-    # suggests=[] is intentional — fix-card: make this guard actionable.
+    # "Project not found: <name>. Use list_projects to see available projects."
+    # (via the shared ProjectContext.notFoundMessage) names the bad value AND
+    # points at list_projects as the discovery next step -> genuinely actionable.
     assert_error_quality(
         err,
         names=[bad],
-        suggests=[],
-        ctx="non-existent project names the bad value",
+        suggests=["list_projects"],
+        ctx="non-existent project names the bad value and points at list_projects",
     )
     assert_no_diff("an invalid call must not touch the project on disk")
 

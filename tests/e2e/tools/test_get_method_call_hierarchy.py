@@ -311,8 +311,10 @@ def test_invalid_direction_enum_errors_and_names_valid_values():
 @e2e_test(tool="get_method_call_hierarchy", kind="read")
 def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped args but the project does not exist -> ProjectContext.exists() is
-    false (in findCallers) -> ToolResult.error("Project not found: <name>"). Names the
-    bad project so the caller knows WHICH value was wrong."""
+    false (in findCallers) -> ToolResult.error(ProjectContext.notFoundMessage(bad)),
+    i.e. "Project not found: <name>. Use list_projects to see available projects." Names
+    the bad project so the caller knows WHICH value was wrong, AND points at list_projects
+    to discover a valid one."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_method_call_hierarchy", {
         "projectName": bad,
@@ -320,10 +322,10 @@ def test_nonexistent_project_errors_and_names_value():
         "methodName": "Add",
     })
     e = assert_error(r, "non-existent project")
-    # AUDIT: names the bad project but is not actionable — no pointer to list_projects
-    # (the sibling tool that enumerates valid project names). suggests=[] -> fix-card.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # Actionable: names the bad project AND points at list_projects (the sibling tool that
+    # enumerates valid project names) via the shared ProjectContext.notFoundMessage tail.
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

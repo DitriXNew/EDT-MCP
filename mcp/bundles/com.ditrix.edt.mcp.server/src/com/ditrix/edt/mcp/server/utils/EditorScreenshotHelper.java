@@ -170,7 +170,7 @@ public final class EditorScreenshotHelper
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
         {
-            return ToolResult.error("Project not found: " + projectName).toJson(); //$NON-NLS-1$
+            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
         }
 
         IFile formFile = project.getFile(new Path(relativePath));

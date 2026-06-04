@@ -19,8 +19,10 @@ Negative matrix targets the tool's REAL execute() error paths, IN THE ORDER they
 fire (GetObjectsByTagsTool.execute):
   1. missing projectName        -> JsonUtils.requireArgument -> "projectName is required"
   2. ProjectStateChecker.buildingErrorOrNull(projectName) guards only the transient
-     BUILDING state, so a NON-existent project name falls through to the
-     "Project not found: <name>" branch, which NAMES the bad value.
+     BUILDING state, so a NON-existent project name falls through to the shared
+     ProjectContext.notFoundMessage branch -> "Project not found: <name>. Use
+     list_projects to see available projects." (NAMES the bad value AND points at
+     list_projects as the discovery next step).
   3. empty/missing tags (valid project) -> parseTagsList() empty ->
      "Tags array is required. Example: [\"Important\", \"NeedsReview\"]"
 
@@ -141,9 +143,10 @@ def test_nonexistent_project_errors():
     r = call("get_objects_by_tags", {"projectName": bad, "tags": [_ABSENT_TAG]})
     err = assert_error(r, "non-existent project")
     # The error names the offending value (this still fails if the tool wrongly
-    # treated the bad name as valid and produced a 0/0 success banner). suggests=[]
-    # remains: the message names the value but does not yet point at list_projects —
-    # that discovery tail is the separate systemic "actionable error tails" fix-card.
-    assert_error_quality(err, names=[bad], suggests=[],
-                         ctx="non-existent project: names the bad value via 'Project not found'")
+    # treated the bad name as valid and produced a 0/0 success banner) AND points at
+    # the discovery next step: the shared ProjectContext.notFoundMessage emits
+    # "Project not found: <name>. Use list_projects to see available projects.",
+    # so suggests=["list_projects"] asserts that actionable tail is present.
+    assert_error_quality(err, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project: names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")

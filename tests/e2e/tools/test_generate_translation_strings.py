@@ -217,8 +217,10 @@ def test_nonexistent_project_errors_and_names_value():
     ONLY the transient BUILDING state and returns null for a missing project, so
     it cannot intercept this case with a vague "...building... Please wait and
     retry." message — the value-naming "Project not found" is what the caller
-    sees. A broken resolver that succeeded against the wrong project, or emitted
-    a generic message, would fail this.
+    sees. The not-found wording also points at list_projects (the shared
+    ProjectContext.notFoundMessage discovery tail), so the error is actionable.
+    A broken resolver that succeeded against the wrong project, or emitted a
+    generic message, would fail this.
     """
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("generate_translation_strings", {
@@ -226,9 +228,8 @@ def test_nonexistent_project_errors_and_names_value():
         "targetLanguages": ["en"],
     })
     e = assert_error(r, "non-existent project")
-    # Downstream not-found branch NAMES the offending value. suggests=[] is
-    # deliberate: the list_projects discovery tail is a SEPARATE change, not part
-    # of this assertion.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # Downstream not-found branch NAMES the offending value AND points at the
+    # list_projects discovery tool (ProjectContext.notFoundMessage).
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value + suggests list_projects")
     assert_no_diff("a rejected call must not touch the project on disk")

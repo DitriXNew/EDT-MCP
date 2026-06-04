@@ -293,14 +293,16 @@ def test_unqualified_symbol_without_modulepath_errors_actionably():
 @e2e_test(tool="go_to_definition", kind="read")
 def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped args but the project does not exist -> ProjectContext.exists() is
-    false -> "Project not found: <name>"."""
+    false -> the migrated ProjectContext.notFoundMessage: "Project not found: <name>.
+    Use list_projects to see available projects." Names the bad value AND is
+    actionable — it points at list_projects, the sibling that enumerates valid names."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("go_to_definition", {"projectName": bad, "symbol": "Calc.Add"})
     e = assert_error(r, "non-existent project")
-    # AUDIT: names the bad project but is not actionable — no pointer to
-    # list_projects (the sibling that enumerates valid names). suggests=[] -> fix-card.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # Names the bad project and is actionable: the message tells you to call
+    # list_projects to discover valid names.
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

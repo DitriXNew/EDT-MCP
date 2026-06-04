@@ -41,8 +41,9 @@ REAL ERROR / SENTINEL PATHS (read from the Java):
       pre-check refuses ONLY the transient BUILDING state and returns null for an unknown
       name, so control falls through to revalidateObjects' own resolution:
       ProjectContext.of(name).exists() is false ->
-      ToolResult.error("Project not found: <name>"). The user therefore sees the
-      value-naming "Project not found: <name>" error that echoes the bad name.
+      ToolResult.error(ProjectContext.notFoundMessage(name)). The user therefore sees the
+      shared, actionable message that echoes the bad name AND points at list_projects:
+      "Project not found: <name>. Use list_projects to see available projects."
 """
 
 from harness import (
@@ -208,10 +209,11 @@ def test_nonexistent_project_errors_clearly():
     ProjectStateChecker.buildingErrorOrNull(projectName) FIRST; that pre-check refuses
     ONLY the transient BUILDING state and returns null for an unknown name, so control
     falls through to revalidateObjects' own resolution: ProjectContext.of(bad).exists()
-    is false -> ToolResult.error("Project not found: <name>").
+    is false -> ToolResult.error(ProjectContext.notFoundMessage(bad)).
 
-    Assert the real, value-naming downstream error -- it echoes the bad name the caller
-    passed, which is the diagnostic the user actually needs.
+    Assert the real downstream error -- it echoes the bad name the caller passed AND
+    points at list_projects to discover a valid project, which is the diagnostic plus
+    next step the user actually needs.
     """
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("revalidate_objects", {
@@ -219,11 +221,12 @@ def test_nonexistent_project_errors_clearly():
         "objects": ["Catalog.Catalog"],
     })
     e = assert_error(r, "non-existent project")
-    # The error surfaced is revalidateObjects' own name-bearing branch
-    # "Project not found: <name>" -- it echoes the bad project name the caller passed.
-    # suggests=[] intentionally: the list_projects discovery tail is a SEPARATE change.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value in 'Project not found'")
+    # The error surfaced is the shared ProjectContext.notFoundMessage(name) branch:
+    # "Project not found: <name>. Use list_projects to see available projects." -- it
+    # echoes the bad project name AND points the caller at list_projects to discover a
+    # valid one, so the error is actionable.
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("a rejected call must not touch the project tree")
 
 
@@ -233,13 +236,14 @@ def test_nonexistent_project_with_full_mode_errors_clearly():
     to prove an unknown project is rejected regardless of mode (a full revalidation of
     a non-existent project must NOT silently "succeed"). The BUILDING-only pre-check
     returns null for an unknown name, so revalidateObjects' own resolution emits the
-    same value-naming "Project not found: <name>" error as the partial-mode case.
+    same shared, actionable ProjectContext.notFoundMessage(name) error as the
+    partial-mode case (names the value AND points at list_projects).
     """
     bad = "GhostProject_full_e2e"
     r = call("revalidate_objects", {"projectName": bad})
     e = assert_error(r, "non-existent project, full mode")
-    # Same name-bearing "Project not found: <name>" branch as the partial-mode case.
-    # suggests=[] intentionally: the list_projects discovery tail is a SEPARATE change.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="full-mode unknown project names the bad value in 'Project not found'")
+    # Same shared ProjectContext.notFoundMessage(name) branch as the partial-mode case:
+    # it names the bad value AND points the caller at list_projects to discover a valid one.
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="full-mode unknown project names the bad value and points at list_projects")
     assert_no_diff("a rejected call must not touch the project tree")

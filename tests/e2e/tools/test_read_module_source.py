@@ -15,7 +15,7 @@ Happy-path fixtures (committed baseline of TestConfiguration):
 Negative matrix targets the tool's REAL execute() errors (read from the Java):
   - missing projectName        -> "projectName is required"
   - missing modulePath         -> "modulePath is required. Example: ..."
-  - non-existent project       -> "Project not found: <name>"
+  - non-existent project       -> "Project not found: <name>. Use list_projects ..."
   - non-existent module path   -> "File not found: src/<path>. Use format ..."
 """
 
@@ -148,12 +148,11 @@ def test_nonexistent_project_errors_clearly():
     bad = "NoSuchProject_ZZZ"
     r = call("read_module_source", {"projectName": bad, "modulePath": ERROR_MODULE})
     err = assert_error(r, "non-existent project")
-    # Real message: "Project not found: <name>". Names the value.
-    # AUDIT: the message offers NO next step (does not point to list_projects to
-    # find a valid project name). suggests=[] is intentional; this is a fix-card
-    # to make the error actionable.
-    assert_error_quality(err, names=[bad, "Project not found"], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # Real message (shared ProjectContext.notFoundMessage): "Project not found:
+    # <name>. Use list_projects to see available projects." Names the value AND
+    # points at the list_projects discovery tool as the next step.
+    assert_error_quality(err, names=[bad, "Project not found"], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

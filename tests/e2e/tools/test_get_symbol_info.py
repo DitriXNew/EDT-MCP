@@ -373,18 +373,17 @@ def test_out_of_range_column_errors():
 @e2e_test(tool="get_symbol_info", kind="read")
 def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped args but the project does not exist -> ProjectContext.exists()
-    is false -> "Project not found: <name>". Names the bad project.
-
-    AUDIT: names the bad value but is not actionable — no pointer to list_projects
-    (the sibling tool that enumerates valid project names). suggests=[] -> fix-card.
+    is false -> ProjectContext.notFoundMessage: "Project not found: <name>. Use
+    list_projects to see available projects." Names the bad project AND points at
+    the sibling discovery tool, so the error is actionable.
     """
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_symbol_info", {
         "projectName": bad, "modulePath": CALC_MODULE, "line": 6, "column": 14,
     })
     e = assert_error(r, "non-existent project")
-    assert_error_quality(e, names=[bad, "Project not found"], suggests=[],
-                         ctx="non-existent project names the bad value")
+    assert_error_quality(e, names=[bad, "Project not found"], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

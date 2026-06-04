@@ -255,19 +255,20 @@ def test_formpath_without_projectname_errors_clearly():
 @e2e_test(tool="get_form_layout_snapshot", kind="read")
 def test_nonexistent_project_errors_and_names_value():
     """Well-formed args but the project does not exist. openAndActivateForm ->
-    "Project not found: <name>" (JSON), unwrapped by extractToolErrorMessage and
-    re-wrapped as errorYaml. The bad project name must surface in the YAML body."""
+    ProjectContext.notFoundMessage(projectName) (JSON), unwrapped by
+    extractToolErrorMessage and re-wrapped as errorYaml. The migrated message names
+    the bad project AND points the caller at list_projects to discover a valid one:
+    "Project not found: <name>. Use list_projects to see available projects."."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_form_layout_snapshot", {
         "projectName": bad,
         "formPath": "CommonForm.Form",
     })
     msg = _assert_is_failure(r, "non-existent project")
-    # AUDIT: "Project not found: <name>" names the bad value but offers NO next step
-    # (no pointer to list_projects to discover a valid project name). suggests=[] is
-    # deliberate -> fix-card: make this message actionable.
-    assert_error_quality(msg, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # The migrated not-found message names the bad value AND offers the next step
+    # (the list_projects discovery tail) -> genuinely actionable.
+    assert_error_quality(msg, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("a rejected call must not touch the project on disk")
 
 

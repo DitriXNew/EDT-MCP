@@ -59,8 +59,9 @@ Negative matrix coverage (all reachable branches in execute())
             application IDs."
   - Mode 2: non-existent projectName (+ some applicationId)
         -> readiness pre-check now refuses only the transient BUILDING state, so a
-            missing project falls through to launchDebug's value-naming branch:
-            "Project not found: <name>"
+            missing project falls through to launchDebug's value-naming branch (the
+            shared ProjectContext.notFoundMessage):
+            "Project not found: <name>. Use list_projects to see available projects."
   - empty-string projectName behaves like missing (execute() checks isEmpty()).
 
 Fixture inventory used (TestConfiguration, English Names): the project itself
@@ -244,8 +245,8 @@ def test_mode2_nonexistent_project_is_rejected_before_launch():
     Mutation sense: a tool that stopped rejecting unknown projects, or that proceeded
     to launch, fails assert_error outright; and the named bad value pins that the
     sharper downstream branch (not the building gate) is the one that fired.
-    suggests=[] — the list_projects discovery tail is a SEPARATE change, not asserted
-    here.
+    The not-found message comes from the shared ProjectContext.notFoundMessage, so it
+    carries the actionable list_projects discovery tail — asserted via suggests below.
     """
     bad_proj = "NoSuchProject_ZZZ_e2e"
     r = call("debug_launch", {"projectName": bad_proj, "applicationId": "AppId"})
@@ -253,8 +254,8 @@ def test_mode2_nonexistent_project_is_rejected_before_launch():
     assert_error_quality(
         err,
         names=[bad_proj, "Project not found"],
-        suggests=[],
-        ctx="non-existent project falls through to the value-naming 'Project not found' branch",
+        suggests=["list_projects"],
+        ctx="non-existent project falls through to the value-naming 'Project not found' branch AND points at list_projects",
     )
     assert_no_diff("a rejected launch must not touch the project source")
 

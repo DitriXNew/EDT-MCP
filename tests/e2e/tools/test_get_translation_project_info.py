@@ -129,8 +129,10 @@ def test_nonexistent_project_errors_and_names_value():
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_translation_project_info", {"projectName": bad})
     e = assert_error(r, "non-existent project")
-    # "Project not found or closed: <name>" names the bad value. suggests=[] is
-    # deliberate — the list_projects discovery tail is a SEPARATE change.
+    # This tool emits its own combined "Project not found or closed: <name>"
+    # diagnostic (it cannot tell missing from closed here), NOT the shared
+    # ProjectContext.notFoundMessage, so it carries no list_projects tail -> suggests=[]
+    # is correct (a "closed" project would not be discoverable via list_projects anyway).
     assert_error_quality(e, names=[bad], suggests=[],
                          ctx="non-existent project names the bad value")
     assert_no_diff("an invalid call must not touch the project on disk")

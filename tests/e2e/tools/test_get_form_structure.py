@@ -209,14 +209,15 @@ def test_missing_projectname_errors_clearly():
 @e2e_test(tool="get_form_structure", kind="read")
 def test_nonexistent_project_errors_and_names_value():
     """Valid-shaped args but the project does not exist -> ProjectContext.exists()
-    is false -> "Project not found: <name>"."""
+    is false -> ProjectContext.notFoundMessage: "Project not found: <name>. Use
+    list_projects to see available projects."."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_form_structure", {"projectName": bad, "formPath": FORM_FQN})
     e = assert_error(r, "non-existent project")
-    # AUDIT: names the bad project but is not actionable — no pointer to list_projects
-    # (the sibling tool that enumerates valid project names). suggests=[] -> fix-card.
-    assert_error_quality(e, names=[bad], suggests=[],
-                         ctx="non-existent project names the bad value")
+    # Actionable: names the bad project AND points at list_projects (the sibling tool
+    # that enumerates valid project names) so the caller has a concrete next step.
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

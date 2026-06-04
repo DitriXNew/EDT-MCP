@@ -250,12 +250,12 @@ def test_nonexistent_project_is_error_and_no_mutation():
         "confirm": True,
     })
     e = assert_error(r, "non-existent project")
-    # resolveProjectAndConfig -> ToolResult.error("Project not found: <name>").
-    # AUDIT: names the bad project but offers NO next step (no list_projects hint to
-    # enumerate valid project names). Names-but-not-actionable. Fix-card: append a
-    # list_projects hint to "Project not found".
-    assert_error_quality(e, names=[bogus], suggests=["not found"],
-                         ctx="non-existent project names the bad value")
+    # resolveProjectAndConfig -> ToolResult.error(ProjectContext.notFoundMessage(name)):
+    # "Project not found: <name>. Use list_projects to see available projects."
+    # This is actionable: it names the bad project AND points at the list_projects
+    # discovery tool to enumerate valid project names.
+    assert_error_quality(e, names=[bogus], suggests=["not found", "list_projects"],
+                         ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("a rejected call must not touch the project on disk")
 
 

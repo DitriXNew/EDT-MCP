@@ -210,17 +210,19 @@ def test_nonexistent_project_errors_and_does_not_mutate():
     names=[bad] asserts that REAL downstream message echoes the offending project value
     (a broken tool that returned a fake empty-success instead of an error fails
     assert_error outright; a tool whose message regressed to a bare 'Error'/stacktrace
-    fails the error-quality bareness/stacktrace check). suggests=[] — the reachable
-    message does not point at a next-step tool (the list_projects discovery tail is a
-    separate change)."""
+    fails the error-quality bareness/stacktrace check). suggests=["list_projects"] — the
+    migrated ProjectContext.notFoundMessage appends "Use list_projects to see available
+    projects.", so the error names the offending value AND points at the next-step
+    discovery tool."""
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("clean_project", {"projectName": bad})
     err = assert_error(r, "non-existent project")
-    # Assert the REAL downstream message contract ("Project not found: <bad>"), which now
-    # names the offending value. Still fails loudly if the tool stopped erroring on an
-    # unknown project (e.g. cleaned all + faked success).
-    assert_error_quality(err, names=[bad], suggests=[],
-                         ctx="non-existent project surfaces the value-naming 'Project not found' error")
+    # Assert the REAL downstream message contract ("Project not found: <bad>. Use
+    # list_projects ..."), which names the offending value AND the discovery tool. Still
+    # fails loudly if the tool stopped erroring on an unknown project (e.g. cleaned all +
+    # faked success), or if the actionable list_projects tail regressed away.
+    assert_error_quality(err, names=[bad], suggests=["list_projects"],
+                         ctx="non-existent project surfaces the value-naming 'Project not found' error with a list_projects next step")
     # A rejected clean must not have touched any tracked file.
     assert_no_diff("a rejected clean must not touch the project on disk")
 
@@ -237,14 +239,17 @@ def test_whitespace_project_name_errors_and_does_not_mutate():
     that trimmed "   " to "" would instead fall through to clean-all and succeed — which
     would fail assert_error here.
 
-    The reachable error is the downstream "Project not found: <value>"; we assert its
-    stable, delimiter-free "Project not found" text rather than the raw blank value
-    (awkward to match through JSON whitespace). suggests=[]."""
+    The reachable error is the downstream "Project not found: <value>. Use list_projects
+    ..."; we assert its stable, delimiter-free "Project not found" text rather than the
+    raw blank value (awkward to match through JSON whitespace), plus the actionable
+    list_projects discovery tail that the migrated ProjectContext.notFoundMessage now
+    appends."""
     bad = "   "
     r = call("clean_project", {"projectName": bad})
     err = assert_error(r, "whitespace-only projectName")
     # The whitespace handle is not an existing project -> the downstream not-found error
-    # fires. Asserting the stable text (not the blank value) is the robust signal.
-    assert_error_quality(err, names=["Project not found"], suggests=[],
-                         ctx="whitespace projectName surfaces the 'Project not found' error")
+    # fires. Asserting the stable text (not the blank value) plus the list_projects
+    # next-step tail is the robust signal.
+    assert_error_quality(err, names=["Project not found"], suggests=["list_projects"],
+                         ctx="whitespace projectName surfaces the 'Project not found' error with a list_projects next step")
     assert_no_diff("a rejected clean must not touch the project on disk")

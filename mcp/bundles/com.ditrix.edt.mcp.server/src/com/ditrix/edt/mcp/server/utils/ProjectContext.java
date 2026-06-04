@@ -16,12 +16,13 @@ import org.eclipse.core.resources.ResourcesPlugin;
  * {@code ResourcesPlugin.getWorkspace().getRoot().getProject(name)} followed by
  * {@code exists()} / {@code isOpen()} checks.
  * <p>
- * Migrating a tool to this resolver is <b>behaviour-preserving</b>: each tool
- * keeps formatting its own "project not found" / "project is closed" message
- * (the wording and the response convention — bare {@code "Error: ..."} vs
- * {@link com.ditrix.edt.mcp.server.protocol.ToolResult}) differ across tools),
- * and keeps its own choice of which checks to apply. This class only removes the
- * duplicated lookup-and-check boilerplate.
+ * Besides resolution, this class owns the <b>standard "project not found"
+ * message</b> via {@link #notFoundMessage(String)} — a single actionable wording
+ * (names the value AND points at {@code list_projects}) that tools use instead of
+ * inlining {@code "Project not found: " + name}, so the not-found error reads the
+ * same everywhere. A tool still chooses WHICH checks to apply ({@link #exists()}
+ * vs {@link #isOpen()}) and its own wording for the distinct "project is closed"
+ * case; only the not-found message and the lookup-and-check boilerplate are shared.
  * <p>
  * This is the first, purely {@link IProject}-level increment of the shared
  * project resolver. TODO (card {@code introduce-project-context-resolver}):
@@ -91,5 +92,21 @@ public final class ProjectContext
     public boolean isOpen()
     {
         return exists() && project.isOpen();
+    }
+
+    /**
+     * The standard, actionable "project not found" error MESSAGE for an unresolved
+     * {@code projectName}: it names the offending value AND points the caller at the
+     * sibling discovery tool. Wrap it in {@code ToolResult.error(...)} instead of
+     * inlining {@code "Project not found: " + projectName}, so every tool surfaces the
+     * same actionable not-found error.
+     *
+     * @param projectName the unresolved project name (the value the caller passed)
+     * @return the message naming the value and suggesting {@code list_projects}
+     */
+    public static String notFoundMessage(String projectName)
+    {
+        return "Project not found: " + projectName //$NON-NLS-1$
+            + ". Use list_projects to see available projects."; //$NON-NLS-1$
     }
 }
