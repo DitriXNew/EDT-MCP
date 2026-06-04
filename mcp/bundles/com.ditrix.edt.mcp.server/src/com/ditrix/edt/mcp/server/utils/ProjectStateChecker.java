@@ -221,7 +221,50 @@ public final class ProjectStateChecker
         
         IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
             .getRoot().getProject(projectName);
-        
+
         return checkReadyOrError(project);
+    }
+
+    /**
+     * Returns a "still building" error message ONLY when the project's derived data
+     * (the reference index) is actively building, otherwise {@code null}.
+     * <p>
+     * Unlike {@link #checkReadyOrError(IProject)} this does NOT reject a project that is
+     * merely missing / closed / unknown: those are PERMANENT conditions a retry will not
+     * fix, and the caller's own resolution yields a sharper, value-naming error
+     * ("Project not found: X"). Use this for a model-mutating or cascade pre-flight where
+     * the only state worth refusing for is a transient in-progress build (running the
+     * cascade against an incomplete index would silently miss references).
+     *
+     * @param project the IProject to check
+     * @return the building message with a retry hint, or {@code null} when not building
+     */
+    public static String buildingErrorOrNull(IProject project)
+    {
+        ProjectStateResult result = checkProjectState(project);
+        if (result.getState() == ProjectState.BUILDING)
+        {
+            return result.getMessage() + ". Please wait and retry."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Name-based variant of {@link #buildingErrorOrNull(IProject)}. A null/empty name
+     * skips the check (returns {@code null}), leaving the caller's required-argument
+     * handling to produce the proper error.
+     *
+     * @param projectName the project name to check
+     * @return the building message with a retry hint, or {@code null} when not building
+     */
+    public static String buildingErrorOrNull(String projectName)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return null;
+        }
+        IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+            .getRoot().getProject(projectName);
+        return buildingErrorOrNull(project);
     }
 }

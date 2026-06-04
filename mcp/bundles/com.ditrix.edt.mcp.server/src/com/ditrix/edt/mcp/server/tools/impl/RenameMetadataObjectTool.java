@@ -18,6 +18,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.rename.MetadataRenameService;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
  * Tool to rename a metadata object or attribute with full refactoring support.
@@ -197,6 +198,18 @@ public class RenameMetadataObjectTool implements IMcpTool
         if (err != null)
         {
             return err;
+        }
+
+        // A cascade rename rewrites every reference to the object across BSL, forms and
+        // metadata. If the project's derived data (the reference index) is still building,
+        // the refactoring resolves an INCOMPLETE set of references: it would rename the
+        // object, miss some references, and still report success — leaving dangling old
+        // references (silent partial corruption). Refuse only for that transient BUILDING
+        // state; a missing/closed project falls through to the value-naming error below.
+        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        if (building != null)
+        {
+            return ToolResult.error(building).toJson();
         }
 
         final java.util.Set<Integer> finalDisableIndices = disableIndices;

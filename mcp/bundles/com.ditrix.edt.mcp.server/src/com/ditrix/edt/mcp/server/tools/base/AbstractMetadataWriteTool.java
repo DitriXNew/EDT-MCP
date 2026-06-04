@@ -19,6 +19,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
  * Base class for metadata write tools that mutate the EDT model
@@ -46,6 +47,18 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     @Override
     public final String execute(Map<String, String> params)
     {
+        // Refuse to mutate the model while the project's derived data is still building:
+        // a delete cascade would resolve an incomplete reference set (silently missing
+        // affected references), and a create/add would see a stale duplicate/parent
+        // lookup. Only the transient BUILDING state is refused here; a missing/closed
+        // project falls through to resolveProjectAndConfig's value-naming error. Checked
+        // on the calling thread before marshalling onto the UI thread.
+        String building = ProjectStateChecker.buildingErrorOrNull(params.get("projectName")); //$NON-NLS-1$
+        if (building != null)
+        {
+            return ToolResult.error(building).toJson();
+        }
+
         AtomicReference<String> resultRef = new AtomicReference<>();
         Display display = PlatformUI.getWorkbench().getDisplay();
         display.syncExec(() -> {

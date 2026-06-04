@@ -196,6 +196,30 @@ def wait_for_server(timeout=60):
     raise RuntimeError("MCP server not reachable at %s" % HEALTH_URL)
 
 
+def wait_for_project_ready(timeout=180):
+    """Wait until no project is still building its derived data (the reference index).
+
+    After a `-clean` relaunch the MCP port opens (wait_for_server) BEFORE EDT finishes
+    indexing, so a cascade/mutation tool (rename / delete / create) run too early would
+    hit a project whose state is 'building'. list_projects reports each project's state
+    value, so poll until none reads 'building'.
+
+    Best-effort: returns True once ready (or if state cannot be read), False on timeout.
+    The per-tool ProjectStateChecker guard is the real safety net — this only removes the
+    test-timing flake so a normal run starts on a fully-indexed workspace.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            text = (call("list_projects", {}).text or "").lower()
+            if text and "building" not in text:
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # git fixture (TestConfiguration is the committed baseline; on-disk truth = git)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -250,11 +274,16 @@ def reset_model():
     undo them — the model would carry the unsaved change into the next test.
     clean_project refreshes files from disk + revalidates, discarding unsaved model
     changes. The orchestrator calls this after each kind='write-metadata' test.
+
+    clean_project's revalidation re-triggers derived-data computation (the reference
+    index), so we then wait for the project to settle — otherwise the NEXT test (e.g. a
+    cascade rename/delete) could run mid-reindex and flake.
     """
     try:
         call("clean_project", {"projectName": PROJECT})
     except Exception:
         pass
+    wait_for_project_ready()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
