@@ -3211,7 +3211,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + applicationId. Destructive/irreversible: run only on explicit request, and terminate any running 1C client on the target infobase first (exclusive lock). Full parameters and examples: call get_tool_guide('update_database').",
+    "description": "Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + applicationId. Destructive/irreversible: guarded by a confirm-preview - call without confirm to preview the exact update (no infobase change), then confirm=true to apply. Terminate any running 1C client on the target infobase first (exclusive lock). Full parameters and examples: call get_tool_guide('update_database').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -3220,6 +3220,10 @@
         },
         "autoRestructure": {
           "description": "Auto-apply restructurization when needed (default true).",
+          "type": "boolean"
+        },
+        "confirm": {
+          "description": "true = apply the update; default false = preview only (resolves the target and reports what would change WITHOUT mutating the infobase).",
           "type": "boolean"
         },
         "fullUpdate": {
@@ -3241,6 +3245,10 @@
     "name": "update_database",
     "outputSchema": {
       "properties": {
+        "action": {
+          "description": "Either 'preview' (nothing changed) or 'updated' (applied).",
+          "type": "string"
+        },
         "applicationId": {
           "description": "Target application ID.",
           "type": "string"
@@ -3248,6 +3256,10 @@
         "applicationName": {
           "description": "Display name of the target application.",
           "type": "string"
+        },
+        "confirmationRequired": {
+          "description": "true on a preview (no infobase change made); absent/false once updated.",
+          "type": "boolean"
         },
         "message": {
           "description": "Human-readable status message for the update.",

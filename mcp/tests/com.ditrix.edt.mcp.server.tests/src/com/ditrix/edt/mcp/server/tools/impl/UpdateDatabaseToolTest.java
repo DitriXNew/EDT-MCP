@@ -64,6 +64,39 @@ public class UpdateDatabaseToolTest
         assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"fullUpdate\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"autoRestructure\"")); //$NON-NLS-1$
+        assertTrue("schema must declare the confirm gate", schema.contains("\"confirm\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresConfirmPreviewFields()
+    {
+        // The confirm-preview adds action ('preview'/'updated') + confirmationRequired to the
+        // success envelope so a client can distinguish a preview from an applied update.
+        String schema = new UpdateDatabaseTool().getOutputSchema();
+        assertNotNull(schema);
+        assertTrue("outputSchema must declare action", schema.contains("\"action\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare confirmationRequired", //$NON-NLS-1$
+            schema.contains("\"confirmationRequired\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionMentionsConfirmPreview()
+    {
+        // The always-loaded description must advertise the two-phase guard so an agent does not
+        // expect a bare call to mutate the infobase.
+        String desc = new UpdateDatabaseTool().getDescription();
+        assertTrue("description must mention the confirm-preview gate", //$NON-NLS-1$
+            desc.toLowerCase().contains("confirm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsTwoPhaseConfirm()
+    {
+        // The guide documents the preview/confirm workflow (and the confirm parameter).
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertTrue("guide must document the preview phase", //$NON-NLS-1$
+            guide.toLowerCase().contains("preview")); //$NON-NLS-1$
+        assertTrue("guide must document the confirm parameter", guide.contains("confirm")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
