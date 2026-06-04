@@ -179,7 +179,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 64 tools are organized into 9 semantic groups:
+All 65 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -190,7 +190,7 @@ All 64 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_structure`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add form attributes | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute` |
+| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add form attributes, edit form items | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 64 tools enabled (default) |
+| **All Tools** | All 65 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -367,6 +367,7 @@ Add to `claude_desktop_config.json`:
 | `get_form_layout_snapshot` | Return YAML with calculated WYSIWYG form element bounds, types, and display properties (`mode`: compact/full) |
 | `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
 | `add_form_attribute` | Add a FORM attribute (the form's own data-model attribute) to an existing managed form, persisted to the form file on disk. Created with a default type |
+| `set_form_item_property` | Set the Title (bilingual), Visible flag and/or ReadOnly flag of an existing form ITEM (field/group/button/decoration/table) addressed by its itemId, persisted to the form file on disk |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
 | `read_module_source` | Read BSL module source code with YAML frontmatter metadata (full file or line range) |
@@ -708,6 +709,25 @@ At least one of `comment` / `synonym` must be provided. The synonym is keyed by 
 | `language` | No | Language code for the title (e.g. `ru`, `en`). Defaults to the configuration default language |
 
 The title is keyed by the language **code** (never the language name). The attribute is created with the default (empty) type, mirroring the platform's own form factory; building an arbitrary 1C type description is out of scope for this first version. Read the form first with `get_form_structure` to see existing attribute names - a duplicate name (case-insensitive) is rejected. Ordinary/legacy (non-managed) forms have no editable model and are rejected.
+
+#### Set Form Item Property Tool
+
+**`set_form_item_property`** - Set the **Title** (bilingual), **Visible** flag and/or **ReadOnly** flag of an existing ITEM of a managed form (a field / group / button / decoration / table), addressed by its `itemId`, via a BM write transaction, then persist the change to the form's `Form.form` file on disk. The `itemId` is the item's programmatic Name - exactly what `get_form_structure` lists - and is searched across the whole nested `items` tree.
+
+**Scope:** only `title`, `visible` and `readOnly`. To change other item properties (data binding, type, layout, etc.) edit the form in the EDT form editor, or export the form with `export_configuration_to_xml`, edit the XML, then re-import with `import_configuration_from_xml`. Adding a new item is also out of scope (this tool only edits an existing one); to add a form attribute use `add_form_attribute`.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `formPath` | Yes | Form FQN: `MetadataType.ObjectName.Forms.FormName` (e.g. `Catalog.Products.Forms.ItemForm`) or `CommonForm.FormName`. The TYPE token may be English or Russian; names are the programmatic Name, not the synonym |
+| `itemId` | Yes | Programmatic Name of the form item to edit - the item Name `get_form_structure` lists (searched across the whole nested items tree, matched case-insensitively) |
+| `title` | No | New display Title; written for `language` or the configuration default language. Provide at least one of `title` / `visible` / `readOnly` |
+| `language` | No | Language code for the title (e.g. `ru`, `en`). Only consulted when `title` is supplied. Defaults to the configuration default language |
+| `visible` | No | New Visible flag (`true`/`false`). Acted on only when the key is present, so `visible: false` is a real set, distinct from omitting it |
+| `readOnly` | No | New ReadOnly flag (`true`/`false`). Only fields, groups and tables carry `readOnly`; setting it on an item without the property (e.g. a decoration) is rejected with a clear error |
+
+At least one of `title` / `visible` / `readOnly` must be provided. The title is keyed by the language **code** (never the language name) and is additive per language - setting it for one language does not remove another's. Ordinary/legacy (non-managed) forms have no editable model and are rejected.
 
 ### Tag Management Tools
 

@@ -2509,6 +2509,97 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Set the Title (bilingual), Visible flag and/or ReadOnly flag of an existing ITEM (field / group / button / decoration / table) of a managed form, persisted to disk. Address the item by its itemId - the programmatic name get_form_structure lists. At least one of title / visible / readOnly must be supplied. Other properties (data binding, type, layout, ...) are out of scope - edit those in EDT or via the export/import XML path. Full parameters and examples: call get_tool_guide('set_form_item_property').",
+    "inputSchema": {
+      "properties": {
+        "formPath": {
+          "description": "Form FQN: 'MetadataType.ObjectName.Forms.FormName' or 'CommonForm.FormName' (e.g. 'Catalog.Products.Forms.ItemForm'). Names are the programmatic Name, not the synonym; the TYPE token may be en/ru. (required)",
+          "type": "string"
+        },
+        "itemId": {
+          "description": "Programmatic name of the form ITEM to edit - the item Name get_form_structure lists (searched across the whole nested items tree). (required)",
+          "type": "string"
+        },
+        "language": {
+          "description": "Optional language code for the title, e.g. 'ru'/'en' (default: config default). Only consulted when 'title' is supplied",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name (required)",
+          "type": "string"
+        },
+        "readOnly": {
+          "description": "Optional new ReadOnly flag (true/false). Only fields / groups / tables have it; setting it on an item without the property (e.g. a decoration) is rejected",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "Optional new display Title, written for 'language' or the config default language. Provide at least one of title / visible / readOnly",
+          "type": "string"
+        },
+        "visible": {
+          "description": "Optional new Visible flag (true/false). Acted on only when the key is present, so visible=false differs from 'visible omitted'",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "projectName",
+        "formPath",
+        "itemId"
+      ],
+      "type": "object"
+    },
+    "name": "set_form_item_property",
+    "outputSchema": {
+      "properties": {
+        "formPath": {
+          "description": "Normalized FQN of the form",
+          "type": "string"
+        },
+        "itemId": {
+          "description": "Programmatic name of the edited form item",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language code the title was written for",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable confirmation message",
+          "type": "string"
+        },
+        "persisted": {
+          "description": "Whether the change was saved to the form file on disk",
+          "type": "boolean"
+        },
+        "readOnly": {
+          "description": "ReadOnly flag written, when one was provided",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the item property was set",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "Title written, when a title was provided",
+          "type": "string"
+        },
+        "visible": {
+          "description": "Visible flag written, when one was provided",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Set the Comment and/or Synonym of an existing metadata object (or one of its attributes via attributeName), persisted to disk. The objectFqn TYPE token may be English or Russian; the synonym is keyed by language code. To change OTHER properties (type, flags, ...) use the export_configuration_to_xml -> edit XML -> import_configuration_from_xml path. Full parameters and examples: call get_tool_guide('set_metadata_property').",
     "inputSchema": {
       "properties": {

@@ -194,6 +194,7 @@ public class ToolGroupTest
         // Metadata/form property writers also belong here.
         assertTrue(tools.contains("set_metadata_property"));
         assertTrue(tools.contains("add_form_attribute"));
-        assertEquals(6, tools.size());
+        assertTrue(tools.contains("set_form_item_property"));
+        assertEquals(7, tools.size());
     }
 }

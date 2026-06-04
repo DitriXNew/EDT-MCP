@@ -61,6 +61,7 @@ import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
+import com.ditrix.edt.mcp.server.tools.impl.SetFormItemPropertyTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetMetadataPropertyTool;
 import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
 import com.ditrix.edt.mcp.server.tools.impl.StepTool;
@@ -170,6 +171,7 @@ public final class BuiltInToolRegistrar
         registry.register(new AddMetadataAttributeTool());
         registry.register(new CreateMetadataObjectTool());
         registry.register(new SetMetadataPropertyTool());
+        registry.register(new SetFormItemPropertyTool());
 
         // LanguageTool translation tools
         registry.register(new GenerateTranslationStringsTool());

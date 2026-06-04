@@ -447,20 +447,25 @@ public class AddFormAttributeTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Writes the title for the given language CODE into the attribute's {@code title}
+     * Writes the title for the given language CODE into the object's {@code title}
      * EMap. The map is keyed by language code (e.g. {@code "en"}/{@code "ru"}), never
      * by the language name (CLAUDE.md don't #2). Best-effort: silently does nothing if
      * the feature is not a string-valued EMap.
+     * <p>
+     * Package-private and reused by {@link SetFormItemPropertyTool}: the {@code title}
+     * EMap lives on the shared {@code Titled} supertype, so the same writer applies to a
+     * form attribute, a form command and a form item alike. (A shared form-model writer
+     * util is the eventual home; until then this is the single bilingual title setter.)
      */
     @SuppressWarnings("unchecked")
-    private static void putTitle(EObject attribute, String languageCode, String title)
+    static void putTitle(EObject object, String languageCode, String title)
     {
-        EStructuralFeature feature = attribute.eClass().getEStructuralFeature(FEATURE_TITLE);
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(FEATURE_TITLE);
         if (feature == null)
         {
             return;
         }
-        Object value = attribute.eGet(feature);
+        Object value = object.eGet(feature);
         if (value instanceof EMap<?, ?>)
         {
             ((EMap<String, String>)value).put(languageCode, title);
