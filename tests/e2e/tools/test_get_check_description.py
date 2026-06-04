@@ -10,10 +10,22 @@ into its human-readable documentation. It is NOT a model query: it reads a
 (PreferenceConstants.PREF_CHECKS_FOLDER) and returns the file body verbatim.
 Source: GetCheckDescriptionTool.getCheckDescription(checkId).
 
-The ONLY parameter is `checkId` (string, required). There is NO projectName and NO
-path parameter — this tool never touches TestConfiguration or the EDT model, so
-EVERY test below ends with assert_no_diff() (a read tool that mutated the project
-would be a bug, and this is the guardrail that catches it).
+Parameters: `checkId` (string, required) and `projectName` (string, OPTIONAL). The
+checkId may be the symbolic dash-cased id OR a short UID code (e.g. "SU23") as shown
+by get_project_errors; when the direct `<checkId>.md` lookup misses AND projectName
+is supplied, the id is resolved UID->symbolic via ICheckRepository.getUidForShortUid
+(same mechanism as get_project_errors) and the lookup retried. projectName is read
+ONLY for that resolution — the tool still never mutates TestConfiguration or the EDT
+model, so EVERY test below ends with assert_no_diff() (a read tool that mutated the
+project would be a bug, and this is the guardrail that catches it).
+
+NOTE on validating the UID happy path: it requires BOTH a configured checks-docs
+folder (off by default in the e2e workspace) AND a UID whose symbolic doc exists, so
+the UID->doc resolution is a verify-in-EDT path (like the LanguageTool tools). The
+pure UID->symbolic mapping is unit-tested with a mocked ICheckRepository
+(GetCheckDescriptionToolTest.testResolveSymbolicCheckUid*). The test below proves the
+new projectName param does not break the validation order or crash in the
+unconfigured fixture.
 
 RESPONSE / ERROR CONTRACT (verified against current source, 2026-06-03)
 ----------------------------------------------------------------------
@@ -61,6 +73,7 @@ client-input errors are "missing checkId" and "bad/unknown checkId".
 from harness import (
     call, assert_error, assert_error_quality,
     assert_contains, assert_not_contains, assert_no_diff, e2e_test,
+    PROJECT,
 )
 
 
@@ -217,3 +230,21 @@ def test_path_traversal_shaped_checkid_is_rejected_not_resolved():
         ctx="traversal-shaped checkId rejected via a known error branch (no file leak)",
     )
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="get_check_description", kind="read")
+def test_uid_shaped_checkid_with_project_name_does_not_crash_or_mutate():
+    # A short UID-shaped checkId ("SU23") together with the optional projectName
+    # exercises the NEW UID-resolution branch. In the e2e workspace the checks-docs
+    # folder is unset, so resolution is never reached: the folder check fires first
+    # and the deterministic baseline is "not configured" (or "not found" if an
+    # operator configured a folder but this UID has no .md). The point of this test
+    # is the GUARDRAIL: passing projectName must not crash, must not mutate the
+    # project, and must still return a well-formed structured error — the actual
+    # UID->doc resolution is a verify-in-EDT path (needs a configured docs folder).
+    r = call("get_check_description", {"checkId": "SU23", "projectName": PROJECT})
+    err = assert_error(r, "UID-shaped checkId with projectName, unconfigured folder")
+    low = (err or "").lower()
+    assert ("not configured" in low) or ("not found" in low) or ("preferences" in low), \
+        "UID checkId must hit a known error branch in the unconfigured fixture: %r" % err
+    assert_no_diff("supplying projectName must not let a read tool mutate the project")
