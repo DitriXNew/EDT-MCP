@@ -195,6 +195,7 @@ public class ToolGroupTest
         assertTrue(tools.contains("set_metadata_property"));
         assertTrue(tools.contains("add_form_attribute"));
         assertTrue(tools.contains("set_form_item_property"));
-        assertEquals(7, tools.size());
+        assertTrue(tools.contains("add_form_command"));
+        assertEquals(8, tools.size());
     }
 }

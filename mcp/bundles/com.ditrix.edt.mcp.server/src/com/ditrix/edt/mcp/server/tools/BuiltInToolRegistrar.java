@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AddFormAttributeTool;
+import com.ditrix.edt.mcp.server.tools.impl.AddFormCommandTool;
 import com.ditrix.edt.mcp.server.tools.impl.AddMetadataAttributeTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataObjectTool;
@@ -163,6 +164,7 @@ public final class BuiltInToolRegistrar
         registry.register(new GetFormLayoutSnapshotTool());
         registry.register(new GetFormScreenshotTool());
         registry.register(new AddFormAttributeTool());
+        registry.register(new AddFormCommandTool());
         registry.register(new ValidateQueryTool());
 
         // Metadata refactoring tools

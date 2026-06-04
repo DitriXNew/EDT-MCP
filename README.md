@@ -179,7 +179,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 65 tools are organized into 9 semantic groups:
+All 66 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -190,7 +190,7 @@ All 65 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_structure`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add form attributes, edit form items | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property` |
+| **Refactoring** | Metadata create, rename, delete, add attributes, set properties, add form attributes/commands, edit form items | `create_metadata_object`, `rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property`, `add_form_command` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 65 tools enabled (default) |
+| **All Tools** | All 66 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -368,6 +368,7 @@ Add to `claude_desktop_config.json`:
 | `get_form_screenshot` | Capture PNG screenshot of form WYSIWYG editor (embedded image resource) |
 | `add_form_attribute` | Add a FORM attribute (the form's own data-model attribute) to an existing managed form, persisted to the form file on disk. Created with a default type |
 | `set_form_item_property` | Set the Title (bilingual), Visible flag and/or ReadOnly flag of an existing form ITEM (field/group/button/decoration/table) addressed by its itemId, persisted to the form file on disk |
+| `add_form_command` | Add a FORM command (a FormCommand, what get_form_structure lists under Commands) to an existing managed form, persisted to the form file on disk. Sets name + bilingual title; the action handler and button binding are out of scope |
 | `list_modules` | List all BSL modules in a project with module type and parent object |
 | `get_module_structure` | Get BSL module structure: procedures/functions, signatures, regions, parameters |
 | `read_module_source` | Read BSL module source code with YAML frontmatter metadata (full file or line range) |
@@ -728,6 +729,24 @@ The title is keyed by the language **code** (never the language name). The attri
 | `readOnly` | No | New ReadOnly flag (`true`/`false`). Only fields, groups and tables carry `readOnly`; setting it on an item without the property (e.g. a decoration) is rejected with a clear error |
 
 At least one of `title` / `visible` / `readOnly` must be provided. The title is keyed by the language **code** (never the language name) and is additive per language - setting it for one language does not remove another's. Ordinary/legacy (non-managed) forms have no editable model and are rejected.
+
+#### Add Form Command Tool
+
+**`add_form_command`** - Add a **form command** (a `FormCommand` in the form's `formCommands` collection, what `get_form_structure` lists under `## Commands`) to an existing managed form via a BM write transaction, then persist the change to the form's `Form.form` file on disk. The command is created with its `name` and (bilingual) `title`.
+
+**Scope:** the command's **action** (the form-module handler method it calls) is **reserved** - in the form model the action is a complex containment chain (`FormCommand.action` → `CommandHandlerContainer` → handler → `CommandHandler.name`), not a plain string, and the platform wires it separately when the command is bound to code; this version does **not** wire it and does **not** create the handler method. Placing a **button** for the command on the form is also out of scope (that is a form-item operation) - the command exists in the model but no button references it yet. Wire the handler and add the button afterwards in the EDT form editor.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | EDT project name |
+| `formPath` | Yes | Form FQN: `MetadataType.ObjectName.Forms.FormName` (e.g. `Catalog.Products.Forms.ItemForm`) or `CommonForm.FormName`. The TYPE token may be English or Russian; names are the programmatic Name, not the synonym |
+| `name` | Yes | Name for the new form command (must be a valid 1C identifier) |
+| `title` | No | Display title; written for `language` or the configuration default language |
+| `language` | No | Language code for the title (e.g. `ru`, `en`). Only consulted when `title` is supplied. Defaults to the configuration default language |
+| `action` | No | Reserved. The command's action (handler) is a complex containment chain in the form model, not a plain string; this version does not wire it. Wire the handler afterwards in the EDT form editor |
+
+The title is keyed by the language **code** (never the language name). Read the form first with `get_form_structure` to see existing command names - a duplicate name (case-insensitive) is rejected. Ordinary/legacy (non-managed) forms have no editable model and are rejected.
 
 ### Tag Management Tools
 
