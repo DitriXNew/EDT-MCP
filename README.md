@@ -190,7 +190,7 @@ All 68 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_structure`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create (objects + members), rename, delete, set properties, add/edit/delete form attributes, commands and items | `create_metadata`, `rename_metadata_object`, `delete_metadata`, `set_metadata_property`, `add_form_attribute`, `set_form_item_property`, `add_form_command`, `delete_form_item`, `add_form_item` |
+| **Refactoring** | Metadata create (objects + members), rename, delete, set properties, add/edit/delete form attributes, commands and items | `create_metadata`, `rename_metadata_object`, `delete_metadata`, `modify_metadata`, `add_form_attribute`, `set_form_item_property`, `add_form_command`, `delete_form_item`, `add_form_item` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -340,7 +340,7 @@ Add to `claude_desktop_config.json`:
 | `rename_metadata_object` | Rename a metadata object or attribute with full refactoring: cascading updates in BSL code, forms, and metadata. Preview + confirm workflow |
 | `delete_metadata` | Delete a metadata object or attribute with reference cleanup. Preview + confirm workflow |
 | `create_metadata` | Create a metadata node by 1C full-name FQN: a top-level object (Catalog, Document, InformationRegister, AccumulationRegister, Enum, CommonModule, Report, DataProcessor) or a member (Attribute, TabularSection, Dimension, Resource, EnumValue) |
-| `set_metadata_property` | Set the Comment and/or Synonym of an existing metadata object or one of its attributes |
+| `modify_metadata` | Set properties of a metadata node (object or member) by full-name FQN, as `[{name, value, language?}]`, with validation (assignable + allowed enum values) |
 | `get_tags` | Get list of all tags defined in the project with descriptions and object counts |
 | `get_objects_by_tags` | Get metadata objects filtered by tags with tag descriptions and object FQNs |
 | `get_applications` | Get list of applications (infobases) for a project with update state |
@@ -664,23 +664,22 @@ Add to `claude_desktop_config.json`:
 
 After creating a node, run `get_project_errors` to verify.
 
-#### Set Metadata Property Tool
+#### Modify Metadata Tool
 
-**`set_metadata_property`** - Set the **Comment** and/or **Synonym** of an existing metadata object, or one of its attributes, via a BM write transaction, then persist the change to the object's `.mdo` on disk. This closes part of the read/write asymmetry: `get_metadata_details` shows Comment and Synonym, and this tool writes them.
+**`modify_metadata`** - Set properties of a metadata node (a top-level object or a member: attribute / tabular section / dimension / resource / enum value) addressed by a 1C full-name FQN, as `properties=[{name, value, language?}]`, via a BM write transaction, then persist to the owning object's `.mdo`. Replaces the former `set_metadata_property` (which set only Comment / Synonym); this tool sets any assignable scalar / boolean / integer / enum / synonym property.
 
-**Scope:** only Comment and Synonym. To change other properties (type, flags, etc.) export the object with `export_configuration_to_xml`, edit the XML, then re-import with `import_configuration_from_xml`.
+**Validation (actionable errors):** a property that is NOT assignable on the node is rejected with the list of assignable properties; an ENUM value that is not one of the allowed literals is rejected WITH the allowed values. Nothing is written unless every property validates. Discover assignable properties + allowed values with `get_metadata_details(assignable: true)`.
+
+**Not here:** the `name` property (rename) is refused - use `rename_metadata_object`, which cascades the rename across BSL code, forms and metadata. The data `type` is not yet settable here.
 
 **Parameters:**
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `projectName` | Yes | EDT project name |
-| `objectFqn` | Yes | FQN of the object to edit (e.g. `Catalog.Products`, `Document.SalesOrder`). The TYPE token may be English or Russian; the object part is the programmatic Name, not the synonym |
-| `attributeName` | No | Name of an attribute of `objectFqn` to edit instead of the object itself; when omitted, the object itself is the target |
-| `comment` | No | New Comment (plain text). Provide `comment` and/or `synonym` (at least one) |
-| `synonym` | No | New Synonym (display name); written for `language` or the configuration default language |
-| `language` | No | Language code for the synonym (e.g. `ru`, `en`). Defaults to the configuration default language |
+| `fqn` | Yes | Full-name FQN of the node (e.g. `Catalog.Products`, `Catalog.Products.Attribute.Weight`). Type / kind tokens may be English or Russian |
+| `properties` | Yes | Array of `{name, value, language?}` (at least one). `name` is the property name; `value` the new value; `language` the code for a synonym (default: config default) |
 
-At least one of `comment` / `synonym` must be provided. The synonym is keyed by the language **code**, so setting a synonym for one language does not remove the synonym stored for another.
+The synonym is keyed by the language **code**, so setting a synonym for one language does not remove the synonym stored for another.
 
 #### Add Form Attribute Tool
 
@@ -1251,7 +1250,7 @@ An action/confirmation/status result with **none** of these returns **Markdown**
 
 Which tool families stay JSON, and why:
 
-- **metadata-writes** (`create_metadata`, `set_metadata_property`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*;
+- **metadata-writes** (`create_metadata`, `modify_metadata`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*;
 - **debug / profiling tools** — return launch / application / breakpoint IDs and live session state consumed by follow-up calls *(a)*;
 - **`validate_query`** — returns the error **line/column** *(b)*;
 - **`list_configurations`** — returns config **identities** consumed by other tools *(a)*;
@@ -1261,7 +1260,7 @@ Errors are reported the same way regardless of a tool's normal format — see th
 
 - **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects`, `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_form_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
 - **YAML tools**: `get_configuration_properties` — returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`).
-- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `debug_yaxunit_tests`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `set_metadata_property`, `delete_metadata`).
+- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `debug_yaxunit_tests`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `modify_metadata`, `delete_metadata`).
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.
 - **Image tools**: `get_form_screenshot` — returns the rendered form as an EmbeddedResource with an `image/*` `mimeType`.
 

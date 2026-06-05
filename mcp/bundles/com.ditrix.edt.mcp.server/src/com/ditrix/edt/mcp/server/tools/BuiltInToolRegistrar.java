@@ -65,7 +65,7 @@ import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetFormItemPropertyTool;
-import com.ditrix.edt.mcp.server.tools.impl.SetMetadataPropertyTool;
+import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
 import com.ditrix.edt.mcp.server.tools.impl.StepTool;
 import com.ditrix.edt.mcp.server.tools.impl.StopProfilingTool;
@@ -175,7 +175,7 @@ public final class BuiltInToolRegistrar
         registry.register(new RenameMetadataObjectTool());
         registry.register(new DeleteMetadataTool());
         registry.register(new CreateMetadataTool());
-        registry.register(new SetMetadataPropertyTool());
+        registry.register(new ModifyMetadataTool());
         registry.register(new SetFormItemPropertyTool());
         registry.register(new AddFormItemTool());
 
