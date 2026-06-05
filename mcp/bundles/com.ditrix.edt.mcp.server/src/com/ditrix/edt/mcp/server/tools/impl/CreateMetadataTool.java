@@ -125,8 +125,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "Task, Subsystem, HTTPService, WebService, Constant, CommonForm, CommonCommand, Report, " //$NON-NLS-1$
             + "DataProcessor, CommonModule, ...). A type the EDT factory cannot instantiate is rejected " //$NON-NLS-1$
             + "with a clear error.\n" //$NON-NLS-1$
-            + "- Member kinds: Attribute, TabularSection, Dimension, Resource, EnumValue, Command (on " //$NON-NLS-1$
-            + "the owner types that declare them).\n" //$NON-NLS-1$
+            + "- Member kinds: Attribute, TabularSection, Dimension, Resource, EnumValue, Command, plus " //$NON-NLS-1$
+            + "the type-specific children AccountingFlag / ExtDimensionAccountingFlag (ChartOfAccounts), " //$NON-NLS-1$
+            + "AddressingAttribute (Task) and Column (DocumentJournal) - each on the owner types that " //$NON-NLS-1$
+            + "declare them.\n" //$NON-NLS-1$
             + "- Members of a NESTED object are supported too, e.g. a tabular-section attribute " //$NON-NLS-1$
             + "`Catalog.X.TabularSection.T.Attribute.A` (the owner is re-navigated by name inside the " //$NON-NLS-1$
             + "write transaction).\n\n" //$NON-NLS-1$
@@ -198,8 +200,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Cannot resolve a create target for FQN '" + fqn + "'. " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Use 'Type.Name' for a top object or 'Type.Name.Kind.Name' for a member " //$NON-NLS-1$
-                + "(Kind = Attribute/TabularSection/Dimension/Resource/EnumValue). The parent must " //$NON-NLS-1$
-                + "already exist; use get_metadata_objects to check.").toJson(); //$NON-NLS-1$
+                + "(Kind = Attribute/TabularSection/Dimension/Resource/EnumValue/Command or a " //$NON-NLS-1$
+                + "type-specific child such as AccountingFlag/AddressingAttribute/Column; see " //$NON-NLS-1$
+                + "get_tool_guide('create_metadata') for the full list). The parent must already " //$NON-NLS-1$
+                + "exist; use get_metadata_objects to check.").toJson(); //$NON-NLS-1$
         }
         if (!isValidIdentifier(target.childName))
         {

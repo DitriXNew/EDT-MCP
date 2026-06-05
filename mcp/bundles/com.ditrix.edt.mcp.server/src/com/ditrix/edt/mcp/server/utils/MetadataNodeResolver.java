@@ -81,6 +81,30 @@ public final class MetadataNodeResolver
         putTokens(m, "commands", "command", "commands", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             cp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x0430),
             cp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x044b));
+        // AccountingFlag on a ChartOfAccounts (ru: priznak ucheta / priznaki ucheta).
+        // The EMF model carries no English code for this collection, so the English tokens are the
+        // natural CamelCased element name (singular/plural).
+        putTokens(m, "accountingFlags", "accountingflag", "accountingflags", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0443, 0x0447, 0x0435, 0x0442, 0x0430),
+            cp(0x043f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0438, 0x0443, 0x0447, 0x0435, 0x0442, 0x0430));
+        // ExtDimensionAccountingFlag on a ChartOfAccounts (ru: priznak ucheta subkonto / priznaki ...).
+        putTokens(m, "extDimensionAccountingFlags", //$NON-NLS-1$
+            "extdimensionaccountingflag", "extdimensionaccountingflags", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x043f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0443, 0x0447, 0x0435, 0x0442, 0x0430,
+                0x0441, 0x0443, 0x0431, 0x043a, 0x043e, 0x043d, 0x0442, 0x043e),
+            cp(0x043f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0438, 0x0443, 0x0447, 0x0435, 0x0442, 0x0430,
+                0x0441, 0x0443, 0x0431, 0x043a, 0x043e, 0x043d, 0x0442, 0x043e));
+        // AddressingAttribute on a Task (ru: rekvizit adresacii / rekvizity adresacii)
+        putTokens(m, "addressingAttributes", "addressingattribute", "addressingattributes", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x0440, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442,
+                0x0430, 0x0434, 0x0440, 0x0435, 0x0441, 0x0430, 0x0446, 0x0438, 0x0438),
+            cp(0x0440, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442, 0x044b,
+                0x0430, 0x0434, 0x0440, 0x0435, 0x0441, 0x0430, 0x0446, 0x0438, 0x0438));
+        // Column on a DocumentJournal (ru: kolonka / kolonki). The EMF model carries no English
+        // code for this collection, so the English tokens are the natural CamelCased element name.
+        putTokens(m, "columns", "column", "columns", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430),
+            cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438));
         CHILD_FEATURE_BY_TOKEN = Collections.unmodifiableMap(m);
     }
 

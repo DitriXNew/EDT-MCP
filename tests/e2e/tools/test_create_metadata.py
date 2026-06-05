@@ -198,6 +198,81 @@ def test_create_command_member_on_catalog():
                        ctx="the new command must be referenced from the owner Catalog.Catalog.mdo on disk")
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_chart_of_accounts_inline_special_flags():
+    # ChartOfAccounts carries two special INLINE child collections the former tools could not
+    # create: accountingFlags (AccountingFlag) and extDimensionAccountingFlags.
+    coa = "E2EUnifiedCoA"
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": "ChartOfAccounts." + coa})
+    assert_ok(r1, "create ChartOfAccounts.%s" % coa)
+    wait_for_project_ready()
+
+    flag = "E2EAcctFlag"
+    r2 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "ChartOfAccounts.%s.AccountingFlag.%s" % (coa, flag),
+    })
+    assert_ok(r2, "create AccountingFlag member")
+    assert r2.structured.get("kind") == "AccountingFlag", \
+        "kind must be the concrete AccountingFlag EClass: %r" % (r2.structured,)
+
+    # The first member-create triggers a derived-data rebuild; wait before the second child create
+    # so it does not hit the BUILDING write-guard.
+    wait_for_project_ready()
+
+    ext = "E2EExtFlag"
+    r3 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "ChartOfAccounts.%s.ExtDimensionAccountingFlag.%s" % (coa, ext),
+    })
+    assert_ok(r3, "create ExtDimensionAccountingFlag member")
+    assert r3.structured.get("kind") == "ExtDimensionAccountingFlag", \
+        "kind must be the concrete ExtDimensionAccountingFlag EClass: %r" % (r3.structured,)
+    # Both flags live inline in the chart-of-accounts .mdo on disk.
+    poll_diff_contains("<name>%s</name>" % flag, ctx="accountingFlag must land in the ChartOfAccounts .mdo")
+    poll_diff_contains("<name>%s</name>" % ext, ctx="extDimensionAccountingFlag must land in the .mdo")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_task_addressing_attribute():
+    # Task.addressingAttributes (AddressingAttribute) — an INLINE child unique to a Task.
+    task = "E2EUnifiedTask"
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": "Task." + task})
+    assert_ok(r1, "create Task.%s" % task)
+    wait_for_project_ready()
+
+    addr = "E2EAddrAttr"
+    r2 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Task.%s.AddressingAttribute.%s" % (task, addr),
+    })
+    assert_ok(r2, "create AddressingAttribute member")
+    assert r2.structured.get("kind") == "AddressingAttribute", \
+        "kind must be the concrete AddressingAttribute EClass: %r" % (r2.structured,)
+    poll_diff_contains("<name>%s</name>" % addr,
+                       ctx="the addressing attribute must land in the Task .mdo on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_document_journal_column():
+    # DocumentJournal.columns (Column) — an INLINE child unique to a DocumentJournal.
+    journal = "E2EUnifiedJournal"
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": "DocumentJournal." + journal})
+    assert_ok(r1, "create DocumentJournal.%s" % journal)
+    wait_for_project_ready()
+
+    col = "E2EJournalCol"
+    r2 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "DocumentJournal.%s.Column.%s" % (journal, col),
+    })
+    assert_ok(r2, "create Column member")
+    assert r2.structured.get("kind") == "Column", \
+        "kind must be the concrete Column EClass: %r" % (r2.structured,)
+    poll_diff_contains("<name>%s</name>" % col,
+                       ctx="the journal column must land in the DocumentJournal .mdo on disk")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — every rejected call: error quality + assert_no_diff()
 # ──────────────────────────────────────────────────────────────────────────────

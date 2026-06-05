@@ -129,6 +129,46 @@ public class MetadataNodeResolverTest
     }
 
     @Test
+    public void testFeatureNameForInlineSpecialChildTokens()
+    {
+        // ChartOfAccounts.accountingFlags (en singular/plural)
+        assertEquals("accountingFlags", MetadataNodeResolver.featureNameForKind("AccountingFlag")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("accountingFlags", MetadataNodeResolver.featureNameForKind("accountingFlags")); //$NON-NLS-1$ //$NON-NLS-2$
+        // ChartOfAccounts.extDimensionAccountingFlags
+        assertEquals("extDimensionAccountingFlags", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind("ExtDimensionAccountingFlag")); //$NON-NLS-1$
+        // Task.addressingAttributes
+        assertEquals("addressingAttributes", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind("AddressingAttribute")); //$NON-NLS-1$
+        // DocumentJournal.columns
+        assertEquals("columns", MetadataNodeResolver.featureNameForKind("Column")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("columns", MetadataNodeResolver.featureNameForKind("columns")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFeatureNameForInlineSpecialChildRussianTokens()
+    {
+        // priznak ucheta -> accountingFlags
+        assertEquals("accountingFlags", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(
+                0x043f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0443, 0x0447, 0x0435, 0x0442, 0x0430)));
+        // priznak ucheta subkonto -> extDimensionAccountingFlags
+        assertEquals("extDimensionAccountingFlags", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(
+                0x043f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0443, 0x0447, 0x0435, 0x0442, 0x0430,
+                0x0441, 0x0443, 0x0431, 0x043a, 0x043e, 0x043d, 0x0442, 0x043e)));
+        // rekvizit adresacii -> addressingAttributes
+        assertEquals("addressingAttributes", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(
+                0x0440, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442,
+                0x0430, 0x0434, 0x0440, 0x0435, 0x0441, 0x0430, 0x0446, 0x0438, 0x0438)));
+        // kolonka -> columns
+        assertEquals("columns", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(
+                0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430)));
+    }
+
+    @Test
     public void testRussianTokenIsCaseInsensitive()
     {
         // Upper-case REKVIZIT -> attributes (the map is queried lower-cased)
