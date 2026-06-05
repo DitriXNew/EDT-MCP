@@ -26,6 +26,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
@@ -66,6 +68,11 @@ public class GetMetadataDetailsTool implements IMcpTool
                 true)
             .booleanProperty("full", //$NON-NLS-1$
                 "All reflected properties (true) or only key info (false). Default: false") //$NON-NLS-1$
+            .booleanProperty("assignable", //$NON-NLS-1$
+                "Instead of the details view, return the ASSIGNABLE-property schema (default false): " + //$NON-NLS-1$
+                "per property its value kind, current value and ALLOWED values (enum literals). This " + //$NON-NLS-1$
+                "is what modify_metadata can set; FQNs may address members (e.g. " + //$NON-NLS-1$
+                "'Catalog.Products.Attribute.Weight').") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
             .build();
@@ -83,7 +90,11 @@ public class GetMetadataDetailsTool implements IMcpTool
             + "specific object's structure.\n" //$NON-NLS-1$
             + "- Batch several objects in one call by passing multiple FQNs in `objectFqns`.\n" //$NON-NLS-1$
             + "- Prefer the default (basic) view first; reach for `full: true` only when you need the " //$NON-NLS-1$
-            + "exhaustive reflection.\n\n" //$NON-NLS-1$
+            + "exhaustive reflection.\n" //$NON-NLS-1$
+            + "- Pass `assignable: true` to get the SETTABLE-property schema instead of the details " //$NON-NLS-1$
+            + "view: per property its value kind, current value, and ALLOWED values (enum literals) - " //$NON-NLS-1$
+            + "exactly what modify_metadata can set. In this mode an FQN may address a member " //$NON-NLS-1$
+            + "(e.g. `Catalog.Products.Attribute.Weight`), not just a top object.\n\n" //$NON-NLS-1$
 
             + "## Parameter details\n" //$NON-NLS-1$
             + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
@@ -144,8 +155,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         List<String> objectFqns = JsonUtils.extractArrayArgument(params, "objectFqns"); //$NON-NLS-1$
         String fullStr = JsonUtils.extractStringArgument(params, "full"); //$NON-NLS-1$
+        boolean assignable = JsonUtils.extractBooleanArgument(params, "assignable", false); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
-        
+
         // Validate required parameters
         String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
         if (err != null)
@@ -157,20 +169,21 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             return ToolResult.error("objectFqns is required (array of FQNs like 'Catalog.Products')").toJson(); //$NON-NLS-1$
         }
-        
+
         boolean full = "true".equalsIgnoreCase(fullStr); //$NON-NLS-1$
-        
+
         // Execute on UI thread
         AtomicReference<String> resultRef = new AtomicReference<>();
         final List<String> fqns = objectFqns;
         final boolean fullMode = full;
+        final boolean assignableMode = assignable;
         final String lang = language;
-        
+
         Display display = PlatformUI.getWorkbench().getDisplay();
         display.syncExec(() -> {
             try
             {
-                String result = getMetadataDetailsInternal(projectName, fqns, fullMode, lang);
+                String result = getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode, lang);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -187,7 +200,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      * Internal implementation that runs on UI thread.
      */
     private String getMetadataDetailsInternal(String projectName, List<String> objectFqns,
-                                               boolean full, String language)
+                                               boolean full, boolean assignable, String language)
     {
         // Get project
         ProjectContext ctx = ProjectContext.of(projectName);
@@ -230,6 +243,21 @@ public class GetMetadataDetailsTool implements IMcpTool
         // Process each FQN
         for (String fqn : objectFqns)
         {
+            // Assignable-schema mode: resolve the node (top object OR member) via the shared
+            // resolver and render its assignable-property table - what modify_metadata can set.
+            if (assignable)
+            {
+                MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, fqn);
+                if (node == null || node.object == null)
+                {
+                    failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
+                    continue;
+                }
+                sb.append(formatAssignable(MetadataTypeUtils.normalizeFqn(fqn), node.object));
+                sb.append("\n---\n\n"); //$NON-NLS-1$
+                continue;
+            }
+
             MdObject mdObject = resolveObject(config, fqn);
             if (mdObject == null)
             {
@@ -245,6 +273,31 @@ public class GetMetadataDetailsTool implements IMcpTool
             sb.append(formatFailures(failures));
         }
 
+        return sb.toString();
+    }
+
+    /**
+     * Renders a node's ASSIGNABLE-property schema as a Markdown table: per property its value kind,
+     * current value, and (for an enum) the allowed values. This is the discovery view for
+     * modify_metadata - it lists exactly what can be set and the valid enum literals. The shared
+     * {@link MarkdownUtils} builder escapes every cell.
+     *
+     * @param fqn the (normalized) FQN, for the section heading
+     * @param obj the resolved node (top object or member)
+     * @return the Markdown section
+     */
+    private static String formatAssignable(String fqn, MdObject obj)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Assignable properties: ").append(fqn).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("Set these with `modify_metadata`. For an ENUM property the value must be one of " //$NON-NLS-1$
+            + "the listed Allowed values.\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Property", "Kind", "Current", "Allowed values")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (MetadataPropertyIntrospector.PropertyInfo p : MetadataPropertyIntrospector.introspect(obj))
+        {
+            String allowed = p.allowedValues.isEmpty() ? null : String.join(", ", p.allowedValues); //$NON-NLS-1$
+            sb.append(MarkdownUtils.tableRow(p.name, p.valueKind.toString(), p.currentValue, allowed));
+        }
         return sb.toString();
     }
 
