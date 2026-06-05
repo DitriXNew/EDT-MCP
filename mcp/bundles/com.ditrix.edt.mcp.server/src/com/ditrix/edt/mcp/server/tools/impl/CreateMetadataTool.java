@@ -23,8 +23,11 @@ import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -129,6 +132,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "the type-specific children AccountingFlag / ExtDimensionAccountingFlag (ChartOfAccounts), " //$NON-NLS-1$
             + "AddressingAttribute (Task) and Column (DocumentJournal) - each on the owner types that " //$NON-NLS-1$
             + "declare them.\n" //$NON-NLS-1$
+            + "- Template (`Catalog.X.Template.T`) and Recalculation " //$NON-NLS-1$
+            + "(`CalculationRegister.R.Recalculation.Rc`) are created with their default content " //$NON-NLS-1$
+            + "wired (a Recalculation's produced types; a Template defaults to the SpreadsheetDocument " //$NON-NLS-1$
+            + "type).\n" //$NON-NLS-1$
             + "- Members of a NESTED object are supported too, e.g. a tabular-section attribute " //$NON-NLS-1$
             + "`Catalog.X.TabularSection.T.Attribute.A` (the owner is re-navigated by name inside the " //$NON-NLS-1$
             + "write transaction).\n\n" //$NON-NLS-1$
@@ -344,21 +351,33 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Top object is not a BM object").toJson(); //$NON-NLS-1$
         }
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
+        IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        if (bmModelManager == null || factory == null || v8ProjectManager == null)
         {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error("Required EDT services not available").toJson(); //$NON-NLS-1$
         }
         IBmModel bmModel = bmModelManager.getModel(project);
         if (bmModel == null)
         {
             return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
         }
+        IV8Project v8Project = v8ProjectManager.getProject(project);
+        if (v8Project == null)
+        {
+            return ToolResult.error("Could not resolve V8 project for: " + projectName).toJson(); //$NON-NLS-1$
+        }
+        final Version version = v8Project.getVersion();
 
         final long topBmId = ((IBmObject)target.topObject).bmGetId();
         final String[] parts = normFqn.split("\\."); //$NON-NLS-1$
         final EStructuralFeature feature = target.feature;
         final EClass elementType = target.elementType;
         final String name = target.childName;
+        // Template / Recalculation / Form need the model-object factory (not a bare EcoreUtil.create)
+        // so the type's default content is wired (e.g. a Recalculation's produced types). They are
+        // still contained members, serialized inline in the owner's .mdo. See isFactoryInitializedChild.
+        final boolean factoryInitialized = isFactoryInitializedChild(elementType);
         // The top object that owns the member's .mdo file (members live inside the top object's file).
         final String topFqn = topFqn(normFqn);
 
@@ -381,11 +400,38 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 {
                     throw new RuntimeException("Member already exists: " + name); //$NON-NLS-1$
                 }
-                MdObject child = (MdObject)EcoreUtil.create(elementType);
-                child.setName(name);
-                child.setUuid(UUID.randomUUID());
-                applyScalarProps(child, props, synonymLanguage);
-                addToFeature(owner, feature, child);
+                MdObject child;
+                if (factoryInitialized)
+                {
+                    // The parent-aware factory wires the type's default content (produced types,
+                    // form/template type); fall back to a bare create only if the factory declines.
+                    child = (MdObject)factory.create(elementType, owner, version);
+                    if (child == null)
+                    {
+                        child = (MdObject)EcoreUtil.create(elementType);
+                    }
+                    child.setName(name);
+                    if (child.getUuid() == null)
+                    {
+                        child.setUuid(UUID.randomUUID());
+                    }
+                    // The factory does not default a template's type; set the platform default.
+                    if (child instanceof BasicTemplate && ((BasicTemplate)child).getTemplateType() == null)
+                    {
+                        ((BasicTemplate)child).setTemplateType(TemplateType.SPREADSHEET_DOCUMENT);
+                    }
+                    applyScalarProps(child, props, synonymLanguage);
+                    addToFeature(owner, feature, child);
+                    factory.fillDefaultReferences(child);
+                }
+                else
+                {
+                    child = (MdObject)EcoreUtil.create(elementType);
+                    child.setName(name);
+                    child.setUuid(UUID.randomUUID());
+                    applyScalarProps(child, props, synonymLanguage);
+                    addToFeature(owner, feature, child);
+                }
                 return child.eClass();
             });
         }
@@ -397,6 +443,24 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         boolean persisted = BmTransactions.forceExportToDisk(project, topFqn);
         return success(normFqn, createdKind, name, persisted, props, synonymLanguage);
+    }
+
+    /**
+     * A child whose valid default content must be wired by the model-object factory (Form, Template,
+     * Recalculation) rather than by a bare {@code EcoreUtil.create}: a Recalculation needs its
+     * produced types, a Form its form type, a Template its template type. These are CONTAINED
+     * objects - the platform serializes them inline in the owner's {@code .mdo}, like other members
+     * (empirically: a Recalculation lands as {@code <recalculations><producedTypes/><name/></...>}
+     * inside the register file) - but creating them with {@code EcoreUtil.create} would leave them
+     * ill-formed. Plain members (Attribute, Command, ...) are everything else. The classification
+     * keys off the three platform base types, so it is robust to the concrete owner-specific
+     * element subtypes.
+     */
+    private static boolean isFactoryInitializedChild(EClass elementType)
+    {
+        return MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(elementType)
+            || MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(elementType)
+            || MdClassPackage.Literals.RECALCULATION.isSuperTypeOf(elementType);
     }
 
     // ---- helpers --------------------------------------------------------------------------------

@@ -169,6 +169,24 @@ public class MetadataNodeResolverTest
     }
 
     @Test
+    public void testFeatureNameForSeparateFileChildTokens()
+    {
+        // Template (en singular/plural)
+        assertEquals("templates", MetadataNodeResolver.featureNameForKind("Template")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("templates", MetadataNodeResolver.featureNameForKind("templates")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Recalculation
+        assertEquals("recalculations", MetadataNodeResolver.featureNameForKind("Recalculation")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("recalculations", MetadataNodeResolver.featureNameForKind("recalculations")); //$NON-NLS-1$ //$NON-NLS-2$
+        // maket -> templates
+        assertEquals("templates", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(0x043c, 0x0430, 0x043a, 0x0435, 0x0442)));
+        // pereraschet -> recalculations
+        assertEquals("recalculations", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(
+                0x043f, 0x0435, 0x0440, 0x0435, 0x0440, 0x0430, 0x0441, 0x0447, 0x0435, 0x0442)));
+    }
+
+    @Test
     public void testRussianTokenIsCaseInsensitive()
     {
         // Upper-case REKVIZIT -> attributes (the map is queried lower-cased)

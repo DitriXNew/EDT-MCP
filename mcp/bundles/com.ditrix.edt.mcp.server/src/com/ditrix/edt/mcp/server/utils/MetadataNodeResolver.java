@@ -105,6 +105,16 @@ public final class MetadataNodeResolver
         putTokens(m, "columns", "column", "columns", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430),
             cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438));
+        // Template - needs factory-wired default content; serialized inline in the owner's .mdo
+        // (ru: maket / makety).
+        putTokens(m, "templates", "template", "templates", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043c, 0x0430, 0x043a, 0x0435, 0x0442),
+            cp(0x043c, 0x0430, 0x043a, 0x0435, 0x0442, 0x044b));
+        // Recalculation on a CalculationRegister - needs the factory (produced types); inline in
+        // the register .mdo (ru: pereraschet / pereraschety).
+        putTokens(m, "recalculations", "recalculation", "recalculations", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043f, 0x0435, 0x0440, 0x0435, 0x0440, 0x0430, 0x0441, 0x0447, 0x0435, 0x0442),
+            cp(0x043f, 0x0435, 0x0440, 0x0435, 0x0440, 0x0430, 0x0441, 0x0447, 0x0435, 0x0442, 0x044b));
         CHILD_FEATURE_BY_TOKEN = Collections.unmodifiableMap(m);
     }
 

@@ -273,6 +273,44 @@ def test_create_document_journal_column():
                        ctx="the journal column must land in the DocumentJournal .mdo on disk")
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_template_on_catalog():
+    # Template needs the model-object factory to be well-formed (a bare create would skip its type).
+    # It is serialized inline in the owner .mdo, like other members. Catalog.Catalog exists.
+    tpl = "E2EUnifiedTpl"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Template." + tpl})
+    assert_ok(r, "create Catalog.Catalog.Template.%s" % tpl)
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    assert "Template" in (r.structured.get("kind") or ""), \
+        "kind must be a template EClass: %r" % (r.structured,)
+    poll_diff_contains("<name>%s</name>" % tpl,
+                       ctx="the new template must land in the owner Catalog.Catalog.mdo on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_recalculation_on_calc_register():
+    # Recalculation MUST go through the factory so its produced types are wired; a bare
+    # EcoreUtil.create would leave them empty. We assert <producedTypes> lands on disk to prove the
+    # factory path (anti-cheat: distinguishes a real factory create from a name-only stub).
+    reg = "E2EUnifiedCalcReg"
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": "CalculationRegister." + reg})
+    assert_ok(r1, "create CalculationRegister.%s" % reg)
+    wait_for_project_ready()
+
+    rc = "E2EUnifiedRecalc"
+    r2 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "CalculationRegister.%s.Recalculation.%s" % (reg, rc),
+    })
+    assert_ok(r2, "create Recalculation child on the new register")
+    assert "Recalculation" in (r2.structured.get("kind") or ""), \
+        "kind must be a Recalculation EClass: %r" % (r2.structured,)
+    poll_diff_contains("<name>%s</name>" % rc,
+                       ctx="the new recalculation must land in the register .mdo on disk")
+    poll_diff_contains("<producedTypes>",
+                       ctx="the factory must wire the recalculation's produced types on disk")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — every rejected call: error quality + assert_no_diff()
 # ──────────────────────────────────────────────────────────────────────────────
