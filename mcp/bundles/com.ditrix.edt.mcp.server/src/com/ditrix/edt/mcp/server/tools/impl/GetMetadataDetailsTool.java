@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
@@ -358,7 +359,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             return null;
         }
-        MdObject mdForm = GetFormStructureTool.resolveMdForm(config, formPath);
+        MdObject mdForm = FormStructureReader.resolveMdForm(config, formPath);
         if (!(mdForm instanceof IBmObject))
         {
             return null;
@@ -377,7 +378,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             {
                 return null;
             }
-            return GetFormStructureTool.render(normalized, formModel, language);
+            return FormStructureReader.render(normalized, formModel, language);
         });
     }
 

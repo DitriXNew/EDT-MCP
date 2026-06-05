@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
@@ -361,7 +362,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
         final Version version = v8Project != null ? v8Project.getVersion() : null;
 
-        MdObject mdForm = GetFormStructureTool.resolveMdForm(config, ref.formPath);
+        MdObject mdForm = FormStructureReader.resolveMdForm(config, ref.formPath);
         if (mdForm == null)
         {
             return ToolResult.error("Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$

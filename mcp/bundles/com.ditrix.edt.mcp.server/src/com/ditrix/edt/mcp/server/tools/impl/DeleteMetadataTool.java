@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
@@ -322,7 +323,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("BM model not available").toJson(); //$NON-NLS-1$
         }
 
-        MdObject mdForm = GetFormStructureTool.resolveMdForm(config, ref.formPath);
+        MdObject mdForm = FormStructureReader.resolveMdForm(config, ref.formPath);
         if (mdForm == null)
         {
             return ToolResult.error("Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
@@ -498,10 +499,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     private static void collectItemDescendants(EObject item, List<Map<String, Object>> out)
     {
-        for (EObject child : GetFormStructureTool.getReferenceList(item, "items")) //$NON-NLS-1$
+        for (EObject child : FormStructureReader.getReferenceList(item, "items")) //$NON-NLS-1$
         {
             Map<String, Object> entry = new java.util.LinkedHashMap<>();
-            entry.put("name", GetFormStructureTool.nameOf(child)); //$NON-NLS-1$
+            entry.put("name", FormStructureReader.nameOf(child)); //$NON-NLS-1$
             entry.put("type", child.eClass().getName()); //$NON-NLS-1$
             out.add(entry);
             collectItemDescendants(child, out);
