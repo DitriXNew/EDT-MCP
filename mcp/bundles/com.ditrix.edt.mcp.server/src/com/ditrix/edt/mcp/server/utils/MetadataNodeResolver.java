@@ -115,6 +115,22 @@ public final class MetadataNodeResolver
         putTokens(m, "recalculations", "recalculation", "recalculations", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             cp(0x043f, 0x0435, 0x0440, 0x0435, 0x0440, 0x0430, 0x0441, 0x0447, 0x0435, 0x0442),
             cp(0x043f, 0x0435, 0x0440, 0x0435, 0x0440, 0x0430, 0x0441, 0x0447, 0x0435, 0x0442, 0x044b));
+        // URLTemplate on an HTTPService (ru token is Cyrillic "Shablon" + ASCII "URL": shablonurl).
+        putTokens(m, "urlTemplates", "urltemplate", "urltemplates", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x0448, 0x0430, 0x0431, 0x043b, 0x043e, 0x043d) + "url", //$NON-NLS-1$
+            cp(0x0448, 0x0430, 0x0431, 0x043b, 0x043e, 0x043d, 0x044b) + "url"); //$NON-NLS-1$
+        // Method on an HTTPService URLTemplate (ru: metod / metody)
+        putTokens(m, "methods", "method", "methods", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043c, 0x0435, 0x0442, 0x043e, 0x0434),
+            cp(0x043c, 0x0435, 0x0442, 0x043e, 0x0434, 0x044b));
+        // Operation on a WebService (ru: operaciya / operacii)
+        putTokens(m, "operations", "operation", "operations", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043e, 0x043f, 0x0435, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f),
+            cp(0x043e, 0x043f, 0x0435, 0x0440, 0x0430, 0x0446, 0x0438, 0x0438));
+        // Parameter on a WebService Operation (ru: parametr / parametry)
+        putTokens(m, "parameters", "parameter", "parameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440),
+            cp(0x043f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440, 0x044b));
         CHILD_FEATURE_BY_TOKEN = Collections.unmodifiableMap(m);
     }
 

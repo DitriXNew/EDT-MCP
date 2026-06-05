@@ -311,6 +311,66 @@ def test_create_recalculation_on_calc_register():
                        ctx="the factory must wire the recalculation's produced types on disk")
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_http_service_url_template_and_method():
+    # HTTPService -> urlTemplate (depth-4) -> method (depth-6 NESTED). Both inline in the service .mdo.
+    svc = "E2EUnifiedHttp"
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": "HTTPService." + svc})
+    assert_ok(r1, "create HTTPService.%s" % svc)
+    wait_for_project_ready()
+
+    tmpl = "E2EUrlTmpl"
+    r2 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "HTTPService.%s.URLTemplate.%s" % (svc, tmpl),
+    })
+    assert_ok(r2, "create URLTemplate on the HTTP service")
+    assert "URLTemplate" in (r2.structured.get("kind") or ""), \
+        "kind must be a URLTemplate EClass: %r" % (r2.structured,)
+    wait_for_project_ready()
+
+    meth = "E2EHttpMethod"
+    r3 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "HTTPService.%s.URLTemplate.%s.Method.%s" % (svc, tmpl, meth),
+    })
+    assert_ok(r3, "create nested Method on the URL template (depth-6)")
+    assert "Method" in (r3.structured.get("kind") or ""), \
+        "kind must be a Method EClass: %r" % (r3.structured,)
+    poll_diff_contains("<name>%s</name>" % meth,
+                       ctx="the nested HTTP method must land in the service .mdo on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_web_service_operation_and_parameter():
+    # WebService -> operation (depth-4) -> parameter (depth-6 NESTED). Both inline in the service .mdo.
+    svc = "E2EUnifiedWs"
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": "WebService." + svc})
+    assert_ok(r1, "create WebService.%s" % svc)
+    wait_for_project_ready()
+
+    op = "E2EWsOp"
+    r2 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "WebService.%s.Operation.%s" % (svc, op),
+    })
+    assert_ok(r2, "create Operation on the web service")
+    assert "Operation" in (r2.structured.get("kind") or ""), \
+        "kind must be an Operation EClass: %r" % (r2.structured,)
+    wait_for_project_ready()
+
+    par = "E2EWsParam"
+    r3 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "WebService.%s.Operation.%s.Parameter.%s" % (svc, op, par),
+    })
+    assert_ok(r3, "create nested Parameter on the operation (depth-6)")
+    assert "Parameter" in (r3.structured.get("kind") or ""), \
+        "kind must be a Parameter EClass: %r" % (r3.structured,)
+    poll_diff_contains("<name>%s</name>" % par,
+                       ctx="the nested WS parameter must land in the service .mdo on disk")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — every rejected call: error quality + assert_no_diff()
 # ──────────────────────────────────────────────────────────────────────────────

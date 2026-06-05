@@ -136,6 +136,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "(`CalculationRegister.R.Recalculation.Rc`) are created with their default content " //$NON-NLS-1$
             + "wired (a Recalculation's produced types; a Template defaults to the SpreadsheetDocument " //$NON-NLS-1$
             + "type).\n" //$NON-NLS-1$
+            + "- Service children: an HTTPService URLTemplate and its Method " //$NON-NLS-1$
+            + "(`HTTPService.S.URLTemplate.T.Method.M`), and a WebService Operation and its Parameter " //$NON-NLS-1$
+            + "(`WebService.S.Operation.O.Parameter.P`).\n" //$NON-NLS-1$
             + "- Members of a NESTED object are supported too, e.g. a tabular-section attribute " //$NON-NLS-1$
             + "`Catalog.X.TabularSection.T.Attribute.A` (the owner is re-navigated by name inside the " //$NON-NLS-1$
             + "write transaction).\n\n" //$NON-NLS-1$

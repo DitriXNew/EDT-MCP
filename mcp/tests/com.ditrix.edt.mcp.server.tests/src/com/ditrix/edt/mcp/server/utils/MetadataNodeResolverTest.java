@@ -187,6 +187,38 @@ public class MetadataNodeResolverTest
     }
 
     @Test
+    public void testFeatureNameForServiceChildTokens()
+    {
+        // HTTPService.urlTemplates / URLTemplate.methods (en singular/plural)
+        assertEquals("urlTemplates", MetadataNodeResolver.featureNameForKind("URLTemplate")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("urlTemplates", MetadataNodeResolver.featureNameForKind("urlTemplates")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("methods", MetadataNodeResolver.featureNameForKind("Method")); //$NON-NLS-1$ //$NON-NLS-2$
+        // WebService.operations / Operation.parameters
+        assertEquals("operations", MetadataNodeResolver.featureNameForKind("Operation")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("parameters", MetadataNodeResolver.featureNameForKind("Parameter")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFeatureNameForServiceChildRussianTokens()
+    {
+        // shablon + ASCII "URL" -> urlTemplates (the ru token mixes Cyrillic and Latin)
+        assertEquals("urlTemplates", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(
+                fromCp(0x0448, 0x0430, 0x0431, 0x043b, 0x043e, 0x043d) + "url")); //$NON-NLS-1$
+        // metod -> methods
+        assertEquals("methods", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(0x043c, 0x0435, 0x0442, 0x043e, 0x0434)));
+        // operaciya -> operations
+        assertEquals("operations", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(
+                0x043e, 0x043f, 0x0435, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f)));
+        // parametr -> parameters
+        assertEquals("parameters", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(fromCp(
+                0x043f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440)));
+    }
+
+    @Test
     public void testRussianTokenIsCaseInsensitive()
     {
         // Upper-case REKVIZIT -> attributes (the map is queried lower-cased)
