@@ -58,10 +58,8 @@ public class ProjectContextAdoptionRatchetTest
      */
     private static final Set<String> KNOWN_DIRECT_WORKSPACE_ACCESS = new HashSet<>(Arrays.asList(
         "ExportConfigurationToXmlTool", //$NON-NLS-1$
-        "GetBookmarksTool", //$NON-NLS-1$
         "GetConfigurationPropertiesTool", //$NON-NLS-1$
         "GetModuleStructureTool", //$NON-NLS-1$
-        "GetTasksTool", //$NON-NLS-1$
         "ImportConfigurationFromXmlTool", //$NON-NLS-1$
         "ListProjectsTool")); //$NON-NLS-1$
 

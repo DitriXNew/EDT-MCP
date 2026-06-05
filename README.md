@@ -179,12 +179,12 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 62 tools are organized into 9 semantic groups:
+All 61 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
 | **Core / Project** | EDT version, server self-diagnosis, on-demand tool guides, project listing, configuration, validation, XML export/import, project removal | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml`, `delete_project` |
-| **Errors & Problems** | Error reporting, bookmarks, tasks | `get_problem_summary`, `get_project_errors`, `get_bookmarks`, `get_tasks` |
+| **Errors & Problems** | Error reporting and workspace markers (bookmarks, tasks) | `get_problem_summary`, `get_project_errors`, `get_markers` |
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 62 tools enabled (default) |
+| **All Tools** | All 61 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -215,8 +215,7 @@ Some tools have configurable default values for parameters like result limits. T
 | Tool | Parameter | Default | Range |
 |------|-----------|---------|-------|
 | `get_project_errors` | Result limit | 100 | 1–1000 |
-| `get_bookmarks` | Result limit | 100 | 1–1000 |
-| `get_tasks` | Result limit | 100 | 1–1000 |
+| `get_markers` | Result limit | 100 | 1–1000 |
 | `get_metadata_objects` | Result limit | 100 | 1–1000 |
 | `get_content_assist` | Result limit | 100 | 1–1000 |
 | `search_in_code` | Max results | 100 | 1–500 |
@@ -327,8 +326,7 @@ Add to `claude_desktop_config.json`:
 | `get_problem_summary` | Problem counts grouped by project and severity |
 | `clean_project` | Cleans project markers and triggers full revalidation |
 | `revalidate_objects` | Revalidates specific objects by FQN (e.g. "Document.MyDoc") |
-| `get_bookmarks` | Returns workspace bookmarks |
-| `get_tasks` | Returns TODO/FIXME task markers |
+| `get_markers` | Returns workspace markers — bookmarks and/or TODO/FIXME task markers |
 | `get_check_description` | Returns check documentation from .md files |
 | `get_content_assist` | Get content assist proposals (type info, method hints) |
 | `get_platform_documentation` | Get platform type documentation (methods, properties, constructors) |
@@ -1160,7 +1158,7 @@ Which tool families stay JSON, and why:
 
 Errors are reported the same way regardless of a tool's normal format — see the **Error contract** below.
 
-- **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects`, `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `get_bookmarks`, `get_tasks`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
+- **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects`, `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `get_markers`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
 - **YAML tools**: `get_configuration_properties` — returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`).
 - **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `debug_yaxunit_tests`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `modify_metadata`, `delete_metadata`).
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.

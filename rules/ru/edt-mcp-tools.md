@@ -59,8 +59,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | Инструмент | Параметр | Default | Диапазон |
 |---|---|---|---|
 | `get_project_errors` | `limit` | 100 | 1–1000 |
-| `get_bookmarks` | `limit` | 100 | 1–1000 |
-| `get_tasks` | `limit` | 100 | 1–1000 |
+| `get_markers` | `limit` | 100 | 1–1000 |
 | `get_metadata_objects` | `limit` | 100 | 1–1000 |
 | `get_content_assist` | (limit) | 100 | 1–1000 |
 | `search_in_code` | `maxResults` | 100 | 1–500 |
@@ -81,14 +80,13 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `export_configuration_to_xml` | Экспорт конфигурации в XML (EDT menu: Export → Configuration to XML Files) | По запросу пользователя |
 | `import_configuration_from_xml` | Импорт конфигурации из XML (обратный к экспорту) | По запросу пользователя |
 
-### 2. Errors & Problems — ошибки и задачи (4)
+### 2. Errors & Problems — ошибки и задачи (3)
 
 | Инструмент | Назначение | Когда использовать |
 |---|---|---|
 | `get_problem_summary` | Сводка по числу проблем по проектам и severity | **Первым** — даёт картину одним вызовом |
 | `get_project_errors` | Детальные ошибки. Фильтры: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (подстрока), `objects` (массив FQN), `limit` (default 100, max 1000) | После сводки — для целевого изучения |
-| `get_bookmarks` | Закладки workspace | По запросу |
-| `get_tasks` | TODO/FIXME-маркеры | По запросу или при аудите технического долга |
+| `get_markers` | Маркеры workspace — закладки и/или TODO/FIXME-маркеры. Фильтры: `markerKind` (`bookmark`/`task`; без него — оба), `projectName`, `filePath`, `priority` (только для задач) | По запросу или при аудите технического долга |
 
 ### 3. Code Intelligence — навигация и подсказки (7)
 

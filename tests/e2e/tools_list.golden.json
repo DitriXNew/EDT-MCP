@@ -695,34 +695,6 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get bookmarks from the workspace. Returns bookmark message, file path, and line number.",
-    "inputSchema": {
-      "properties": {
-        "filePath": {
-          "description": "Filter by file path substring (optional)",
-          "type": "string"
-        },
-        "limit": {
-          "description": "Maximum number of results (default: 100, max: 1000)",
-          "type": "integer"
-        },
-        "projectName": {
-          "description": "Filter by project name (optional)",
-          "type": "string"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
-    "name": "get_bookmarks",
-    "outputSchema": null
-  },
-  {
-    "annotations": {
-      "idempotentHint": true,
-      "openWorldHint": false,
-      "readOnlyHint": true
-    },
     "description": "Get detailed description of an EDT check by its ID. Returns markdown content with check explanation, examples, and how to fix. Accepts the symbolic check id OR the short UID code shown by get_project_errors (pass projectName so the UID can be resolved). Requires a configured check-descriptions folder (MCP preferences); without it the tool returns a configuration error.",
     "inputSchema": {
       "properties": {
@@ -942,6 +914,51 @@
       "type": "object"
     },
     "name": "get_form_screenshot",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "List workspace markers: bookmarks and/or task markers (TODO, FIXME, XXX, HACK). Filter by markerKind (bookmark | task; omit to list both), projectName, filePath substring, and - for task markers only - priority. Returns a markdown table of Kind, Type, Priority, Message, Path and Line.",
+    "inputSchema": {
+      "properties": {
+        "filePath": {
+          "description": "Filter by file path substring (optional)",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum number of results (default: 100, max: 1000)",
+          "type": "integer"
+        },
+        "markerKind": {
+          "description": "Which markers to list: 'bookmark' (manual navigation bookmarks) or 'task' (TODO/FIXME/XXX/HACK code markers). Omit to list both.",
+          "enum": [
+            "bookmark",
+            "task"
+          ],
+          "type": "string"
+        },
+        "priority": {
+          "description": "Filter task markers by priority (optional). Applies to task markers only; bookmarks have no priority and are unaffected. Cannot be combined with markerKind=bookmark.",
+          "enum": [
+            "high",
+            "normal",
+            "low"
+          ],
+          "type": "string"
+        },
+        "projectName": {
+          "description": "Filter by project name (optional)",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "get_markers",
     "outputSchema": null
   },
   {
@@ -1521,43 +1538,6 @@
       "type": "object"
     },
     "name": "get_tags",
-    "outputSchema": null
-  },
-  {
-    "annotations": {
-      "idempotentHint": true,
-      "openWorldHint": false,
-      "readOnlyHint": true
-    },
-    "description": "Get tasks (TODO, FIXME, etc.) from the workspace. Returns task message, file path, line number, and priority.",
-    "inputSchema": {
-      "properties": {
-        "filePath": {
-          "description": "Filter by file path substring (optional)",
-          "type": "string"
-        },
-        "limit": {
-          "description": "Maximum number of results (default: 100, max: 1000)",
-          "type": "integer"
-        },
-        "priority": {
-          "description": "Filter by priority (optional)",
-          "enum": [
-            "high",
-            "normal",
-            "low"
-          ],
-          "type": "string"
-        },
-        "projectName": {
-          "description": "Filter by project name (optional)",
-          "type": "string"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
-    "name": "get_tasks",
     "outputSchema": null
   },
   {

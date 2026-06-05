@@ -62,6 +62,25 @@ public final class ProjectContext
     }
 
     /**
+     * Returns a handle to every project in the workspace (open or closed). This is
+     * the shared replacement for an inlined
+     * {@code ResourcesPlugin.getWorkspace().getRoot().getProjects()} used by tools
+     * that scan across all projects (e.g. a workspace-wide marker scan) rather than
+     * one named project. The caller applies its own {@link IProject#isOpen()} /
+     * existence filtering, exactly as the inlined form required.
+     * <p>
+     * TODO (card {@code introduce-project-context-resolver}): the remaining
+     * {@code tools/impl} tools that still inline the workspace-root enumeration
+     * (see {@code ProjectContextAdoptionRatchetTest}) can migrate onto this.
+     *
+     * @return all projects in the workspace (never {@code null}; possibly empty)
+     */
+    public static IProject[] allProjects()
+    {
+        return ResourcesPlugin.getWorkspace().getRoot().getProjects();
+    }
+
+    /**
      * @return the resolved project handle; may be {@code null} (empty name) or a
      *         handle to a project that does not exist in the workspace
      */

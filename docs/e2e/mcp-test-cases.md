@@ -136,19 +136,15 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 - **Assert:** rows carry a `Check code`; severity filter narrows results; `limit` honoured.
 - **Validated 2026‑06‑01:** PASS — ERRORS sample = `undefined-variable` on `CommonModule.EquipmentFiscalPrinterClientServer.Module`.
 
-### get_bookmarks
-- **Type:** read · **Runnable on IRP:** full (empty result is valid)
-- **Cases:** `{projectName:"IRP"}` → bookmark list (Message/Path/Line). IRP has none.
-- **Assert:** well‑formed "Found: N bookmarks"; N≥0.
-- **Validated 2026‑06‑01:** PASS — 0 bookmarks.
-
-### get_tasks
-- **Type:** read · **Runnable on IRP:** full
+### get_markers
+- **Type:** read · **Runnable on IRP:** full (empty result is valid) · consolidation of the former `get_bookmarks` + `get_tasks`
 - **Cases:**
-  - `{projectName:"IRP", limit:5}` → TODO/FIXME table (Type/Priority/Message/Path/Line).
-  - `{projectName:"IRP", priority:"high"}` → priority filter.
-- **Assert:** rows have a Path under `/IRP/src/…` and a Line number; "more available" when truncated.
-- **Validated 2026‑06‑01:** PASS — 5 TODOs (e.g. `CommonModules/BarcodeClient/Module.bsl:178`).
+  - `{projectName:"IRP"}` → both families (Kind/Type/Priority/Message/Path/Line). IRP has no bookmarks.
+  - `{projectName:"IRP", markerKind:"bookmark"}` → bookmarks only (IRP has none → empty report).
+  - `{projectName:"IRP", markerKind:"task", limit:5}` → TODO/FIXME rows.
+  - `{projectName:"IRP", priority:"high"}` → task priority filter (bookmarks unaffected).
+  - `{markerKind:"bookmark", priority:"high"}` → rejected contradiction (priority is task-only).
+- **Assert:** well‑formed "**Found:** N markers"; markerKind=bookmark/unmatchable filePath → "0 markers"; task rows have a Path under `/IRP/src/…` and a Line number.
 
 ---
 

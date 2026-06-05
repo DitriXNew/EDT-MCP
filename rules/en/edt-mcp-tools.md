@@ -58,8 +58,7 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | Tool | Parameter | Default | Range |
 |---|---|---|---|
 | `get_project_errors` | `limit` | 100 | 1-1000 |
-| `get_bookmarks` | `limit` | 100 | 1-1000 |
-| `get_tasks` | `limit` | 100 | 1-1000 |
+| `get_markers` | `limit` | 100 | 1-1000 |
 | `get_metadata_objects` | `limit` | 100 | 1-1000 |
 | `get_content_assist` | (limit) | 100 | 1-1000 |
 | `search_in_code` | `maxResults` | 100 | 1-500 |
@@ -80,14 +79,13 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `export_configuration_to_xml` | Export configuration to XML files (EDT menu: Export -> Configuration to XML Files) | On user request |
 | `import_configuration_from_xml` | Import configuration from XML files (reverse of export) | On user request |
 
-### 2. Errors & Problems (4)
+### 2. Errors & Problems (3)
 
 | Tool | Purpose | When to use |
 |---|---|---|
 | `get_problem_summary` | Problem counts by project and severity | **First** — gives the full picture in one call |
 | `get_project_errors` | Detailed errors. Filters: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (substring), `objects` (FQN array), `limit` (default 100, max 1000) | After the summary — for targeted investigation |
-| `get_bookmarks` | Workspace bookmarks | On request |
-| `get_tasks` | TODO/FIXME markers | On request or during a technical-debt audit |
+| `get_markers` | Workspace markers — bookmarks and/or TODO/FIXME task markers. Filters: `markerKind` (`bookmark`/`task`; omit = both), `projectName`, `filePath`, `priority` (task-only) | On request or during a technical-debt audit |
 
 ### 3. Code Intelligence (7)
 
