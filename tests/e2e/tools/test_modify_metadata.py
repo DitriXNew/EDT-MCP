@@ -161,18 +161,66 @@ def test_bad_enum_value_lists_allowed():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_type_property_not_yet_supported():
-    attr = "E2ETypePropAttr"
+def test_set_structured_type_number_on_attribute():
+    attr = "E2ETypeNumAttr"
     cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
     assert_ok(cr, "seed attribute")
     wait_for_project_ready()
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Number", "precision": 10, "scale": 2}]}}],
+    })
+    assert_ok(r, "set type Number(10,2)")
+    assert "type" in (r.structured.get("applied") or []), "type must be applied: %r" % (r.structured,)
+    # the new Number qualifier lands in the owner .mdo (precision element appears in the diff)
+    poll_diff_contains("precision", ctx="the new Number(10,2) type must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_ref_type_to_catalog():
+    attr = "E2ERefTypeAttr"
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
+    assert_ok(cr, "seed attribute")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Ref", "ref": "Catalog.Catalog"}]}}],
+    })
+    assert_ok(r, "set a CatalogRef type")
+    assert "type" in (r.structured.get("applied") or []), "type must be applied: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_ref_type_to_non_ref_object_is_clean_error():
+    # A reference to an object with NO ref type (a CommonModule) must be a CLEAN error, not a crash
+    # (the underlying getRefType throws AssertionError for such kinds; the tool must convert it).
+    attr = "E2EBadRefAttr"
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
+    assert_ok(cr, "seed attribute")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Ref", "ref": "CommonModule.OK"}]}}],
+    })
+    e = assert_error(r, "ref to a non-ref object")
+    assert_error_quality(e, suggests=["not a reference type"],
+                         ctx="a ref to a non-ref-producing object is a clean error, not a crash")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_type_malformed_spec_is_error():
+    attr = "E2ETypeBadAttr"
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
+    assert_ok(cr, "seed attribute")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        # a bare string, not the structured {types:[{kind:...}]} shape -> rejected with the shape
         "properties": [{"name": "type", "value": "String"}],
     })
-    e = assert_error(r, "type not yet supported")
-    assert_error_quality(e, suggests=["not yet supported"],
-                         ctx="setting the data type is gated for now")
+    e = assert_error(r, "malformed type spec")
+    assert_error_quality(e, suggests=["types", "kind"],
+                         ctx="a non-structured type value is rejected with the expected shape")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

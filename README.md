@@ -670,7 +670,9 @@ After creating a node, run `get_project_errors` to verify.
 
 **Validation (actionable errors):** a property that is NOT assignable on the node is rejected with the list of assignable properties; an ENUM value that is not one of the allowed literals is rejected WITH the allowed values. Nothing is written unless every property validates. Discover assignable properties + allowed values with `get_metadata_details(assignable: true)`.
 
-**Not here:** the `name` property (rename) is refused - use `rename_metadata_object`, which cascades the rename across BSL code, forms and metadata. The data `type` is not yet settable here.
+**Not here:** the `name` property (rename) is refused - use `rename_metadata_object`, which cascades the rename across BSL code, forms and metadata.
+
+**Setting the data `type`:** the `type` property takes a structured value `{types:[{kind, ...}]}` - primitive kinds `String` / `Number` / `Boolean` / `Date` with inline qualifiers (`length`; `precision` / `scale` / `nonNegative`; `fractions` = `DateTime` / `Date` / `Time`), or a reference `{kind:'Ref', ref:'Type.Name'}` (also `{kind:'CatalogRef', ref:'Name'}`); the list may mix several (a composite type). Example: `{name:'type', value:{types:[{kind:'Number', precision:10, scale:2}]}}`.
 
 **Parameters:**
 | Parameter | Required | Description |

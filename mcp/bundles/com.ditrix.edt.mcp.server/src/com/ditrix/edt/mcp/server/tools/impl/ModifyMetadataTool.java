@@ -19,8 +19,11 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -31,6 +34,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -120,15 +124,22 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "## Not supported here\n" //$NON-NLS-1$
             + "- `name` (rename): refused - use rename_metadata_object, which cascades the rename " //$NON-NLS-1$
             + "across BSL code, forms and metadata.\n" //$NON-NLS-1$
-            + "- The data `type` (TypeDescription): not yet settable here - coming in a later version.\n" //$NON-NLS-1$
             + "- A member of a NESTED object (e.g. a tabular-section attribute) is not yet supported.\n\n" //$NON-NLS-1$
+            + "## Setting the data type\n" //$NON-NLS-1$
+            + "The `type` property takes a STRUCTURED value `{types:[{kind, ...}]}`. Primitive kinds " //$NON-NLS-1$
+            + "String / Number / Boolean / Date carry inline qualifiers (length; precision / scale / " //$NON-NLS-1$
+            + "nonNegative; fractions = DateTime | Date | Time). A reference is `{kind:'Ref', " //$NON-NLS-1$
+            + "ref:'Type.Name'}` (or `{kind:'CatalogRef', ref:'Name'}`). The list may mix several " //$NON-NLS-1$
+            + "(a composite type).\n\n" //$NON-NLS-1$
             + "## Examples\n" //$NON-NLS-1$
             + "- Set a comment: `{projectName:'P', fqn:'Catalog.Products', properties:[{name:'comment', " //$NON-NLS-1$
             + "value:'Goods'}]}`\n" //$NON-NLS-1$
             + "- Set a synonym: `{projectName:'P', fqn:'Catalog.Products', properties:[{name:'synonym', " //$NON-NLS-1$
             + "value:'Goods', language:'en'}]}`\n" //$NON-NLS-1$
             + "- Set an enum on an attribute: `{projectName:'P', " //$NON-NLS-1$
-            + "fqn:'Catalog.Products.Attribute.Weight', properties:[{name:'indexing', value:'Index'}]}`\n\n" //$NON-NLS-1$
+            + "fqn:'Catalog.Products.Attribute.Weight', properties:[{name:'indexing', value:'Index'}]}`\n" //$NON-NLS-1$
+            + "- Set a type: `{projectName:'P', fqn:'Catalog.Products.Attribute.Weight', " //$NON-NLS-1$
+            + "properties:[{name:'type', value:{types:[{kind:'Number', precision:10, scale:2}]}}]}`\n\n" //$NON-NLS-1$
             + "## Result\n" //$NON-NLS-1$
             + "JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, and " //$NON-NLS-1$
             + "`persisted`."; //$NON-NLS-1$
@@ -194,12 +205,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             memberName = target.getName();
         }
 
+        // The platform version is needed only to build a 'type' value; resolve it best-effort (a
+        // missing version is reported only if a 'type' property is actually set).
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
+        final Version version = v8Project != null ? v8Project.getVersion() : null;
+
         // Validate every property against the introspected schema BEFORE any write (fail fast, no
         // partial mutation). On success, collect the prepared changes to apply inside the tx.
         List<PreparedChange> changes = new ArrayList<>();
         for (JsonObject prop : properties)
         {
-            String pErr = prepare(config, target, prop, changes);
+            String pErr = prepare(config, version, target, prop, changes);
             if (pErr != null)
             {
                 return pErr;
@@ -270,7 +287,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Validates one property against the introspected schema and, on success, appends a
      * {@link PreparedChange}. Returns a JSON error string on failure, or {@code null} on success.
      */
-    private String prepare(Configuration config, MdObject target, JsonObject prop,
+    private String prepare(Configuration config, Version version, MdObject target, JsonObject prop,
         List<PreparedChange> out)
     {
         String name = asString(prop.get("name")); //$NON-NLS-1$
@@ -347,8 +364,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return null;
             }
             case TYPE_DESCRIPTION:
-                return ToolResult.error("Setting the data type ('" + name + "') via modify_metadata is " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "not yet supported (coming in a later version). Set it in EDT for now.").toJson(); //$NON-NLS-1$
+            {
+                if (version == null)
+                {
+                    return ToolResult.error("Cannot resolve the platform version needed to build a " //$NON-NLS-1$
+                        + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                MetadataTypeBuilder.Result tr =
+                    MetadataTypeBuilder.build(prop.get("value"), config, version); //$NON-NLS-1$
+                if (tr.error != null)
+                {
+                    return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                out.add(PreparedChange.scalar(info.feature, tr.typeDescription));
+                return null;
+            }
             case STRING:
             default:
                 if (value == null || value.isEmpty())
