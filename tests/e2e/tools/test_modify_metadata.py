@@ -372,6 +372,131 @@ def test_set_type_malformed_spec_is_error():
                          ctx="a non-structured type value is rejected with the expected shape")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Happy — FORM members (the cross-model hop: modify an item / attribute / command)
+# Fixture: Catalog.Catalog has a managed form "ItemForm".
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _seed_form_attribute(attr):
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed form attribute " + attr)
+    wait_for_project_ready()
+
+
+def _seed_form_field(attr, fld):
+    _seed_form_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r, "seed bound field " + fld)
+    wait_for_project_ready()
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_field_title_visible_readonly():
+    # Folds set_form_item_property: set title + visible + readOnly on a field in one call.
+    _seed_form_field("MFAttr", "MFField")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.MFField",
+        "properties": [
+            {"name": "title", "value": "Modified field title", "language": "en"},
+            {"name": "visible", "value": False},
+            {"name": "readOnly", "value": True},
+        ],
+    })
+    assert_ok(r, "modify a form field's title/visible/readOnly")
+    assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
+    applied = r.structured.get("applied") or []
+    for f in ("title", "visible", "readOnly"):
+        assert f in applied, "%s must be in applied: %r" % (f, r.structured)
+    poll_diff_contains("Modified field title",
+                       ctx="the field title must land in the form's .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_attribute_type():
+    # The deferred form-attribute value-TYPE: set Number(10,2) on a form attribute via the `type`
+    # alias (mapped to the attribute's real valueType feature).
+    _seed_form_attribute("MFTypeAttr")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFTypeAttr",
+        "properties": [{"name": "type",
+                        "value": {"types": [{"kind": "Number", "precision": 10, "scale": 2}]}}],
+    })
+    assert_ok(r, "set a form attribute's value type")
+    assert "valueType" in (r.structured.get("applied") or []), \
+        "the type alias must apply to valueType: %r" % (r.structured,)
+    poll_diff_contains("precision",
+                       ctx="the form attribute's Number(10,2) type must land in the .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_command_title():
+    cmd = "MFCmd"
+    cr = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(cr, "seed form command")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd,
+        "properties": [{"name": "title", "value": "Refresh now", "language": "en"}],
+    })
+    assert_ok(r, "set a form command's title")
+    assert "title" in (r.structured.get("applied") or []), "title must be applied: %r" % (r.structured,)
+    poll_diff_contains("Refresh now", ctx="the command title must land in the .form on disk")
+
+
+# ── Negative (form members) ─────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_unknown_property_lists_assignable():
+    _seed_form_field("MFUAttr", "MFUField")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.MFUField",
+        "properties": [{"name": "definitelyNotAProp_zz", "value": "x"}],
+    })
+    e = assert_error(r, "unknown form item property")
+    assert_error_quality(e, names=["definitelyNotAProp_zz"], suggests=["assignable", "visible"],
+                         ctx="an unknown form property lists the item's assignable properties")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_id_is_rejected():
+    _seed_form_field("MFIdAttr", "MFIdField")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.MFIdField",
+        "properties": [{"name": "id", "value": 99}],
+    })
+    e = assert_error(r, "form item id rejected")
+    assert_error_quality(e, names=["id"], suggests=["automatically", "unique"],
+                         ctx="the auto-allocated form item id cannot be set")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_handler_is_rejected():
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Handler.OnOpen",
+        "properties": [{"name": "title", "value": "x"}],
+    })
+    e = assert_error(r, "modify form handler rejected")
+    assert_error_quality(e, suggests=["not supported", "create_metadata", "delete_metadata"],
+                         ctx="modifying a form handler points to create/delete")
+    assert_no_diff("a rejected form-handler modify must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_missing_member_is_error():
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.NoSuchField_zz",
+        "properties": [{"name": "visible", "value": False}],
+    })
+    e = assert_error(r, "missing form member")
+    assert_error_quality(e, names=["NoSuchField_zz"], suggests=["not found", "get_form_structure"],
+                         ctx="a missing form member points to get_form_structure")
+    assert_no_diff("a rejected form modify must change nothing")
+
+
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_empty_value_is_rejected_not_a_silent_clear():
     # An empty value must be rejected, never silently clear the property (parity with the former

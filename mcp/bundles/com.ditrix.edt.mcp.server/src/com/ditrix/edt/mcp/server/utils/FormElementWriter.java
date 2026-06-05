@@ -891,6 +891,18 @@ public final class FormElementWriter
         return findItem(formModel, name);
     }
 
+    /** Finds a form ATTRIBUTE by programmatic name, or {@code null}. Call on the tx-bound form model. */
+    public static EObject findFormAttribute(EObject formModel, String name)
+    {
+        return findByName(referenceList(formModel, FEATURE_ATTRIBUTES), name);
+    }
+
+    /** Finds a form COMMAND by programmatic name, or {@code null}. Call on the tx-bound form model. */
+    public static EObject findFormCommand(EObject formModel, String name)
+    {
+        return findByName(referenceList(formModel, FEATURE_FORM_COMMANDS), name);
+    }
+
     /** Depth-first search of the whole {@code items} tree for an item by programmatic name. */
     private static EObject findItem(EObject container, String name)
     {

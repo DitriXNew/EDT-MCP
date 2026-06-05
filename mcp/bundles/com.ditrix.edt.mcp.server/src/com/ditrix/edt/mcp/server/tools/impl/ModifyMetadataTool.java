@@ -33,6 +33,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
@@ -65,8 +66,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Set properties of a metadata node (object or member) addressed by a 1C full-name FQN, " //$NON-NLS-1$
-            + "as properties=[{name, value, language?}]. Each property is validated (it must be " //$NON-NLS-1$
+        return "Set properties of a metadata node (object or member, including a FORM member - item / " //$NON-NLS-1$
+            + "attribute / command) addressed by a 1C full-name FQN, as " //$NON-NLS-1$
+            + "properties=[{name, value, language?}]. Each property is validated (it must be " //$NON-NLS-1$
             + "assignable, and an enum value must be one of the allowed literals) with an actionable " //$NON-NLS-1$
             + "error. Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
@@ -141,6 +143,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "whose type matches; get_metadata_details(assignable:true) shows the allowed target " //$NON-NLS-1$
             + "type. Structured content with per-item flags (e.g. a common attribute's content), and " //$NON-NLS-1$
             + "references whose target is a member (e.g. a default form), are not set here yet.\n\n" //$NON-NLS-1$
+            + "## Form members\n" //$NON-NLS-1$
+            + "A FORM member is addressed like its create FQN: `Catalog.X.Form.F.<Kind>.Name` (or " //$NON-NLS-1$
+            + "`CommonForm.F.<Kind>.Name`), Kind = Attribute / Command / Field / Button / Group / " //$NON-NLS-1$
+            + "Decoration / Table. The same assignable properties apply: an item's `title` (bilingual; " //$NON-NLS-1$
+            + "defaults to the config language when `language` is omitted), `visible`, `readOnly` " //$NON-NLS-1$
+            + "(fields / groups / tables only) and any other assignable scalar / boolean / enum the " //$NON-NLS-1$
+            + "item carries. NB `type` is context-dependent: on a form ATTRIBUTE it aliases the data " //$NON-NLS-1$
+            + "`valueType` (same `{types:[...]}` shape as an mdclass attribute); on a form FIELD / " //$NON-NLS-1$
+            + "Button / Decoration it is the display-kind ENUM (InputField / LabelField / ...). A wrong " //$NON-NLS-1$
+            + "property name is rejected WITH the member's assignable list. The form item `id` cannot " //$NON-NLS-1$
+            + "be set (auto-allocated); modifying an event handler is not supported (create/delete it). " //$NON-NLS-1$
+            + "The change persists to the form's `Form.form` on disk.\n\n" //$NON-NLS-1$
             + "## Examples\n" //$NON-NLS-1$
             + "- Set a comment: `{projectName:'P', fqn:'Catalog.Products', properties:[{name:'comment', " //$NON-NLS-1$
             + "value:'Goods'}]}`\n" //$NON-NLS-1$
@@ -151,7 +165,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "- Set a type: `{projectName:'P', fqn:'Catalog.Products.Attribute.Weight', " //$NON-NLS-1$
             + "properties:[{name:'type', value:{types:[{kind:'Number', precision:10, scale:2}]}}]}`\n" //$NON-NLS-1$
             + "- Set a list reference: `{projectName:'P', fqn:'Subsystem.Sales', " //$NON-NLS-1$
-            + "properties:[{name:'content', value:['Catalog.Products', 'Document.Order']}]}`\n\n" //$NON-NLS-1$
+            + "properties:[{name:'content', value:['Catalog.Products', 'Document.Order']}]}`\n" //$NON-NLS-1$
+            + "- Hide a form item: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Field.Price', " //$NON-NLS-1$
+            + "properties:[{name:'visible', value:false}]}`\n" //$NON-NLS-1$
+            + "- Set a form attribute's type: `{projectName:'P', " //$NON-NLS-1$
+            + "fqn:'Catalog.Products.Form.ItemForm.Attribute.Total', properties:[{name:'type', " //$NON-NLS-1$
+            + "value:{types:[{kind:'Number', precision:10, scale:2}]}}]}`\n\n" //$NON-NLS-1$
             + "## Result\n" //$NON-NLS-1$
             + "JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, and " //$NON-NLS-1$
             + "`persisted`."; //$NON-NLS-1$
@@ -182,6 +201,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         Configuration config = ctx.config;
 
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+
+        // A FQN that addresses a FORM member (item / attribute / command) is handled by a dedicated
+        // branch: form members live on the editable Form content model (a cross-model hop), not the
+        // mdclass tree. The validation + change pipeline (prepare / PreparedChange) is reused as-is.
+        FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
+        if (formRef != null)
+        {
+            return modifyFormMember(ctx, normFqn, formRef, properties);
+        }
+
         MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
         if (node == null || node.object == null)
         {
@@ -304,10 +333,228 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Modifies a FORM member (item / attribute / command) addressed by a form FQN. The member lives on
+     * the editable Form content model (reached via the cross-model hop), so this branch resolves the
+     * member there, reuses the shared {@link #prepare} validation + {@link PreparedChange} pipeline
+     * (the introspector is EClass-driven, so an item's title / visible / readOnly and an attribute's
+     * valueType / enums classify the same way mdclass properties do), then applies the changes inside a
+     * BM write transaction and force-exports the CONTENT form to its {@code Form.form} on disk.
+     *
+     * <p>Validation and mutation run inside ONE BM write transaction: every property is validated
+     * first and a failure throws {@link FormValidationException} (carrying a ready JSON error) BEFORE
+     * any {@code eSet}, so the transaction rolls back with no partial mutation; building the change
+     * values and setting them in the same transaction avoids any cross-transaction detached-object
+     * concern. The member is re-navigated by name inside the transaction.</p>
+     */
+    private String modifyFormMember(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+    {
+        // Event handlers are added/removed (create_metadata / delete_metadata), not property-modified.
+        if (FormElementWriter.isHandlerToken(ref.kindToken) || ref.isItemLevel())
+        {
+            return ToolResult.error("Modifying a form event handler is not supported. Use " //$NON-NLS-1$
+                + "create_metadata to add a handler or delete_metadata to remove it.").toJson(); //$NON-NLS-1$
+        }
+
+        Configuration config = ctx.config;
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
+        final Version version = v8Project != null ? v8Project.getVersion() : null;
+
+        MdObject mdForm = GetFormStructureTool.resolveMdForm(config, ref.formPath);
+        if (mdForm == null)
+        {
+            return ToolResult.error("Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
+                + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table).").toJson(); //$NON-NLS-1$
+        }
+        if (!(mdForm instanceof IBmObject))
+        {
+            return ToolResult.error("Form is not a BM object").toJson(); //$NON-NLS-1$
+        }
+
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (bmModelManager == null)
+        {
+            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+        }
+        IBmModel bmModel = bmModelManager.getModel(ctx.project);
+        if (bmModel == null)
+        {
+            return ToolResult.error("BM model not available").toJson(); //$NON-NLS-1$
+        }
+
+        final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
+        final List<String> applied = new ArrayList<>();
+
+        // Validate + apply inside ONE BM write transaction: resolve the member, validate every
+        // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
+        // so the tx rolls back with no partial mutation), then apply. The member is re-navigated by
+        // name inside the tx (only the form top object is re-fetchable by bmId). Building the change
+        // values and setting them in the SAME tx avoids any cross-transaction detached-object concern.
+        final String contentFormFqn;
+        try
+        {
+            contentFormFqn = BmTransactions.<String>write(bmModel, "ModifyFormMember", (tx, pm) -> //$NON-NLS-1$
+            {
+                EObject txMdForm = (EObject)tx.getObjectById(mdFormBmId);
+                if (txMdForm == null)
+                {
+                    throw new RuntimeException("Form object not found in transaction"); //$NON-NLS-1$
+                }
+                EObject formModel = FormElementWriter.getEditableForm(txMdForm);
+                if (formModel == null)
+                {
+                    throw new FormValidationException(ToolResult.error("the form has no editable " //$NON-NLS-1$
+                        + "content model (it may be empty, an ordinary/legacy form, or not yet " //$NON-NLS-1$
+                        + "built)").toJson());
+                }
+                EObject member = resolveFormMember(formModel, ref);
+                if (member == null)
+                {
+                    throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
+                        + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                        + ". Use get_form_structure to list the members.").toJson()); //$NON-NLS-1$
+                }
+                List<PreparedChange> changes = new ArrayList<>();
+                for (JsonObject prop : properties)
+                {
+                    String guard = guardFormProperty(prop);
+                    if (guard != null)
+                    {
+                        throw new FormValidationException(guard);
+                    }
+                    String pErr =
+                        prepare(config, version, member, normalizeFormProperty(member, prop), changes);
+                    if (pErr != null)
+                    {
+                        throw new FormValidationException(pErr);
+                    }
+                }
+                for (PreparedChange change : changes)
+                {
+                    change.applyTo(member, tx);
+                    applied.add(change.featureName());
+                }
+                return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
+            });
+        }
+        catch (Exception e)
+        {
+            // A property-validation failure carries a ready JSON error (possibly wrapped by the tx
+            // runner) - surface it directly; anything else is a genuine failure.
+            String validationJson = FormValidationException.jsonOf(e);
+            if (validationJson != null)
+            {
+                return validationJson;
+            }
+            Activator.logError("Error modifying form member", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to modify form member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        boolean persisted = contentFormFqn != null && !contentFormFqn.isEmpty()
+            && BmTransactions.forceExportToDisk(ctx.project, contentFormFqn);
+
+        return ToolResult.success()
+            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("applied", applied) //$NON-NLS-1$
+            .put("persisted", persisted) //$NON-NLS-1$
+            .put("message", "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .toJson();
+    }
+
+    /** Resolves a form member EObject (attribute / command / visual item) on the tx-bound form model. */
+    private static EObject resolveFormMember(EObject formModel, FormElementWriter.FormMemberRef ref)
+    {
+        FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
+        if (kind == FormElementWriter.Kind.ATTRIBUTE)
+        {
+            return FormElementWriter.findFormAttribute(formModel, ref.name);
+        }
+        if (kind == FormElementWriter.Kind.COMMAND)
+        {
+            return FormElementWriter.findFormCommand(formModel, ref.name);
+        }
+        // Field / Button / Group / Decoration and any other visual item (e.g. Table) live in the
+        // items tree, searched by the same name get_form_structure lists.
+        return FormElementWriter.findFormItem(formModel, ref.name);
+    }
+
+    /**
+     * Refuses the structural form property a client must not set as a value: {@code id} (the
+     * form-wide-unique item id is allocated automatically). The {@code name} (rename) property is
+     * already refused by {@link #prepare}. Returns a JSON error to reject, or {@code null} to allow.
+     */
+    private static String guardFormProperty(JsonObject prop)
+    {
+        String name = asString(prop.get("name")); //$NON-NLS-1$
+        if ("id".equalsIgnoreCase(name)) //$NON-NLS-1$
+        {
+            return ToolResult.error("The form item 'id' is allocated automatically and must stay " //$NON-NLS-1$
+                + "form-wide unique - it cannot be set.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Maps the friendly {@code type} alias to a form attribute's real {@code valueType} feature so a
+     * form attribute's data type is set with the same {@code {name:'type', value:{types:[...]}}} shape
+     * mdclass attributes use. Returns the original prop unchanged when no alias applies.
+     */
+    private static JsonObject normalizeFormProperty(EObject member, JsonObject prop)
+    {
+        String name = asString(prop.get("name")); //$NON-NLS-1$
+        if ("type".equalsIgnoreCase(name) //$NON-NLS-1$
+            && member.eClass().getEStructuralFeature("type") == null //$NON-NLS-1$
+            && member.eClass().getEStructuralFeature("valueType") != null) //$NON-NLS-1$
+        {
+            JsonObject copy = prop.deepCopy();
+            copy.addProperty("name", "valueType"); //$NON-NLS-1$ //$NON-NLS-2$
+            return copy;
+        }
+        return prop;
+    }
+
+    /**
+     * Thrown out of the form write lambda when a property fails validation (or the form/member cannot
+     * be resolved): carries a ready {@code ToolResult.error(...).toJson()} so the caller surfaces the
+     * actionable message instead of a generic failure. Throwing BEFORE any {@code eSet} rolls the tx
+     * back with no partial mutation.
+     */
+    private static final class FormValidationException extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+
+        final String json;
+
+        FormValidationException(String json)
+        {
+            super("form member validation failed"); //$NON-NLS-1$
+            this.json = json;
+        }
+
+        /** Finds a {@link FormValidationException} in the cause chain and returns its JSON, or null. */
+        static String jsonOf(Throwable t)
+        {
+            for (Throwable c = t; c != null; c = c.getCause())
+            {
+                if (c instanceof FormValidationException)
+                {
+                    return ((FormValidationException)c).json;
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
      * Validates one property against the introspected schema and, on success, appends a
      * {@link PreparedChange}. Returns a JSON error string on failure, or {@code null} on success.
+     * Accepts any {@link EObject} so it serves both mdclass nodes and form members (the introspector
+     * and the prepared change are EClass-driven, not mdclass-specific).
      */
-    private String prepare(Configuration config, Version version, MdObject target, JsonObject prop,
+    private String prepare(Configuration config, Version version, EObject target, JsonObject prop,
         List<PreparedChange> out)
     {
         String name = asString(prop.get("name")); //$NON-NLS-1$
