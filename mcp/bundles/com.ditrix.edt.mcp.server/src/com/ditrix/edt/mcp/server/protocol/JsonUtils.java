@@ -513,6 +513,10 @@ public final class JsonUtils
                 return ". Use get_module_structure to list the module's procedures and functions."; //$NON-NLS-1$
             case "objectFqn": //$NON-NLS-1$
                 return ". Use get_metadata_objects to find an object's FQN."; //$NON-NLS-1$
+            case "fqn": //$NON-NLS-1$
+                return ". Use get_metadata_objects to find an object's FQN (e.g. Catalog.Products); for a" //$NON-NLS-1$
+                    + " nested member append the member path (e.g. Catalog.Products.Attribute.Price)," //$NON-NLS-1$
+                    + " whose names are listed by get_metadata_details."; //$NON-NLS-1$
             case "applicationId": //$NON-NLS-1$
                 return ". Use get_applications to list available application IDs."; //$NON-NLS-1$
             default:

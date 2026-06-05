@@ -94,6 +94,11 @@ public class JsonUtilsTest
         assertTrue(JsonUtils.requireArgument(new HashMap<>(), "methodName").contains("get_module_structure"));
         assertTrue(JsonUtils.requireArgument(new HashMap<>(), "objectFqn").contains("get_metadata_objects"));
         assertTrue(JsonUtils.requireArgument(new HashMap<>(), "applicationId").contains("get_applications"));
+        // The unified metadata CRUD tools (create/modify/delete_metadata) address by `fqn`; a missing
+        // fqn must steer to discovery + show the nested-member shape.
+        String fqnHint = JsonUtils.requireArgument(new HashMap<>(), "fqn");
+        assertTrue("fqn-required must steer to get_metadata_objects", fqnHint.contains("get_metadata_objects"));
+        assertTrue("fqn-required must show the nested-member shape", fqnHint.contains("Attribute"));
     }
 
     @Test
