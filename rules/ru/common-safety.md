@@ -11,7 +11,7 @@
 Файлы 1С-проекта в EDT имеют сложную структуру (EMF-связи, UUID, ссылки на объекты). Прямая правка файловыми инструментами клиента (Read/Edit/Write у Claude, аналоги у Cursor/Copilot/Gemini CLI и т. п.) ломает их.
 
 - **BSL** (`.bsl`) — **только** через MCP EDT (`read_module_source`, `write_module_source`, `read_method_source`).
-- **Метаданные** (`.mdo`) — файловая правка возможна, но при наличии MCP-инструмента предпочитай его (`rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`).
+- **Метаданные** (`.mdo`) — файловая правка возможна, но при наличии MCP-инструмента предпочитай его (`create_metadata`, `modify_metadata`, `rename_metadata_object`, `delete_metadata`).
 - **Формы** (`Form.form`) — файловая правка возможна, но осторожно (см. `edt-metadata.md`).
 - **Прочие XML** (роли, общие команды, и т. п.) — файловая правка допустима; UUID-правила см. в `edt-metadata.md`.
 - **Не-1С** (JSON, JS, Python, docker, shell) — стандартными файловыми/поисковыми/shell-инструментами клиента.
@@ -23,5 +23,5 @@
 Базовое поведение (не запускать `rm -rf /`, не коммитить секреты, не выполнять `git push --force` без явного запроса) предполагается. Точечные напоминания именно для 1С-проекта:
 
 - Перед `git reset --hard`, `git checkout .`, `git clean -fd` — отдельно подтверди с пользователем. В EDT в это время может быть открыт редактор с несохранёнными изменениями, и потеря будет тихой.
-- `delete_metadata_object` и `rename_metadata_object` всегда вызывай **сначала без `confirm`** — это preview. Применение — отдельным вызовом с `confirm: true`.
+- `delete_metadata` и `rename_metadata_object` всегда вызывай **сначала без `confirm`** — это preview. Применение — отдельным вызовом с `confirm: true`.
 - Не запускай `update_database` с `fullUpdate: true` без явной просьбы — это полная реструктуризация ИБ, долгая и потенциально с потерей.

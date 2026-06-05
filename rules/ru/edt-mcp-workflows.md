@@ -62,12 +62,16 @@
 ### Удаление
 
 1. Для top-level — `find_references` для оценки масштаба. Для вложенных — пропускаем.
-2. `delete_metadata_object` с `projectName`+`objectFqn`, без `confirm` — preview affected references.
+2. `delete_metadata` с `projectName`+`fqn` (полное имя объекта или подчинённого члена, например `Catalog.Products` или `Document.SalesOrder.Attribute.Amount`), без `confirm` — preview affected references.
 3. С `confirm: true` — применить.
 
-### Добавление реквизита
+### Создание объекта или члена (например, реквизита)
 
-`add_metadata_attribute` с `projectName`+`parentFqn`+`attributeName` — каскадно создаёт реквизит без ручной правки `.mdo`.
+`create_metadata` с `projectName`+`fqn` — адресует узел по полному имени FQN. Top-level объект — `Type.Name` (например, `Catalog.Products`); подчинённый член — `Type.Name.Kind.Name` (например, `Catalog.Products.Attribute.Weight`, `InformationRegister.Prices.Resource.Sum`, `Enum.Colors.EnumValue.Red`). Вид (kind) выводится из FQN, поэтому один инструмент и создаёт объекты, и добавляет члены — без ручной правки `.mdo`. Опционально передай `properties` (`[{name, value, language?}]`), чтобы задать `synonym` / `comment` при создании; остальные свойства задавай потом через `modify_metadata`.
+
+### Задание свойств
+
+`modify_metadata` с `projectName`+`fqn`+`properties` (`[{name, value, language?}]`) — задаёт назначаемые свойства объекта или члена по FQN (синоним, комментарий, структурированный `type` и прочие назначаемые скалярные/булевы/целочисленные/enum-свойства), с валидацией по набору назначаемых свойств и допустимым enum-литералам. Что можно задать — смотри через `get_metadata_details` (`assignable: true`). Свойство `name` (переименование) здесь запрещено — используй `rename_metadata_object`.
 
 ## 7. Отладка
 

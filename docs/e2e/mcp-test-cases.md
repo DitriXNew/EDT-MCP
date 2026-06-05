@@ -462,10 +462,10 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 > Claude Code auto‑mode classifier **blocks preview on real objects** (cascade‑corruption
 > risk; CLAUDE.md "explicit request only"). Happy‑path coverage = sandbox + explicit approval.
 
-### create_metadata_object
+### create_metadata
 - **Type:** write · **Runnable on IRP:** SKIPPED — **not in this session's tool registry** (newest tool; stale cached tools/list). Validate with a fresh connection.
-- **Cases (sandbox):** `{projectName, metadataType:"Catalog", name:"E2ETest", synonym:"…", language:"en"}` → creates `.mdo`; invalid identifier `name` → validation error; Russian `metadataType` token.
-- **Assert:** valid → object created + appears in `get_metadata_objects`; bad name → error before creation.
+- **Cases (sandbox):** `{projectName, fqn:"Catalog.E2ETest", properties:[{name:"synonym", value:"…", language:"en"}]}` → creates a top‑level object `.mdo`; a member by FQN `{fqn:"Catalog.E2ETest.Attribute.Weight"}` → creates the attribute; invalid identifier in the FQN → validation error; Russian type/kind token in the FQN.
+- **Assert:** valid → node created + appears in `get_metadata_objects` / `get_metadata_details`; bad name → error before creation.
 - **Validated 2026‑06‑01:** not callable (stale registry).
 
 ### rename_metadata_object
@@ -477,16 +477,16 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 - **Assert:** bad FQN → "Object not found" + child‑type hint. Preview lists indexed change points.
 - **Validated 2026‑06‑01:** PASS (error path); real‑object preview blocked by classifier (expected).
 
-### delete_metadata_object
+### delete_metadata
 - **Type:** destructive (reference cleanup) · **Runnable on IRP:** error‑only unattended
-- **Cases:** non‑existent FQN → `Object not found …`; preview (real, no confirm) → classifier‑gated; happy = `confirm:true` (sandbox+approval).
+- **Cases:** non‑existent FQN → `Object not found …`; preview (real, no confirm) → classifier‑gated; happy = `confirm:true` (sandbox+approval). Addresses a node by full‑name FQN (`Catalog.X` or a member `Document.Y.Attribute.Z`).
 - **Assert:** bad FQN → JSON `success:false` + child‑type hint.
 - **Validated 2026‑06‑01:** PASS (error path).
 
-### add_metadata_attribute
+### modify_metadata
 - **Type:** write (BM transaction) · **Runnable on IRP:** error‑only here
-- **Cases:** non‑existent parent → error; (sandbox) valid parent (Catalog/Document/…/Register) + name → attribute created with defaults; Russian type token.
-- **Assert:** bad parent → `success:false`, "Parent object not found" + FQN‑format hint.
+- **Cases:** non‑existent FQN → error; (sandbox) existing node (object or member, addressed by FQN) + `properties:[{name, value, language?}]` → properties set (synonym / comment / structured `type` / assignable scalar / enum); non‑assignable property or bad enum literal → validation error. Discover assignable properties + allowed values with `get_metadata_details(assignable:true)`.
+- **Assert:** bad FQN → `success:false`, "Object not found" + FQN‑format hint; non‑assignable/bad‑enum property → rejected with the allowed set, nothing written.
 - **Validated 2026‑06‑01:** PASS (error path).
 
 ---
@@ -526,14 +526,14 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 | 3 | Form tools blank without `-DnativeFormBufferedLayoutRender=true`; per‑element bounds need non‑native render | env/config | flag added to test EDT; re‑validate after restart |
 | 4 | `update_database` blocked by safety classifier even on error path | expected | document as approval‑gated |
 | 5 | `rename`/`delete` preview on real objects classifier‑gated | expected | document as approval‑gated |
-| 6 | `create_metadata_object` + `terminate_launch` absent from session tool registry (stale cached tools/list; server was down at start) | harness | re‑validate with a fresh MCP connection |
+| 6 | `create_metadata` + `terminate_launch` absent from session tool registry (stale cached tools/list; server was down at start) | harness | re‑validate with a fresh MCP connection |
 | 7 | LanguageTool not installed → 3 translation tools unusable | env | install LanguageTool for happy paths |
 | 8 | IRP has no infobase/launch config → app/debug full flow not exercised | env | needs a project with an infobase + YAXUnit |
 | 9 | `get_module_structure` reported every region ending at EOF (and methods between sibling regions mis-assigned to the previous region) | **bug → FIXED** | card `b2` closed; region end matched in source by `#Region/#EndRegion` depth (validated live on AccountingServer) |
 | 10 | `validate_query` + `get_content_assist` results built via raw Gson, bypassing `ToolResult` | **refactor → DONE** | card `aQ` closed — both migrated to `ToolResult` (+3 / +5 unit tests), output preserved (validated live) |
 | 11 | `get_content_assist` returns `totalProposals:0` on rapid repeat / parallel calls on the same file | bug (low) | card `b3` filed — EDT content-assist readiness, not the tool's formatting; call serially, retry once on 0 |
 
-**Coverage:** 56 of 58 tools exercised live (read happy‑paths + write/destructive error‑paths). 2 (`create_metadata_object`, `terminate_launch`) pending a fresh connection. Happy paths for write/destructive/app/debug/translation tools require a sandbox project (+infobase / +LanguageTool / +approval) as noted per tool.
+**Coverage:** 56 of 58 tools exercised live (read happy‑paths + write/destructive error‑paths). 2 (`create_metadata`, `terminate_launch`) pending a fresh connection. Happy paths for write/destructive/app/debug/translation tools require a sandbox project (+infobase / +LanguageTool / +approval) as noted per tool.
 
 
 

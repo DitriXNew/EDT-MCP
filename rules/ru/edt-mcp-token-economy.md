@@ -82,7 +82,7 @@
 ### `find_references`
 
 - Default 100, максимум 500. Поднимай только для рефакторинга, требующего полного охвата.
-- Поддерживает **только top-level** объекты (`Catalog.X`, `Document.Y`, `CommonModule.Z`). Для вложенных вернёт ошибку — переходи сразу к `rename_metadata_object`/`delete_metadata_object`.
+- Поддерживает **только top-level** объекты (`Catalog.X`, `Document.Y`, `CommonModule.Z`). Для вложенных вернёт ошибку — переходи сразу к `rename_metadata_object`/`delete_metadata`.
 
 ### `get_content_assist`
 

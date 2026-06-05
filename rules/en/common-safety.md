@@ -11,7 +11,7 @@
 1C project files in EDT have a complex structure (EMF links, UUIDs, object references). Direct editing via the client's file tools (Read/Edit/Write in Claude, the equivalents in Cursor/Copilot/Gemini CLI, etc.) breaks them.
 
 - **BSL** (`.bsl`) — **only** via MCP EDT (`read_module_source`, `write_module_source`, `read_method_source`).
-- **Metadata** (`.mdo`) — direct file editing is possible, but when an MCP tool is available prefer it (`rename_metadata_object`, `delete_metadata_object`, `add_metadata_attribute`).
+- **Metadata** (`.mdo`) — direct file editing is possible, but when an MCP tool is available prefer it (`create_metadata`, `modify_metadata`, `rename_metadata_object`, `delete_metadata`).
 - **Forms** (`Form.form`) — direct file editing is possible, but with care (see `edt-metadata.md`).
 - **Other XML** (roles, common commands, etc.) — direct file editing is acceptable; UUID rules see in `edt-metadata.md`.
 - **Non-1C files** (JSON, JS, Python, docker, shell) — the client's standard file/search/shell tools.
@@ -23,5 +23,5 @@ If the needed MCP tool is missing or refuses — **ask the user** before bypassi
 Baseline behaviour (not running `rm -rf /`, not committing secrets, not running `git push --force` without an explicit request) is assumed. Targeted reminders for a 1C project:
 
 - Before `git reset --hard`, `git checkout .`, `git clean -fd` — confirm with the user explicitly. EDT may have an editor open with unsaved changes at that moment, and the loss will be silent.
-- Always call `delete_metadata_object` and `rename_metadata_object` **first without `confirm`** — this is a preview. To apply, call again with `confirm: true`.
+- Always call `delete_metadata` and `rename_metadata_object` **first without `confirm`** — this is a preview. To apply, call again with `confirm: true`.
 - Do not run `update_database` with `fullUpdate: true` without an explicit request — this is a full infobase restructuring, long-running and potentially lossy.

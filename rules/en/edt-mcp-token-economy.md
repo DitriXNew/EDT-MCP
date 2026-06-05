@@ -82,7 +82,7 @@
 ### `find_references`
 
 - Default 100, max 500. Raise it only for refactoring that requires full coverage.
-- Supports **top-level objects only** (`Catalog.X`, `Document.Y`, `CommonModule.Z`). For nested objects it returns an error — go directly to `rename_metadata_object`/`delete_metadata_object`.
+- Supports **top-level objects only** (`Catalog.X`, `Document.Y`, `CommonModule.Z`). For nested objects it returns an error — go directly to `rename_metadata_object`/`delete_metadata`.
 
 ### `get_content_assist`
 

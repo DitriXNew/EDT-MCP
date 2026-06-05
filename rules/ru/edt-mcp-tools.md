@@ -26,9 +26,12 @@ MCP-клиенты именуют инструменты по-разному. Р
 | «Прочитай метод X модуля Y» | `read_method_source` | **Никогда** не загружай весь модуль ради одного метода |
 | «Покажи код модуля целиком» | сначала `get_module_structure` (карта), потом `read_module_source` только если действительно нужен весь файл | Экономия токенов |
 | «Измени код в методе» | `read_method_source` → `write_module_source` с `mode: searchReplace` | См. `edt-mcp-write-safety.md` |
-| «Переименуй / удали объект метаданных» | `rename_metadata_object` / `delete_metadata_object` **без** `confirm` (preview) → тот же вызов с `confirm: true` | Ручная правка XML каскадно ломает ссылки |
-| «Создай новый объект» | `create_metadata_object` | Дефолтное наполнение EDT + корректный UUID; не собирай `.mdo` руками |
-| «Добавь реквизит» | `add_metadata_attribute` | Не редактируй `.mdo` руками |
+| «Переименуй объект метаданных» | `rename_metadata_object` **без** `confirm` (preview) → тот же вызов с `confirm: true` | Ручная правка XML каскадно ломает ссылки |
+| «Удали объект / член метаданных» | `delete_metadata` **без** `confirm` (preview) → тот же вызов с `confirm: true` | Ручная правка XML каскадно ломает ссылки |
+| «Создай новый объект» | `create_metadata` с FQN верхнего уровня (`Catalog.Products`) | Дефолтное наполнение EDT + корректный UUID; не собирай `.mdo` руками |
+| «Добавь реквизит / табличную часть / измерение / ресурс» | `create_metadata` с FQN члена (`Catalog.Products.Attribute.Weight`) | Не редактируй `.mdo` руками; вид выводится из FQN |
+| «Установи тип реквизита / синоним / другое свойство» | `modify_metadata` (структурная спецификация `type`); какие свойства назначаемы — `get_metadata_details(assignable: true)` | Не редактируй `.mdo` руками ради назначаемых свойств |
+| «Какие свойства можно задать у объекта/члена?» | `get_metadata_details(assignable: true)` | Список назначаемых свойств + допустимые значения |
 | «Проверь запрос 1С» | `validate_query` (для СКД — `dcsMode: true`) | Перед вставкой текста запроса в код |
 | «Что в этой форме?» | `get_form_layout_snapshot` с `mode: compact` (YAML); `get_form_screenshot` если нужен визуал | YAML дешевле PNG |
 | «Что показывает платформа для типа X?» | `get_platform_documentation` | Не угадывай сигнатуры |
@@ -94,10 +97,10 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `get_content_assist` | Подсказки в точке кода (типы, методы) | При работе в конкретной позиции BSL |
 | `get_platform_documentation` | Документация платформы (типы, методы, свойства, конструкторы) | При сомнениях в сигнатуре платформы 1С |
 | `get_metadata_objects` | Список объектов конфигурации с фильтрами `metadataType`, `nameFilter`, `limit` (default 100, max 1000), `language` | Обзор объектов; **всегда** с фильтром |
-| `get_metadata_details` | Детальные свойства объектов по массиву FQN (`objectFqns: [...]`) | После того как нашёл нужные объекты |
+| `get_metadata_details` | Детальные свойства объектов по массиву FQN (`objectFqns: [...]`); FQN могут адресовать члены (`Catalog.Products.Attribute.Weight`). С `assignable: true` возвращает схему **назначаемых** свойств (вид значения, текущее значение, допустимые литералы перечисления) — то, что умеет ставить `modify_metadata` | После того как нашёл нужные объекты; перед `modify_metadata` — с `assignable: true` |
 | `list_subsystems` | Дерево подсистем (плоская таблица, рекурсивно по умолчанию) | Знакомство со структурой конфигурации |
 | `get_subsystem_content` | Содержимое подсистемы по FQN: свойства, объекты, вложенные подсистемы | Углубление в конкретную подсистему |
-| `find_references` | Все ссылки на объект метаданных в коде, формах, ролях. **Только top-level объекты** (`Catalog.X`, `Document.Y`, `CommonModule.Z`); для вложенных (реквизиты, табличные части, формы) вернёт ошибку — используй сразу `rename_metadata_object`/`delete_metadata_object` | Перед переименованием/удалением top-level объекта |
+| `find_references` | Все ссылки на объект метаданных в коде, формах, ролях. **Только top-level объекты** (`Catalog.X`, `Document.Y`, `CommonModule.Z`); для вложенных (реквизиты, табличные части, формы) вернёт ошибку — используй сразу `rename_metadata_object`/`delete_metadata` | Перед переименованием/удалением top-level объекта |
 
 ### 4. Tags — теги (2)
 
@@ -156,10 +159,10 @@ MCP-клиенты именуют инструменты по-разному. Р
 
 | Инструмент | Назначение | Когда использовать |
 |---|---|---|
-| `rename_metadata_object` | Переименование с каскадным обновлением (BSL-код, формы, метаданные). Workflow: 1) вызов без `confirm` — preview всех change points с индексами; 2) (опционально) `disableIndices: "2,3,5"` для пропуска отдельных изменений; 3) `confirm: true`. Параметр `maxResults` (default 20, 0 = без лимита) ограничивает preview. Поддерживает русские FQN | **Только** так переименовывать; ручная правка XML опасна |
-| `delete_metadata_object` | Удаление с очисткой ссылок. Аналогичный workflow preview → confirm | Аналогично |
-| `add_metadata_attribute` | Добавить реквизит в объект (Catalog, Document, Register, ...) | Вместо ручного редактирования `.mdo` |
-| `create_metadata_object` | Создать новый top-level объект с дефолтным наполнением EDT. Поддерживаемые типы: `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor`. Параметры: `metadataType`, `name`, опц. `synonym`, `comment`, `language`. UUID генерируется автоматически | Вместо ручной сборки нового `.mdo`; после — прогнать `get_project_errors` |
+| `rename_metadata_object` | Переименование с каскадным обновлением (BSL-код, формы, метаданные). Workflow: 1) вызов без `confirm` — preview всех change points с индексами; 2) (опционально) `disableIndices: "2,3,5"` для пропуска отдельных изменений; 3) `confirm: true`. Параметр `maxResults` (default 20, 0 = без лимита) ограничивает preview. Поддерживает русские FQN. **Единственный** инструмент переименования — `modify_metadata` имя не меняет | **Только** так переименовывать; ручная правка XML опасна |
+| `delete_metadata` | Удаление объекта **или** члена по FQN с каскадной очисткой ссылок в BSL/формах/других метаданных. Параметры: `projectName`, `fqn`, опц. `confirm`. Две фазы: вызов без `confirm` — preview затронутых ссылок; `confirm: true` — применение | **Только** так удалять; ручная правка XML опасна |
+| `create_metadata` | Создать узел метаданных по 1C full-name FQN: объект верхнего уровня (`Catalog.Products` / `Справочник.Товары`) **или** подчинённый член (`Catalog.Products.Attribute.Weight`, `InformationRegister.Prices.Dimension.Product`, `Document.Order.TabularSection.Goods`, `Enum.Colors.EnumValue.Red`). Вид выводится из FQN; токены типа и вида допускаются на русском и английском. Параметры: `projectName`, `fqn`, опц. `properties` (массив `{name, value, language?}`), опц. `expectedNotExists`. При создании в `properties` принимаются **только** `synonym` и `comment` — остальные свойства задаёт `modify_metadata`. Дубликаты отклоняются. Поддерживаемые типы верхнего уровня: `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor`. Пока поддерживается один уровень вложенности члена (поле табличной части пока отклоняется) | Вместо ручной сборки нового `.mdo`; после — прогнать `get_project_errors` |
+| `modify_metadata` | Установить свойства объекта **или** члена по FQN. Параметры: `projectName`, `fqn`, `properties` (массив `{name, value, language?}`). Каждое свойство валидируется: должно быть назначаемым (иначе ошибка перечисляет назначаемые и указывает на `get_metadata_details(assignable: true)`), значение перечисления — одним из допустимых литералов. Умеет `synonym` (по коду языка), `comment` и `type` (структурная спецификация). Для переименования — `rename_metadata_object` (свойство `name` отклоняется) | Задать тип реквизита, синоним и прочие назначаемые свойства без ручной правки `.mdo` |
 
 ### 9. Translation (LanguageTool) — перевод (3)
 

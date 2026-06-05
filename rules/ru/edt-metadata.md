@@ -6,17 +6,18 @@
 
 | Задача | Инструмент | Почему лучше, чем руками |
 |---|---|---|
-| Создать новый top-level объект | `create_metadata_object` | Дефолтное наполнение EDT (как мастер «Создать»); UUID и `producedTypes` генерируются автоматически |
+| Создать новый top-level объект | `create_metadata` с FQN верхнего уровня (`Catalog.Products`) | Дефолтное наполнение EDT (как мастер «Создать»); UUID и `producedTypes` генерируются автоматически |
+| Добавить реквизит / табличную часть / измерение / ресурс | `create_metadata` с FQN члена (`Catalog.Products.Attribute.Weight`) | Без рискованной ручной правки XML, UUID генерируется автоматически; вид выводится из FQN |
+| Установить тип реквизита / синоним / другое назначаемое свойство | `modify_metadata` (структурная спецификация `type`) | Без ручной правки `.mdo`; какие свойства назначаемы — `get_metadata_details(assignable: true)` |
 | Переименовать объект / реквизит / табличную часть / измерение / ресурс | `rename_metadata_object` | Каскадно правит BSL-код, формы, роли, подсистемы. Дает preview всех точек изменений |
-| Удалить объект / реквизит и т. п. | `delete_metadata_object` | Чистит ссылки во всём проекте. Дает preview |
-| Добавить реквизит в объект | `add_metadata_attribute` | Без рискованной ручной правки XML, UUID генерируется автоматически |
+| Удалить объект / реквизит и т. п. | `delete_metadata` | Чистит ссылки во всём проекте. Дает preview |
 | Найти, где используется top-level объект | `find_references` | Полный поиск по метаданным, BSL, формам, ролям |
 
 Ручная правка `.mdo` оправдана, когда:
 - меняются свойства, для которых нет инструмента (например, `FullTextSearch`, `Format`, `DataLockControlMode`, набор `usePurposes` у формы, и т. п.);
 - идёт массовое единообразное изменение, которое проще сделать поиском.
 
-## Workflow `rename_metadata_object` / `delete_metadata_object`
+## Workflow `rename_metadata_object` / `delete_metadata`
 
 Оба инструмента работают в две фазы — это защищает от каскадных правок «вслепую»:
 
@@ -43,23 +44,42 @@
 - `rename_metadata_object` в preview-режиме (без `confirm`) — он покажет все места, где упоминается реквизит. Имя при этом не меняется.
 - Либо `search_in_code` для текстового поиска по BSL.
 
-## `create_metadata_object` — поддерживаемые типы
+## `create_metadata` — создание по FQN
 
-Создаёт новый top-level объект с тем же дефолтным наполнением, что и мастер EDT «Создать» (корректный UUID, `producedTypes`, формы/свойства по умолчанию, где применимо). Поддерживаемый `metadataType`: `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor` (русские имена типов тоже принимаются).
+Создаёт узел метаданных с тем же дефолтным наполнением, что и мастер EDT «Создать» (корректный UUID, `producedTypes`, формы/свойства по умолчанию, где применимо). Адресуется по 1C full-name FQN:
 
-Параметры: `projectName`, `metadataType`, `name` (обязательные); `synonym`, `comment`, `language` (опциональные). `name` должно быть корректным идентификатором 1С; объект с таким же типом и именем создать нельзя. `synonym` пишется для языка конфигурации по умолчанию, если не задан `language`.
+- **Объект верхнего уровня**: `Catalog.Products` / `Справочник.Товары`. Поддерживаемые типы: `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor` (русские имена типов тоже принимаются).
+- **Подчинённый член**: `Catalog.Products.Attribute.Weight`, `InformationRegister.Prices.Dimension.Product`, `AccumulationRegister.Stock.Resource.Quantity`, `Document.Order.TabularSection.Goods`, `Enum.Colors.EnumValue.Red`. Вид члена выводится из FQN; токены типа и вида допускаются на русском и английском (`Справочник`/`Catalog`, `Реквизит`/`Attribute`, `ТабличнаяЧасть`/`TabularSection`, `Измерение`/`Dimension`, `Ресурс`/`Resource`, `ЗначениеПеречисления`/`EnumValue`).
 
-Инструмент создаёт только сам объект. Чтобы добавить реквизиты / табличные части / задать тип реквизита — используй `add_metadata_attribute` или правь `.mdo` отдельным шагом. После создания прогони `get_project_errors` (и `revalidate_objects` на новый объект, если валидация выглядит устаревшей).
+Параметры: `projectName`, `fqn` (обязательные); `properties`, `expectedNotExists` (опциональные). `properties` — массив `{name, value, language?}`, но **при создании** принимаются только `synonym` и `comment`; любое другое свойство вернёт ошибку с указанием на `modify_metadata`. Имя объекта/члена в FQN должно быть корректным идентификатором 1С; дубликаты (объект/член того же типа и имени) отклоняются. `synonym` пишется по коду языка (`language`), по умолчанию — язык конфигурации.
 
-## `add_metadata_attribute` — поддерживаемые родители
+**Оговорка по вложенности**: пока поддерживается только один уровень члена под объектом верхнего уровня. Поле табличной части (вложенность-в-вложенность) пока отклоняется — добавляй его ручной правкой `.mdo`.
 
-Принимает `parentFqn` следующих типов: `Catalog`, `Document`, `ExchangePlan`, `ChartOfCharacteristicTypes`, `ChartOfAccounts`, `ChartOfCalculationTypes`, `BusinessProcess`, `Task`, `DataProcessor`, `Report`, `InformationRegister`, `AccumulationRegister`, `AccountingRegister`. Реквизит создаётся со свойствами по умолчанию и **корректно сгенерированным UUID** — UUID руками задавать не надо.
+Чтобы задать тип реквизита и прочие назначаемые свойства — `modify_metadata` (см. ниже). После создания прогони `get_project_errors` (и `revalidate_objects` на новый объект, если валидация выглядит устаревшей).
 
-Если нужно сразу выставить тип реквизита, описание, синонимы и т. п. — отдельным шагом отредактируй `.mdo` руками или дождись отдельного инструмента для этого.
+## `modify_metadata` — установка назначаемых свойств
+
+Устанавливает свойства объекта **или** члена по FQN. Параметры: `projectName`, `fqn`, `properties` (обязательные). `properties` — массив `{name, value, language?}`. Каждое свойство валидируется:
+
+- оно должно быть **назначаемым** — иначе понятная ошибка перечислит назначаемые свойства и укажет на `get_metadata_details(assignable: true)`;
+- значение свойства-перечисления должно быть одним из **допустимых литералов** — иначе ошибка перечислит допустимые литералы.
+
+Умеет ставить `synonym` (по коду языка), `comment` и `type` (тип данных). Значение `type` — **структурная спецификация** `{"types":[{"kind":...}]}`, где `kind` это:
+
+- примитив `String` / `Number` / `Boolean` / `Date` со встроенными квалификаторами: `length` (для строки); `precision`, `scale`, `nonNegative` (для числа); `fractions` = `DateTime` | `Date` | `Time` (для даты);
+- либо ссылка: `{"kind":"Ref","ref":"Type.Name"}` или `{"kind":"CatalogRef","ref":"Name"}`.
+
+Список `types` может смешивать несколько описаний — получится составной тип.
+
+**Переименование `modify_metadata` НЕ делает** — свойство `name` отклоняется. Для переименования используй `rename_metadata_object`.
+
+## `get_metadata_details(assignable: true)` — что можно установить
+
+Чтобы узнать, какие свойства принимает `modify_metadata` и в какие значения, вызови `get_metadata_details` с `assignable: true`. Он вернёт схему назначаемых свойств: для каждого — вид значения, текущее значение и допустимые литералы перечисления. FQN могут адресовать члены (например `Catalog.Products.Attribute.Weight`). Это инструмент обнаружения перед `modify_metadata`.
 
 ## Язык синонимов (`language`)
 
-В инструментах чтения метаданных (`get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`) есть параметр `language` — код языка для значений `<synonym>` (например, `ru`, `en`). Если не задан — используется язык конфигурации по умолчанию. В русскоязычных проектах ставь `language: "ru"`, чтобы получать читаемые названия. На запись (`add_metadata_attribute`) этот параметр не влияет — синонимы при добавлении надо проставлять руками в `.mdo`.
+В инструментах чтения метаданных (`get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`) есть параметр `language` — код языка для значений `<synonym>` (например, `ru`, `en`). Если не задан — используется язык конфигурации по умолчанию. В русскоязычных проектах ставь `language: "ru"`, чтобы получать читаемые названия. На запись синонимы тоже пишутся **по коду языка**: и `create_metadata`, и `modify_metadata` принимают `language` в элементе `properties` (`{name: "synonym", value: ..., language: "ru"}`) — проставлять синоним руками в `.mdo` больше не нужно.
 
 ## Ручная правка `.mdo` / Form XML: UUID v4
 

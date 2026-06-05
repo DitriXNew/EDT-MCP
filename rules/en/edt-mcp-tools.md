@@ -26,9 +26,11 @@ This section matters more than any table below. Use it to pick the right tool, t
 | "Read method X of module Y" | `read_method_source` | **Never** load the whole module for a single method |
 | "Show me the whole module" | first `get_module_structure` (the map), then `read_module_source` only if you really need the whole file | Token economy |
 | "Modify code in a method" | `read_method_source` -> `write_module_source` with `mode: searchReplace` | See `edt-mcp-write-safety.md` |
-| "Rename / delete a metadata object" | `rename_metadata_object` / `delete_metadata_object` **without** `confirm` (preview) -> the same call with `confirm: true` | Manual XML edits break references cascadingly |
-| "Create a new object" | `create_metadata_object` | EDT default content + correct UUID; do not hand-build the `.mdo` |
-| "Add an attribute" | `add_metadata_attribute` | Do not edit `.mdo` by hand |
+| "Rename a metadata object" | `rename_metadata_object` **without** `confirm` (preview) -> the same call with `confirm: true` | Manual XML edits break references cascadingly |
+| "Delete an object / member" | `delete_metadata` (by FQN) **without** `confirm` (preview) -> the same call with `confirm: true` | Manual XML edits break references cascadingly |
+| "Create a new object" | `create_metadata` with a top-level FQN (`Catalog.Products`) | EDT default content + correct UUID; do not hand-build the `.mdo` |
+| "Add an attribute / tabular section / dimension / resource" | `create_metadata` with a member FQN (`Catalog.Products.Attribute.Weight`) | Do not edit `.mdo` by hand |
+| "Set a property / type of an object or member" | `modify_metadata` (discover what is settable via `get_metadata_details(assignable: true)`) | Structured `type` spec; do not edit `.mdo` by hand |
 | "Validate a 1C query" | `validate_query` (DCS query -> `dcsMode: true`) | Before pasting a query text into code |
 | "What's in this form?" | `get_form_layout_snapshot` with `mode: compact` (YAML); `get_form_screenshot` for visuals | YAML is cheaper than PNG |
 | "What does the platform expose for type X?" | `get_platform_documentation` | Do not guess signatures |
@@ -94,10 +96,10 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `get_content_assist` | Completions at a code position (types, methods) | When working at a specific BSL position |
 | `get_platform_documentation` | Platform documentation (types, methods, properties, constructors) | When in doubt about a 1C platform signature |
 | `get_metadata_objects` | List of configuration objects with filters `metadataType`, `nameFilter`, `limit` (default 100, max 1000), `language` | Object overview; **always** use a filter |
-| `get_metadata_details` | Detailed object properties by FQN array (`objectFqns: [...]`) | After finding the objects you need |
+| `get_metadata_details` | Detailed object properties by FQN array (`objectFqns: [...]`); FQNs may address members (e.g. `Catalog.Products.Attribute.Weight`). With `assignable: true` returns the assignable-property schema (per property: value kind, current value, allowed enum literals) | After finding the objects you need; use `assignable: true` to discover what `modify_metadata` can set and to what values |
 | `list_subsystems` | Subsystem tree (flat table, recursive by default) | Getting familiar with the configuration structure |
 | `get_subsystem_content` | Subsystem contents by FQN: properties, objects, nested subsystems | Drilling into a specific subsystem |
-| `find_references` | All references to a metadata object in code, forms, roles, metadata. **Top-level objects only** (`Catalog.X`, `Document.Y`, `CommonModule.Z`); for nested ones (attributes, tabular sections, forms) it returns an error — use `rename_metadata_object`/`delete_metadata_object` directly | Before rename/delete of a top-level object |
+| `find_references` | All references to a metadata object in code, forms, roles, metadata. **Top-level objects only** (`Catalog.X`, `Document.Y`, `CommonModule.Z`); for nested ones (attributes, tabular sections, forms) it returns an error — use `rename_metadata_object`/`delete_metadata` directly | Before rename/delete of a top-level object |
 
 ### 4. Tags (2)
 
@@ -156,10 +158,10 @@ Typical cycle — see `edt-mcp-workflows.md`, section "Debugging".
 
 | Tool | Purpose | When to use |
 |---|---|---|
-| `rename_metadata_object` | Rename with cascading update (BSL code, forms, metadata). Workflow: 1) call without `confirm` — preview all change points with indices; 2) (optional) `disableIndices: "2,3,5"` to skip specific changes; 3) `confirm: true`. `maxResults` (default 20, 0 = no limit) caps the preview. Russian FQNs are supported | **Only** this way to rename; manual XML editing is dangerous |
-| `delete_metadata_object` | Delete with reference cleanup. Same preview -> confirm workflow | Same |
-| `add_metadata_attribute` | Add an attribute to an object (Catalog, Document, Register, ...) | Instead of manual `.mdo` editing |
-| `create_metadata_object` | Create a new top-level object with EDT default content. Supported types: `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor`. Params: `metadataType`, `name`, optional `synonym`, `comment`, `language`. UUID is generated automatically | Instead of hand-building a new `.mdo`; run `get_project_errors` afterwards |
+| `rename_metadata_object` | Rename with cascading update (BSL code, forms, metadata). Workflow: 1) call without `confirm` — preview all change points with indices; 2) (optional) `disableIndices: "2,3,5"` to skip specific changes; 3) `confirm: true`. `maxResults` (default 20, 0 = no limit) caps the preview. Russian FQNs are supported | **Only** this way to rename; manual XML editing is dangerous. `modify_metadata` does **not** rename |
+| `delete_metadata` | Delete an object **or** member by FQN with cascading reference cleanup (BSL, forms, other metadata). Two-phase: call without `confirm` to preview affected references, then `confirm: true` to apply. Russian FQNs are supported | Instead of manual `.mdo` editing |
+| `create_metadata` | Create a metadata node addressed by a 1C full-name FQN: a top-level object (`Catalog.Products`) **or** a subordinate member (`Catalog.Products.Attribute.Weight`, `InformationRegister.Prices.Dimension.Product`, `Document.Order.TabularSection.Goods`, `Enum.Colors.EnumValue.Red`). Kind is inferred from the FQN; type/kind tokens may be English or Russian. Supported top-level types: `Catalog`, `Document`, `InformationRegister`, `AccumulationRegister`, `Enum`, `CommonModule`, `Report`, `DataProcessor`. Params: `projectName`, `fqn`, optional `properties` (`[{name, value, language?}]`, only `synonym`/`comment` at creation), `expectedNotExists`. UUID is generated automatically | Instead of hand-building a new `.mdo`; set other properties with `modify_metadata`; run `get_project_errors` afterwards |
+| `modify_metadata` | Set properties of an object **or** member by FQN. Params: `projectName`, `fqn`, `properties` (`[{name, value, language?}]`). Each property is validated against the assignable schema and allowed enum literals. Can set `synonym` (language-keyed), `comment`, and the data `type` (structured spec). Discover what is settable via `get_metadata_details(assignable: true)` | Set type/synonym/other assignable properties without editing `.mdo`. Does **not** rename — use `rename_metadata_object` |
 
 ### 9. Translation (LanguageTool) (3)
 

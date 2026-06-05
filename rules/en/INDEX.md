@@ -50,7 +50,7 @@ The most specific file wins over the more general one. For example, `bsl-ssl.md`
 ## ALWAYS
 
 - Before editing a BSL object — read the method via `read_method_source`, do not load the whole module
-- Before `rename_metadata_object` / `delete_metadata_object` — first call **without** `confirm` (preview of all changes), then the same call with `confirm: true` to apply
+- Before `rename_metadata_object` / `delete_metadata` — first call **without** `confirm` (preview of all changes), then the same call with `confirm: true` to apply
 - After any code write — check for errors via `get_project_errors` or `get_problem_summary`
 - Before writing new code — find similar patterns in the project via `search_in_code` and follow them
 - When in doubt about a 1C platform signature — `get_platform_documentation`, do not guess

@@ -62,12 +62,16 @@ Short form:
 ### Delete
 
 1. For top-level — `find_references` to estimate scope. For nested — skip.
-2. `delete_metadata_object` with `projectName` + `objectFqn`, without `confirm` — preview affected references.
+2. `delete_metadata` with `projectName` + `fqn` (full-name FQN of the object or member, e.g. `Catalog.Products` or `Document.SalesOrder.Attribute.Amount`), without `confirm` — preview affected references.
 3. With `confirm: true` — apply.
 
-### Add an attribute
+### Create an object or a member (e.g. an attribute)
 
-`add_metadata_attribute` with `projectName` + `parentFqn` + `attributeName` — cascadingly creates the attribute without manual `.mdo` editing.
+`create_metadata` with `projectName` + `fqn` — addresses the node by its 1C full-name FQN. A top-level object is `Type.Name` (e.g. `Catalog.Products`); a subordinate member is `Type.Name.Kind.Name` (e.g. `Catalog.Products.Attribute.Weight`, `InformationRegister.Prices.Resource.Sum`, `Enum.Colors.EnumValue.Red`). The kind is inferred from the FQN, so this single tool both creates objects and adds members — no manual `.mdo` editing. Optionally pass `properties` (`[{name, value, language?}]`) to set `synonym` / `comment` at creation; set other properties afterwards with `modify_metadata`.
+
+### Set properties
+
+`modify_metadata` with `projectName` + `fqn` + `properties` (`[{name, value, language?}]`) — sets assignable properties of an object or member by FQN (synonym, comment, a structured `type`, and other assignable scalar/boolean/integer/enum properties), validated against the assignable-property set and allowed enum literals. Discover what is settable with `get_metadata_details` (`assignable: true`). The `name` property (rename) is refused here — use `rename_metadata_object`.
 
 ## 7. Debugging
 

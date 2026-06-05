@@ -52,7 +52,7 @@ Action/confirmation/status results with none of these return MARKDOWN. `write_mo
 
 Tool families that stay JSON, and why:
 
-- metadata-writes (`create_metadata_object`, `add_metadata_attribute`, `delete_metadata_object`) → created **FQN** *(a)*;
+- metadata-writes (`create_metadata`, `modify_metadata`, `delete_metadata`) → addressed **FQN** *(a)*;
 - debug / profiling tools → launch / application / breakpoint **IDs** + live session state *(a)*;
 - `validate_query` → error **line/col** *(b)*;
 - `list_configurations` → config **identities** *(a)*;
