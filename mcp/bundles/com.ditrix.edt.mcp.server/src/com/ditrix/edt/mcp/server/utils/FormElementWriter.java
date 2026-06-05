@@ -72,7 +72,7 @@ public final class FormElementWriter
     public static final class FormMemberRef
     {
         /** The owning form path, normalized to the {@code Type.Object.forms.FormName} /
-         * {@code CommonForm.Name} shape that {@code GetFormStructureTool.resolveMdForm} expects. */
+         * {@code CommonForm.Name} shape that {@code FormStructureReader.resolveMdForm} expects. */
         public final String formPath;
         /** The raw element kind token (English or Russian); resolve via {@link #kindForToken}. */
         public final String kindToken;
@@ -168,7 +168,7 @@ public final class FormElementWriter
      * If {@code normFqn} addresses a FORM ITSELF (not a member) - {@code Type.Object.Form(s).FormName}
      * (4 parts, form token at position 2) or {@code CommonForm.FormName} (2 parts) - returns the form
      * path normalized to the {@code Type.Object.forms.FormName} / {@code CommonForm.Name} shape that
-     * {@code GetFormStructureTool.resolveMdForm} expects; otherwise {@code null}. Used to render a
+     * {@code FormStructureReader.resolveMdForm} expects; otherwise {@code null}. Used to render a
      * form's structure from {@code get_metadata_details}.
      */
     public static String parseFormPath(String normFqn)

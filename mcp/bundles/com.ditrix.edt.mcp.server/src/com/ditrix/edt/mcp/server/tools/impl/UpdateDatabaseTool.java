@@ -290,7 +290,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     ? ApplicationUpdateType.FULL
                     : ApplicationUpdateType.INCREMENTAL;
 
-            // Confirm-preview gate (mirrors delete_metadata / delete_form_item): a bare call
+            // Confirm-preview gate (mirrors delete_metadata): a bare call
             // resolves the target and reports the exact IRREVERSIBLE action WITHOUT touching the
             // infobase; only confirm=true actually applies it. All validation above (project open,
             // application exists, not already being updated) has run, so the preview is trustworthy.

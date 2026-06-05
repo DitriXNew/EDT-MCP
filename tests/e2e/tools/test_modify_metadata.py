@@ -492,8 +492,8 @@ def test_modify_form_missing_member_is_error():
         "properties": [{"name": "visible", "value": False}],
     })
     e = assert_error(r, "missing form member")
-    assert_error_quality(e, names=["NoSuchField_zz"], suggests=["not found", "get_form_structure"],
-                         ctx="a missing form member points to get_form_structure")
+    assert_error_quality(e, names=["NoSuchField_zz"], suggests=["not found", "get_metadata_details"],
+                         ctx="a missing form member points to get_metadata_details")
     assert_no_diff("a rejected form modify must change nothing")
 
 

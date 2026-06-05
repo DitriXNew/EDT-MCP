@@ -7,15 +7,11 @@
 package com.ditrix.edt.mcp.server.tools;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.tools.impl.AddFormAttributeTool;
-import com.ditrix.edt.mcp.server.tools.impl.AddFormCommandTool;
-import com.ditrix.edt.mcp.server.tools.impl.AddFormItemTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
-import com.ditrix.edt.mcp.server.tools.impl.DeleteFormItemTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
@@ -30,7 +26,6 @@ import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetFormLayoutSnapshotTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetFormScreenshotTool;
-import com.ditrix.edt.mcp.server.tools.impl.GetFormStructureTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMetadataDetailsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMetadataObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool;
@@ -64,7 +59,6 @@ import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
-import com.ditrix.edt.mcp.server.tools.impl.SetFormItemPropertyTool;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
 import com.ditrix.edt.mcp.server.tools.impl.StepTool;
@@ -163,21 +157,17 @@ public final class BuiltInToolRegistrar
         registry.register(new GetMethodCallHierarchyTool());
         registry.register(new GoToDefinitionTool());
         registry.register(new GetSymbolInfoTool());
-        registry.register(new GetFormStructureTool());
         registry.register(new GetFormLayoutSnapshotTool());
         registry.register(new GetFormScreenshotTool());
-        registry.register(new AddFormAttributeTool());
-        registry.register(new AddFormCommandTool());
-        registry.register(new DeleteFormItemTool());
         registry.register(new ValidateQueryTool());
 
-        // Metadata refactoring tools
+        // Metadata refactoring tools (form members are created/edited/removed by their FQNs via
+        // create/modify/delete_metadata; the former add_form_*/set_form_item_property/delete_form_item/
+        // get_form_structure tools were folded into those + get_metadata_details and removed in F4b).
         registry.register(new RenameMetadataObjectTool());
         registry.register(new DeleteMetadataTool());
         registry.register(new CreateMetadataTool());
         registry.register(new ModifyMetadataTool());
-        registry.register(new SetFormItemPropertyTool());
-        registry.register(new AddFormItemTool());
 
         // LanguageTool translation tools
         registry.register(new GenerateTranslationStringsTool());

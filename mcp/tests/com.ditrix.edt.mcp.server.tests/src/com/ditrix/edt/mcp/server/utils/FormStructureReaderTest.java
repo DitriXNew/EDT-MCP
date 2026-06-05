@@ -33,8 +33,8 @@ import org.junit.Test;
  * form (items / attributes / formCommands / name / id / title). The deep read of a real form model is
  * covered by the e2e suite (get_metadata_details on a form FQN) against a live EDT.
  *
- * <p>This logic used to live on {@code GetFormStructureTool}; it was extracted to the shared
- * {@link FormStructureReader} so {@code get_metadata_details} / {@code delete_metadata} reuse it.</p>
+ * <p>This logic was extracted into the shared {@link FormStructureReader} (from the former
+ * form-read tool) so {@code get_metadata_details} / {@code delete_metadata} reuse it.</p>
  */
 public class FormStructureReaderTest
 {

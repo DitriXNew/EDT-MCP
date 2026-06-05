@@ -133,8 +133,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "`...Field.Item.Handler.Event`). The same two-phase preview/confirm applies; deleting a " //$NON-NLS-1$
             + "Group / Table cascades its contained subtree. Unlike the mdclass path there is NO " //$NON-NLS-1$
             + "reference cascade for forms: a cross-reference to the removed member (a field's " //$NON-NLS-1$
-            + "dataPath, a button's command) is NOT rewritten - re-check with get_form_structure / " //$NON-NLS-1$
-            + "get_metadata_details afterwards. The change persists to the form's `Form.form` on disk. " //$NON-NLS-1$
+            + "dataPath, a button's command) is NOT rewritten - re-check with get_metadata_details " //$NON-NLS-1$
+            + "afterwards. The change persists to the form's `Form.form` on disk. " //$NON-NLS-1$
             + "For a form member the preview's `items` list the removed element + its contained " //$NON-NLS-1$
             + "descendants as `{name, type}` and `affectedReferencesCount` is 0 (no cascade is " //$NON-NLS-1$
             + "computed for forms).\n\n" //$NON-NLS-1$
@@ -363,10 +363,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("No event handler for '" + ref.name + "' on " //$NON-NLS-1$ //$NON-NLS-2$
                 + (ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath) //$NON-NLS-1$
-                + ". Use get_form_structure to list the handlers.").toJson(); //$NON-NLS-1$
+                + ". Use get_metadata_details to list the handlers.").toJson(); //$NON-NLS-1$
         }
         return ToolResult.error("Form member not found: " + ref.name + " (kind '" + ref.kindToken //$NON-NLS-1$ //$NON-NLS-2$
-            + "') on " + ref.formPath + ". Use get_form_structure to list the members.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            + "') on " + ref.formPath + ". Use get_metadata_details to list the members.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Preview inside a READ transaction (no mutation): capture the target type + item descendants. */
@@ -430,7 +430,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     ? "the " + (handler ? "handler" : "member") + " itself." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                     : "it and its " + data.descendants.size() + " contained item(s).") //$NON-NLS-1$ //$NON-NLS-2$
                 + " Cross-references to it (a field's dataPath, a button's command) are NOT rewritten - " //$NON-NLS-1$
-                + "re-check with get_form_structure / get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
+                + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
                 + "to apply.") //$NON-NLS-1$
             .toJson();
     }

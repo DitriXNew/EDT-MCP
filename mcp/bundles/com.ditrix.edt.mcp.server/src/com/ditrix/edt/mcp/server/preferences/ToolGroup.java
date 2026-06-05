@@ -57,11 +57,9 @@ public enum ToolGroup
         "get_form_screenshot", "validate_query"), //$NON-NLS-1$ //$NON-NLS-2$
 
     REFACTORING("refactoring", "Refactoring", //$NON-NLS-1$ //$NON-NLS-2$
-        "Metadata create, rename, delete, attribute management, and form item editing", //$NON-NLS-1$
+        "Metadata create, rename, delete and property management (objects, members and form members)", //$NON-NLS-1$
         "rename_metadata_object", "delete_metadata", "create_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "modify_metadata", "add_form_attribute", //$NON-NLS-1$ //$NON-NLS-2$
-        "set_form_item_property", "add_form_command", "delete_form_item", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "add_form_item"), //$NON-NLS-1$
+        "modify_metadata"), //$NON-NLS-1$
 
     TRANSLATION("translation", "Translation (LanguageTool)", //$NON-NLS-1$ //$NON-NLS-2$
         "LanguageTool: translation strings generation, configuration sync, project info", //$NON-NLS-1$

@@ -548,7 +548,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
                 + "'Type.Object.Form.FormName' or 'CommonForm.FormName'; check with " //$NON-NLS-1$
-                + "get_metadata_objects and get_form_structure.").toJson(); //$NON-NLS-1$
+                + "get_metadata_objects and get_metadata_details.").toJson(); //$NON-NLS-1$
         }
         if (!(mdForm instanceof IBmObject))
         {

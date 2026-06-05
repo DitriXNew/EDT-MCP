@@ -309,8 +309,8 @@ def test_delete_form_missing_member_is_error():
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.NoSuchField_zz",
         "confirm": True})
     e = assert_error(r, "delete a missing form member")
-    assert_error_quality(e, names=["NoSuchField_zz"], suggests=["not found", "get_form_structure"],
-                         ctx="a missing form member points to get_form_structure")
+    assert_error_quality(e, names=["NoSuchField_zz"], suggests=["not found", "get_metadata_details"],
+                         ctx="a missing form member points to get_metadata_details")
     assert_no_diff("a rejected form-member delete must change nothing")
 
 

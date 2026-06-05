@@ -415,7 +415,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
                         + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                        + ". Use get_form_structure to list the members.").toJson()); //$NON-NLS-1$
+                        + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
                 }
                 List<PreparedChange> changes = new ArrayList<>();
                 for (JsonObject prop : properties)

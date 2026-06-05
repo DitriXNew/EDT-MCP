@@ -34,7 +34,6 @@ public class ToolAnnotationClassifierTest
             "delete_metadata",
             "update_database",
             "rename_metadata_object",
-            "delete_form_item",
             "delete_project" })
         {
             ToolAnnotations a = ToolAnnotationClassifier.classify(name);

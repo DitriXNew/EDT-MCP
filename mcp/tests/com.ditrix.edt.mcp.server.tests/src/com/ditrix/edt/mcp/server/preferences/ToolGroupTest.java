@@ -195,13 +195,15 @@ public class ToolGroupTest
         assertTrue(tools.contains("create_metadata"));
         assertFalse(tools.contains("create_metadata_object"));
         assertFalse(tools.contains("add_metadata_attribute"));
-        // Metadata/form property writers also belong here.
+        // The unified property writer belongs here too (it also edits form members by FQN; the former
+        // add_form_*/set_form_item_property/delete_form_item tools were folded into
+        // create/modify/delete_metadata and removed in F4b).
         assertTrue(tools.contains("modify_metadata"));
-        assertTrue(tools.contains("add_form_attribute"));
-        assertTrue(tools.contains("set_form_item_property"));
-        assertTrue(tools.contains("add_form_command"));
-        assertTrue(tools.contains("delete_form_item"));
-        assertTrue(tools.contains("add_form_item"));
-        assertEquals(9, tools.size());
+        assertFalse(tools.contains("add_form_attribute"));
+        assertFalse(tools.contains("set_form_item_property"));
+        assertFalse(tools.contains("add_form_command"));
+        assertFalse(tools.contains("delete_form_item"));
+        assertFalse(tools.contains("add_form_item"));
+        assertEquals(4, tools.size());
     }
 }

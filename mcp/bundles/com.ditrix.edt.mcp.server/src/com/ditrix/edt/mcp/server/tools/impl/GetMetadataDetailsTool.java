@@ -278,9 +278,9 @@ public class GetMetadataDetailsTool implements IMcpTool
             }
 
             // A FQN that addresses a FORM ITSELF (Type.Object.Form.FormName or CommonForm.FormName)
-            // renders the form's STRUCTURE (items / attributes / commands) via the cross-model hop -
-            // the same view get_form_structure produces, folded in here. Form MEMBERS use their own
-            // create/modify/delete FQNs; this branch is for the whole form.
+            // renders the form's STRUCTURE (items / attributes / commands) via the cross-model hop
+            // (FormStructureReader). Form MEMBERS use their own create/modify/delete FQNs; this branch
+            // is for the whole form.
             String formPath = FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(fqn));
             if (formPath != null)
             {
@@ -347,7 +347,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     /**
      * Renders a form's structure (items / attributes / commands) for a form FQN, reusing
-     * {@code GetFormStructureTool}'s resolver + renderer: resolve the {@code BasicForm}, then inside a
+     * {@code FormStructureReader}'s resolver + renderer: resolve the {@code BasicForm}, then inside a
      * BM READ transaction reach its editable {@code Form} content and render it to markdown (the
      * EObjects must not escape the read task). Returns {@code null} when the form has no editable
      * content model (empty / legacy / not built) or the BM model is unavailable.
