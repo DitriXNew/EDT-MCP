@@ -123,8 +123,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "default).\n\n" //$NON-NLS-1$
             + "## Not supported here\n" //$NON-NLS-1$
             + "- `name` (rename): refused - use rename_metadata_object, which cascades the rename " //$NON-NLS-1$
-            + "across BSL code, forms and metadata.\n" //$NON-NLS-1$
-            + "- A member of a NESTED object (e.g. a tabular-section attribute) is not yet supported.\n\n" //$NON-NLS-1$
+            + "across BSL code, forms and metadata.\n\n" //$NON-NLS-1$
             + "## Setting the data type\n" //$NON-NLS-1$
             + "The `type` property takes a STRUCTURED value `{types:[{kind, ...}]}`. Primitive kinds " //$NON-NLS-1$
             + "String / Number / Boolean / Date carry inline qualifiers (length; precision / scale / " //$NON-NLS-1$
@@ -178,7 +177,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         MdObject target = node.object;
 
-        // Resolve the BM re-fetch strategy (mutation must re-fetch inside the write tx).
+        // Resolve the BM re-fetch strategy (mutation must re-fetch inside the write tx). Only TOP
+        // objects are re-fetchable by bmId, so for a member we re-fetch the TOP object and
+        // re-navigate to the leaf's owner BY NAME inside the tx - this is what lets a member of a
+        // NESTED object (e.g. a tabular-section attribute) be modified, not just a direct member.
+        final String[] parts = normFqn.split("\\."); //$NON-NLS-1$
         final long topBmId;
         final EStructuralFeature memberFeature;
         final String memberName;
@@ -194,13 +197,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         else
         {
-            // A member: re-fetch its owner (which must be a BM TOP object) and re-find it by name.
-            if (!(node.owner instanceof IBmObject) || !((IBmObject)node.owner).bmIsTop())
+            MdObject topObject = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
+            if (!(topObject instanceof IBmObject))
             {
-                return ToolResult.error("Modifying a member of a nested object (e.g. a tabular-section " //$NON-NLS-1$
-                    + "attribute) is not yet supported by modify_metadata.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("Top object is not a BM object").toJson(); //$NON-NLS-1$
             }
-            topBmId = ((IBmObject)node.owner).bmGetId();
+            topBmId = ((IBmObject)topObject).bmGetId();
             memberFeature = node.feature;
             memberName = target.getName();
         }
@@ -248,7 +250,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 EObject applyTo = top;
                 if (memberFeature != null)
                 {
-                    applyTo = childByName(top, memberFeature, memberName);
+                    EObject owner = MetadataNodeResolver.resolveOwnerInTx(top, parts);
+                    if (owner == null)
+                    {
+                        throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$
+                    }
+                    applyTo = childByName(owner, memberFeature, memberName);
                     if (applyTo == null)
                     {
                         throw new RuntimeException("Member not found in transaction: " + memberName); //$NON-NLS-1$

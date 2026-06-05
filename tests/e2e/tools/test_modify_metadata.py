@@ -6,7 +6,8 @@ modify_metadata sets properties of a metadata node (object or member) addressed 
 set_metadata_property and adds VALIDATION: a non-assignable property is rejected WITH
 the list of assignable properties; an out-of-range enum value is rejected WITH the
 allowed literals; the `name` property is refused (use rename_metadata_object); the data
-`type` is not yet settable. Nothing is written unless EVERY property validates.
+`type` takes a structured value. A member of a NESTED object (a tabular-section attribute) is
+modifiable via in-transaction owner re-navigation. Nothing is written unless EVERY property validates.
 
 JSON-responseType tool (payload in r.structured: {action:'modified', fqn, applied[],
 persisted, message}). The assignable-property discovery lives in
@@ -174,6 +175,32 @@ def test_set_structured_type_number_on_attribute():
     assert "type" in (r.structured.get("applied") or []), "type must be applied: %r" % (r.structured,)
     # the new Number qualifier lands in the owner .mdo (precision element appears in the diff)
     poll_diff_contains("precision", ctx="the new Number(10,2) type must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_type_on_nested_tabular_section_attribute():
+    # A member of a NESTED object (a tabular-section attribute, depth-6) is modifiable: the tool
+    # re-fetches the TOP object and re-navigates to the leaf's owner inside the write transaction.
+    ts, attr = "E2EModTab", "E2EModNestedAttr"
+    c1 = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.TabularSection." + ts})
+    assert_ok(c1, "seed tabular section")
+    wait_for_project_ready()
+    c2 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.TabularSection.%s.Attribute.%s" % (ts, attr),
+    })
+    assert_ok(c2, "seed nested attribute")
+    wait_for_project_ready()
+
+    fqn = "Catalog.Catalog.TabularSection.%s.Attribute.%s" % (ts, attr)
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Number", "precision": 8, "scale": 0}]}}],
+    })
+    assert_ok(r, "set type on the NESTED tabular-section attribute")
+    assert "type" in (r.structured.get("applied") or []), "type must be applied: %r" % (r.structured,)
+    poll_diff_contains("precision",
+                       ctx="the nested attribute's Number type must land in the owner Catalog.Catalog.mdo")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
