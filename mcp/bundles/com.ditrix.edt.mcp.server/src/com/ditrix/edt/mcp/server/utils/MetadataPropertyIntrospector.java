@@ -13,6 +13,7 @@ import java.util.List;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EEnum;
 import org.eclipse.emf.ecore.EEnumLiteral;
@@ -23,6 +24,8 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 /**
  * Introspects the ASSIGNABLE properties of a metadata {@link EObject}: which structural features a
@@ -50,7 +53,11 @@ public final class MetadataPropertyIntrospector
         /** The localized synonym map, keyed by language code. */
         LOCALIZED_STRING,
         /** A 1C data type (mcore {@code TypeDescription}); set via the structured type form. */
-        TYPE_DESCRIPTION
+        TYPE_DESCRIPTION,
+        /** A single reference to another metadata object, set by its FQN. */
+        REFERENCE,
+        /** A list of references to other metadata objects, set (replaced) by an array of FQNs. */
+        MANY_REFERENCE
     }
 
     /** The introspected schema of one assignable property. */
@@ -109,7 +116,7 @@ public final class MetadataPropertyIntrospector
                 continue;
             }
             result.add(new PropertyInfo(feature.getName(), kind, renderCurrent(obj, feature, kind),
-                kind == ValueKind.ENUM ? enumLiterals(feature) : null, feature));
+                allowedValuesFor(feature, kind), feature));
         }
         return result;
     }
@@ -225,9 +232,38 @@ public final class MetadataPropertyIntrospector
             {
                 return ValueKind.TYPE_DESCRIPTION;
             }
+            // A non-containment reference whose target is a metadata object (MdObject subtype) is a
+            // plain object reference, settable by FQN. Containment refs (child collections) and
+            // non-MdObject refs (e.g. the EObject-typed suppressObject) are excluded. Derived /
+            // transient / non-changeable refs are already filtered upstream by isAssignable.
+            EClass targetType = ref.getEReferenceType();
+            if (!ref.isContainment() && targetType != null
+                && MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(targetType))
+            {
+                return ref.isMany() ? ValueKind.MANY_REFERENCE : ValueKind.REFERENCE;
+            }
             return null;
         }
         return null;
+    }
+
+    /**
+     * The target metadata-type name of a reference feature (e.g. {@code "Subsystem"}), or
+     * {@code "metadata object"} when the target is the abstract base {@code MdObject} (e.g. a
+     * subsystem's content may hold any object). Used to report the allowed target in the schema.
+     */
+    static String referenceTargetTypeName(EStructuralFeature feature)
+    {
+        if (!(feature instanceof EReference))
+        {
+            return null;
+        }
+        EClass target = ((EReference)feature).getEReferenceType();
+        if (target == null)
+        {
+            return null;
+        }
+        return MdClassPackage.Literals.MD_OBJECT == target ? "metadata object" : target.getName(); //$NON-NLS-1$
     }
 
     /** A localized-string map feature (e.g. the synonym) is a containment ref to a *MapEntry EClass. */
@@ -253,6 +289,21 @@ public final class MetadataPropertyIntrospector
             {
                 return (EEnum)type;
             }
+        }
+        return null;
+    }
+
+    /** The schema "allowed values" column: enum literals for ENUM, the target type for a reference. */
+    private static List<String> allowedValuesFor(EStructuralFeature feature, ValueKind kind)
+    {
+        if (kind == ValueKind.ENUM)
+        {
+            return enumLiterals(feature);
+        }
+        if (kind == ValueKind.REFERENCE || kind == ValueKind.MANY_REFERENCE)
+        {
+            String target = referenceTargetTypeName(feature);
+            return target != null ? Collections.singletonList(target) : null;
         }
         return null;
     }
@@ -292,6 +343,10 @@ public final class MetadataPropertyIntrospector
                     // Render via the literal NAME so "Current" shares the vocabulary of allowedValues.
                     return value instanceof org.eclipse.emf.common.util.Enumerator enumerator
                         ? enumerator.getName() : String.valueOf(value);
+                case REFERENCE:
+                    return value instanceof MdObject ? ((MdObject)value).getName() : null;
+                case MANY_REFERENCE:
+                    return renderReferenceList(value);
                 default:
                     return String.valueOf(value);
             }
@@ -324,6 +379,32 @@ public final class MetadataPropertyIntrospector
             sb.append(entry.getKey()).append('=').append(entry.getValue());
         }
         return sb.toString();
+    }
+
+    private static String renderReferenceList(Object value)
+    {
+        if (!(value instanceof EList<?>))
+        {
+            return null;
+        }
+        EList<?> list = (EList<?>)value;
+        if (list.isEmpty())
+        {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Object element : list)
+        {
+            if (element instanceof MdObject)
+            {
+                if (sb.length() > 0)
+                {
+                    sb.append(", "); //$NON-NLS-1$
+                }
+                sb.append(((MdObject)element).getName());
+            }
+        }
+        return sb.length() > 0 ? sb.toString() : null;
     }
 
     private static String renderType(TypeDescription typeDesc)

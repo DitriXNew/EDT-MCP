@@ -12,11 +12,14 @@ import java.util.Map;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
@@ -130,6 +133,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "nonNegative; fractions = DateTime | Date | Time). A reference is `{kind:'Ref', " //$NON-NLS-1$
             + "ref:'Type.Name'}` (or `{kind:'CatalogRef', ref:'Name'}`). The list may mix several " //$NON-NLS-1$
             + "(a composite type).\n\n" //$NON-NLS-1$
+            + "## Setting an object reference\n" //$NON-NLS-1$
+            + "A reference property to another metadata object is set by FQN: a SINGLE reference " //$NON-NLS-1$
+            + "(e.g. `chartOfAccounts` on an AccountingRegister) takes `value:'Type.Name'`; a LIST " //$NON-NLS-1$
+            + "reference (e.g. a Subsystem's `content`) takes `value:['Type.Name', ...]` and REPLACES " //$NON-NLS-1$
+            + "the whole list (an empty array `[]` clears it). The target must be a top-level object " //$NON-NLS-1$
+            + "whose type matches; get_metadata_details(assignable:true) shows the allowed target " //$NON-NLS-1$
+            + "type. Structured content with per-item flags (e.g. a common attribute's content), and " //$NON-NLS-1$
+            + "references whose target is a member (e.g. a default form), are not set here yet.\n\n" //$NON-NLS-1$
             + "## Examples\n" //$NON-NLS-1$
             + "- Set a comment: `{projectName:'P', fqn:'Catalog.Products', properties:[{name:'comment', " //$NON-NLS-1$
             + "value:'Goods'}]}`\n" //$NON-NLS-1$
@@ -138,7 +149,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "- Set an enum on an attribute: `{projectName:'P', " //$NON-NLS-1$
             + "fqn:'Catalog.Products.Attribute.Weight', properties:[{name:'indexing', value:'Index'}]}`\n" //$NON-NLS-1$
             + "- Set a type: `{projectName:'P', fqn:'Catalog.Products.Attribute.Weight', " //$NON-NLS-1$
-            + "properties:[{name:'type', value:{types:[{kind:'Number', precision:10, scale:2}]}}]}`\n\n" //$NON-NLS-1$
+            + "properties:[{name:'type', value:{types:[{kind:'Number', precision:10, scale:2}]}}]}`\n" //$NON-NLS-1$
+            + "- Set a list reference: `{projectName:'P', fqn:'Subsystem.Sales', " //$NON-NLS-1$
+            + "properties:[{name:'content', value:['Catalog.Products', 'Document.Order']}]}`\n\n" //$NON-NLS-1$
             + "## Result\n" //$NON-NLS-1$
             + "JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, and " //$NON-NLS-1$
             + "`persisted`."; //$NON-NLS-1$
@@ -263,7 +276,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 for (PreparedChange change : changes)
                 {
-                    change.applyTo(applyTo);
+                    change.applyTo(applyTo, tx);
                 }
                 return null;
             });
@@ -386,6 +399,49 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 out.add(PreparedChange.scalar(info.feature, tr.typeDescription));
                 return null;
             }
+            case REFERENCE:
+            {
+                if (value == null || value.isEmpty())
+                {
+                    return requireValueError(name);
+                }
+                MdObject targetMd = resolveReferenceTarget(config, value);
+                String vErr = validateReferenceTarget(name, info.feature, targetMd, value);
+                if (vErr != null)
+                {
+                    return vErr;
+                }
+                out.add(PreparedChange.reference(info.feature, ((IBmObject)targetMd).bmGetId()));
+                return null;
+            }
+            case MANY_REFERENCE:
+            {
+                JsonElement raw = prop.get("value"); //$NON-NLS-1$
+                if (raw == null || !raw.isJsonArray())
+                {
+                    return ToolResult.error("'" + name + "' is a list reference: provide 'value' as an " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "array of FQNs, e.g. [\"Catalog.Products\", \"Document.Order\"].").toJson(); //$NON-NLS-1$
+                }
+                List<Long> ids = new ArrayList<>();
+                for (JsonElement el : raw.getAsJsonArray())
+                {
+                    String fqn = (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
+                    if (fqn == null || fqn.isEmpty())
+                    {
+                        return ToolResult.error("Each entry of the '" + name + "' list must be a " //$NON-NLS-1$ //$NON-NLS-2$
+                            + "non-empty FQN string.").toJson(); //$NON-NLS-1$
+                    }
+                    MdObject t = resolveReferenceTarget(config, fqn);
+                    String vErr = validateReferenceTarget(name, info.feature, t, fqn);
+                    if (vErr != null)
+                    {
+                        return vErr;
+                    }
+                    ids.add(((IBmObject)t).bmGetId());
+                }
+                out.add(PreparedChange.manyReference(info.feature, ids));
+                return null;
+            }
             case STRING:
             default:
                 if (value == null || value.isEmpty())
@@ -395,6 +451,40 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 out.add(PreparedChange.scalar(info.feature, value));
                 return null;
         }
+    }
+
+    /** Resolves a reference-target FQN to its metadata object (a top object), or {@code null}. */
+    private static MdObject resolveReferenceTarget(Configuration config, String fqn)
+    {
+        String norm = MetadataTypeUtils.normalizeFqn(fqn);
+        MetadataNodeResolver.MetadataNode n = MetadataNodeResolver.resolveExisting(config, norm);
+        return n != null ? n.object : null;
+    }
+
+    /**
+     * Validates a reference target: it must resolve, be a re-fetchable top object, and have a type
+     * assignable to the reference feature's target type. Returns a JSON error or {@code null} on OK.
+     */
+    private static String validateReferenceTarget(String prop, EStructuralFeature feature,
+        MdObject target, String fqn)
+    {
+        if (target == null)
+        {
+            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' was not found. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "Use a valid FQN (e.g. 'Catalog.Products'); check with get_metadata_objects.").toJson(); //$NON-NLS-1$
+        }
+        if (!(target instanceof IBmObject) || !((IBmObject)target).bmIsTop())
+        {
+            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "top-level object; references to members are not supported.").toJson(); //$NON-NLS-1$
+        }
+        EClass targetType = ((EReference)feature).getEReferenceType();
+        if (targetType != null && !targetType.isSuperTypeOf(target.eClass()))
+        {
+            return ToolResult.error("'" + fqn + "' is a " + target.eClass().getName() + " but '" + prop //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "' requires a " + targetType.getName() + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
     }
 
     /**
@@ -413,30 +503,46 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
     private static final class PreparedChange
     {
+        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE }
+
         private final EStructuralFeature feature;
+        private final Kind kind;
         private final Object scalarValue;
         private final String localizedLanguage;
         private final String localizedValue;
-        private final boolean localized;
+        /** For a REFERENCE: the target's bmId. For a MANY_REFERENCE: the targets' bmIds in order. */
+        private final List<Long> referenceBmIds;
 
-        private PreparedChange(EStructuralFeature feature, Object scalarValue, String language,
-            String localizedValue, boolean localized)
+        private PreparedChange(EStructuralFeature feature, Kind kind, Object scalarValue,
+            String language, String localizedValue, List<Long> referenceBmIds)
         {
             this.feature = feature;
+            this.kind = kind;
             this.scalarValue = scalarValue;
             this.localizedLanguage = language;
             this.localizedValue = localizedValue;
-            this.localized = localized;
+            this.referenceBmIds = referenceBmIds;
         }
 
         static PreparedChange scalar(EStructuralFeature feature, Object value)
         {
-            return new PreparedChange(feature, value, null, null, false);
+            return new PreparedChange(feature, Kind.SCALAR, value, null, null, null);
         }
 
         static PreparedChange localized(EStructuralFeature feature, String language, String value)
         {
-            return new PreparedChange(feature, null, language, value, true);
+            return new PreparedChange(feature, Kind.LOCALIZED, null, language, value, null);
+        }
+
+        static PreparedChange reference(EStructuralFeature feature, long targetBmId)
+        {
+            return new PreparedChange(feature, Kind.REFERENCE, null, null, null,
+                java.util.Collections.singletonList(targetBmId));
+        }
+
+        static PreparedChange manyReference(EStructuralFeature feature, List<Long> targetBmIds)
+        {
+            return new PreparedChange(feature, Kind.MANY_REFERENCE, null, null, null, targetBmIds);
         }
 
         String featureName()
@@ -445,25 +551,55 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         @SuppressWarnings("unchecked")
-        void applyTo(EObject target)
+        void applyTo(EObject target, IBmTransaction tx)
         {
-            if (localized)
+            switch (kind)
             {
-                Object map = target.eGet(feature);
-                if (map instanceof EMap)
+                case LOCALIZED:
                 {
+                    Object map = target.eGet(feature);
+                    if (!(map instanceof EMap))
+                    {
+                        throw new RuntimeException("Localized feature '" + feature.getName() //$NON-NLS-1$
+                            + "' is not a map"); //$NON-NLS-1$
+                    }
                     ((EMap<String, String>)map).put(localizedLanguage, localizedValue);
+                    return;
                 }
-                else
+                case REFERENCE:
                 {
-                    throw new RuntimeException("Localized feature '" + feature.getName() //$NON-NLS-1$
-                        + "' is not a map"); //$NON-NLS-1$
+                    // BM normalizes the target to its in-tx counterpart by bmId on set.
+                    target.eSet(feature, requireInTx(tx, referenceBmIds.get(0)));
+                    return;
                 }
+                case MANY_REFERENCE:
+                {
+                    // Replace the whole list (a plain, non-containment cross-reference list, so add()
+                    // only links the target - it does not reparent it).
+                    EList<EObject> list = (EList<EObject>)target.eGet(feature);
+                    list.clear();
+                    for (Long id : referenceBmIds)
+                    {
+                        list.add(requireInTx(tx, id));
+                    }
+                    return;
+                }
+                case SCALAR:
+                default:
+                    target.eSet(feature, scalarValue);
+                    return;
             }
-            else
+        }
+
+        /** Re-fetches a reference target inside the tx, failing clearly if it has gone (rolls back). */
+        private static EObject requireInTx(IBmTransaction tx, long bmId)
+        {
+            EObject t = (EObject)tx.getObjectById(bmId);
+            if (t == null)
             {
-                target.eSet(feature, scalarValue);
+                throw new RuntimeException("Reference target is no longer in the transaction"); //$NON-NLS-1$
             }
+            return t;
         }
     }
 

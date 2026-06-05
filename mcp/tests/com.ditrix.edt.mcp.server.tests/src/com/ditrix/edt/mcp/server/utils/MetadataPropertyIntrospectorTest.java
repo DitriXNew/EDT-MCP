@@ -166,4 +166,41 @@ public class MetadataPropertyIntrospectorTest
         assertTrue(MetadataPropertyIntrospector.introspect(null).isEmpty());
         assertNull(MetadataPropertyIntrospector.find(null, "name")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testSubsystemContentIsManyReferenceWithTargetType()
+    {
+        // A Subsystem's `content` is a non-containment list of MdObject references -> MANY_REFERENCE,
+        // reporting its (base) target type as the allowed value.
+        PropertyInfo content = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createSubsystem(), "content"); //$NON-NLS-1$
+        assertNotNull("a subsystem's content must be assignable", content); //$NON-NLS-1$
+        assertTrue("content must be a MANY_REFERENCE", //$NON-NLS-1$
+            content.valueKind == ValueKind.MANY_REFERENCE);
+        assertFalse("a reference must report its allowed target type", //$NON-NLS-1$
+            content.allowedValues.isEmpty());
+    }
+
+    @Test
+    public void testSubsystemParentIsSingleReference()
+    {
+        PropertyInfo parent = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createSubsystem(), "parentSubsystem"); //$NON-NLS-1$
+        assertNotNull("a subsystem's parentSubsystem must be assignable", parent); //$NON-NLS-1$
+        assertTrue("parentSubsystem must be a single REFERENCE", //$NON-NLS-1$
+            parent.valueKind == ValueKind.REFERENCE);
+        assertTrue("parentSubsystem must report its Subsystem target type", //$NON-NLS-1$
+            parent.allowedValues.contains("Subsystem")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAccountingRegisterChartOfAccountsIsSingleReference()
+    {
+        PropertyInfo coa = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createAccountingRegister(), "chartOfAccounts"); //$NON-NLS-1$
+        assertNotNull("an AccountingRegister.chartOfAccounts must be assignable", coa); //$NON-NLS-1$
+        assertTrue("chartOfAccounts must be a single REFERENCE", coa.valueKind == ValueKind.REFERENCE); //$NON-NLS-1$
+        assertTrue("chartOfAccounts must report its ChartOfAccounts target type", //$NON-NLS-1$
+            coa.allowedValues.contains("ChartOfAccounts")); //$NON-NLS-1$
+    }
 }

@@ -203,6 +203,75 @@ def test_set_type_on_nested_tabular_section_attribute():
                        ctx="the nested attribute's Number type must land in the owner Catalog.Catalog.mdo")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Happy — object reference properties (single + many), set by FQN
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_many_reference_subsystem_content():
+    # A Subsystem's `content` is a LIST reference to metadata objects: set it to [Catalog.Catalog]
+    # by FQN. The whole list is replaced; the referenced FQN lands in the subsystem .mdo.
+    sub = "E2ERefSubsystem"
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Subsystem." + sub})
+    assert_ok(cr, "seed subsystem")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Subsystem." + sub,
+        "properties": [{"name": "content", "value": ["Catalog.Catalog"]}],
+    })
+    assert_ok(r, "set the subsystem content list")
+    assert "content" in (r.structured.get("applied") or []), "content must be applied: %r" % (r.structured,)
+    poll_diff_contains("Catalog.Catalog",
+                       ctx="the referenced object FQN must land in the subsystem .mdo content")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_single_reference_accounting_register_chart_of_accounts():
+    # An AccountingRegister.chartOfAccounts is a SINGLE reference to a ChartOfAccounts: set it by FQN.
+    coa = "E2ERefCoA"
+    reg = "E2ERefAcctReg"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "ChartOfAccounts." + coa}), "seed CoA")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "AccountingRegister." + reg}), "seed register")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "AccountingRegister." + reg,
+        "properties": [{"name": "chartOfAccounts", "value": "ChartOfAccounts." + coa}],
+    })
+    assert_ok(r, "set the chartOfAccounts single reference")
+    assert "chartOfAccounts" in (r.structured.get("applied") or []), \
+        "chartOfAccounts must be applied: %r" % (r.structured,)
+    poll_diff_contains(coa, ctx="the referenced chart of accounts must land in the register .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="read")
+def test_assignable_lists_reference_property_with_target_type():
+    # The Subsystem's `content` reference must appear in the assignable schema as a (MANY_)REFERENCE
+    # with its allowed target type, so a client can discover it.
+    sub = "E2ERefSubsystem2"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Subsystem." + sub}), "seed subsystem")
+    wait_for_project_ready()
+    text = _assignable_text("Subsystem." + sub)
+    assert_contains(text, "content", "the content reference must be listed as assignable")
+    assert_contains(text, "REFERENCE", "a reference property must report its REFERENCE kind")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_reference_to_nonexistent_target_is_error():
+    sub = "E2ERefSubsystem3"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Subsystem." + sub}), "seed subsystem")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Subsystem." + sub,
+        "properties": [{"name": "content", "value": ["Catalog.NoSuchObjectHere"]}],
+    })
+    e = assert_error(r, "reference to a nonexistent target")
+    assert_error_quality(e, names=["Catalog.NoSuchObjectHere"],
+                         ctx="a missing reference target is a clean, actionable error")
+
+
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_set_ref_type_to_catalog():
     attr = "E2ERefTypeAttr"
