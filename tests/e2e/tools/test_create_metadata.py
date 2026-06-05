@@ -219,13 +219,38 @@ def test_duplicate_node_is_error():
     assert_no_diff("a rejected duplicate create must not change the project")
 
 
+# Top-types newly enabled by removing the hardcoded 8-type allow-list: the EDT factory
+# produces default content for any configuration object type. Representative spread incl.
+# the user-named services / charts / registers.
+_NEWLY_ENABLED_TOP_TYPES = [
+    "Subsystem", "HTTPService", "WebService", "ChartOfCharacteristicTypes",
+    "ChartOfAccounts", "ChartOfCalculationTypes", "ExchangePlan", "BusinessProcess",
+    "Task", "Constant", "CommonCommand", "AccountingRegister", "CalculationRegister",
+    "DefinedType", "FilterCriterion", "DocumentJournal",
+]
+
+
 @e2e_test(tool="create_metadata", kind="write-metadata")
-def test_recognized_but_unsupported_top_type_is_error():
-    # Subsystem IS a recognized metadata type but is NOT in SUPPORTED_TOP_TYPES.
-    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Subsystem.E2EShouldNotExist"})
-    e = assert_error(r, "recognized-but-unsupported top type")
-    assert_error_quality(e, names=["Subsystem"], suggests=["not supported", "Catalog"])
-    assert_no_diff("a rejected create must not change the project")
+def test_create_all_top_types_incl_services_charts_registers():
+    # The hardcoded 8-type allow-list is gone: any configuration top-type the EDT factory can
+    # instantiate now creates. Create one of each representative type, then read each back.
+    created = []
+    failed = []
+    for t in _NEWLY_ENABLED_TOP_TYPES:
+        wait_for_project_ready()
+        name = "E2EChk" + t
+        r = call("create_metadata", {"projectName": PROJECT, "fqn": t + "." + name})
+        if r.is_error:
+            failed.append("%s -> %s" % (t, (r.error_text() or "")[:140]))
+            continue
+        assert r.structured.get("action") == "created", "%s: %r" % (t, r.structured)
+        created.append((t, name))
+    assert not failed, "these top types failed to create:\n  " + "\n  ".join(failed)
+    # MODEL read-back: each created object resolves by FQN.
+    for t, name in created:
+        d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [t + "." + name]})
+        assert_ok(d, "read-back %s.%s" % (t, name))
+        assert_contains(d.text, name, "MODEL read-back: %s.%s present" % (t, name))
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

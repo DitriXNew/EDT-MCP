@@ -6,11 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.util.Arrays;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
@@ -52,13 +49,6 @@ import com.google.gson.JsonObject;
 public class CreateMetadataTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "create_metadata"; //$NON-NLS-1$
-
-    /** Top-level types supported for creation (same set as the former create_metadata_object). */
-    private static final Set<String> SUPPORTED_TOP_TYPES = new LinkedHashSet<>(Arrays.asList(
-        "Catalog", "Document", "InformationRegister", "AccumulationRegister", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "Enum", "CommonModule", "Report", "DataProcessor")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-
-    private static final String SUPPORTED_TOP_LIST = String.join(", ", SUPPORTED_TOP_TYPES); //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -129,7 +119,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "- The leading TYPE token and the KIND token may be English or Russian; the Name parts " //$NON-NLS-1$
             + "are the programmatic Names, never the synonym.\n\n" //$NON-NLS-1$
             + "## Supported kinds\n" //$NON-NLS-1$
-            + "- Top-level types: " + SUPPORTED_TOP_LIST + ".\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + "- Top-level types: any configuration object type (Catalog, Document, Information/" //$NON-NLS-1$
+            + "Accumulation/Accounting/CalculationRegister, Enum, ChartOfAccounts / " //$NON-NLS-1$
+            + "ChartOfCharacteristicTypes / ChartOfCalculationTypes, ExchangePlan, BusinessProcess, " //$NON-NLS-1$
+            + "Task, Subsystem, HTTPService, WebService, Constant, CommonForm, CommonCommand, Report, " //$NON-NLS-1$
+            + "DataProcessor, CommonModule, ...). A type the EDT factory cannot instantiate is rejected " //$NON-NLS-1$
+            + "with a clear error.\n" //$NON-NLS-1$
             + "- Member kinds: Attribute, TabularSection, Dimension, Resource, EnumValue (on the owner " //$NON-NLS-1$
             + "types that declare them).\n" //$NON-NLS-1$
             + "- Members of a NESTED object (e.g. a tabular-section attribute, " //$NON-NLS-1$
@@ -159,8 +154,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "`language`. After a create run get_project_errors to verify.\n\n" //$NON-NLS-1$
             + "## Gotchas\n" //$NON-NLS-1$
             + "- A node whose FQN already resolves is rejected as a duplicate.\n" //$NON-NLS-1$
-            + "- An unknown type / kind token, an unsupported top-level type, or a malformed FQN " //$NON-NLS-1$
-            + "(odd trailing token) is rejected with guidance.\n" //$NON-NLS-1$
+            + "- An unknown type / kind token or a malformed FQN (odd trailing token) is rejected with " //$NON-NLS-1$
+            + "guidance; a recognized top-type the EDT factory cannot instantiate fails with a clear " //$NON-NLS-1$
+            + "error (no static allow-list).\n" //$NON-NLS-1$
             + "- Members are created with DEFAULT properties (e.g. a default type); adjust with " //$NON-NLS-1$
             + "modify_metadata.\n" //$NON-NLS-1$
             + "- `persisted=false` means the in-memory change committed but the `.mdo` export did not " //$NON-NLS-1$
@@ -251,11 +247,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private String createTopLevel(IProject project, Configuration config, String projectName,
         CreateTarget target, String normFqn, Props props, String synonymLanguage)
     {
-        if (!SUPPORTED_TOP_TYPES.contains(target.topLevelType))
-        {
-            return ToolResult.error("Top-level type '" + target.topLevelType + "' is not supported for " //$NON-NLS-1$ //$NON-NLS-2$
-                + "creation. Supported: " + SUPPORTED_TOP_LIST + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        // Any configuration top-level type resolved by MetadataTypeUtils is attempted: the EDT
+        // model-object factory produces the EDT "New"-wizard default content. A type the factory
+        // cannot instantiate fails gracefully below (clean error, no crash) rather than via a
+        // hand-maintained allow-list.
         EStructuralFeature collection = config.eClass().getEStructuralFeature(target.configFeatureName);
         if (collection == null || !(collection.getEType() instanceof EClass))
         {
@@ -304,7 +299,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 MdObject newObject = (MdObject)factory.create(eClass, version);
                 if (newObject == null)
                 {
-                    throw new RuntimeException("Factory returned null for type: " + eClass.getName()); //$NON-NLS-1$
+                    throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
+                        + "' object"); //$NON-NLS-1$
                 }
                 newObject.setName(name);
                 applyScalarProps(newObject, props, synonymLanguage);
