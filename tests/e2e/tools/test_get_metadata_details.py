@@ -33,6 +33,7 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    wait_for_project_ready,
     e2e_test,
     PROJECT,
 )
@@ -212,3 +213,37 @@ def test_nonexistent_project_is_error():
     # points at the discovery tool.
     assert_error_quality(e, names=[bogus], suggests=["not found", "list_projects"])
     assert_no_diff("a rejected call must not change the project")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FORM structure — a form FQN renders the form's structure (folds get_form_structure)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_form_fqn_renders_structure():
+    # A managed-form FQN (Type.Object.Form.FormName) renders its STRUCTURE: items / attributes /
+    # commands. Seed an attribute + command, then read the whole form back by its FQN.
+    r1 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.GMDFAttr"})
+    assert_ok(r1, "seed form attribute")
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command.GMDFCmd"})
+    assert_ok(r2, "seed form command")
+    wait_for_project_ready()
+    r = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(r, "get_metadata_details on a managed-form FQN")
+    assert_contains(r.text, "Form Structure", "must render the form-structure heading")
+    assert_contains(r.text, "## Attributes", "must render the Attributes section")
+    assert_contains(r.text, "GMDFAttr", "must list the seeded form attribute")
+    assert_contains(r.text, "GMDFCmd", "must list the seeded form command")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_common_form_fqn_renders_structure():
+    # A CommonForm FQN (2-part) also renders its structure (no mutation: pure read of an existing form).
+    r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["CommonForm.Form"]})
+    assert_ok(r, "get_metadata_details on a CommonForm FQN")
+    assert_contains(r.text, "Form Structure", "a CommonForm FQN must render the form structure")
+    assert_contains(r.text, "## Items", "must render the Items section")

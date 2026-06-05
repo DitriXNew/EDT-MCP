@@ -165,6 +165,31 @@ public final class FormElementWriter
     }
 
     /**
+     * If {@code normFqn} addresses a FORM ITSELF (not a member) - {@code Type.Object.Form(s).FormName}
+     * (4 parts, form token at position 2) or {@code CommonForm.FormName} (2 parts) - returns the form
+     * path normalized to the {@code Type.Object.forms.FormName} / {@code CommonForm.Name} shape that
+     * {@code GetFormStructureTool.resolveMdForm} expects; otherwise {@code null}. Used to render a
+     * form's structure from {@code get_metadata_details}.
+     */
+    public static String parseFormPath(String normFqn)
+    {
+        if (normFqn == null)
+        {
+            return null;
+        }
+        String[] p = normFqn.split("\\."); //$NON-NLS-1$
+        if (p.length == 4 && isFormToken(p[2]))
+        {
+            return p[0] + "." + p[1] + ".forms." + p[3]; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (p.length == 2 && "CommonForm".equalsIgnoreCase(MetadataTypeUtils.toEnglishSingular(p[0]))) //$NON-NLS-1$
+        {
+            return p[0] + "." + p[1]; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
      * Resolves a form-member FQN kind token (English or Russian, case-insensitive) to a {@link Kind},
      * or {@code null} if it is not a supported form-element kind.
      */

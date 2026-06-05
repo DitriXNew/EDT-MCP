@@ -174,6 +174,34 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testParseFormPathManagedAndCommon()
+    {
+        // A managed-form FQN (Type.Object.Form.FormName) normalizes to the 'forms' shape resolveMdForm
+        // expects; the form token is bilingual.
+        assertEquals("Catalog.Products.forms.ItemForm", //$NON-NLS-1$
+            FormElementWriter.parseFormPath("Catalog.Products.Form.ItemForm")); //$NON-NLS-1$
+        assertEquals("Catalog.Products.forms.ItemForm", //$NON-NLS-1$
+            FormElementWriter.parseFormPath("Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$
+        // Russian "Форма" (forma) form token.
+        String ru = "Catalog.Products." + fromCp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430) + ".ItemForm"; //$NON-NLS-1$
+        assertEquals("Catalog.Products.forms.ItemForm", FormElementWriter.parseFormPath(ru)); //$NON-NLS-1$
+        // A CommonForm (2 parts) IS a form.
+        assertEquals("CommonForm.MyForm", FormElementWriter.parseFormPath("CommonForm.MyForm")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testParseFormPathRejectsNonForm()
+    {
+        // A plain top object is NOT a form FQN (must fall through to the normal object path).
+        assertNull(FormElementWriter.parseFormPath("Catalog.Products")); //$NON-NLS-1$
+        // A 4-part mdclass member (no form token at position 2) is not a form FQN.
+        assertNull(FormElementWriter.parseFormPath("Catalog.Products.Attribute.Weight")); //$NON-NLS-1$
+        // A nested member FQN is not a form FQN.
+        assertNull(FormElementWriter.parseFormPath("Catalog.Products.TabularSection.Lines.Attribute.Qty")); //$NON-NLS-1$
+        assertNull(FormElementWriter.parseFormPath(null));
+    }
+
+    @Test
     public void testParseNonFormFqnReturnsNull()
     {
         // A plain mdclass member (no form token at position 2) is NOT a form member.

@@ -12,9 +12,13 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
+import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -24,6 +28,8 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
@@ -51,7 +57,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         return "Get detailed properties of one or more 1C metadata objects (basic info by default, " + //$NON-NLS-1$
                "or every reflected section with 'full: true'). Use it after get_metadata_objects to " + //$NON-NLS-1$
                "inspect a known object's attributes/forms/commands; in full mode each section is " + //$NON-NLS-1$
-               "capped so request fewer FQNs to keep the response small. " + //$NON-NLS-1$
+               "capped so request fewer FQNs to keep the response small. A FORM FQN " + //$NON-NLS-1$
+               "('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE " + //$NON-NLS-1$
+               "(items / attributes / commands). " + //$NON-NLS-1$
                "Use this for the full properties of one named object; to list objects by type use get_metadata_objects. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
@@ -94,7 +102,12 @@ public class GetMetadataDetailsTool implements IMcpTool
             + "- Pass `assignable: true` to get the SETTABLE-property schema instead of the details " //$NON-NLS-1$
             + "view: per property its value kind, current value, and ALLOWED values (enum literals) - " //$NON-NLS-1$
             + "exactly what modify_metadata can set. In this mode an FQN may address a member " //$NON-NLS-1$
-            + "(e.g. `Catalog.Products.Attribute.Weight`), not just a top object.\n\n" //$NON-NLS-1$
+            + "(e.g. `Catalog.Products.Attribute.Weight`), not just a top object.\n" //$NON-NLS-1$
+            + "- Pass a FORM FQN (`Catalog.Products.Form.ItemForm` or `CommonForm.MyForm`) to render " //$NON-NLS-1$
+            + "that form's STRUCTURE - its items (the nested visual tree), attributes and commands. " //$NON-NLS-1$
+            + "(For a CommonForm this renders the form structure, not the CommonForm's mdclass " //$NON-NLS-1$
+            + "properties.) Form members are created/edited/removed by their own FQNs via " //$NON-NLS-1$
+            + "create_metadata / modify_metadata / delete_metadata.\n\n" //$NON-NLS-1$
 
             + "## Parameter details\n" //$NON-NLS-1$
             + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
@@ -227,7 +240,12 @@ public class GetMetadataDetailsTool implements IMcpTool
         // e.g. "ru"/"en", not by the Language object's name). May be null when the
         // configuration has no languages; downstream synonym lookup tolerates that.
         String effectiveLanguage = MetadataLanguageUtils.resolveLanguageCode(config, language);
-        
+
+        // The BM model is needed only to render a FORM's structure (a cross-model hop into the
+        // editable Form content); resolved best-effort (a form FQN with no model reports a failure).
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
+
         StringBuilder sb = new StringBuilder();
         sb.append("# Metadata Details: ").append(projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -254,6 +272,25 @@ public class GetMetadataDetailsTool implements IMcpTool
                     continue;
                 }
                 sb.append(formatAssignable(MetadataTypeUtils.normalizeFqn(fqn), node.object));
+                sb.append("\n---\n\n"); //$NON-NLS-1$
+                continue;
+            }
+
+            // A FQN that addresses a FORM ITSELF (Type.Object.Form.FormName or CommonForm.FormName)
+            // renders the form's STRUCTURE (items / attributes / commands) via the cross-model hop -
+            // the same view get_form_structure produces, folded in here. Form MEMBERS use their own
+            // create/modify/delete FQNs; this branch is for the whole form.
+            String formPath = FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(fqn));
+            if (formPath != null)
+            {
+                String formStructure = renderFormStructure(config, bmModel, formPath, effectiveLanguage);
+                if (formStructure == null)
+                {
+                    failures.add(new String[] { fqn, "the form has no editable content model (it may " //$NON-NLS-1$
+                        + "be empty, an ordinary/legacy form, or not yet built)" }); //$NON-NLS-1$
+                    continue;
+                }
+                sb.append(formStructure);
                 sb.append("\n---\n\n"); //$NON-NLS-1$
                 continue;
             }
@@ -307,6 +344,43 @@ public class GetMetadataDetailsTool implements IMcpTool
      * per-object failure (recorded in the machine-readable failures table), never
      * a whole-call failure.
      */
+    /**
+     * Renders a form's structure (items / attributes / commands) for a form FQN, reusing
+     * {@code GetFormStructureTool}'s resolver + renderer: resolve the {@code BasicForm}, then inside a
+     * BM READ transaction reach its editable {@code Form} content and render it to markdown (the
+     * EObjects must not escape the read task). Returns {@code null} when the form has no editable
+     * content model (empty / legacy / not built) or the BM model is unavailable.
+     */
+    private static String renderFormStructure(Configuration config, IBmModel bmModel, String formPath,
+        String language)
+    {
+        if (bmModel == null)
+        {
+            return null;
+        }
+        MdObject mdForm = GetFormStructureTool.resolveMdForm(config, formPath);
+        if (!(mdForm instanceof IBmObject))
+        {
+            return null;
+        }
+        final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
+        final String normalized = MetadataTypeUtils.normalizeFqn(formPath);
+        return BmTransactions.read(bmModel, "GetMetadataDetailsForm", (tx, monitor) -> //$NON-NLS-1$
+        {
+            EObject txMdForm = tx.getObjectById(mdFormBmId);
+            if (txMdForm == null)
+            {
+                return null;
+            }
+            EObject formModel = FormElementWriter.getEditableForm(txMdForm);
+            if (formModel == null)
+            {
+                return null;
+            }
+            return GetFormStructureTool.render(normalized, formModel, language);
+        });
+    }
+
     private MdObject resolveObject(Configuration config, String fqn)
     {
         // Parse FQN: Type.Name
