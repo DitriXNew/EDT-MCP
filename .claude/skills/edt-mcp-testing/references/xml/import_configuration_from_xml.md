@@ -49,7 +49,7 @@ get_project_errors(projectName="TC_ImportProbe")  # optional: no unexpected impo
 Mutation-safety notes (critical):
 - Mutating tools run **only** against disposable artifacts — here a throwaway project name (`TC_ImportProbe`) and a temp dir under `D:\WS\tmp`. Never import over the live `IRP` config or onto the tracked `TestConfiguration/src` path.
 - Mutate **through MCP** so the EDT model and disk stay in sync. A subsequent `-clean` redeploy (`pwsh D:\Soft\edt-redeploy.ps1`) drops unsaved in-memory edits; an MCP-driven import is persisted to the workspace by the close/open/refresh step, so it survives.
-- This tool has **no preview/confirm** parameter (unlike `rename_metadata_object` / `delete_metadata_object`, which return a preview without `confirm` and only apply with `confirm=true`). Every successful `import_configuration_from_xml` call mutates immediately — there is no dry-run.
+- This tool has **no preview/confirm** parameter (unlike `rename_metadata_object` / `delete_metadata`, which return a preview without `confirm` and only apply with `confirm=true`). Every successful `import_configuration_from_xml` call mutates immediately — there is no dry-run.
 
 **Result.** JSON (`ResponseType.JSON`). The success envelope is built by `ToolResult.success().put("importPath", …).put("project", …).put("message", …)`. Representative shape **from source** (not a live run — see the do-not-run note):
 

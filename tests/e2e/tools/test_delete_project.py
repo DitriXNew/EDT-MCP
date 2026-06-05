@@ -4,7 +4,7 @@ e2e tests for delete_project (kind: action) — DESTRUCTIVE workspace project re
 THE TOOL (DeleteProjectTool, getResponseType() == JSON):
 Removes an EDT project from the workspace, optionally deleting its files from disk
 (deleteContent). The inverse of import_configuration_from_xml. Destructive, so it is
-guarded by a confirm-preview (mirroring delete_metadata_object): a bare call PREVIEWS
+guarded by a confirm-preview (mirroring delete_metadata): a bare call PREVIEWS
 (action='preview', confirmationRequired=true) without removing anything; only confirm=true
 performs the removal (action='deleted').
 

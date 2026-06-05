@@ -37,7 +37,7 @@ update_database(
 
 **Full test procedure (explicit-request-only; documented, do NOT run live during reference drafting).**
 1. **Confirm ready.** `list_projects` → `TestConfiguration` `State=ready`.
-2. **Establish a pending change to apply.** A clean `UPDATED` infobase has nothing to update. Make a *schema* change through MCP (so model + disk stay in sync after a later `-clean` redeploy), e.g. `add_metadata_attribute` on `Catalog.Catalog`. After it, `get_applications(projectName="TestConfiguration")` should report `updateState` = `INCREMENTAL_UPDATE_REQUIRED` (or `FULL_UPDATE_REQUIRED`).
+2. **Establish a pending change to apply.** A clean `UPDATED` infobase has nothing to update. Make a *schema* change through MCP (so model + disk stay in sync after a later `-clean` redeploy), e.g. `create_metadata` with `fqn="Catalog.Catalog.Attribute.TmpFlag"`. After it, `get_applications(projectName="TestConfiguration")` should report `updateState` = `INCREMENTAL_UPDATE_REQUIRED` (or `FULL_UPDATE_REQUIRED`).
 3. **Ensure exclusivity.** `list_configurations(projectName="TestConfiguration")` → every config `running:false`. If one is `running:true`, `terminate_launch` it and re-confirm. Verify independently with `Get-Process 1cv8,1cv8c` (must be empty for this IB).
 4. **Call.** `update_database(...)` as above (incremental first; only use `fullUpdate=true` when a full reload is actually required).
 5. **Verify success.** Re-run `get_applications(projectName="TestConfiguration")` and confirm `updateState` is back to `UPDATED` ("Up to date"). The tool's own response also reports `stateBefore` → `stateAfter` (expect `…_REQUIRED` → `UPDATED`) and `message:"Database updated successfully"`.

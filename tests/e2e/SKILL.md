@@ -32,8 +32,8 @@ tests/e2e/
   tools/
     test_list_projects.py          <- one file per tool. You write/own exactly one of these.
     test_write_module_source.py
-    test_create_metadata_object.py
-    ... (one per tool, 61 total)
+    test_create_metadata.py
+    ... (one per tool)
     test_coverage_ratchet.py       <- meta: fails if a tools/list tool has no @e2e_test
 ```
 
@@ -55,7 +55,7 @@ tests/e2e/
 4. **`kind="write-metadata"` tools get extra isolation** (the orchestrator does this, not you): immediately after such a test it runs `reset_fixture()` **then** `reset_model()`. Why: these tools mutate EDT's in-memory BM model, EDT may **async-autosave** it to disk, and a git reset alone cannot undo an *unsaved model* change — `reset_model()` (calls `clean_project`, which refreshes the model from the just-reset clean disk) discards it before the next test.
 5. **After the whole run** the final `git status TestConfiguration/` MUST be empty. A run that leaves the project dirty is a failed run.
 
-**Metadata writes now persist to disk** (since commit `71a48ba` — fix-card `metadata-writes-not-persisted-to-disk`, see [[project_metadata_write_persistence]]). `add_metadata_attribute` / `create_metadata_object` now `forceExport` the mutated top object(s) to `.mdo` after the write; `delete`/`rename` always did (via the refactoring service); `write_module_source` flushes `.bsl` synchronously. So a metadata-write change IS on disk — but with a **sub-second async lag** after the call returns (the export pipeline drains a beat later). **Consequence:** verify a metadata-write BOTH ways — a **MODEL READ-BACK** (semantic: a read tool sees the change in the model) AND the **on-disk structure** via `poll_diff_contains(...)` (NOT a bare `assert_diff_contains` — poll for the lag). The orchestrator reverts the on-disk `.mdo` via `reset_fixture` (git) and re-syncs the model via `reset_model()`.
+**Metadata writes now persist to disk** (since commit `71a48ba` — fix-card `metadata-writes-not-persisted-to-disk`, see [[project_metadata_write_persistence]]). `create_metadata` / `modify_metadata` now `forceExport` the mutated top object(s) to `.mdo` after the write; `delete_metadata`/`rename_metadata_object` always did (via the refactoring service); `write_module_source` flushes `.bsl` synchronously. So a metadata-write change IS on disk — but with a **sub-second async lag** after the call returns (the export pipeline drains a beat later). **Consequence:** verify a metadata-write BOTH ways — a **MODEL READ-BACK** (semantic: a read tool sees the change in the model) AND the **on-disk structure** via `poll_diff_contains(...)` (NOT a bare `assert_diff_contains` — poll for the lag). The orchestrator reverts the on-disk `.mdo` via `reset_fixture` (git) and re-syncs the model via `reset_model()`.
 
 ---
 
@@ -190,16 +190,18 @@ def test_searchreplace_missing_oldsource_errors_clearly():
     assert_error_quality(e, names=["THIS_DOES_NOT_EXIST"], suggests=["read_module_source"])
     assert_no_diff()                              # a rejected write must NOT touch disk
 
-@e2e_test(tool="add_metadata_attribute", kind="write-metadata")
-def test_add_attribute_appears_in_model_readback():
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_appears_in_model_and_on_disk():
     parent, new_attr = "Catalog.Catalog", "E2EColor"
     before = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [parent], "full": True})
     assert_not_contains(before.text, new_attr, "absent before (else a no-op passes)")
-    r = call("add_metadata_attribute", {"projectName": PROJECT, "parentFqn": parent, "attributeName": new_attr})
-    assert_ok(r, "add attribute")
+    # Members are addressed by their full FQN (the create_metadata fold of add_metadata_attribute).
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": parent + ".Attribute." + new_attr})
+    assert_ok(r, "create attribute member")
     after = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [parent], "full": True})
     assert_contains(after.text, new_attr, "MODEL read-back: new attribute is in the model")
-    # NOTE: do NOT assert_diff_contains here — metadata writes do not reach disk (see §3).
+    # Verify BOTH ways (see §3): model read-back AND on-disk structure, polling for the export lag.
+    poll_diff_contains(new_attr, "ON-DISK: the new attribute reaches the .mdo")
 
 @e2e_test(tool="get_translation_project_info", kind="read")
 def test_env_dependent_sentinel_or_real():
