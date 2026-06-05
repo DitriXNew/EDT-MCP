@@ -198,7 +198,9 @@ public class MetadataTypeUtilsTest
         assertEquals("chartsOfAccounts", MetadataTypeUtils.getConfigReferenceName("ChartOfAccounts"));
         assertEquals("filterCriteria", MetadataTypeUtils.getConfigReferenceName("FilterCriterion"));
         assertEquals("httpServices", MetadataTypeUtils.getConfigReferenceName("HTTPService"));
-        assertEquals("xdtoPackages", MetadataTypeUtils.getConfigReferenceName("XDTOPackage"));
+        // The Configuration feature is "xDTOPackages" (capital DTO) - a casing fix; the old
+        // "xdtoPackages" made create_metadata fail to resolve the collection.
+        assertEquals("xDTOPackages", MetadataTypeUtils.getConfigReferenceName("XDTOPackage"));
     }
 
     @Test

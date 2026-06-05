@@ -177,6 +177,59 @@ def test_set_structured_type_number_on_attribute():
     poll_diff_contains("precision", ctx="the new Number(10,2) type must land in the owner .mdo")
 
 
+def _seed_attr_and_set_type(attr, type_value):
+    """Seed an attribute on Catalog.Catalog, then set its `type` to the structured value."""
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
+    assert_ok(cr, "seed attribute " + attr)
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        "properties": [{"name": "type", "value": type_value}],
+    })
+    assert_ok(r, "set type on " + attr)
+    assert "type" in (r.structured.get("applied") or []), "type must be applied: %r" % (r.structured,)
+    return r
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_string_type_with_length():
+    # String type with a length qualifier (the user-named "set string length" case).
+    _seed_attr_and_set_type("E2ETypeStrAttr", {"types": [{"kind": "String", "length": 137}]})
+    poll_diff_contains("137", ctx="the String length qualifier must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_boolean_type():
+    _seed_attr_and_set_type("E2ETypeBoolAttr", {"types": [{"kind": "Boolean"}]})
+    poll_diff_contains("Boolean", ctx="the Boolean type must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_date_type_with_fractions():
+    # Use Time (a NON-default fraction): DateTime is the platform default and EDT omits it from the
+    # serialized <dateQualifiers/>, so Time is what reliably proves the fraction landed.
+    _seed_attr_and_set_type("E2ETypeDateAttr", {"types": [{"kind": "Date", "fractions": "Time"}]})
+    poll_diff_contains("<dateFractions>Time</dateFractions>",
+                       ctx="the Date Time fractions must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_composite_type():
+    # A composite (mixed) type: the list may carry several kinds at once.
+    _seed_attr_and_set_type("E2ETypeCompAttr",
+                            {"types": [{"kind": "Number", "precision": 8}, {"kind": "Boolean"}]})
+    poll_diff_contains("Boolean", ctx="a composite type's Boolean member must land in the owner .mdo")
+    poll_diff_contains("precision", ctx="a composite type's Number member must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_typed_ref_shorthand():
+    # The '<Type>Ref' shorthand (CatalogRef + Name) is an alternative to {kind:'Ref', ref:'Type.Name'}.
+    _seed_attr_and_set_type("E2ETypeRefShAttr", {"types": [{"kind": "CatalogRef", "ref": "Catalog"}]})
+    poll_diff_contains("CatalogRef.Catalog",
+                       ctx="the CatalogRef shorthand must resolve to the catalog ref on disk")
+
+
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_set_type_on_nested_tabular_section_attribute():
     # A member of a NESTED object (a tabular-section attribute, depth-6) is modifiable: the tool

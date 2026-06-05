@@ -162,6 +162,38 @@ def test_create_register_then_resource_member():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_dimension_member_on_register():
+    # Dimension is a member kind distinct from Resource/Attribute. Create a register, then a Dimension.
+    reg = "E2EDimReg"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "InformationRegister." + reg}),
+              "seed InformationRegister")
+    wait_for_project_ready()
+    dim = "E2EUnifiedDim"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "InformationRegister.%s.Dimension.%s" % (reg, dim)})
+    assert_ok(r, "create Dimension member on the register")
+    assert "Dimension" in (r.structured.get("kind") or ""), \
+        "kind must be the concrete register-dimension EClass: %r" % (r.structured,)
+    poll_diff_contains("<name>%s</name>" % dim,
+                       ctx="the new dimension must land in the register's .mdo on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_enum_value_member():
+    # EnumValue is a member kind unique to an Enum. Create an Enum, then a value on it.
+    enum = "E2EUnifiedEnum"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Enum." + enum}), "seed Enum")
+    wait_for_project_ready()
+    val = "E2EUnifiedEnumVal"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Enum.%s.EnumValue.%s" % (enum, val)})
+    assert_ok(r, "create EnumValue member on the enum")
+    assert "EnumValue" in (r.structured.get("kind") or ""), \
+        "kind must be the concrete EnumValue EClass: %r" % (r.structured,)
+    poll_diff_contains("<name>%s</name>" % val,
+                       ctx="the new enum value must land in the enum's .mdo on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_nested_tabular_section_attribute():
     # depth-6: a member of a NESTED object. Create a tabular section (depth-4), then an
     # attribute ON that tabular section (depth-6) via in-transaction owner re-navigation.
@@ -411,22 +443,30 @@ def test_duplicate_node_is_error():
 
 # Top-types newly enabled by removing the hardcoded 8-type allow-list: the EDT factory
 # produces default content for any configuration object type. Representative spread incl.
-# the user-named services / charts / registers.
-_NEWLY_ENABLED_TOP_TYPES = [
-    "Subsystem", "HTTPService", "WebService", "ChartOfCharacteristicTypes",
-    "ChartOfAccounts", "ChartOfCalculationTypes", "ExchangePlan", "BusinessProcess",
-    "Task", "Constant", "CommonCommand", "AccountingRegister", "CalculationRegister",
-    "DefinedType", "FilterCriterion", "DocumentJournal",
+# EVERY configuration top-type the resolver (MetadataTypeUtils) knows - an EXHAUSTIVE list, not a
+# sample - so this test proves create_metadata can instantiate each one (the 8-type allow-list is
+# gone). If a new type is added to the resolver, add it here too (the coverage is deliberate).
+_ALL_TOP_TYPES = [
+    "Catalog", "Document", "CommonModule", "InformationRegister", "AccumulationRegister",
+    "Enum", "Report", "DataProcessor", "ExchangePlan", "BusinessProcess", "Task", "Role",
+    "Subsystem", "CommonCommand", "CommonForm", "WebService", "HTTPService", "Constant",
+    "ChartOfCharacteristicTypes", "ChartOfAccounts", "ChartOfCalculationTypes",
+    "AccountingRegister", "CalculationRegister", "DocumentJournal", "Sequence",
+    "FilterCriterion", "SettingsStorage", "ExternalDataSource", "CommonAttribute",
+    "EventSubscription", "ScheduledJob", "SessionParameter", "FunctionalOption",
+    "FunctionalOptionsParameter", "CommonPicture", "StyleItem", "DefinedType",
+    "CommonTemplate", "CommandGroup", "DocumentNumerator", "WSReference", "XDTOPackage",
+    "Language", "Style", "Interface", "IntegrationService", "Bot", "WebSocketClient",
 ]
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
-def test_create_all_top_types_incl_services_charts_registers():
-    # The hardcoded 8-type allow-list is gone: any configuration top-type the EDT factory can
-    # instantiate now creates. Create one of each representative type, then read each back.
+def test_create_every_top_type():
+    # EXHAUSTIVE: create one of EVERY configuration top-type and read each back. A type the EDT
+    # factory cannot instantiate, or a wrong configuration-collection name, fails this test.
     created = []
     failed = []
-    for t in _NEWLY_ENABLED_TOP_TYPES:
+    for t in _ALL_TOP_TYPES:
         wait_for_project_ready()
         name = "E2EChk" + t
         r = call("create_metadata", {"projectName": PROJECT, "fqn": t + "." + name})
