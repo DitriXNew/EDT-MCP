@@ -77,6 +77,10 @@ public final class MetadataNodeResolver
         putTokens(m, "enumValues", "enumvalue", "enumvalues", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             cp(0x0437, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0435, 0x043f, 0x0435, 0x0440, 0x0435, 0x0447, 0x0438, 0x0441, 0x043b, 0x0435, 0x043d, 0x0438, 0x044f),
             cp(0x0437, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x044f, 0x043f, 0x0435, 0x0440, 0x0435, 0x0447, 0x0438, 0x0441, 0x043b, 0x0435, 0x043d, 0x0438, 0x044f));
+        // Command (ru: komanda / komandy)
+        putTokens(m, "commands", "command", "commands", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x0430),
+            cp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x044b));
         CHILD_FEATURE_BY_TOKEN = Collections.unmodifiableMap(m);
     }
 
@@ -149,33 +153,39 @@ public final class MetadataNodeResolver
         public final String topLevelType;
         /** Configuration collection feature name (e.g. {@code "catalogs"}); {@code null} for a child. */
         public final String configFeatureName;
-        /** Resolved parent; {@code null} for a top-level create. */
+        /** Resolved direct parent of the leaf; {@code null} for a top-level create. */
         public final EObject owner;
+        /** The TOP object that owns the leaf's {@code .mdo} file and is re-fetchable in a BM
+         * transaction (only TOP objects are re-fetchable by bmId); {@code null} for a top-level create. */
+        public final MdObject topObject;
         /** Containment feature on {@link #owner}; {@code null} for a top-level create. */
         public final EReference feature;
         /** Concrete element type to instantiate; {@code null} for a top-level create. */
         public final EClass elementType;
 
         private CreateTarget(boolean topLevel, String childName, String topLevelType,
-            String configFeatureName, EObject owner, EReference feature, EClass elementType)
+            String configFeatureName, EObject owner, MdObject topObject, EReference feature,
+            EClass elementType)
         {
             this.topLevel = topLevel;
             this.childName = childName;
             this.topLevelType = topLevelType;
             this.configFeatureName = configFeatureName;
             this.owner = owner;
+            this.topObject = topObject;
             this.feature = feature;
             this.elementType = elementType;
         }
 
         static CreateTarget forTopLevel(String topLevelType, String configFeatureName, String childName)
         {
-            return new CreateTarget(true, childName, topLevelType, configFeatureName, null, null, null);
+            return new CreateTarget(true, childName, topLevelType, configFeatureName, null, null, null, null);
         }
 
-        static CreateTarget forChild(EObject owner, EReference feature, EClass elementType, String childName)
+        static CreateTarget forChild(EObject owner, MdObject topObject, EReference feature,
+            EClass elementType, String childName)
         {
-            return new CreateTarget(false, childName, null, null, owner, feature, elementType);
+            return new CreateTarget(false, childName, null, null, owner, topObject, feature, elementType);
         }
     }
 
@@ -296,11 +306,12 @@ public final class MetadataNodeResolver
         }
 
         // Navigate to the OWNER of the leaf (everything up to, but excluding, the last pair).
-        MdObject owner = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
-        if (owner == null)
+        MdObject top = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
+        if (top == null)
         {
             return null;
         }
+        MdObject owner = top;
         for (int i = 2; i + 1 < parts.length - 2; i += 2)
         {
             EReference ref = childFeature(owner, parts[i]);
@@ -321,8 +332,47 @@ public final class MetadataNodeResolver
         {
             return null;
         }
-        return CreateTarget.forChild(owner, leafFeature, leafFeature.getEReferenceType(),
+        return CreateTarget.forChild(owner, top, leafFeature, leafFeature.getEReferenceType(),
             parts[parts.length - 1]);
+    }
+
+    /**
+     * Re-navigates from a TOP object (already re-fetched inside a BM transaction) to the direct
+     * parent of the leaf, following the same kind/name pairs the FQN encodes. This is how a member
+     * of a NESTED object (e.g. a tabular-section attribute) is created: only TOP objects are
+     * re-fetchable by bmId, so the owner is re-resolved by name from the in-transaction top.
+     *
+     * @param top the top object, re-fetched in the transaction (must be non-{@code null})
+     * @param parts the normalized FQN parts (the same array {@code Type.Name(.Kind.Name)+})
+     * @return the leaf's direct parent within the transaction (the top itself for a direct member),
+     *     or {@code null} if any intermediate segment does not resolve
+     */
+    public static EObject resolveOwnerInTx(EObject top, String[] parts)
+    {
+        if (top == null || parts == null || !isValidArity(parts.length))
+        {
+            return null;
+        }
+        EObject owner = top;
+        for (int i = 2; i + 1 < parts.length - 2; i += 2)
+        {
+            if (!(owner instanceof MdObject))
+            {
+                return null;
+            }
+            EReference ref = childFeature((MdObject)owner, parts[i]);
+            if (ref == null)
+            {
+                return null;
+            }
+            MdObject child = findInList(owner, ref, parts[i + 1]);
+            if (child == null)
+            {
+                return null;
+            }
+            owner = child;
+        }
+        return owner;
     }
 
     /**

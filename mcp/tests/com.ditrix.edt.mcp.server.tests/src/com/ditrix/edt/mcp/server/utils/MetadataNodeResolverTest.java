@@ -58,6 +58,8 @@ public class MetadataNodeResolverTest
         assertEquals("dimensions", MetadataNodeResolver.featureNameForKind("dimension")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("resources", MetadataNodeResolver.featureNameForKind("resource")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("enumValues", MetadataNodeResolver.featureNameForKind("enumValue")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("commands", MetadataNodeResolver.featureNameForKind("command")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("commands", MetadataNodeResolver.featureNameForKind("commands")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -82,6 +84,10 @@ public class MetadataNodeResolverTest
         assertEquals("resources", //$NON-NLS-1$
             MetadataNodeResolver.featureNameForKind(
                 fromCp(0x0440, 0x0435, 0x0441, 0x0443, 0x0440, 0x0441)));
+        // komanda -> commands
+        assertEquals("commands", //$NON-NLS-1$
+            MetadataNodeResolver.featureNameForKind(
+                fromCp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x0430)));
     }
 
     @Test

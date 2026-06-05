@@ -89,8 +89,8 @@ public class CreateMetadataToolTest
         assertTrue("guide should keep the language CODE detail", guide.contains("language CODE")); //$NON-NLS-1$ //$NON-NLS-2$
         // member kinds documented
         assertTrue("guide should list member kinds", guide.contains("EnumValue")); //$NON-NLS-1$ //$NON-NLS-2$
-        // the nested-member limitation is disclosed
-        assertTrue("guide should disclose the nested-member limitation", //$NON-NLS-1$
-            guide.contains("not yet supported")); //$NON-NLS-1$
+        // nested-object members (e.g. a tabular-section attribute) are now supported and documented
+        assertTrue("guide should document nested-object members", //$NON-NLS-1$
+            guide.contains("tabular-section attribute")); //$NON-NLS-1$
     }
 }

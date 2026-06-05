@@ -125,11 +125,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "Task, Subsystem, HTTPService, WebService, Constant, CommonForm, CommonCommand, Report, " //$NON-NLS-1$
             + "DataProcessor, CommonModule, ...). A type the EDT factory cannot instantiate is rejected " //$NON-NLS-1$
             + "with a clear error.\n" //$NON-NLS-1$
-            + "- Member kinds: Attribute, TabularSection, Dimension, Resource, EnumValue (on the owner " //$NON-NLS-1$
-            + "types that declare them).\n" //$NON-NLS-1$
-            + "- Members of a NESTED object (e.g. a tabular-section attribute, " //$NON-NLS-1$
-            + "`Catalog.X.TabularSection.T.Attribute.A`) are not yet supported here and are rejected " //$NON-NLS-1$
-            + "with a clear message.\n\n" //$NON-NLS-1$
+            + "- Member kinds: Attribute, TabularSection, Dimension, Resource, EnumValue, Command (on " //$NON-NLS-1$
+            + "the owner types that declare them).\n" //$NON-NLS-1$
+            + "- Members of a NESTED object are supported too, e.g. a tabular-section attribute " //$NON-NLS-1$
+            + "`Catalog.X.TabularSection.T.Attribute.A` (the owner is re-navigated by name inside the " //$NON-NLS-1$
+            + "write transaction).\n\n" //$NON-NLS-1$
             + "## Parameters\n" //$NON-NLS-1$
             + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
             + "- `fqn` (required) - full-name FQN of the node to create.\n" //$NON-NLS-1$
@@ -331,15 +331,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private String createMember(IProject project, String projectName, CreateTarget target,
         String normFqn, Props props, String synonymLanguage)
     {
-        // The owner must be a BM TOP object: members of a nested object (e.g. a tabular-section
-        // attribute) need an in-transaction re-navigation that this version does not yet do.
-        // NB every BM EObject implements IBmObject; top-vs-nested is bmIsTop() (a nested object
-        // has a non-top bmId that tx.getObjectById cannot re-fetch), so both checks are required.
-        if (!(target.owner instanceof IBmObject) || !((IBmObject)target.owner).bmIsTop())
+        // Members are created inside a write transaction. Only TOP objects are re-fetchable by
+        // bmId, so we re-fetch the TOP object and re-navigate to the leaf's owner BY NAME inside the
+        // transaction - this is what lets a member of a NESTED object (e.g. a tabular-section
+        // attribute) be created, not just a direct member of the top object.
+        if (!(target.topObject instanceof IBmObject))
         {
-            return ToolResult.error("Creating a member of a nested object (e.g. a tabular-section " //$NON-NLS-1$
-                + "attribute) is not yet supported by create_metadata. Create members directly on a " //$NON-NLS-1$
-                + "top-level object for now.").toJson(); //$NON-NLS-1$
+            return ToolResult.error("Top object is not a BM object").toJson(); //$NON-NLS-1$
         }
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
@@ -352,7 +350,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
         }
 
-        final long ownerBmId = ((IBmObject)target.owner).bmGetId();
+        final long topBmId = ((IBmObject)target.topObject).bmGetId();
+        final String[] parts = normFqn.split("\\."); //$NON-NLS-1$
         final EStructuralFeature feature = target.feature;
         final EClass elementType = target.elementType;
         final String name = target.childName;
@@ -364,10 +363,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             createdKind = BmTransactions.<EClass>write(bmModel, "CreateMetadataMember", (tx, pm) -> //$NON-NLS-1$
             {
-                EObject owner = (EObject)tx.getObjectById(ownerBmId);
-                if (owner == null)
+                EObject top = (EObject)tx.getObjectById(topBmId);
+                if (top == null)
                 {
                     throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
+                }
+                EObject owner = MetadataNodeResolver.resolveOwnerInTx(top, parts);
+                if (owner == null)
+                {
+                    throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$
                 }
                 if (childByName(owner, feature, name) != null)
                 {

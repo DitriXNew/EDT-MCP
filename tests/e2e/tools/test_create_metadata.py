@@ -162,23 +162,40 @@ def test_create_register_then_resource_member():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
-def test_nested_member_creation_is_rejected_for_now():
-    # depth-4 tabular section is supported; a member of THAT (depth-6) is gated for now.
-    tab = "E2EUnifiedTab"
+def test_create_nested_tabular_section_attribute():
+    # depth-6: a member of a NESTED object. Create a tabular section (depth-4), then an
+    # attribute ON that tabular section (depth-6) via in-transaction owner re-navigation.
+    tab, attr = "E2EUnifiedTab", "E2ENestedAttr"
     r1 = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.TabularSection." + tab})
     assert_ok(r1, "create tabular section (depth-4) must succeed")
 
-    # Let the derived-data rebuild from the tabular-section create settle before the nested call,
-    # otherwise the BUILDING write-guard masks the intended "not yet supported" rejection.
+    # The tabular-section create triggers a derived-data rebuild; wait before the dependent nested create.
     wait_for_project_ready()
 
     r2 = call("create_metadata", {
         "projectName": PROJECT,
-        "fqn": "Catalog.Catalog.TabularSection.%s.Attribute.E2ENestedAttr" % tab,
+        "fqn": "Catalog.Catalog.TabularSection.%s.Attribute.%s" % (tab, attr),
     })
-    e = assert_error(r2, "nested member (depth-6) is gated")
-    assert_error_quality(e, suggests=["not yet supported"],
-                         ctx="nested-member create is rejected with a clear 'not yet supported' message")
+    assert_ok(r2, "create nested tabular-section attribute (depth-6)")
+    assert r2.structured.get("action") == "created", "must report created: %r" % (r2.structured,)
+    assert "Attribute" in (r2.structured.get("kind") or ""), \
+        "kind must be the concrete TS-attribute EClass: %r" % (r2.structured,)
+    # The tabular section and its nested attribute live inline in the owner Catalog.Catalog.mdo.
+    poll_diff_contains("<name>%s</name>" % attr,
+                       ctx="the nested attribute must land in the owner Catalog.Catalog.mdo on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_command_member_on_catalog():
+    # Object-level Command child via the new 'Command' kind token.
+    cmd = "E2EUnifiedCmd"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Command." + cmd})
+    assert_ok(r, "create Catalog.Catalog.Command.%s" % cmd)
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    assert "Command" in (r.structured.get("kind") or ""), \
+        "kind must be a command EClass: %r" % (r.structured,)
+    poll_diff_contains(cmd,
+                       ctx="the new command must be referenced from the owner Catalog.Catalog.mdo on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
