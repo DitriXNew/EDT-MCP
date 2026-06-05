@@ -144,9 +144,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "`Catalog.X.TabularSection.T.Attribute.A` (the owner is re-navigated by name inside the " //$NON-NLS-1$
             + "write transaction).\n" //$NON-NLS-1$
             + "- Form content: a member of a form (`Catalog.X.Form.F.<Kind>.Name` or " //$NON-NLS-1$
-            + "`CommonForm.F.<Kind>.Name`) where Kind is Attribute, Command, Group or Decoration. " //$NON-NLS-1$
-            + "Optional properties: `title` (with `language`), and `parent` to nest a Group/Decoration " //$NON-NLS-1$
-            + "under an existing item.\n" //$NON-NLS-1$
+            + "`CommonForm.F.<Kind>.Name`) where Kind is Attribute, Command, Group, Decoration, Field " //$NON-NLS-1$
+            + "or Button. Optional properties: `title` (with `language`); `parent` to nest under an " //$NON-NLS-1$
+            + "item; a Field binds to a form attribute via `dataPath` (e.g. {name:'dataPath', " //$NON-NLS-1$
+            + "value:'Price'}); a Button binds to a form command via `command` (the target must exist " //$NON-NLS-1$
+            + "first).\n" //$NON-NLS-1$
             + "- Form event handler: `Catalog.X.Form.F.Handler.EventName` binds a BSL handler to a form " //$NON-NLS-1$
             + "event (the leaf is the event name, e.g. OnOpen). An unknown event is rejected WITH the " //$NON-NLS-1$
             + "list of available events (in the configuration language). The BSL procedure name is the " //$NON-NLS-1$
@@ -486,8 +488,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (kind == null)
         {
             return ToolResult.error("Unsupported form element kind '" + ref.kindToken + "' in '" //$NON-NLS-1$ //$NON-NLS-2$
-                + normFqn + "'. Supported form kinds: Attribute, Command, Group, Decoration " //$NON-NLS-1$
-                + "(Field/Button/Handler are added in a later step).").toJson(); //$NON-NLS-1$
+                + normFqn + "'. Supported form kinds: Attribute, Command, Group, Decoration, Field, " //$NON-NLS-1$
+                + "Button (and Handler for events).").toJson(); //$NON-NLS-1$
         }
         if (!isValidIdentifier(ref.name))
         {
@@ -495,10 +497,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
 
-        // Form-member properties: title (+ language) and parent (nest a visual item under an item).
+        // Form-member properties: title (+ language), parent (nest a visual item), and the binding
+        // target for a Field (dataPath/attribute -> the form attribute) or a Button (command).
         String titleVal = null;
         String titleLang = null;
         String parentName = null;
+        String bindTarget = null;
         for (JsonObject prop : properties)
         {
             String pName = asString(prop.get("name")); //$NON-NLS-1$
@@ -515,10 +519,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 case "parent": //$NON-NLS-1$
                     parentName = asString(prop.get("value")); //$NON-NLS-1$
                     break;
+                case "datapath": //$NON-NLS-1$
+                case "attribute": //$NON-NLS-1$
+                case "command": //$NON-NLS-1$
+                    bindTarget = asString(prop.get("value")); //$NON-NLS-1$
+                    break;
                 default:
                     return ToolResult.error("Property '" + pName + "' is not supported for a form " //$NON-NLS-1$ //$NON-NLS-2$
                         + "element. This version applies: title (with optional language), parent " //$NON-NLS-1$
-                        + "(nest a visual item). Set other properties via modify_metadata.").toJson(); //$NON-NLS-1$
+                        + "(nest a visual item), dataPath/attribute (a Field's bound attribute), " //$NON-NLS-1$
+                        + "command (a Button's bound command). Set other properties via " //$NON-NLS-1$
+                        + "modify_metadata.").toJson(); //$NON-NLS-1$
             }
         }
 
@@ -572,6 +583,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final FormElementWriter.Kind fKind = kind;
         final String name = ref.name;
         final String parent = parentName;
+        final String bind = bindTarget;
         final String titleText = titleVal;
         final String[] createdKind = new String[1];
 
@@ -591,7 +603,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     throw new RuntimeException("the form has no editable content model (it may be " //$NON-NLS-1$
                         + "empty, an ordinary/legacy form, or not yet built)"); //$NON-NLS-1$
                 }
-                String err = FormElementWriter.createMember(formModel, fKind, name, parent,
+                String err = FormElementWriter.createMember(formModel, fKind, name, parent, bind,
                     titleLanguage, titleText, createdKind);
                 if (err != null)
                 {

@@ -38,6 +38,8 @@ public class FormElementWriterTest
         assertEquals(Kind.COMMAND, FormElementWriter.kindForToken("Command")); //$NON-NLS-1$
         assertEquals(Kind.GROUP, FormElementWriter.kindForToken("group")); //$NON-NLS-1$
         assertEquals(Kind.DECORATION, FormElementWriter.kindForToken("Decoration")); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("Field")); //$NON-NLS-1$
+        assertEquals(Kind.BUTTON, FormElementWriter.kindForToken("Button")); //$NON-NLS-1$
     }
 
     @Test
@@ -55,13 +57,18 @@ public class FormElementWriterTest
         // dekoraciya -> DECORATION
         assertEquals(Kind.DECORATION, FormElementWriter.kindForToken(
             fromCp(0x0434, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f)));
+        // pole -> FIELD
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken(fromCp(0x043f, 0x043e, 0x043b, 0x0435)));
+        // knopka -> BUTTON
+        assertEquals(Kind.BUTTON, FormElementWriter.kindForToken(
+            fromCp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430)));
     }
 
     @Test
     public void testKindForUnknownAndNull()
     {
         assertNull(FormElementWriter.kindForToken("Nonsense")); //$NON-NLS-1$
-        assertNull(FormElementWriter.kindForToken("Field")); // not in slice 1 //$NON-NLS-1$
+        assertNull(FormElementWriter.kindForToken("Table")); // not a supported form kind yet //$NON-NLS-1$
         assertNull(FormElementWriter.kindForToken(null));
     }
 

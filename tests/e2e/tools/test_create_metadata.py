@@ -484,6 +484,59 @@ def test_create_form_unknown_event_lists_available():
                          ctx="an unknown event must list the available events")
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_field_bound_to_attribute():
+    # Create a form attribute, then a Field bound to it via dataPath.
+    attr, fld = "FPrice", "PriceField"
+    r1 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r1, "seed form attribute")
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r2, "create a Field bound to the attribute")
+    assert "FormField" in (r2.structured.get("kind") or ""), "kind must be FormField: %r" % (r2.structured,)
+    poll_diff_contains("<segments>%s</segments>" % attr,
+                       ctx="the field's dataPath must bind to the attribute on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_button_bound_to_command():
+    # Create a form command, then a Button bound to it.
+    cmd, btn = "FRefresh", "RefreshBtn"
+    r1 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r1, "seed form command")
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + btn,
+        "properties": [{"name": "command", "value": cmd}]})
+    assert_ok(r2, "create a Button bound to the command")
+    assert "Button" in (r2.structured.get("kind") or ""), "kind must be Button: %r" % (r2.structured,)
+    poll_diff_contains(cmd, ctx="the button's commandName must reference the command on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_field_missing_attribute_is_error():
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.OrphanField",
+        "properties": [{"name": "dataPath", "value": "NoSuchAttr_zz"}]})
+    e = assert_error(r, "field bound to a missing attribute")
+    assert_error_quality(e, names=["NoSuchAttr_zz"], suggests=["not found"],
+                         ctx="a field bound to a missing attribute is a clean error")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_button_missing_command_is_error():
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button.OrphanBtn",
+        "properties": [{"name": "command", "value": "NoSuchCmd_zz"}]})
+    e = assert_error(r, "button bound to a missing command")
+    assert_error_quality(e, names=["NoSuchCmd_zz"], suggests=["not found"],
+                         ctx="a button bound to a missing command is a clean error")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — every rejected call: error quality + assert_no_diff()
 # ──────────────────────────────────────────────────────────────────────────────

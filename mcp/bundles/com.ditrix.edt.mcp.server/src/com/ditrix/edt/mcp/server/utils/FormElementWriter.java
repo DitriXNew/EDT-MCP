@@ -63,7 +63,7 @@ public final class FormElementWriter
     private static final String TYPE_LITERAL_LABEL = "Label"; //$NON-NLS-1$
 
     /** A supported form-element kind, resolved from a (bilingual) FQN kind token. */
-    public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION }
+    public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON }
 
     /** A parsed form-member FQN: the form path (for {@code resolveMdForm}) + the leaf kind/name. */
     public static final class FormMemberRef
@@ -136,6 +136,8 @@ public final class FormElementWriter
     private static final String RU_COMMAND = cp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x0430); // komanda
     private static final String RU_GROUP = cp(0x0433, 0x0440, 0x0443, 0x043f, 0x043f, 0x0430); // gruppa
     private static final String RU_DECORATION = cp(0x0434, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f); // dekoraciya
+    private static final String RU_FIELD = cp(0x043f, 0x043e, 0x043b, 0x0435); // pole
+    private static final String RU_BUTTON = cp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430); // knopka
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
@@ -173,6 +175,14 @@ public final class FormElementWriter
         if ("decoration".equals(t) || RU_DECORATION.equals(t)) //$NON-NLS-1$
         {
             return Kind.DECORATION;
+        }
+        if ("field".equals(t) || RU_FIELD.equals(t)) //$NON-NLS-1$
+        {
+            return Kind.FIELD;
+        }
+        if ("button".equals(t) || RU_BUTTON.equals(t)) //$NON-NLS-1$
+        {
+            return Kind.BUTTON;
         }
         return null;
     }
@@ -226,7 +236,7 @@ public final class FormElementWriter
      *     {@code createdKind} when non-null.
      */
     public static String createMember(EObject formModel, Kind kind, String name, String parentName,
-        String titleLanguage, String title, String[] createdKind)
+        String bindTarget, String titleLanguage, String title, String[] createdKind)
     {
         switch (kind)
         {
@@ -234,6 +244,10 @@ public final class FormElementWriter
                 return createAttribute(formModel, name, titleLanguage, title, createdKind);
             case COMMAND:
                 return createCommand(formModel, name, titleLanguage, title, createdKind);
+            case FIELD:
+                return createField(formModel, name, parentName, bindTarget, titleLanguage, title, createdKind);
+            case BUTTON:
+                return createButton(formModel, name, parentName, bindTarget, titleLanguage, title, createdKind);
             case GROUP:
             case DECORATION:
             default:
@@ -287,15 +301,10 @@ public final class FormElementWriter
         {
             return "Form item already exists: " + name; //$NON-NLS-1$
         }
-        EObject container = formModel;
-        if (parentName != null && !parentName.isEmpty())
+        EObject container = containerFor(formModel, parentName);
+        if (container == null)
         {
-            container = findItem(formModel, parentName);
-            if (container == null)
-            {
-                return "Parent form item not found: " + parentName //$NON-NLS-1$
-                    + ". Create the parent group first, or omit 'parent' to add at the form root."; //$NON-NLS-1$
-            }
+            return parentNotFound(parentName);
         }
         String classifier = kind == Kind.GROUP ? ECLASS_FORM_GROUP : ECLASS_DECORATION;
         EObject item = createFromClassifier(formModel, classifier);
@@ -311,6 +320,137 @@ public final class FormElementWriter
         addToList(container, FEATURE_ITEMS, item);
         recordKind(item, createdKind);
         return null;
+    }
+
+    /** A FormField bound to a form attribute via its dataPath (a generic InputField the user can refine). */
+    @SuppressWarnings("unchecked")
+    private static String createField(EObject formModel, String name, String parentName,
+        String attrName, String titleLanguage, String title, String[] createdKind)
+    {
+        if (attrName == null || attrName.isEmpty())
+        {
+            return "A form field needs a 'dataPath' property naming the form attribute it shows " //$NON-NLS-1$
+                + "(e.g. {name:'dataPath', value:'Price'})."; //$NON-NLS-1$
+        }
+        if (findByName(referenceList(formModel, FEATURE_ATTRIBUTES), attrName) == null)
+        {
+            return "Form attribute '" + attrName + "' not found - create it first, then bind the field " //$NON-NLS-1$ //$NON-NLS-2$
+                + "to it (so the data path resolves)."; //$NON-NLS-1$
+        }
+        if (findItem(formModel, name) != null)
+        {
+            return "Form item already exists: " + name; //$NON-NLS-1$
+        }
+        EObject container = containerFor(formModel, parentName);
+        if (container == null)
+        {
+            return parentNotFound(parentName);
+        }
+        EObject item = createFromClassifier(formModel, "FormField"); //$NON-NLS-1$
+        if (item == null)
+        {
+            return "Cannot create a form field for this form model."; //$NON-NLS-1$
+        }
+        setStringFeature(item, FEATURE_NAME, name);
+        setBooleanFeature(item, FEATURE_VISIBLE, true);
+        setIntFeature(item, FEATURE_ID, nextItemId(formModel));
+        // dataPath: a contained DataPath with segments=[attrName] (objects is transient - left empty,
+        // the form's derived data recomputes it).
+        EStructuralFeature dpFeat = item.eClass().getEStructuralFeature("dataPath"); //$NON-NLS-1$
+        EObject dataPath = createFromClassifier(formModel, "DataPath"); //$NON-NLS-1$
+        if (dpFeat instanceof EReference && dataPath != null)
+        {
+            EStructuralFeature segFeat = dataPath.eClass().getEStructuralFeature("segments"); //$NON-NLS-1$
+            if (segFeat != null && dataPath.eGet(segFeat) instanceof EList<?>)
+            {
+                ((EList<String>)dataPath.eGet(segFeat)).add(attrName);
+            }
+            item.eSet(dpFeat, dataPath);
+        }
+        // Pure-model default field type (InputField + a fresh InputFieldExtInfo), as the platform's
+        // own factory does before the value type is known.
+        setEnumFeature(item, FEATURE_TYPE, "InputField"); //$NON-NLS-1$
+        setExtInfoClassifier(formModel, item, "InputFieldExtInfo"); //$NON-NLS-1$
+        applyTitle(item, titleLanguage, title);
+        addToList(container, FEATURE_ITEMS, item);
+        recordKind(item, createdKind);
+        return null;
+    }
+
+    /** A Button bound to a form command (FormCommand is-a mcore Command, so the reference is direct). */
+    private static String createButton(EObject formModel, String name, String parentName,
+        String cmdName, String titleLanguage, String title, String[] createdKind)
+    {
+        if (cmdName == null || cmdName.isEmpty())
+        {
+            return "A form button needs a 'command' property naming the form command it runs " //$NON-NLS-1$
+                + "(e.g. {name:'command', value:'Refresh'})."; //$NON-NLS-1$
+        }
+        EObject command = findByName(referenceList(formModel, FEATURE_FORM_COMMANDS), cmdName);
+        if (command == null)
+        {
+            return "Form command '" + cmdName + "' not found - create it first, then bind the button " //$NON-NLS-1$ //$NON-NLS-2$
+                + "to it."; //$NON-NLS-1$
+        }
+        if (findItem(formModel, name) != null)
+        {
+            return "Form item already exists: " + name; //$NON-NLS-1$
+        }
+        EObject container = containerFor(formModel, parentName);
+        if (container == null)
+        {
+            return parentNotFound(parentName);
+        }
+        EObject item = createFromClassifier(formModel, "Button"); //$NON-NLS-1$
+        if (item == null)
+        {
+            return "Cannot create a form button for this form model."; //$NON-NLS-1$
+        }
+        setStringFeature(item, FEATURE_NAME, name);
+        setBooleanFeature(item, FEATURE_VISIBLE, true);
+        setIntFeature(item, FEATURE_ID, nextItemId(formModel));
+        // A standalone button; buttons have no extInfo (unlike fields/groups/decorations).
+        setEnumFeature(item, FEATURE_TYPE, "UsualButton"); //$NON-NLS-1$
+        EStructuralFeature cmdFeat = item.eClass().getEStructuralFeature("commandName"); //$NON-NLS-1$
+        if (cmdFeat instanceof EReference)
+        {
+            item.eSet(cmdFeat, command);
+        }
+        applyTitle(item, titleLanguage, title);
+        addToList(container, FEATURE_ITEMS, item);
+        recordKind(item, createdKind);
+        return null;
+    }
+
+    /** The form root for a blank parent, the named item otherwise, or {@code null} if not found. */
+    private static EObject containerFor(EObject formModel, String parentName)
+    {
+        if (parentName == null || parentName.isEmpty())
+        {
+            return formModel;
+        }
+        return findItem(formModel, parentName);
+    }
+
+    private static String parentNotFound(String parentName)
+    {
+        return "Parent form item not found: " + parentName //$NON-NLS-1$
+            + ". Create the parent group first, or omit 'parent' to add at the form root."; //$NON-NLS-1$
+    }
+
+    /** Attaches a fresh extInfo of the named concrete classifier to an item (best-effort). */
+    private static void setExtInfoClassifier(EObject formModel, EObject item, String classifier)
+    {
+        EStructuralFeature feature = item.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(feature instanceof EReference))
+        {
+            return;
+        }
+        EClass extInfoClass = formEClass(formModel, classifier);
+        if (extInfoClass != null && extInfoClass.getEPackage() != null)
+        {
+            item.eSet(feature, extInfoClass.getEPackage().getEFactoryInstance().create(extInfoClass));
+        }
     }
 
     // ---- event handlers -------------------------------------------------------------------------
