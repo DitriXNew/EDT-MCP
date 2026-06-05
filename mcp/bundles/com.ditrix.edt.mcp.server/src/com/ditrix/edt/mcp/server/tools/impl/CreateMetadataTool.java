@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver.CreateTarget;
@@ -141,7 +142,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "(`WebService.S.Operation.O.Parameter.P`).\n" //$NON-NLS-1$
             + "- Members of a NESTED object are supported too, e.g. a tabular-section attribute " //$NON-NLS-1$
             + "`Catalog.X.TabularSection.T.Attribute.A` (the owner is re-navigated by name inside the " //$NON-NLS-1$
-            + "write transaction).\n\n" //$NON-NLS-1$
+            + "write transaction).\n" //$NON-NLS-1$
+            + "- Form content: a member of a form (`Catalog.X.Form.F.<Kind>.Name` or " //$NON-NLS-1$
+            + "`CommonForm.F.<Kind>.Name`) where Kind is Attribute, Command, Group or Decoration. " //$NON-NLS-1$
+            + "Optional properties: `title` (with `language`), and `parent` to nest a Group/Decoration " //$NON-NLS-1$
+            + "under an existing item. (Field/Button bindings and event Handlers come in a later step.)" //$NON-NLS-1$
+            + "\n\n" //$NON-NLS-1$
             + "## Parameters\n" //$NON-NLS-1$
             + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
             + "- `fqn` (required) - full-name FQN of the node to create.\n" //$NON-NLS-1$
@@ -188,6 +194,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, "expectedNotExists", false); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
 
+        // A FQN that addresses a FORM's content (e.g. Catalog.X.Form.F.Command.C) is handled by a
+        // dedicated branch: form members live on the editable Form content model (a cross-model hop),
+        // not the mdclass tree, and take 'title'/'parent' properties rather than synonym/comment.
+        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
+        if (formRef != null)
+        {
+            return createFormMember(projectName, normFqn, formRef, properties);
+        }
+
         // Parse the supported properties (synonym/comment); reject anything else early.
         Props props = new Props();
         String propErr = parseProperties(properties, props);
@@ -204,7 +220,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IProject project = ctx.project;
         Configuration config = ctx.config;
 
-        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
         CreateTarget target = MetadataNodeResolver.resolveForCreate(config, normFqn);
         if (target == null)
         {
@@ -446,6 +461,154 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         boolean persisted = BmTransactions.forceExportToDisk(project, topFqn);
         return success(normFqn, createdKind, name, persisted, props, synonymLanguage);
+    }
+
+    // ---- form-content member creation (the cross-model hop into the editable Form) ---------------
+
+    /**
+     * Creates a member of a form's CONTENT model (a form attribute / command / visual item) addressed
+     * by a form FQN. Forms are a separate top object reached from the {@code BasicForm} mdo via
+     * {@code getForm()}; the mutation runs on the re-fetched content form inside a write transaction
+     * and the content form's OWN FQN is force-exported (it serializes to {@code Form.form}).
+     */
+    private String createFormMember(String projectName, String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+    {
+        FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
+        if (kind == null)
+        {
+            return ToolResult.error("Unsupported form element kind '" + ref.kindToken + "' in '" //$NON-NLS-1$ //$NON-NLS-2$
+                + normFqn + "'. Supported form kinds: Attribute, Command, Group, Decoration " //$NON-NLS-1$
+                + "(Field/Button/Handler are added in a later step).").toJson(); //$NON-NLS-1$
+        }
+        if (!isValidIdentifier(ref.name))
+        {
+            return ToolResult.error("Invalid name '" + ref.name + "'. A name must start with a letter " //$NON-NLS-1$ //$NON-NLS-2$
+                + "or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
+        }
+
+        // Form-member properties: title (+ language) and parent (nest a visual item under an item).
+        String titleVal = null;
+        String titleLang = null;
+        String parentName = null;
+        for (JsonObject prop : properties)
+        {
+            String pName = asString(prop.get("name")); //$NON-NLS-1$
+            if (pName == null || pName.isEmpty())
+            {
+                return ToolResult.error("Each entry in 'properties' needs a non-empty 'name'.").toJson(); //$NON-NLS-1$
+            }
+            switch (pName.toLowerCase())
+            {
+                case "title": //$NON-NLS-1$
+                    titleVal = asString(prop.get("value")); //$NON-NLS-1$
+                    titleLang = asString(prop.get("language")); //$NON-NLS-1$
+                    break;
+                case "parent": //$NON-NLS-1$
+                    parentName = asString(prop.get("value")); //$NON-NLS-1$
+                    break;
+                default:
+                    return ToolResult.error("Property '" + pName + "' is not supported for a form " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "element. This version applies: title (with optional language), parent " //$NON-NLS-1$
+                        + "(nest a visual item). Set other properties via modify_metadata.").toJson(); //$NON-NLS-1$
+            }
+        }
+
+        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        if (ctx.hasError())
+        {
+            return ctx.error;
+        }
+        IProject project = ctx.project;
+        Configuration config = ctx.config;
+
+        MdObject mdForm = GetFormStructureTool.resolveMdForm(config, ref.formPath);
+        if (mdForm == null)
+        {
+            return ToolResult.error("Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'Type.Object.Form.FormName' or 'CommonForm.FormName'; check with " //$NON-NLS-1$
+                + "get_metadata_objects and get_form_structure.").toJson(); //$NON-NLS-1$
+        }
+        if (!(mdForm instanceof IBmObject))
+        {
+            return ToolResult.error("Form is not a BM object").toJson(); //$NON-NLS-1$
+        }
+
+        final String titleLanguage;
+        if (titleVal != null && !titleVal.isEmpty())
+        {
+            titleLanguage = MetadataLanguageUtils.resolveLanguageCode(config, titleLang);
+            if (titleLanguage == null)
+            {
+                return ToolResult.error("Cannot determine a language code for the title in this " //$NON-NLS-1$
+                    + "configuration. Specify a 'language' code (e.g. 'en' or 'ru').").toJson(); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            titleLanguage = null;
+        }
+
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (bmModelManager == null)
+        {
+            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+        }
+        IBmModel bmModel = bmModelManager.getModel(project);
+        if (bmModel == null)
+        {
+            return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
+        }
+
+        final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
+        final FormElementWriter.Kind fKind = kind;
+        final String name = ref.name;
+        final String parent = parentName;
+        final String titleText = titleVal;
+        final String[] createdKind = new String[1];
+
+        final String contentFormFqn;
+        try
+        {
+            contentFormFqn = BmTransactions.<String>write(bmModel, "CreateFormMember", (tx, pm) -> //$NON-NLS-1$
+            {
+                EObject txMdForm = (EObject)tx.getObjectById(mdFormBmId);
+                if (txMdForm == null)
+                {
+                    throw new RuntimeException("Form object not found in transaction"); //$NON-NLS-1$
+                }
+                EObject formModel = FormElementWriter.getEditableForm(txMdForm);
+                if (formModel == null)
+                {
+                    throw new RuntimeException("the form has no editable content model (it may be " //$NON-NLS-1$
+                        + "empty, an ordinary/legacy form, or not yet built)"); //$NON-NLS-1$
+                }
+                String err = FormElementWriter.createMember(formModel, fKind, name, parent,
+                    titleLanguage, titleText, createdKind);
+                if (err != null)
+                {
+                    throw new RuntimeException(err);
+                }
+                // The content Form is a separate top object serialized to Form.form - export ITS fqn.
+                return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
+            });
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error creating form member", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to create form element: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        boolean persisted = contentFormFqn != null && !contentFormFqn.isEmpty()
+            && BmTransactions.forceExportToDisk(project, contentFormFqn);
+
+        return ToolResult.success()
+            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("kind", createdKind[0] != null ? createdKind[0] : fKind.name()) //$NON-NLS-1$
+            .put("name", name) //$NON-NLS-1$
+            .put("persisted", persisted) //$NON-NLS-1$
+            .put("message", "Created " + normFqn).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

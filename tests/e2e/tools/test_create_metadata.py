@@ -404,6 +404,66 @@ def test_create_web_service_operation_and_parameter():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Happy — FORM content members (the cross-model hop into the editable .form)
+# Fixture: Catalog.Catalog has a managed form "ItemForm".
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_attribute():
+    attr = "E2EFormAttr"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "create a form attribute by FQN")
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    poll_diff_contains(attr, ctx="the new form attribute must land in the form's .form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_command():
+    cmd = "E2EFormCmd"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r, "create a form command by FQN")
+    poll_diff_contains(cmd, ctx="the new form command must land in the form's .form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_group_and_nested_decoration():
+    # A Group at the form root, then a Decoration NESTED under it via the 'parent' property.
+    grp, dec = "E2EFormGroup", "E2EFormDeco"
+    r1 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group." + grp})
+    assert_ok(r1, "create a form group by FQN")
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Decoration." + dec,
+        "properties": [{"name": "parent", "value": grp}]})
+    assert_ok(r2, "create a form decoration nested under the group")
+    poll_diff_contains(grp, ctx="the new form group must land on disk")
+    poll_diff_contains(dec, ctx="the nested decoration must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_attribute_russian_token():
+    # The form token + element kind token are bilingual: "Форма" + "Реквизит".
+    attr = "E2EFormAttrRu"
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Форма.ItemForm.Реквизит." + attr})
+    assert_ok(r, "create a form attribute via Russian form/kind tokens")
+    poll_diff_contains(attr, ctx="the Russian-token form attribute must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_unknown_kind_is_error():
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Nonsense.X"})
+    e = assert_error(r, "unknown form element kind")
+    assert_error_quality(e, names=["Nonsense"], suggests=["Attribute", "Command"],
+                         ctx="an unknown form kind must list the supported form kinds")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — every rejected call: error quality + assert_no_diff()
 # ──────────────────────────────────────────────────────────────────────────────
 
