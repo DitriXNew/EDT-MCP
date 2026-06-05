@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -20,6 +22,11 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.util.EcoreUtil;
+
+import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
+import com._1c.g5.v8.dt.platform.version.Version;
 
 /**
  * Shared writer for the editable FORM CONTENT model ({@code com._1c.g5.v8.dt.form.model.Form}, a
@@ -131,6 +138,18 @@ public final class FormElementWriter
     private static final String RU_DECORATION = cp(0x0434, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f); // dekoraciya
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
+    private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
+
+    /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
+    public static boolean isHandlerToken(String token)
+    {
+        if (token == null)
+        {
+            return false;
+        }
+        String t = token.trim().toLowerCase();
+        return "handler".equals(t) || RU_HANDLER.equals(t); //$NON-NLS-1$
+    }
 
     public static Kind kindForToken(String token)
     {
@@ -292,6 +311,184 @@ public final class FormElementWriter
         addToList(container, FEATURE_ITEMS, item);
         recordKind(item, createdKind);
         return null;
+    }
+
+    // ---- event handlers -------------------------------------------------------------------------
+
+    /**
+     * Binds an event {@code Handler} to {@code container} (the form itself or a form item): resolves
+     * the requested {@code eventName} against the element's AVAILABLE events; on no match returns an
+     * error LISTING the available events localized to {@code langCode} (the user-required advisory).
+     * The {@code procName} is the BSL handler procedure name (defaults to the event name when blank).
+     *
+     * @param version the platform version (to resolve the element's platform Type and its events)
+     * @return {@code null} on success, or a human-readable error message
+     */
+    public static String createHandler(EObject container, String eventName, String procName,
+        Version version, String langCode, String[] createdKind)
+    {
+        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
+        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        {
+            return "The form element '" + container.eClass().getName() //$NON-NLS-1$
+                + "' cannot hold event handlers."; //$NON-NLS-1$
+        }
+        List<EObject> events = availableEvents(container, version);
+        if (events.isEmpty())
+        {
+            return "Could not resolve the available events for this form element."; //$NON-NLS-1$
+        }
+        EObject matched = null;
+        for (EObject ev : events)
+        {
+            if (eventName.equalsIgnoreCase(eventNameOf(ev, false))
+                || eventName.equalsIgnoreCase(eventNameOf(ev, true)))
+            {
+                matched = ev;
+                break;
+            }
+        }
+        if (matched == null)
+        {
+            boolean ru = "ru".equals(langCode); //$NON-NLS-1$
+            StringBuilder sb = new StringBuilder();
+            for (EObject ev : events)
+            {
+                String n = eventNameOf(ev, ru);
+                if (n == null || n.isEmpty())
+                {
+                    n = eventNameOf(ev, !ru);
+                }
+                if (n != null && !n.isEmpty())
+                {
+                    if (sb.length() > 0)
+                    {
+                        sb.append(", "); //$NON-NLS-1$
+                    }
+                    sb.append(n);
+                }
+            }
+            return "Event '" + eventName + "' is not valid for " + container.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Available events: " + sb; //$NON-NLS-1$
+        }
+        EStructuralFeature evFeat = handlerEventFeature(handlersFeat);
+        for (EObject existing : referenceList(container, "handlers")) //$NON-NLS-1$
+        {
+            if (evFeat != null && existing.eGet(evFeat) == matched)
+            {
+                return "An event handler for '" + eventName + "' already exists on this element."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        EClass ehType = ((EReference)handlersFeat).getEReferenceType();
+        if (ehType == null || ehType.getEPackage() == null)
+        {
+            return "Cannot create an event handler for this form model."; //$NON-NLS-1$
+        }
+        EObject handler = ehType.getEPackage().getEFactoryInstance().create(ehType);
+        setStringFeature(handler, FEATURE_NAME, (procName == null || procName.isEmpty()) ? eventName : procName);
+        if (evFeat != null)
+        {
+            handler.eSet(evFeat, matched);
+        }
+        addToList(container, "handlers", handler); //$NON-NLS-1$
+        recordKind(handler, createdKind);
+        return null;
+    }
+
+    /** The {@code event} EReference on the EventHandler EClass held by the {@code handlers} feature. */
+    private static EStructuralFeature handlerEventFeature(EStructuralFeature handlersFeat)
+    {
+        EClass ehType = ((EReference)handlersFeat).getEReferenceType();
+        return ehType != null ? ehType.getEStructuralFeature("event") : null; //$NON-NLS-1$
+    }
+
+    private static String eventNameOf(EObject event, boolean russian)
+    {
+        return stringFeature(event, russian ? "nameRu" : "name"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The available platform events for a form element, replicating FormItemInformationService's
+     * pure-model logic (no form-service dependency): element EClass &rarr; platform base-type name
+     * &rarr; resolve that {@code Type} via {@link IEObjectProvider} &rarr; {@code Type.getEvents()}.
+     * <p>NB only the form ROOT is wired today. When a later slice binds handlers to a FIELD/GROUP/
+     * BUTTON, also union the events of the element's {@code extInfo} sub-type (FormItemInformation
+     * Service does this) - the base type alone misses ext-info-specific events.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private static List<EObject> availableEvents(EObject container, Version version)
+    {
+        if (version == null)
+        {
+            return Collections.emptyList();
+        }
+        String typeName = baseTypeName(container.eClass().getName());
+        if (typeName == null)
+        {
+            return Collections.emptyList();
+        }
+        IEObjectProvider provider =
+            IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version);
+        if (provider == null)
+        {
+            return Collections.emptyList();
+        }
+        EObject type = resolveType(provider, container, typeName);
+        // The managed form's platform type is "ClientApplicationForm" on modern platforms and
+        // "ManagedForm" on legacy ones; try the other name if the first is unknown to the provider.
+        if (type == null && "ClientApplicationForm".equals(typeName)) //$NON-NLS-1$
+        {
+            type = resolveType(provider, container, "ManagedForm"); //$NON-NLS-1$
+        }
+        if (type == null)
+        {
+            return Collections.emptyList();
+        }
+        EStructuralFeature eventsFeat = type.eClass().getEStructuralFeature("events"); //$NON-NLS-1$
+        Object value = eventsFeat != null ? type.eGet(eventsFeat) : null;
+        return value instanceof List<?> ? (List<EObject>)value : Collections.emptyList();
+    }
+
+    private static EObject resolveType(IEObjectProvider provider, EObject context, String typeName)
+    {
+        try
+        {
+            // createProxy THROWS for a name the provider does not know (it does not return null), so
+            // an unknown legacy/modern type name must not abort the lookup - we try the alternative.
+            EObject proxy = provider.createProxy(typeName);
+            if (proxy == null)
+            {
+                return null;
+            }
+            EObject resolved = EcoreUtil.resolve(proxy, context);
+            return (resolved == null || resolved.eIsProxy()) ? null : resolved;
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
+    }
+
+    /** Maps a form-element EClass name to its platform base-type name (the events source). */
+    private static String baseTypeName(String eClassName)
+    {
+        switch (eClassName)
+        {
+            case "Form": //$NON-NLS-1$
+                return "ClientApplicationForm"; //$NON-NLS-1$ (legacy "ManagedForm" tried as fallback)
+            case "FormField": //$NON-NLS-1$
+                return "FormField"; //$NON-NLS-1$
+            case "Table": //$NON-NLS-1$
+                return "FormTable"; //$NON-NLS-1$
+            case "FormGroup": //$NON-NLS-1$
+                return "FormGroup"; //$NON-NLS-1$
+            case "Button": //$NON-NLS-1$
+                return "FormButton"; //$NON-NLS-1$
+            case "Decoration": //$NON-NLS-1$
+                return "FormDecoration"; //$NON-NLS-1$
+            default:
+                return null;
+        }
     }
 
     // ---- element factories (reflective, via the form EPackage) ----------------------------------

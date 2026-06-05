@@ -90,6 +90,31 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testIsHandlerToken()
+    {
+        assertEquals(Boolean.TRUE, Boolean.valueOf(FormElementWriter.isHandlerToken("Handler"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, Boolean.valueOf(FormElementWriter.isHandlerToken("handler"))); //$NON-NLS-1$
+        // obrabotchik -> handler
+        assertEquals(Boolean.TRUE, Boolean.valueOf(FormElementWriter.isHandlerToken(
+            fromCp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a))));
+        assertEquals(Boolean.FALSE, Boolean.valueOf(FormElementWriter.isHandlerToken("Command"))); //$NON-NLS-1$
+        assertEquals(Boolean.FALSE, Boolean.valueOf(FormElementWriter.isHandlerToken(null)));
+        // a Handler token is NOT a member Kind (it routes to the handler path, not createMember)
+        assertNull(FormElementWriter.kindForToken("Handler")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseHandlerFqnRoutesAsHandler()
+    {
+        // Form-level handler: leaf is the event name; the token routes to the handler path.
+        FormMemberRef ref = FormElementWriter.parse("Catalog.Products.Form.ItemForm.Handler.OnOpen"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Catalog.Products.forms.ItemForm", ref.formPath); //$NON-NLS-1$
+        assertEquals("Handler", ref.kindToken); //$NON-NLS-1$
+        assertEquals("OnOpen", ref.name); //$NON-NLS-1$
+    }
+
+    @Test
     public void testParseCommonFormMember()
     {
         FormMemberRef ref = FormElementWriter.parse("CommonForm.MyForm.Attribute.Field1"); //$NON-NLS-1$

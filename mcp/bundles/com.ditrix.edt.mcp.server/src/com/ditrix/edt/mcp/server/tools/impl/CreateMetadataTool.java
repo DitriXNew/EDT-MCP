@@ -146,8 +146,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "- Form content: a member of a form (`Catalog.X.Form.F.<Kind>.Name` or " //$NON-NLS-1$
             + "`CommonForm.F.<Kind>.Name`) where Kind is Attribute, Command, Group or Decoration. " //$NON-NLS-1$
             + "Optional properties: `title` (with `language`), and `parent` to nest a Group/Decoration " //$NON-NLS-1$
-            + "under an existing item. (Field/Button bindings and event Handlers come in a later step.)" //$NON-NLS-1$
-            + "\n\n" //$NON-NLS-1$
+            + "under an existing item.\n" //$NON-NLS-1$
+            + "- Form event handler: `Catalog.X.Form.F.Handler.EventName` binds a BSL handler to a form " //$NON-NLS-1$
+            + "event (the leaf is the event name, e.g. OnOpen). An unknown event is rejected WITH the " //$NON-NLS-1$
+            + "list of available events (in the configuration language). The BSL procedure name is the " //$NON-NLS-1$
+            + "`procedure` property (defaults to the event name). (Field/Button bindings come in a " //$NON-NLS-1$
+            + "later step.)\n\n" //$NON-NLS-1$
             + "## Parameters\n" //$NON-NLS-1$
             + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
             + "- `fqn` (required) - full-name FQN of the node to create.\n" //$NON-NLS-1$
@@ -201,6 +205,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
+            if (FormElementWriter.isHandlerToken(formRef.kindToken))
+            {
+                return createFormHandler(projectName, normFqn, formRef, properties);
+            }
             return createFormMember(projectName, normFqn, formRef, properties);
         }
 
@@ -609,6 +617,124 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .put("name", name) //$NON-NLS-1$
             .put("persisted", persisted) //$NON-NLS-1$
             .put("message", "Created " + normFqn).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Binds an event handler to a form (the leaf is the EVENT name; the BSL procedure name comes from
+     * a {@code procedure} property, defaulting to the event name). An unknown event is rejected with
+     * the list of AVAILABLE events localized to the configuration language.
+     */
+    private String createFormHandler(String projectName, String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+    {
+        String procName = null;
+        for (JsonObject prop : properties)
+        {
+            String pName = asString(prop.get("name")); //$NON-NLS-1$
+            if (pName == null || pName.isEmpty())
+            {
+                return ToolResult.error("Each entry in 'properties' needs a non-empty 'name'.").toJson(); //$NON-NLS-1$
+            }
+            switch (pName.toLowerCase())
+            {
+                case "procedure": //$NON-NLS-1$
+                case "handler": //$NON-NLS-1$
+                    procName = asString(prop.get("value")); //$NON-NLS-1$
+                    break;
+                default:
+                    return ToolResult.error("Property '" + pName + "' is not supported for a form " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "handler. Use 'procedure' (the BSL handler procedure name; defaults to the " //$NON-NLS-1$
+                        + "event name).").toJson(); //$NON-NLS-1$
+            }
+        }
+
+        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        if (ctx.hasError())
+        {
+            return ctx.error;
+        }
+        IProject project = ctx.project;
+        Configuration config = ctx.config;
+
+        MdObject mdForm = GetFormStructureTool.resolveMdForm(config, ref.formPath);
+        if (mdForm == null)
+        {
+            return ToolResult.error("Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'Type.Object.Form.FormName' or 'CommonForm.FormName'.").toJson(); //$NON-NLS-1$
+        }
+        if (!(mdForm instanceof IBmObject))
+        {
+            return ToolResult.error("Form is not a BM object").toJson(); //$NON-NLS-1$
+        }
+
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(project) : null;
+        final Version version = v8Project != null ? v8Project.getVersion() : null;
+        if (version == null)
+        {
+            return ToolResult.error("Cannot resolve the platform version needed to validate the form " //$NON-NLS-1$
+                + "event.").toJson(); //$NON-NLS-1$
+        }
+        final String langCode = MetadataLanguageUtils.resolveLanguageCode(config, null);
+
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (bmModelManager == null)
+        {
+            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+        }
+        IBmModel bmModel = bmModelManager.getModel(project);
+        if (bmModel == null)
+        {
+            return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
+        }
+
+        final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
+        final String eventName = ref.name;
+        final String fProc = procName;
+        final String[] createdKind = new String[1];
+
+        final String contentFormFqn;
+        try
+        {
+            contentFormFqn = BmTransactions.<String>write(bmModel, "CreateFormHandler", (tx, pm) -> //$NON-NLS-1$
+            {
+                EObject txMdForm = (EObject)tx.getObjectById(mdFormBmId);
+                if (txMdForm == null)
+                {
+                    throw new RuntimeException("Form object not found in transaction"); //$NON-NLS-1$
+                }
+                EObject formModel = FormElementWriter.getEditableForm(txMdForm);
+                if (formModel == null)
+                {
+                    throw new RuntimeException("the form has no editable content model (it may be " //$NON-NLS-1$
+                        + "empty, an ordinary/legacy form, or not yet built)"); //$NON-NLS-1$
+                }
+                String err = FormElementWriter.createHandler(formModel, eventName, fProc, version,
+                    langCode, createdKind);
+                if (err != null)
+                {
+                    throw new RuntimeException(err);
+                }
+                return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
+            });
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error creating form handler", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to create form handler: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        boolean persisted = contentFormFqn != null && !contentFormFqn.isEmpty()
+            && BmTransactions.forceExportToDisk(project, contentFormFqn);
+
+        return ToolResult.success()
+            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("kind", createdKind[0] != null ? createdKind[0] : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("name", eventName) //$NON-NLS-1$
+            .put("persisted", persisted) //$NON-NLS-1$
+            .put("message", "Created handler for event '" + eventName + "' on " + ref.formPath) //$NON-NLS-1$ //$NON-NLS-2$
+            .toJson();
     }
 
     /**

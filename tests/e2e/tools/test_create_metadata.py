@@ -463,6 +463,27 @@ def test_create_form_unknown_kind_is_error():
                          ctx="an unknown form kind must list the supported form kinds")
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_event_handler():
+    # Bind a BSL handler to the form's OnOpen event; the leaf is the event name, the proc via property.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Handler.OnOpen",
+        "properties": [{"name": "procedure", "value": "MyOnOpen"}]})
+    assert_ok(r, "bind an OnOpen form handler")
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    poll_diff_contains("MyOnOpen", ctx="the handler procedure name must land in the form's .form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_unknown_event_lists_available():
+    # An unknown event must be rejected WITH the list of available events (the user-required advisory).
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Handler.DefinitelyNotAnEvent_zz"})
+    e = assert_error(r, "unknown form event")
+    assert_error_quality(e, names=["DefinitelyNotAnEvent_zz"], suggests=["Available events"],
+                         ctx="an unknown event must list the available events")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — every rejected call: error quality + assert_no_diff()
 # ──────────────────────────────────────────────────────────────────────────────
