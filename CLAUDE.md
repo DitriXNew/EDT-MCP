@@ -11,7 +11,7 @@ This file is about **what NOT to do** and **where to stop and think twice**. For
 ## ❌ Hard don'ts (violating these = a bug or corruption)
 
 1. **Touch the model only inside a transaction boundary.** Never read the model in a write task, never mutate outside a write task. A real bug of this class already happened: `get_project_errors` read markers outside a read transaction (fixed in `25d7851`). Reads go in a read boundary, writes in a write boundary.
-2. **The metadata synonym is keyed by the language CODE** (`getLanguageCode()` → `"ru"`/`"en"`), **never** by `getDefaultLanguage().getName()` (that returns the name "Russian"/"Русский" — it misses the EMap and silently breaks on a multi-language configuration). Reference impl: `CreateMetadataObjectTool.resolveLanguage`.
+2. **The metadata synonym is keyed by the language CODE** (`getLanguageCode()` → `"ru"`/`"en"`), **never** by `getDefaultLanguage().getName()` (that returns the name "Russian"/"Русский" — it misses the EMap and silently breaks on a multi-language configuration). Reference impl: `MetadataLanguageUtils.resolveLanguageCode` (the shared resolver used by `create_metadata` / `modify_metadata` / the metadata formatters).
 3. **Do not hardcode `"ru"`** as the language fallback. Use the code of the first configured language.
 4. **Do not add more hand-rolled resolution.** Project/configuration/module resolution and BM access are already copy-pasted dozens of times — do not add yet another `ResourcesPlugin.getWorkspace()...` copy. Metadata type/object resolution goes through the existing `MetadataTypeUtils` (it is the shared bilingual resolver — do NOT rewrite it). Shared `ProjectContext`/`BmTransactions` are being introduced by the refactor — if they don't exist yet, leave a TODO, but do not copy the old boilerplate.
 5. **`tools/impl/` holds `IMcpTool` classes only.** No utilities or abstract bases there (use `utils/`, `tools/base/`).
@@ -27,8 +27,8 @@ This file is about **what NOT to do** and **where to stop and think twice**. For
 | Where | Why it's dangerous | Do this before editing |
 |---|---|---|
 | `RenameMetadataObjectTool` | **Cascading edits across the whole configuration** — BSL code, forms, metadata (README:50). A mistake = mass corruption. | Run on a test configuration; verify the cascade scope; don't run it without an explicit request. |
-| BM write tools (`Create`/`Add`/`Delete`/`Rename`Metadata) | Model mutation + transactions + cascade. | Check the transaction boundary and reversibility. |
-| `update_database`, `delete_metadata_object`, `delete_project` | Destructive / irreversible (DB update / object delete / project removal). | Only on an explicit user request. |
+| BM write tools (`create_metadata`/`modify_metadata`/`delete_metadata` — all FQN-addressed — + `rename_metadata_object`) | Model mutation + transactions + cascade. | Check the transaction boundary and reversibility. |
+| `update_database`, `delete_metadata` (FQN-addressed, confirm-preview), `delete_project` | Destructive / irreversible (DB update / object delete / project removal). | Only on an explicit user request. |
 | `clean_project` | A rebuild/revalidation — discards UNSAVED model changes (recoverable, NOT destructive; `destructiveHint=false`). | Save unsaved edits first; otherwise safe to run. |
 | `McpServer` (~1000 lines) | Transport + SSE + interruption + tool registry are tangled together. | Change one responsibility without touching the others. |
 | `Activator` | Service-locator hub + static logging — almost everything depends on it. | Be careful with init/dispose order and signatures. |
