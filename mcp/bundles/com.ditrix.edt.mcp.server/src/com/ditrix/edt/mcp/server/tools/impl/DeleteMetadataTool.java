@@ -113,9 +113,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "## Parameters\n" //$NON-NLS-1$
             + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
             + "- `fqn` (required) - the delete target. Top object: 'Type.Name' (e.g. 'Catalog.Products' " //$NON-NLS-1$
-            + "deletes the whole catalog). Member: 'Type.Name.Kind.Name' (e.g. " //$NON-NLS-1$
-            + "'Document.SalesOrder.Attribute.Amount'). Supported kinds: Attribute, TabularSection, " //$NON-NLS-1$
-            + "Dimension, Resource, EnumValue.\n" //$NON-NLS-1$
+            + "deletes the whole catalog). Member: 'Type.Name.Kind.Name', including a NESTED member " //$NON-NLS-1$
+            + "(e.g. 'Catalog.X.TabularSection.T.Attribute.A'). Any node create_metadata can address - " //$NON-NLS-1$
+            + "an attribute / tabular section / dimension / resource / enum value / command / template " //$NON-NLS-1$
+            + "/ recalculation / type-specific child - can be deleted by its FQN.\n" //$NON-NLS-1$
             + "- `confirm` (optional, default false) - false previews, true applies.\n\n" //$NON-NLS-1$
             + "## Bilingual (ru/en)\n" //$NON-NLS-1$
             + "Resolves by the programmatic Name; only the leading TYPE token and the child KIND tokens " //$NON-NLS-1$
@@ -163,7 +164,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Node not found: " + fqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Check the FQN: 'Type.Name' for a top object (e.g. 'Catalog.Products'), " //$NON-NLS-1$
                 + "'Type.Name.Kind.Name' for a member (e.g. 'Document.Order.Attribute.Amount'). " //$NON-NLS-1$
-                + "Supported kinds: Attribute, TabularSection, Dimension, Resource, EnumValue. " //$NON-NLS-1$
+                + "Any node create_metadata can address can be deleted; see " //$NON-NLS-1$
+                + "get_tool_guide('create_metadata') for the kinds. " //$NON-NLS-1$
                 + "Use get_metadata_objects to find an object's FQN.").toJson(); //$NON-NLS-1$
         }
 

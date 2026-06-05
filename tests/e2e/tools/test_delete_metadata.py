@@ -94,6 +94,89 @@ def test_confirm_deletes_member_attribute():
                     "a member delete must NOT delete the parent Catalog.Catalog")
 
 
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_confirm_deletes_command_member():
+    # A Command child (a new kind create_metadata can address) is deletable by FQN.
+    cmd = "E2EDelCmd"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Command." + cmd}),
+              "seed command to delete")
+    wait_for_project_ready()
+
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Command." + cmd, "confirm": True,
+    })
+    assert_ok(r, "delete the seeded command")
+    assert r.structured.get("action") == "executed", "command delete must execute: %r" % (r.structured,)
+    assert_contains(_list_catalogs(), "| Catalog ", "the parent catalog must survive a command delete")
+    poll_disk_lacks("src/Catalogs/Catalog/Catalog.mdo", cmd,
+                    ctx="the deleted command must be gone from the owner .mdo")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_confirm_deletes_nested_tabular_section_attribute():
+    # A NESTED member (depth-6) is deletable: resolveExisting resolves the leaf and the refactoring
+    # service removes it.
+    ts, attr = "E2EDelTab", "E2EDelNestedAttr"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.TabularSection." + ts}),
+              "seed tabular section")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.TabularSection.%s.Attribute.%s" % (ts, attr)}), "seed nested attribute")
+    wait_for_project_ready()
+
+    r = call("delete_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.TabularSection.%s.Attribute.%s" % (ts, attr), "confirm": True,
+    })
+    assert_ok(r, "delete the nested tabular-section attribute (depth-6)")
+    assert r.structured.get("action") == "executed", "nested delete must execute: %r" % (r.structured,)
+    poll_disk_lacks("src/Catalogs/Catalog/Catalog.mdo", attr,
+                    ctx="the deleted nested attribute must be gone from the owner .mdo")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_confirm_deletes_inline_special_child():
+    # A type-specific inline child (a ChartOfAccounts AccountingFlag) is deletable by FQN.
+    coa, flag = "E2EDelCoA", "E2EDelFlag"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "ChartOfAccounts." + coa}),
+              "seed chart of accounts")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfAccounts.%s.AccountingFlag.%s" % (coa, flag)}),
+        "seed accounting flag")
+    wait_for_project_ready()
+
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfAccounts.%s.AccountingFlag.%s" % (coa, flag), "confirm": True,
+    })
+    assert_ok(r, "delete the accounting flag")
+    assert r.structured.get("action") == "executed", "special-child delete must execute: %r" % (r.structured,)
+    # Anti-cheat (path-independent): re-creating the same flag must SUCCEED - it would fail with
+    # "already exists" if the delete had been a no-op.
+    wait_for_project_ready()
+    again = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfAccounts.%s.AccountingFlag.%s" % (coa, flag)})
+    assert_ok(again, "re-creating the flag proves the delete actually removed it")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_confirm_deletes_template_factory_child():
+    # A Template (a factory-initialized child create_metadata addresses) is deletable by FQN. Verified
+    # on the known owner path, closing the gap on the generalized "any addressable node" claim.
+    tpl = "E2EDelTpl"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Template." + tpl}),
+              "seed template to delete")
+    wait_for_project_ready()
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Template." + tpl, "confirm": True,
+    })
+    assert_ok(r, "delete the seeded template")
+    assert r.structured.get("action") == "executed", "template delete must execute: %r" % (r.structured,)
+    poll_disk_lacks("src/Catalogs/Catalog/Catalog.mdo", tpl,
+                    ctx="the deleted template must be gone from the owner .mdo")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Happy — PREVIEW (confirm absent) lists change points and does NOT mutate
 # ──────────────────────────────────────────────────────────────────────────────
@@ -152,7 +235,8 @@ def test_nonexistent_node_is_error():
     r = call("delete_metadata", {"projectName": PROJECT, "fqn": bad, "confirm": True})
     e = assert_error(r, "non-existent node")
     assert_error_quality(e, names=[bad], suggests=["Type.Name", "Catalog.Products"])
-    assert_contains(e, "EnumValue", "the not-found message lists supported member kinds")
+    assert_contains(e, "get_tool_guide('create_metadata')",
+                    "the not-found message points to the create guide for the addressable kinds")
     assert_contains(_list_commonmodules(), "OK", "a rejected lookup must not delete the sibling OK")
     assert_no_diff("a rejected call must not touch the project on disk")
 
