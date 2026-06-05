@@ -7,8 +7,11 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -73,14 +76,28 @@ public final class FormElementWriter
         public final String formPath;
         /** The raw element kind token (English or Russian); resolve via {@link #kindForToken}. */
         public final String kindToken;
-        /** The element's programmatic name. */
+        /** The element's programmatic name (for a handler FQN, the EVENT name). */
         public final String name;
+        /** For an ITEM-LEVEL handler FQN, the owning item's kind token; {@code null} for a form-level
+         * member or handler. */
+        public final String itemKindToken;
+        /** For an ITEM-LEVEL handler FQN, the owning item's name; {@code null} otherwise. */
+        public final String itemName;
 
-        FormMemberRef(String formPath, String kindToken, String name)
+        FormMemberRef(String formPath, String kindToken, String name, String itemKindToken,
+            String itemName)
         {
             this.formPath = formPath;
             this.kindToken = kindToken;
             this.name = name;
+            this.itemKindToken = itemKindToken;
+            this.itemName = itemName;
+        }
+
+        /** Whether the FQN addresses an event handler on a form ITEM (vs the form root). */
+        public boolean isItemLevel()
+        {
+            return itemName != null;
         }
     }
 
@@ -91,11 +108,13 @@ public final class FormElementWriter
 
     /**
      * Parses a form-member FQN into its form path + leaf kind/name, or returns {@code null} when the
-     * FQN does not address a form member. Two shapes are recognized:
+     * FQN does not address a form member. The recognized shapes are:
      * <ul>
-     *   <li>{@code Type.Object.Form.FormName.Kind.Name} (6 parts; the {@code Form} token may be
-     *       {@code Form}/{@code Forms}/{@code Форма}/{@code Формы})</li>
-     *   <li>{@code CommonForm.FormName.Kind.Name} (4 parts; a CommonForm IS a form)</li>
+     *   <li>{@code Type.Object.Form.FormName.Kind.Name} (form-level member/handler; the {@code Form}
+     *       token may be {@code Form}/{@code Forms}/{@code Форма}/{@code Формы})</li>
+     *   <li>{@code CommonForm.FormName.Kind.Name} (a CommonForm IS a form)</li>
+     *   <li>{@code Type.Object.Form.FormName.ItemKind.ItemName.Handler.Event} (an event handler on a
+     *       form ITEM) and its {@code CommonForm.FormName.ItemKind.ItemName.Handler.Event} variant</li>
      * </ul>
      * The form-element kind tokens are NOT confused with the mdclass member tokens because a mdclass
      * member FQN never carries a form token at position 2 nor starts with {@code CommonForm} followed
@@ -108,13 +127,32 @@ public final class FormElementWriter
             return null;
         }
         String[] p = normFqn.split("\\."); //$NON-NLS-1$
-        if (p.length == 6 && isFormToken(p[2]))
+        String formPath;
+        int rem; // index where the kind/name remainder begins
+        if (p.length >= 6 && isFormToken(p[2]))
         {
-            return new FormMemberRef(p[0] + "." + p[1] + ".forms." + p[3], p[4], p[5]); //$NON-NLS-1$ //$NON-NLS-2$
+            formPath = p[0] + "." + p[1] + ".forms." + p[3]; //$NON-NLS-1$ //$NON-NLS-2$
+            rem = 4;
         }
-        if (p.length == 4 && "CommonForm".equalsIgnoreCase(MetadataTypeUtils.toEnglishSingular(p[0]))) //$NON-NLS-1$
+        else if (p.length >= 4 && "CommonForm".equalsIgnoreCase(MetadataTypeUtils.toEnglishSingular(p[0]))) //$NON-NLS-1$
         {
-            return new FormMemberRef(p[0] + "." + p[1], p[2], p[3]); //$NON-NLS-1$
+            formPath = p[0] + "." + p[1]; //$NON-NLS-1$
+            rem = 2;
+        }
+        else
+        {
+            return null;
+        }
+        int tail = p.length - rem;
+        if (tail == 2)
+        {
+            // Form-level member or handler: Kind.Name.
+            return new FormMemberRef(formPath, p[rem], p[rem + 1], null, null);
+        }
+        if (tail == 4 && isHandlerToken(p[rem + 2]))
+        {
+            // Item-level handler: ItemKind.ItemName.Handler.Event.
+            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1]);
         }
         return null;
     }
@@ -548,22 +586,19 @@ public final class FormElementWriter
     }
 
     /**
-     * The available platform events for a form element, replicating FormItemInformationService's
-     * pure-model logic (no form-service dependency): element EClass &rarr; platform base-type name
-     * &rarr; resolve that {@code Type} via {@link IEObjectProvider} &rarr; {@code Type.getEvents()}.
-     * <p>NB only the form ROOT is wired today. When a later slice binds handlers to a FIELD/GROUP/
-     * BUTTON, also union the events of the element's {@code extInfo} sub-type (FormItemInformation
-     * Service does this) - the base type alone misses ext-info-specific events.</p>
+     * The available platform events for a form element (the form root OR a form item), replicating
+     * {@code FormItemInformationService.getAllowedEvents}'s pure-model logic (no form-service
+     * dependency): the union of the events of the element's platform BASE type and, when present, its
+     * {@code extInfo} SUB-type. The base/ext type name comes from {@link #PLATFORM_TYPE_BY_ECLASS}
+     * (the same mapping the platform's {@code BASE_TYPES_OF_FORM_ITEMS_AND_EXT} holds); each name is
+     * resolved to its {@code Type} via {@link IEObjectProvider} and its {@code events} collected.
+     * <p>Unioning the ext-info type matters for items: e.g. an input field's {@code OnChange} lives on
+     * {@code FormFieldExtensionForATextBox} (its {@code InputFieldExtInfo}), not on the bare
+     * {@code FormField} base type.</p>
      */
-    @SuppressWarnings("unchecked")
-    private static List<EObject> availableEvents(EObject container, Version version)
+    private static List<EObject> availableEvents(EObject element, Version version)
     {
         if (version == null)
-        {
-            return Collections.emptyList();
-        }
-        String typeName = baseTypeName(container.eClass().getName());
-        if (typeName == null)
         {
             return Collections.emptyList();
         }
@@ -573,20 +608,60 @@ public final class FormElementWriter
         {
             return Collections.emptyList();
         }
-        EObject type = resolveType(provider, container, typeName);
-        // The managed form's platform type is "ClientApplicationForm" on modern platforms and
-        // "ManagedForm" on legacy ones; try the other name if the first is unknown to the provider.
-        if (type == null && "ClientApplicationForm".equals(typeName)) //$NON-NLS-1$
+        List<EObject> events = new ArrayList<>();
+        addTypeEvents(provider, element, PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()), events);
+        EStructuralFeature extInfoFeat = element.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (extInfoFeat instanceof EReference)
         {
-            type = resolveType(provider, container, "ManagedForm"); //$NON-NLS-1$
+            Object ext = element.eGet(extInfoFeat);
+            if (ext instanceof EObject)
+            {
+                addTypeEvents(provider, element,
+                    PLATFORM_TYPE_BY_ECLASS.get(((EObject)ext).eClass().getName()), events);
+            }
         }
+        return events;
+    }
+
+    /** Resolves {@code typeName} to a platform {@code Type} and appends its {@code events} to the list. */
+    @SuppressWarnings("unchecked")
+    private static void addTypeEvents(IEObjectProvider provider, EObject context, String typeName,
+        List<EObject> accumulator)
+    {
+        EObject type = resolveTypeName(provider, context, typeName);
         if (type == null)
         {
-            return Collections.emptyList();
+            return;
         }
         EStructuralFeature eventsFeat = type.eClass().getEStructuralFeature("events"); //$NON-NLS-1$
         Object value = eventsFeat != null ? type.eGet(eventsFeat) : null;
-        return value instanceof List<?> ? (List<EObject>)value : Collections.emptyList();
+        if (value instanceof List<?>)
+        {
+            accumulator.addAll((List<EObject>)value);
+        }
+    }
+
+    /**
+     * Resolves a platform type by name, swapping {@code ManagedForm} &harr; {@code ClientApplication
+     * Form} the way the platform does (the managed form's type is {@code ClientApplicationForm} on
+     * modern platforms and {@code ManagedForm} on legacy ones).
+     */
+    private static EObject resolveTypeName(IEObjectProvider provider, EObject context, String typeName)
+    {
+        if (typeName == null)
+        {
+            return null;
+        }
+        EObject type = resolveType(provider, context, typeName);
+        if (type == null && "ManagedForm".equals(typeName)) //$NON-NLS-1$
+        {
+            type = resolveType(provider, context, "ClientApplicationForm"); //$NON-NLS-1$
+        }
+        else if (type == null && "ClientApplicationForm".equals(typeName)) //$NON-NLS-1$
+        {
+            type = resolveType(provider, context, "ManagedForm"); //$NON-NLS-1$
+        }
+        return type;
     }
 
     private static EObject resolveType(IEObjectProvider provider, EObject context, String typeName)
@@ -609,26 +684,80 @@ public final class FormElementWriter
         }
     }
 
-    /** Maps a form-element EClass name to its platform base-type name (the events source). */
-    private static String baseTypeName(String eClassName)
+    /**
+     * Form-element / ext-info EClass name &rarr; platform base-type name, a faithful copy of
+     * {@code FormItemInformationService.BASE_TYPES_OF_FORM_ITEMS_AND_EXT} (keyed by EClass NAME so this
+     * bundle needs no compile-time form-model dependency). The events of an element are the union over
+     * its base EClass and its current {@code extInfo} EClass.
+     */
+    private static final Map<String, String> PLATFORM_TYPE_BY_ECLASS = buildPlatformTypeMap();
+
+    private static Map<String, String> buildPlatformTypeMap()
     {
-        switch (eClassName)
-        {
-            case "Form": //$NON-NLS-1$
-                return "ClientApplicationForm"; //$NON-NLS-1$ (legacy "ManagedForm" tried as fallback)
-            case "FormField": //$NON-NLS-1$
-                return "FormField"; //$NON-NLS-1$
-            case "Table": //$NON-NLS-1$
-                return "FormTable"; //$NON-NLS-1$
-            case "FormGroup": //$NON-NLS-1$
-                return "FormGroup"; //$NON-NLS-1$
-            case "Button": //$NON-NLS-1$
-                return "FormButton"; //$NON-NLS-1$
-            case "Decoration": //$NON-NLS-1$
-                return "FormDecoration"; //$NON-NLS-1$
-            default:
-                return null;
-        }
+        Map<String, String> m = new HashMap<>();
+        // Element base types.
+        m.put("Form", "ManagedForm"); // modern: ClientApplicationForm (resolveTypeName swaps) //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Table", "FormTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Decoration", "FormDecoration"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("FormField", "FormField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Button", "FormButton"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("FormGroup", "FormGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Addition", "FormItemAddition"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Form ext-infos.
+        m.put("CatalogFormExtInfo", "ManagedFormExtensionForCatalogs"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("DocumentFormExtInfo", "ManagedFormExtensionForDocuments"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ChartOfCharacteristicTypesFormExtInfo", //$NON-NLS-1$
+            "ManagedFormExtensionForChartOfCharacteristicsTypes"); //$NON-NLS-1$
+        m.put("ReportFormExtInfo", "ManagedFormExtensionForReports"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ConstantsFormExtInfo", "ManagedFormExtensionForConstants"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("InformationRegisterManagerFormExtInfo", //$NON-NLS-1$
+            "ManagedFormExtensionForInformationRegisterRecords"); //$NON-NLS-1$
+        m.put("BusinessProcesFormExtInfo", "ManagedFormExtensionForBusinessProcesses"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TaskFormExtInfo", "ManagedFormExtensionForTasks"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SettingsComposerFormExtInfo", "ManagedFormExtensionForSettingsComposer"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("RecordSetFormExtInfo", "ManagedFormExtensionForRecordSet"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ObjectFormExtInfo", "ManagedFormExtensionForObjects"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TableObjectFormExtInfo", "ManagedFormExtensionForExternalDataSourceTableObject"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TableRecordFormExtInfo", "ManagedFormExtensionForExternalDataSourceTableRecord"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CubeRecordFormExtInfo", "ManagedFormExtensionForExternalDataSourceCubeRecord"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CubeRecordSetFormExtInfo", "ManagedFormExtensionForExternalDataSourceCubeRecordSet"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Table / decoration ext-infos.
+        m.put("DynamicListTableExtInfo", "FormTableExtensionForDynamicList"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("LabelDecorationExtInfo", "FormDecorationExtensionForALabel"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PictureDecorationExtInfo", "FormDecorationExtensionForAPicture"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Field ext-infos.
+        m.put("LabelFieldExtInfo", "FormFieldExtensionForALabelField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("InputFieldExtInfo", "FormFieldExtensionForATextBox"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CheckBoxFieldExtInfo", "FormFieldExtensionForACheckBoxField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ImageFieldExtInfo", "FormFieldExtensionForAPictureField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("RadioButtonsFieldExtInfo", "FormFieldExtensionForARadioButtonField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SpreadSheetDocFieldExtInfo", "FormFieldExtensionForASpreadsheetDocumentField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TextDocFieldExtInfo", "FormFieldExtensionForATextDocument"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CalendarFieldExtInfo", "FormFieldExtensionForACalendarField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ProgressBarFieldExtInfo", "FormFieldExtensionForAProgressBarField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TrackBarFieldExtInfo", "FormFieldExtensionForATrackBarField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ChartFieldExtInfo", "FormFieldExtensionForAChartField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GanttChartFieldExtInfo", "FormFieldExtensionForAGanttChartField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("DendrogramFieldExtInfo", "FormFieldExtensionForADendrogramField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("FlowchartFieldExtInfo", "FormFieldExtensionForAGraphicalSchemaField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("HtmlFieldExtInfo", "FormExtensionForAHTMLDocumentField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GeographicalMapFieldExtInfo", "FormFieldExtensionForAGeographicalSchemaField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("FormattedDocFieldExtInfo", "FormFieldExtensionForAFormattedDocument"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PDFDocumentFieldExtInfo", "FormExtensionForAPDFDocumentField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PlannerFieldExtInfo", "FormFieldExtensionForAPlanner"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PeriodFieldExtInfo", "FormFieldExtensionForAPeriodField"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Group ext-infos.
+        m.put("ColumnGroupExtInfo", "FormGroupExtensionForAGroupOfColumns"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PagesGroupExtInfo", "FormGroupExtensionForPages"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PageGroupExtInfo", "FormGroupExtensionForAPage"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PopupGroupExtInfo", "FormGroupExtensionForAPopup"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CommandBarExtInfo", "FormGroupExtensionForACommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("UsualGroupExtInfo", "FormGroupExtensionForAUsualGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Addition ext-infos.
+        m.put("SearchStringAdditionExtInfo", "FormItemAdditionExtensionForSearchString"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ViewStatusAdditionExtInfo", "FormItemAdditionExtensionForViewStatus"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SearchControlAdditionExtInfo", "FormItemAdditionExtensionForSearchControl"); //$NON-NLS-1$ //$NON-NLS-2$
+        return Collections.unmodifiableMap(m);
     }
 
     // ---- element factories (reflective, via the form EPackage) ----------------------------------
@@ -750,6 +879,16 @@ public final class FormElementWriter
             EMap<String, String> map = (EMap<String, String>)value;
             map.put(languageCode, title);
         }
+    }
+
+    /**
+     * Finds a form item by its (form-wide unique) programmatic name anywhere in the {@code items}
+     * tree, or {@code null}. Used to resolve the owner of an item-level event handler. Must be called
+     * on the transaction-bound form model.
+     */
+    public static EObject findFormItem(EObject formModel, String name)
+    {
+        return findItem(formModel, name);
     }
 
     /** Depth-first search of the whole {@code items} tree for an item by programmatic name. */

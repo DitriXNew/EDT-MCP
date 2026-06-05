@@ -119,6 +119,48 @@ public class FormElementWriterTest
         assertEquals("Catalog.Products.forms.ItemForm", ref.formPath); //$NON-NLS-1$
         assertEquals("Handler", ref.kindToken); //$NON-NLS-1$
         assertEquals("OnOpen", ref.name); //$NON-NLS-1$
+        // A form-level handler is NOT item-level.
+        assertNull(ref.itemName);
+        assertEquals(Boolean.FALSE, Boolean.valueOf(ref.isItemLevel()));
+    }
+
+    @Test
+    public void testParseItemLevelHandlerManagedForm()
+    {
+        // Item-level handler: ItemKind.ItemName.Handler.Event (the leaf is the event, the item carries
+        // the owning element name).
+        FormMemberRef ref =
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Handler.OnChange"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Catalog.Products.forms.ItemForm", ref.formPath); //$NON-NLS-1$
+        assertEquals("Handler", ref.kindToken); //$NON-NLS-1$
+        assertEquals("OnChange", ref.name); //$NON-NLS-1$
+        assertEquals("Field", ref.itemKindToken); //$NON-NLS-1$
+        assertEquals("Price", ref.itemName); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, Boolean.valueOf(ref.isItemLevel()));
+    }
+
+    @Test
+    public void testParseItemLevelHandlerCommonForm()
+    {
+        FormMemberRef ref =
+            FormElementWriter.parse("CommonForm.MyForm.Field.Price.Handler.OnChange"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("CommonForm.MyForm", ref.formPath); //$NON-NLS-1$
+        assertEquals("Handler", ref.kindToken); //$NON-NLS-1$
+        assertEquals("OnChange", ref.name); //$NON-NLS-1$
+        assertEquals("Field", ref.itemKindToken); //$NON-NLS-1$
+        assertEquals("Price", ref.itemName); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, Boolean.valueOf(ref.isItemLevel()));
+    }
+
+    @Test
+    public void testParseItemLevelNonHandlerReturnsNull()
+    {
+        // A 4-token remainder whose third token is NOT a handler token is not a recognized form member.
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Command.X")); //$NON-NLS-1$
+        // A 3-token remainder (odd length) is not a recognized form member either.
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Handler")); //$NON-NLS-1$
     }
 
     @Test

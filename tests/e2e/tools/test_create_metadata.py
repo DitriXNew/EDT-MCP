@@ -518,6 +518,65 @@ def test_create_form_button_bound_to_command():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_item_level_handler():
+    # Create an attribute + a Field bound to it, then bind an ITEM-LEVEL handler to the field's
+    # OnChange (an input-field event that lives on the field's extInfo sub-type, not the form root) -
+    # this exercises the 8-part item-level FQN and the base+extInfo event union.
+    attr, fld, proc = "IHAttr", "IHField", "IHFieldOnChange"
+    r1 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r1, "seed form attribute")
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r2, "seed bound field")
+    wait_for_project_ready()
+    r3 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.%s.Handler.OnChange" % fld,
+        "properties": [{"name": "procedure", "value": proc}]})
+    assert_ok(r3, "bind an item-level OnChange handler to the field")
+    assert r3.structured.get("action") == "created", "must report created: %r" % (r3.structured,)
+    # The message must reference the owning item, not just the form path.
+    assert fld in (r3.structured.get("message") or ""), \
+        "the item-level handler message must name the field: %r" % (r3.structured,)
+    poll_diff_contains(proc, ctx="the item-level handler procedure must land in the form's .form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_item_level_handler_unknown_event_lists_available():
+    # An item-level handler with an unknown event must list the item's available events (which include
+    # the extInfo sub-type's events, e.g. OnChange for an input field).
+    attr, fld = "IHEAttr", "IHEField"
+    r1 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r1, "seed form attribute")
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r2, "seed bound field")
+    wait_for_project_ready()
+    r3 = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.%s.Handler.NotARealEvent_zz" % fld})
+    e = assert_error(r3, "unknown item-level event")
+    assert_error_quality(e, names=["NotARealEvent_zz"], suggests=["Available events", "OnChange"],
+                         ctx="an unknown field event must list the field's available events incl. OnChange")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_item_level_handler_missing_item_is_error():
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.NoSuchItem_zz.Handler.OnChange"})
+    e = assert_error(r, "item-level handler on a missing item")
+    assert_error_quality(e, names=["NoSuchItem_zz"], suggests=["not found", "Create the item first"],
+                         ctx="an item-level handler on a missing item is a clean error")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_field_missing_attribute_is_error():
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.OrphanField",

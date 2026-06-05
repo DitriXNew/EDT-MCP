@@ -150,10 +150,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "value:'Price'}); a Button binds to a form command via `command` (the target must exist " //$NON-NLS-1$
             + "first).\n" //$NON-NLS-1$
             + "- Form event handler: `Catalog.X.Form.F.Handler.EventName` binds a BSL handler to a form " //$NON-NLS-1$
-            + "event (the leaf is the event name, e.g. OnOpen). An unknown event is rejected WITH the " //$NON-NLS-1$
-            + "list of available events (in the configuration language). The BSL procedure name is the " //$NON-NLS-1$
-            + "`procedure` property (defaults to the event name). (Field/Button bindings come in a " //$NON-NLS-1$
-            + "later step.)\n\n" //$NON-NLS-1$
+            + "event (the leaf is the event name, e.g. OnOpen); an ITEM-level handler uses " //$NON-NLS-1$
+            + "`Catalog.X.Form.F.Field.Price.Handler.OnChange` (the item's events include its kind, " //$NON-NLS-1$
+            + "e.g. an input field's OnChange). An unknown event is rejected WITH the list of available " //$NON-NLS-1$
+            + "events (in the configuration language). The BSL procedure name is the `procedure` " //$NON-NLS-1$
+            + "property (defaults to the event name).\n\n" //$NON-NLS-1$
             + "## Parameters\n" //$NON-NLS-1$
             + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
             + "- `fqn` (required) - full-name FQN of the node to create.\n" //$NON-NLS-1$
@@ -632,9 +633,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Binds an event handler to a form (the leaf is the EVENT name; the BSL procedure name comes from
-     * a {@code procedure} property, defaulting to the event name). An unknown event is rejected with
-     * the list of AVAILABLE events localized to the configuration language.
+     * Binds an event handler to a form root or to a form ITEM (the leaf is the EVENT name; the BSL
+     * procedure name comes from a {@code procedure} property, defaulting to the event name). For an
+     * item-level FQN ({@code ...Form.F.Field.Item.Handler.Event}) the handler attaches to the named
+     * item. An unknown event is rejected with the list of AVAILABLE events (the union of the element's
+     * base type and its extInfo sub-type) localized to the configuration language.
      */
     private String createFormHandler(String projectName, String normFqn,
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
@@ -703,6 +706,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
         final String eventName = ref.name;
         final String fProc = procName;
+        final String fItemName = ref.isItemLevel() ? ref.itemName : null;
         final String[] createdKind = new String[1];
 
         final String contentFormFqn;
@@ -721,7 +725,19 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     throw new RuntimeException("the form has no editable content model (it may be " //$NON-NLS-1$
                         + "empty, an ordinary/legacy form, or not yet built)"); //$NON-NLS-1$
                 }
-                String err = FormElementWriter.createHandler(formModel, eventName, fProc, version,
+                // Form-level handlers attach to the form root; item-level handlers
+                // (Type.Object.Form.F.Field.Item.Handler.Event) attach to the named item.
+                EObject container = formModel;
+                if (fItemName != null)
+                {
+                    container = FormElementWriter.findFormItem(formModel, fItemName);
+                    if (container == null)
+                    {
+                        throw new RuntimeException("Form item not found: " + fItemName //$NON-NLS-1$
+                            + ". Create the item first, then add the handler."); //$NON-NLS-1$
+                    }
+                }
+                String err = FormElementWriter.createHandler(container, eventName, fProc, version,
                     langCode, createdKind);
                 if (err != null)
                 {
@@ -745,7 +761,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .put("kind", createdKind[0] != null ? createdKind[0] : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
             .put("name", eventName) //$NON-NLS-1$
             .put("persisted", persisted) //$NON-NLS-1$
-            .put("message", "Created handler for event '" + eventName + "' on " + ref.formPath) //$NON-NLS-1$ //$NON-NLS-2$
+            .put("message", "Created handler for event '" + eventName + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                + (ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath)) //$NON-NLS-1$
             .toJson();
     }
 
