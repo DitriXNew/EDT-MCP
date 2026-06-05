@@ -225,7 +225,7 @@ python tests/e2e/run_all.py --project TestConfiguration --junit-xml tests/e2e/e2
 - The run **mutates** `TestConfiguration` and reverts it; on a clean checkout that is expected. The final state must be clean.
 - The existing `.github/workflows/e2e-tests.yml` invokes the runner against a running server; keep its CLI flags (`--host/--port/--project/--junit-xml`) stable.
 - **No new dependencies** — Python **stdlib only** (`urllib`, `json`, `subprocess` for git, `re`). Do not add pip packages. (Research-backed: the official MCP SDK's in-memory transport doesn't fit a server that lives inside EDT; the hand-rolled client is kept spec-conformant instead — initialize + notifications/initialized handshake, Mcp-Session-Id + MCP-Protocol-Version headers, robust SSE.)
-- **Scope:** the suite covers **all 61 tools (~452 tests)** + `tools/test_coverage_ratchet.py` (fails if `tools/list` advertises a tool with no `@e2e_test`). It supersedes the older `tests/e2e/run_e2e_tests.py` monolith. **Adding a new tool?** add `tools/test_<tool>.py` — the ratchet enforces it.
+- **Scope:** the suite covers **every tool** + `tools/test_coverage_ratchet.py` (fails if `tools/list` advertises a tool with no `@e2e_test`). It replaced the older `run_e2e_tests.py` monolith (now removed). **Adding a new tool?** add `tools/test_<tool>.py` — the ratchet enforces it.
 - **Filter:** `--filter <substr>` runs only tests whose name/tool matches (useful while iterating).
 
 ---

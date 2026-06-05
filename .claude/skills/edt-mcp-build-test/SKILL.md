@@ -9,7 +9,7 @@ description: How to build the EDT-MCP Eclipse plugin (Tycho/Maven) and run its u
 
 - Maven/Tycho-реактор: `mcp/` (bom, bundles, features, repositories, targets, tests).
 - Юнит-тесты: `mcp/tests/com.ditrix.edt.mcp.server.tests/src` (JUnit4, plug-in fragment).
-- E2E: `tests/e2e/run_e2e_tests.py` (Python; гоняет MCP-сервер против `TestConfiguration/`).
+- E2E: `tests/e2e/run_all.py` + `tools/test_<tool>.py` (Python; гоняет MCP-сервер против `TestConfiguration/`).
 
 ## Сборка
 
@@ -41,7 +41,7 @@ bash source/compile.sh --skip-tests
 
 ## E2E
 
-`tests/e2e/run_e2e_tests.py` — запускает сценарии против живого сервера и `TestConfiguration/`. Включает round-trip кириллических синонимов и проверку ключа синонима по коду языка (`_assert_synonym_language_code`). При добавлении инструмента из непокрытого семейства (debug/profiling, validate_query, навигация) — добавить сценарий (карточка `e2e-single-script-no-coverage-backstop`).
+`tests/e2e/run_all.py` (+ `tools/test_<tool>.py`, по одному на инструмент) — запускает сценарии против живого сервера и `TestConfiguration/` с git-фикстурной изоляцией. Покрытие enforced рэтчетом (`tools/test_coverage_ratchet.py`): инструмент в `tools/list` без теста валит сьют. Round-trip кириллических синонимов и проверка ключа синонима по коду языка — в `test_create_metadata.py` / `test_get_metadata_details.py`. Новый инструмент — добавить `tools/test_<tool>.py`.
 
 ## Перед коммитом
 - [ ] Сборка проходит

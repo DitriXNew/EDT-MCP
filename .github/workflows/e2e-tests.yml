@@ -59,7 +59,7 @@ jobs:
           MCP_PORT: ${{ github.event.inputs.mcp_port }}
           MCP_PROJECT: ${{ github.event.inputs.project_name }}
         run: |
-          python tests/e2e/run_e2e_tests.py \
+          python tests/e2e/run_all.py \
             --host "$MCP_HOST" \
             --port "$MCP_PORT" \
             --project "$MCP_PROJECT" \

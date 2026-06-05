@@ -34,7 +34,7 @@ This file is about **what NOT to do** and **where to stop and think twice**. For
 | `Activator` | Service-locator hub + static logging — almost everything depends on it. | Be careful with init/dispose order and signatures. |
 | `tags/*` ↔ `groups/*` | Mirror stacks with no shared base: a change in one is almost always needed in the other. | Change both features in sync (until the shared base is extracted). |
 | Form rendering (`get_form_screenshot`, `get_form_layout_snapshot`) | Depends on a JVM flag and the native/Java render mode. **A blank result ≠ a code bug.** | Check the memory/skill about the JVM flag and render mode before "fixing" it. |
-| Metadata formatter layer (`tools/metadata/*`) | The output contract (the synonym table) is verified **only** by e2e (`run_e2e_tests.py:596` `_assert_synonym_language_code`). | If you change the format, update/run e2e or you silently break it. |
+| Metadata formatter layer (`tools/metadata/*`) | The output contract (the synonym table, keyed by language CODE) is verified **only** by e2e (`tests/e2e/tools/test_get_metadata_details.py` renders/asserts the synonym table; `test_create_metadata.py` asserts the language-CODE echo). | If you change the format, update/run those e2e tests or you silently break it. |
 
 ---
 
@@ -76,7 +76,7 @@ This is a Maven/Tycho project under `mcp/`. **A local build is available** — u
   CI itself runs `mvn clean verify --batch-mode -T 1C` in `mcp/` on JDK 17.
 - **First build is slow** (Tycho pulls the EDT p2 repo from `edt.1c.ru` + Eclipse SDK, hundreds of MB); once the `~/.m2/repository/p2` + `.cache/tycho` caches exist, it runs in ~1 minute. If those caches are absent and there's no network, the build legitimately can't run — say so rather than fake it.
 - **Tests need the target platform too** (Mockito/JUnit come from the p2 target, not plain Maven Central) — a green `compile.sh` run is what actually proves Java changes; greps only catch anchor/text problems.
-- **Still unrunnable locally without EDT:** the `run_e2e_tests.py` e2e suite needs a live EDT workbench + MCP server. The formatter/synonym and error-shape contracts are e2e-only — those stay "verify in EDT."
+- **Still unrunnable locally without EDT:** the `tests/e2e/` suite (`run_all.py`) needs a live EDT workbench + MCP server. The formatter/synonym and error-shape contracts are e2e-only — those stay "verify in EDT."
 
 ---
 

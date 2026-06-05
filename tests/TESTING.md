@@ -40,7 +40,11 @@ mcp/tests/com.ditrix.edt.mcp.server.tests/target/surefire-reports/
 
 ### 2. E2E Tests (Python HTTP client)
 
-Located in `tests/e2e/run_e2e_tests.py`
+Located in `tests/e2e/` — a modular black-box suite: `harness.py` (HTTP/SSE client +
+git-fixture isolation + assertions), `run_all.py` (serial runner, discovery,
+`--junit-xml`, `--filter`), and one `tools/test_<tool>.py` per tool. A coverage ratchet
+(`tools/test_coverage_ratchet.py`) fails the suite if `tools/list` advertises a tool with
+no test.
 
 These tests send real HTTP requests to a running MCP server and validate every tool. They require:
 - A running EDT instance with the MCP plugin installed
@@ -67,32 +71,27 @@ plugin must be installed by hand before running E2E:
 **Running locally:**
 ```bash
 # Make sure EDT is running with MCP server on port 8765
-python tests/e2e/run_e2e_tests.py
+python tests/e2e/run_all.py
 
 # Or with custom settings:
-python tests/e2e/run_e2e_tests.py --host localhost --port 8765 --project TestConfiguration
+python tests/e2e/run_all.py --host localhost --port 8765 --project TestConfiguration
 
-# Wait for server to start (useful for CI):
-python tests/e2e/run_e2e_tests.py --wait 300
+# Run a subset (substring match on tool/test name):
+python tests/e2e/run_all.py --filter modify_metadata
 
 # Generate JUnit XML report:
-python tests/e2e/run_e2e_tests.py --junit-xml results.xml
+python tests/e2e/run_all.py --junit-xml results.xml
 ```
 
-When all E2E tests pass, the runner automatically **cleans up** artifacts it created
-(`E2EChk*` metadata objects): deletes each object via `delete_metadata_object`,
-runs `clean_project`, then verifies every object is gone via `get_metadata_details`.
-If cleanup fails, the process exits with code 1 even though the functional tests passed.
+Each mutating test isolates itself with a **git fixture**: it snapshots the
+`TestConfiguration/` tree, runs, then restores it (`git checkout` + `git clean`), so a
+failed test never leaks artifacts into the next one. The runner reports `fixture clean:
+True/False` at the end; a dirty fixture fails the run even if every functional test passed.
 
-**E2E tests cover:**
-
-| Category | Tools |
-|----------|-------|
-| Protocol | health, initialize, tools/list, error handling |
-| Standalone | get_edt_version, list_projects, get_platform_documentation, get_check_description |
-| Project | get_configuration_properties, get_metadata_objects, get_metadata_details, get_problem_summary, get_project_errors, get_tags, get_bookmarks, get_tasks, create_metadata_object |
-| BSL Code | list_modules, get_module_structure, read_module_source, read_method_source, search_in_code |
-| Advanced | find_references, get_applications, get_form_screenshot |
+**E2E tests cover all tools** — one `tools/test_<tool>.py` per tool (happy path + negative
++ error-quality + anti-cheat), enforced by the coverage ratchet. The unified metadata CRUD
+tools are covered by `test_create_metadata.py`, `test_modify_metadata.py`,
+`test_delete_metadata.py`, and `test_get_metadata_details.py` (basic / full / `assignable`).
 
 ## Test Configuration
 
@@ -139,7 +138,9 @@ EDT-MCP/
 │   └── pom.xml                                 # Root (includes tests module)
 ├── tests/
 │   └── e2e/
-│       └── run_e2e_tests.py                    # E2E test script
+│       ├── harness.py                          # HTTP/SSE client + git-fixture + asserts
+│       ├── run_all.py                          # Serial E2E runner (--filter, --junit-xml)
+│       └── tools/test_<tool>.py                # One black-box test file per tool
 ├── TestConfiguration/                          # Test 1C configuration
 │   └── src/
 └── .github/workflows/

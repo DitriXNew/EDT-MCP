@@ -189,7 +189,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
   - Russian type token: `objectFqns:["Справочник.Agreements"]` resolves the same object.
 - **Assert:** sections Basic/Attributes/Tabular Sections/Forms/Commands; attribute types like `CatalogRef.Partners`.
 - **Validated 2026‑06‑01:** PASS — Agreements (31 attrs, AddAttributes TS, 3 forms); BankPayment (4 TS incl. PaymentList).
-- **Automated (bilingual):** `run_e2e_tests.py::test_metadata_bilingual_type_token` asserts the EN/RU type token (`Catalog.X` vs `Справочник.X`) yields byte‑identical output across the FQN‑accepting read tools — get_metadata_details, find_references, go_to_definition, get_project_errors — and that the synonym map is keyed by language code (`| en | … |`). Closes card aR's read‑tool resolve criterion.
+- **Automated (bilingual):** the per-tool e2e files (`tests/e2e/tools/test_get_metadata_details.py`, `test_find_references.py`, `test_go_to_definition.py`, `test_get_project_errors.py`) assert the EN/RU type token (`Catalog.X` vs `Справочник.X`) resolves to the same object, and that the synonym map is keyed by language code (`| en | … |`). Closes card aR's read‑tool resolve criterion.
 
 ### list_subsystems
 - **Type:** read · **Runnable on IRP:** full
@@ -314,7 +314,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
   - `dcsMode:true` for DCS queries.
 - **Assert:** `success:true` always; `valid` + `issues[]` (severity/message/line/column) reflect query.
 - **Validated 2026‑06‑01:** PASS — EN valid→true; bad field & bad syntax→correct errors; **RU query valid→true**. *Note:* issues sometimes duplicated (same error with/without `offset`).
-- **Automated:** `run_e2e_tests.py::test_validate_query` (EN valid / RU valid / broken‑field) now asserts this against `TestConfiguration` — closes card a8.
+- **Automated:** `tests/e2e/tools/test_validate_query.py` (EN valid / RU valid / broken‑field) asserts this against `TestConfiguration` — closes card a8.
 
 ### get_form_layout_snapshot
 - **Type:** read (opens form WYSIWYG) · **Runnable on IRP:** form‑level only (needs render config)
