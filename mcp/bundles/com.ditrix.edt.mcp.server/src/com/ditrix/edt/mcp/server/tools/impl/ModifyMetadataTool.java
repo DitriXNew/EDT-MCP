@@ -409,7 +409,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + "content model (it may be empty, an ordinary/legacy form, or not yet " //$NON-NLS-1$
                         + "built)").toJson());
                 }
-                EObject member = resolveFormMember(formModel, ref);
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                 if (member == null)
                 {
                     throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
@@ -462,23 +462,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put("persisted", persisted) //$NON-NLS-1$
             .put("message", "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .toJson();
-    }
-
-    /** Resolves a form member EObject (attribute / command / visual item) on the tx-bound form model. */
-    private static EObject resolveFormMember(EObject formModel, FormElementWriter.FormMemberRef ref)
-    {
-        FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
-        if (kind == FormElementWriter.Kind.ATTRIBUTE)
-        {
-            return FormElementWriter.findFormAttribute(formModel, ref.name);
-        }
-        if (kind == FormElementWriter.Kind.COMMAND)
-        {
-            return FormElementWriter.findFormCommand(formModel, ref.name);
-        }
-        // Field / Button / Group / Decoration and any other visual item (e.g. Table) live in the
-        // items tree, searched by the same name get_form_structure lists.
-        return FormElementWriter.findFormItem(formModel, ref.name);
     }
 
     /**

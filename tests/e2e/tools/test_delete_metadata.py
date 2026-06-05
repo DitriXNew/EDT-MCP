@@ -200,6 +200,121 @@ def test_preview_without_confirm_lists_changepoints_and_does_not_mutate():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Happy — FORM members (the cross-model hop: delete an item / attribute / command /
+# handler from the editable .form). Fixture: Catalog.Catalog has form "ItemForm".
+# ──────────────────────────────────────────────────────────────────────────────
+
+_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+
+
+def _seed_form_attribute(attr):
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed form attribute " + attr)
+    wait_for_project_ready()
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_field_preview_then_confirm():
+    # Seed an attribute + a bound field, PREVIEW the field delete (no mutation shape), then confirm.
+    _seed_form_attribute("DFAttr")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.DFField",
+        "properties": [{"name": "dataPath", "value": "DFAttr"}]})
+    assert_ok(r, "seed bound field")
+    wait_for_project_ready()
+    fqn = "Catalog.Catalog.Form.ItemForm.Field.DFField"
+    # Preview (confirm omitted): shape only, nothing removed yet.
+    pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(pv, "preview the field delete")
+    assert pv.structured.get("action") == "preview", "must be a preview: %r" % (pv.structured,)
+    names = [it.get("name") for it in (pv.structured.get("items") or [])]
+    assert "DFField" in names, "preview items must list the field: %r" % (pv.structured,)
+    assert_contains(pv.structured.get("message", ""), "confirm=true",
+                    "preview must instruct re-calling with confirm=true")
+    # Confirm: the field is removed and the form persisted.
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(r, "delete the field (confirm)")
+    assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
+    poll_disk_lacks(_FORM, "DFField", ctx="the deleted field must be gone from the .form on disk")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_attribute_confirm():
+    _seed_form_attribute("DAAttr")
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.DAAttr",
+        "confirm": True})
+    assert_ok(r, "delete a form attribute (confirm)")
+    assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
+    poll_disk_lacks(_FORM, "DAAttr", ctx="the deleted form attribute must be gone from the .form")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_command_confirm():
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command.DCmd"})
+    assert_ok(r, "seed form command")
+    wait_for_project_ready()
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command.DCmd", "confirm": True})
+    assert_ok(r, "delete a form command (confirm)")
+    poll_disk_lacks(_FORM, "DCmd", ctx="the deleted form command must be gone from the .form")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_group_cascades_subtree():
+    # A Group with a nested Decoration: the preview lists the descendant, confirm cascades the subtree.
+    g, d = "DGroup", "DDeco"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group." + g})
+    assert_ok(r, "seed group")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Decoration." + d,
+        "properties": [{"name": "parent", "value": g}]})
+    assert_ok(r, "seed nested decoration")
+    wait_for_project_ready()
+    fqn = "Catalog.Catalog.Form.ItemForm.Group." + g
+    pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(pv, "preview the group delete")
+    names = [it.get("name") for it in (pv.structured.get("items") or [])]
+    assert g in names and d in names, \
+        "the preview must list the group AND its contained decoration: %r" % (pv.structured,)
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(r, "delete the group (confirm, cascades)")
+    poll_disk_lacks(_FORM, g, ctx="the deleted group must be gone from the .form")
+    poll_disk_lacks(_FORM, d, ctx="the cascaded decoration must be gone from the .form")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_handler_confirm():
+    # Seed a form-level OnOpen handler with a distinctive proc name, then delete it by event FQN.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Handler.OnOpen",
+        "properties": [{"name": "procedure", "value": "DelHandlerProc_zz"}]})
+    assert_ok(r, "seed form handler")
+    wait_for_project_ready()
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Handler.OnOpen", "confirm": True})
+    assert_ok(r, "delete a form handler (confirm)")
+    assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
+    poll_disk_lacks(_FORM, "DelHandlerProc_zz",
+                    ctx="the deleted handler's procedure must be gone from the .form")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_missing_member_is_error():
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.NoSuchField_zz",
+        "confirm": True})
+    e = assert_error(r, "delete a missing form member")
+    assert_error_quality(e, names=["NoSuchField_zz"], suggests=["not found", "get_form_structure"],
+                         ctx="a missing form member points to get_form_structure")
+    assert_no_diff("a rejected form-member delete must change nothing")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — bad input must error clearly AND change nothing
 # ──────────────────────────────────────────────────────────────────────────────
 

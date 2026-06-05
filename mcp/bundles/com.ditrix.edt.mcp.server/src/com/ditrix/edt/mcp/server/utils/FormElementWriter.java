@@ -903,6 +903,54 @@ public final class FormElementWriter
         return findByName(referenceList(formModel, FEATURE_FORM_COMMANDS), name);
     }
 
+    /**
+     * Resolves a form member EObject from a parsed member ref on the tx-bound form model: ATTRIBUTE
+     * &rarr; the attributes list, COMMAND &rarr; the formCommands list, anything else (Field / Button /
+     * Group / Decoration / Table / ...) &rarr; the items tree by name. Returns {@code null} if no such
+     * member exists. A handler ref is NOT a member - resolve it via {@link #findFormHandler} on the
+     * appropriate container.
+     */
+    public static EObject resolveFormMember(EObject formModel, FormMemberRef ref)
+    {
+        Kind kind = kindForToken(ref.kindToken);
+        if (kind == Kind.ATTRIBUTE)
+        {
+            return findFormAttribute(formModel, ref.name);
+        }
+        if (kind == Kind.COMMAND)
+        {
+            return findFormCommand(formModel, ref.name);
+        }
+        return findFormItem(formModel, ref.name);
+    }
+
+    /**
+     * Finds the event handler bound to {@code eventName} (English or Russian, case-insensitive) on
+     * {@code container} (the form root or a form item), or {@code null}. Used to delete a handler by
+     * the event its FQN names. Call on the tx-bound form model.
+     */
+    public static EObject findFormHandler(EObject container, String eventName)
+    {
+        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
+        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        {
+            return null;
+        }
+        EClass ehType = ((EReference)handlersFeat).getEReferenceType();
+        EStructuralFeature evFeat = ehType != null ? ehType.getEStructuralFeature("event") : null; //$NON-NLS-1$
+        for (EObject handler : referenceList(container, "handlers")) //$NON-NLS-1$
+        {
+            Object ev = evFeat != null ? handler.eGet(evFeat) : null;
+            if (ev instanceof EObject
+                && (eventName.equalsIgnoreCase(stringFeature((EObject)ev, "name")) //$NON-NLS-1$
+                    || eventName.equalsIgnoreCase(stringFeature((EObject)ev, "nameRu")))) //$NON-NLS-1$
+            {
+                return handler;
+            }
+        }
+        return null;
+    }
+
     /** Depth-first search of the whole {@code items} tree for an item by programmatic name. */
     private static EObject findItem(EObject container, String name)
     {

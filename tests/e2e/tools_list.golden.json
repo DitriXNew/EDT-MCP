@@ -686,7 +686,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata node (object or member) addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview affected references, then confirm=true to apply (deletion is hard to reverse). Full parameters and examples: call get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata node (object or member, including a FORM member - item / attribute / command / handler) addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). Full parameters and examples: call get_tool_guide('delete_metadata').",
     "inputSchema": {
       "properties": {
         "confirm": {
