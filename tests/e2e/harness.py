@@ -38,6 +38,11 @@ PROJECT_DIR = os.path.join(REPO_ROOT, *PROJECT_REL.split("/"))       # absolute 
 # named "<base>.tests" — breakpoints in the test modules resolve against THIS project,
 # not the base configuration. Override with MCP_TESTS_PROJECT if the layout changes.
 TESTS_PROJECT = os.environ.get("MCP_TESTS_PROJECT", PROJECT + ".tests")
+# Git path of the extension fixture (its EDT project dir is "tests", under tests/), kept
+# decoupled from the extension's EDT NAME like PROJECT_REL. The tests only READ it, but a
+# stale EDT model can autosave a manual editor edit back to it, so the end-of-run cleanup
+# reverts this too and re-syncs the model — a session must leave the WHOLE tree clean.
+TESTS_PROJECT_REL = os.environ.get("MCP_TESTS_PROJECT_REL", "tests/tests")
 
 # Opt-in gate for the ATTENDED live-infobase round-trip suite (test_live_roundtrip.py).
 # Those tests drive a REAL 1C runtime-client launch / debug session against a running
@@ -284,8 +289,13 @@ def _git(*args):
     )
 
 
-def reset_fixture():
-    """Hard reset the fixture to the committed baseline (HEAD). Called before EVERY test.
+# Both fixture projects. The BASE is the one tests mutate (reset before every test); the
+# EXTENSION is read-only to the tests but the end-of-run cleanup reverts it too.
+ALL_FIXTURE_RELS = [PROJECT_REL, TESTS_PROJECT_REL]
+
+
+def _reset_rel(rel):
+    """Hard-revert one fixture path to the committed baseline (HEAD).
 
     Metadata delete/rename/create operations persist to disk AND can leave the change
     STAGED in the index (observed: a renamed-to module appears as `A` staged). The
@@ -293,9 +303,21 @@ def reset_fixture():
     unstaged delete), (2) `checkout HEAD --` to restore tracked files (undo deletions /
     mods / renames-from), (3) `clean -fd` to remove the now-untracked files. Plain
     `checkout --` (from the index) cannot undo staged changes, so all three are needed."""
-    _git("reset", "-q", "--", PROJECT_REL)
-    _git("checkout", "HEAD", "--", PROJECT_REL)
-    _git("clean", "-fd", PROJECT_REL)
+    _git("reset", "-q", "--", rel)
+    _git("checkout", "HEAD", "--", rel)
+    _git("clean", "-fd", rel)
+
+
+def reset_fixture():
+    """Hard reset the BASE fixture to HEAD. Called before EVERY test (never trust the prev)."""
+    _reset_rel(PROJECT_REL)
+
+
+def reset_all_fixtures():
+    """Hard reset EVERY fixture path (base + extension) to HEAD — used by the end-of-run
+    cleanup so the whole working tree returns to the committed baseline."""
+    for rel in ALL_FIXTURE_RELS:
+        _reset_rel(rel)
 
 
 def _status_porcelain():
@@ -333,6 +355,41 @@ def reset_model():
     except Exception:
         pass
     wait_for_project_ready()
+
+
+def all_fixtures_status():
+    """Porcelain status across EVERY fixture path (base + extension). The end-of-run gate
+    uses this so a session that leaves ANY fixture dirty is VISIBLE — 'no diff' then means
+    the run touched nothing it should not have."""
+    parts = []
+    for rel in ALL_FIXTURE_RELS:
+        s = _git("status", "--porcelain", "--", rel).stdout.rstrip("\r\n")
+        if s:
+            parts.append(s)
+    return "\n".join(parts)
+
+
+def final_cleanup():
+    """Leave the working tree verifiably clean ('no diff' == the session passed and left
+    nothing behind).
+
+    Reverts BOTH fixtures on disk, then clean_projects BOTH. The clean_project is the part
+    that defeats the autosave resurrection: it tears down EDT's in-memory model and
+    re-imports it from the now-clean disk (synchronously — the call blocks on the project
+    restart + derived-data rebuild), so a STALE model (e.g. a manual edit made in the EDT
+    editor, or a metadata write whose model change was not flushed) no longer has a pending
+    change to AUTOSAVE back and re-dirty the tree (the Compute/Goods whack-a-mole). The
+    final reset_all_fixtures() only mops up any file clean_project itself re-touched (e.g. a
+    CRLF/marker touch). Best-effort on the MCP calls (a wedged EDT must not make teardown
+    raise). Run at startup AND at the end."""
+    reset_all_fixtures()
+    for proj in (PROJECT, TESTS_PROJECT):
+        try:
+            call("clean_project", {"projectName": proj})
+        except Exception:
+            pass
+    wait_for_project_ready()
+    reset_all_fixtures()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -151,7 +151,8 @@ def main():
     if not harness.wait_for_project_ready():
         print("WARN: project still building after wait_for_project_ready timeout — "
               "cascade/mutation tests may flake until indexing completes")
-    harness.reset_fixture()  # clean start
+    harness.final_cleanup()  # clean start: revert BOTH fixtures + sync EDT model so the run
+                             # does not begin on a stale extension edit (e.g. a manual experiment)
 
     # Each test (incl. its write-metadata model cleanup, see _run_test_unit) runs under a
     # per-test wall-clock timeout. If a test exceeds it, EDT is almost certainly hung (the
@@ -179,20 +180,28 @@ def main():
         if timed_out:
             aborted_after = "%s::%s" % (t["tool"], t["name"])
 
-    # Final cleanliness guarantee.
-    harness.reset_fixture()
-    final_clean = (harness._status_porcelain() == "")
+    # Final cleanliness guarantee across BOTH fixtures (base + extension). On a normal run,
+    # full cleanup (revert + EDT model sync) so a stale model can't autosave changes back
+    # after the run. On an ABORT the EDT is wedged, so model-sync would hang — do git-only.
+    if aborted_after:
+        harness.reset_all_fixtures()
+    else:
+        harness.final_cleanup()
+    final_clean = (harness.all_fixtures_status() == "")
 
     npass = sum(1 for _, s, _, _ in results if s == "pass")
     nskip = sum(1 for _, s, _, _ in results if s == "skip")
     nfail = sum(1 for _, s, _, _ in results if s not in ("pass", "skip"))
     skip_note = (" | %d skipped" % nskip) if nskip else ""
-    print("\n== %d/%d passed%s | fixture clean: %s ==" % (npass, len(results) - nskip, skip_note, final_clean))
+    # On abort the EDT is wedged and was NOT model-synced, so 'clean' is only a point-in-time
+    # disk check (EDT may re-dirty after exit) — label it so it is not read as a guarantee.
+    clean_label = ("%s (point-in-time; EDT wedged)" % final_clean) if aborted_after else str(final_clean)
+    print("\n== %d/%d passed%s | fixture clean: %s ==" % (npass, len(results) - nskip, skip_note, clean_label))
     if aborted_after:
         print("!! RUN ABORTED after a TIMEOUT in %s - subsequent tests were skipped. "
               "Restart EDT and re-run." % aborted_after)
     if not final_clean:
-        print("!! TestConfiguration left dirty:\n%s" % harness._status_porcelain()[:500])
+        print("!! fixtures left dirty after cleanup:\n%s" % harness.all_fixtures_status()[:500])
 
     if args.junit:
         write_junit(results, args.junit, final_clean)
