@@ -65,7 +65,7 @@ public class StepTool implements IMcpTool
             .integerProperty("threadId", "Id of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("threadName", "Name of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", "Application id of the debug session") //$NON-NLS-1$ //$NON-NLS-2$
-            .objectArrayProperty("frames", "Stack frames: frameIndex, frameRef, name, line") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("frames", "Stack frames: frameIndex, frameRef, name, line, modulePath, project") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("topFrameRef", "Stable ref of the top stack frame") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }

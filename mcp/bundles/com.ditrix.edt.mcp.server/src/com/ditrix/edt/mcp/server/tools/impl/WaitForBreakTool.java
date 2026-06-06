@@ -14,12 +14,15 @@ import java.util.Map;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IThread;
+import org.eclipse.emf.common.util.URI;
 
+import com._1c.g5.v8.dt.debug.core.model.IBslStackFrame;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 
 /**
@@ -81,7 +84,7 @@ public class WaitForBreakTool implements IMcpTool
             .booleanProperty("autoResolved", "True if applicationId was auto-resolved") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("threadId", "Id of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("threadName", "Name of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
-            .objectArrayProperty("frames", "Stack frames of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("frames", "Stack frames of the suspended thread (frameIndex, frameRef, name, line, modulePath, project)") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("topFrameRef", "Stable frame reference of the top stack frame") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -226,6 +229,7 @@ public class WaitForBreakTool implements IMcpTool
             {
                 // ignore
             }
+            putSourceLocation(dto, f);
             frames.add(dto);
         }
         ToolResult result = ToolResult.success()
@@ -243,5 +247,60 @@ public class WaitForBreakTool implements IMcpTool
             result.put("topFrameRef", frames.get(0).get("frameRef")); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return result.toJson();
+    }
+
+    /**
+     * Best-effort: resolves a BSL frame's source file and adds {@code modulePath}
+     * (relative to {@code src/}) and {@code project} to the DTO so the caller can
+     * chain straight into {@code set_breakpoint} / {@code read_module_source}. A
+     * non-BSL frame, a null source or a source outside {@code src/} is silently
+     * skipped — the {@code line}/{@code name} fields still describe the frame.
+     */
+    private static void putSourceLocation(Map<String, Object> dto, IStackFrame f)
+    {
+        if (!(f instanceof IBslStackFrame))
+        {
+            return;
+        }
+        URI source;
+        try
+        {
+            source = ((IBslStackFrame) f).getSource();
+        }
+        catch (Exception ex)
+        {
+            return;
+        }
+        if (source == null || !source.isPlatformResource())
+        {
+            return;
+        }
+        // EDT module sources are platform-resource URIs laid out as
+        // /<project>/src/<modulePath>. Decode via toPlatformString(true): a plain
+        // URI.toString() leaves segments percent-encoded, which would corrupt the
+        // Cyrillic project/module names that set_breakpoint / read_module_source
+        // expect decoded.
+        String platformPath = source.toPlatformString(true);
+        if (platformPath == null)
+        {
+            return;
+        }
+        String marker = "/" + BslModuleUtils.SOURCE_FOLDER + "/"; //$NON-NLS-1$ //$NON-NLS-2$
+        int idx = platformPath.indexOf(marker);
+        if (idx <= 0)
+        {
+            // No project segment before /src/ — not a resolvable workspace module.
+            return;
+        }
+        dto.put("modulePath", platformPath.substring(idx + marker.length())); //$NON-NLS-1$
+        String project = platformPath.substring(0, idx);
+        if (project.startsWith("/")) //$NON-NLS-1$
+        {
+            project = project.substring(1);
+        }
+        if (!project.isEmpty())
+        {
+            dto.put("project", project); //$NON-NLS-1$
+        }
     }
 }

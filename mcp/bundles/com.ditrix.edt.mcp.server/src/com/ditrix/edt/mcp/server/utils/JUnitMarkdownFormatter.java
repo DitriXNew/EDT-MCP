@@ -45,6 +45,20 @@ public final class JUnitMarkdownFormatter
      */
     private static final Pattern BRACKET_WRAPPER = Pattern.compile("^\\[[^\\]]*\\]\\s*<(.*)>$"); //$NON-NLS-1$
 
+    /**
+     * Extracts a source location from a 1C stack-frame line. A frame reads
+     * {@code {[<ext> ]<Kind>.<ModuleName>.<Part>(<line>)}:<statement>}, e.g.
+     * {@code {tests CommonModule.tests_SampleTests.Module(51)}:ЮТест...}.
+     *
+     * <p>Group 1 = optional extension name ({@code tests}); group 2 = the
+     * programmatic module name (the language-independent middle segment); group
+     * 3 = the localized module-part token ({@code Module}/{@code Модуль}); group
+     * 4 = the 1-based line. We key only on the name and line — the surrounding
+     * kind/part words are localized, so they are matched but not interpreted.
+     */
+    private static final Pattern FRAME_LOCATION = Pattern.compile(
+        "\\{\\s*(?:([^.{}()\\s]+)\\s+)?[^.{}()]+\\.([^.{}()]+)\\.([^.{}()]+)\\((\\d+)\\)"); //$NON-NLS-1$
+
     /** Minimum length before a head/message overlap is treated as a real duplicate. */
     private static final int MIN_DUPLICATE_LENGTH = 16;
 
@@ -93,6 +107,22 @@ public final class JUnitMarkdownFormatter
             if (tc.message != null && !tc.message.isEmpty())
             {
                 sb.append("**Message:** ").append(tc.message).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (withTrace && tc.trace != null)
+            {
+                // Surface the failing source location so the caller can chain
+                // straight into set_breakpoint / read_module_source.
+                FrameLocation loc = firstUserFrameLocation(tc.trace);
+                if (loc != null)
+                {
+                    sb.append("**Location:** ").append(loc.modulePath) //$NON-NLS-1$
+                        .append(':').append(loc.line);
+                    if (loc.extension != null && !loc.extension.isEmpty())
+                    {
+                        sb.append(" (extension: ").append(loc.extension).append(')'); //$NON-NLS-1$
+                    }
+                    sb.append("\n"); //$NON-NLS-1$
+                }
             }
             if (withTrace && tc.trace != null && !tc.trace.trim().isEmpty())
             {
@@ -307,6 +337,85 @@ public final class JUnitMarkdownFormatter
     private static String hiddenMarker(int count)
     {
         return "{… " + count + " internal YAXUnit frames hidden …}"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Finds the first actionable (non-internal) user stack frame in a raw
+     * YAXUnit trace and returns its source location, or {@code null} when none
+     * parses.
+     *
+     * <p>1C traces list the innermost frame first and the YAXUnit assertion
+     * engine frames are skipped as {@link #isInternalFrame internal}, so the
+     * first match is the failure site. A YAXUnit test (or a helper it calls) is
+     * always a common module, so the path is {@code CommonModules/<name>/Module.bsl}
+     * — EDT names module files in English regardless of the platform language,
+     * and the module name itself is the language-independent middle segment of
+     * the frame reference.
+     */
+    static FrameLocation firstUserFrameLocation(String trace)
+    {
+        if (trace == null)
+        {
+            return null;
+        }
+        for (String line : trace.split("\n", -1)) //$NON-NLS-1$
+        {
+            if (!isStackFrame(line) || isInternalFrame(line))
+            {
+                continue;
+            }
+            Matcher m = FRAME_LOCATION.matcher(line);
+            if (m.find())
+            {
+                // Only a common-module frame maps cleanly to CommonModules/<name>/
+                // Module.bsl. Skip other module kinds (object/manager/command
+                // modules, common on the error path) rather than fabricate a wrong
+                // path: for an assertion failure the test frame — itself a common
+                // module — is the first match; for an error thrown deeper we fall
+                // through to the nearest common-module caller (a valid call site).
+                if (!isCommonModulePart(m.group(3)))
+                {
+                    continue;
+                }
+                int lineNo;
+                try
+                {
+                    lineNo = Integer.parseInt(m.group(4));
+                }
+                catch (NumberFormatException e)
+                {
+                    continue;
+                }
+                String modulePath = "CommonModules/" + m.group(2) + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
+                return new FrameLocation(modulePath, lineNo, m.group(1));
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether a frame's module-part token denotes a common module's main module
+     * — {@code Module} (en) or {@code Модуль} (ru). String compare, not a regex,
+     * so the Cyrillic literal mirrors the existing internal-frame tokens.
+     */
+    private static boolean isCommonModulePart(String part)
+    {
+        return "Module".equals(part) || "Модуль".equals(part); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A parsed source location for a failing test: module path + 1-based line. */
+    static final class FrameLocation
+    {
+        final String modulePath;
+        final int line;
+        final String extension;
+
+        FrameLocation(String modulePath, int line, String extension)
+        {
+            this.modulePath = modulePath;
+            this.line = line;
+            this.extension = extension;
+        }
     }
 
     private static void appendSkippedSection(StringBuilder sb, List<JUnitTestResults.TestCase> cases)
