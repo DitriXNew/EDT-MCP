@@ -49,8 +49,9 @@ public class GetProfilingResultsTool implements IMcpTool
     public String getDescription()
     {
         return "Get profiling (performance measurement) results after a debug session: " //$NON-NLS-1$
-            + "per-module, per-line call count, timing and percentage. Also reports whether " //$NON-NLS-1$
-            + "profiling is currently active. Run start_profiling + the test (then stop_profiling) first. " //$NON-NLS-1$
+            + "per-module, per-line call count, timing and percentage. Returns only the MOST " //$NON-NLS-1$
+            + "RECENT measurement session (historical sessions are not returned). Also reports " //$NON-NLS-1$
+            + "whether profiling is currently active. Run start_profiling + the test (then stop_profiling) first. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('get_profiling_results')."; //$NON-NLS-1$
     }
 
@@ -74,7 +75,7 @@ public class GetProfilingResultsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("count", "Number of profiling result sets returned") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("count", "Number of result sets returned (0 or 1 — only the latest session)") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("profilingActive", "Whether profiling is currently active") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Informational note when no results are available") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("results", //$NON-NLS-1$
@@ -118,7 +119,9 @@ public class GetProfilingResultsTool implements IMcpTool
             + "`dur`, `pureDur`, `code` (source text, truncated to 120 chars) and `method` (the method " //$NON-NLS-1$
             + "signature); `concise` (the default) keeps only `line`, `calls` and `pct`.\n" //$NON-NLS-1$
             + "Output is capped at 200 lines per module to keep the response bounded; narrow with " //$NON-NLS-1$
-            + "`moduleFilter` / `minFrequency` if you hit the cap.\n\n" //$NON-NLS-1$
+            + "`moduleFilter` / `minFrequency` if you hit the cap.\n" //$NON-NLS-1$
+            + "Only the MOST RECENT measurement session is returned (`count` is 0 or 1); earlier " //$NON-NLS-1$
+            + "sessions are intentionally not included.\n\n" //$NON-NLS-1$
 
             + "## Examples\n" //$NON-NLS-1$
             + "- Everything collected: `{}`.\n" //$NON-NLS-1$
@@ -205,6 +208,12 @@ public class GetProfilingResultsTool implements IMcpTool
             Method getProfilingResults = profilingResultClass.getMethod("getProfilingResults"); //$NON-NLS-1$
             Method getTotalDurability = profilingResultClass.getMethod("getTotalDurability"); //$NON-NLS-1$
             Method getResultName = profilingResultClass.getMethod("getName"); //$NON-NLS-1$
+
+            // Contract: return ONLY the latest measurement session — historical sessions are
+            // noise. getResults() is backed by an unordered cache + a store that survives
+            // restarts, so "latest" is the max getDateOfSession() (not list position).
+            Method getDateOfSession = profilingResultClass.getMethod("getDateOfSession"); //$NON-NLS-1$
+            results = latestOnly(results, getDateOfSession);
 
             // ILineProfilingResult methods
             Method getLineNo = lineResultClass.getMethod("getLineNo"); //$NON-NLS-1$
@@ -305,5 +314,40 @@ public class GetProfilingResultsTool implements IMcpTool
             Activator.logError("Error in get_profiling_results", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Reduces the accumulated profiling results to a singleton list holding ONLY the most
+     * recent measurement session (max {@code getDateOfSession()}). {@code getResults()} is
+     * backed by an unordered cache plus a persistent store, so "latest" must be computed
+     * from the session date, not list order. Historical sessions are intentionally dropped
+     * — only the last measurement is meaningful. Falls back to the last element if no
+     * session dates are present. Caller has already verified {@code results} is non-empty.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static List<?> latestOnly(List<?> results, Method getDateOfSession) throws Exception
+    {
+        Object latest = null;
+        Comparable latestDate = null;
+        for (Object result : results)
+        {
+            Object date = getDateOfSession.invoke(result);
+            if (!(date instanceof Comparable))
+            {
+                continue;
+            }
+            // Strict '>' so on an exact-date tie the first max wins; any tied session is
+            // equally "latest" and count stays 1 either way.
+            if (latestDate == null || ((Comparable) date).compareTo(latestDate) > 0)
+            {
+                latestDate = (Comparable) date;
+                latest = result;
+            }
+        }
+        if (latest == null)
+        {
+            latest = results.get(results.size() - 1);
+        }
+        return List.of(latest);
     }
 }

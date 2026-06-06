@@ -11,23 +11,26 @@ WHAT IT DOES (read GetProfilingResultsTool.java for the exact branches):
     - applicationId  (debug session id; toggles the profilingActive on/off report)
   There are NO required parameters.
 
-ENVIRONMENT (CRITICAL — this is the realistic, correct happy contract here):
-  This EDT has NO active debug session, and TestConfiguration has NO running infobase
-  / launched application, so nothing ever called start_profiling. Therefore
-  IProfilingService.getResults() returns an EMPTY list, and execute() hits the
-  no-results branch which is a BENIGN SUCCESS (NOT is_error):
+CONTRACT — LATEST-ONLY (read GetProfilingResultsTool.latestOnly):
+  get_profiling_results returns ONLY the most recent measurement session, never the
+  historical ones. IProfilingService.getResults() is backed by an unordered cache + a
+  PERSISTENT store (1C keeps замеры производительности across an EDT -clean relaunch), so
+  the tool picks the max getDateOfSession() and drops the rest. Therefore `count` is
+  always 0 or 1 — NEVER the raw number of historical sessions.
 
-      ToolResult.success()
-        .put("count", 0)
-        .put("profilingActive", <false here — nothing is profiling>)
-        .put("message", "No profiling results available. Make sure you called
-                         start_profiling before running the test.")
-
-  That clear, actionable sentinel IS the happy contract in this environment: it names
-  the missing precondition (no results) AND the next step (call start_profiling first).
-  We do NOT start a real infobase/debug session (heavy, not configured) — the sentinel
-  + the parameter behavior below IS the coverage. A live, populated profiling run would
-  instead return count>0 with a `results` array; that path is not reachable headless.
+ENVIRONMENT (why count is 0 OR 1, not a fixed value):
+  This EDT has NO active debug session and TestConfiguration has NO running infobase, so
+  nothing called start_profiling THIS run. But a measurement may already PERSIST from an
+  earlier live profiling round (it survives -clean). So:
+    - clean store (e.g. fresh CI infobase) -> getResults() empty -> count==0 + the
+      no-results sentinel: ToolResult.success().put("count",0).put("profilingActive",false)
+      .put("message","No profiling results available. ... start_profiling ...").
+    - a persisted session present -> latestOnly keeps exactly ONE -> count==1 with a
+      populated `results` array (the latest session only).
+  Both are BENIGN SUCCESS (NOT is_error). The tests assert the LATEST-ONLY invariant
+  (count in {0,1}) — which is also mutation-sensitive: a regression to echoing every
+  historical session (count>1) FAILS them. The count==0 branch additionally asserts the
+  actionable sentinel; the count==1 branch asserts exactly one well-formed result set.
 
 NEGATIVE / EDGE MATRIX (honest to what the Java actually does):
   get_profiling_results has NO required params and performs NO hard validation of its
@@ -85,60 +88,80 @@ def _structured(r, ctx):
     return s
 
 
+def _assert_latest_only(s, ctx):
+    """Assert the LATEST-ONLY invariant and return the count.
+
+    get_profiling_results returns only the most recent measurement session, so `count`
+    is 0 (clean store) or 1 (a session persists) — NEVER the raw number of historical
+    sessions. This is mutation-sensitive: a regression to echoing every session (count>1)
+    fails here, and it is deterministic regardless of whether a measurement persists from
+    an earlier live run. When count==0 the actionable no-results sentinel must be present;
+    when count==1 exactly one well-formed result set must be carried."""
+    c = s.get("count")
+    if c not in (0, 1):
+        raise AssertionError(
+            "latest-only: expected count in {0,1} (only the most recent session); got %r [%s]"
+            % (c, ctx))
+    if c == 0:
+        msg = str(s.get("message") or "")
+        assert_contains(msg, "No profiling results available",
+                        "no-results sentinel must state there are no results [%s]" % ctx)
+        assert_contains(msg, "start_profiling",
+                        "no-results sentinel must point at the start_profiling next step [%s]" % ctx)
+    else:
+        results = s.get("results")
+        if not isinstance(results, list) or len(results) != 1:
+            raise AssertionError(
+                "latest-only: count==1 must carry exactly one result set; got %r [%s]"
+                % (results, ctx))
+    return c
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY / SENTINEL (no debug session => benign success with the no-results sentinel)
 # ──────────────────────────────────────────────────────────────────────────────
 @e2e_test(tool="get_profiling_results", kind="read")
 def test_no_session_returns_benign_no_results_sentinel():
-    """No active debug session / no profiling run => the no-results branch.
+    """No active debug session / no profiling run THIS run => benign success.
 
-    This is a BENIGN SUCCESS (assert_ok, NOT is_error): IProfilingService.getResults()
-    is empty so the tool returns count=0, profilingActive=false, and a clear actionable
-    message that names the missing precondition AND the fix (call start_profiling).
+    assert_ok (NOT is_error): profilingActive is false (nothing is profiling now), and
+    the latest-only contract holds: count is 0 (clean store -> the actionable no-results
+    sentinel naming start_profiling) or 1 (a measurement persists from an earlier live
+    run -> exactly one result set).
 
-    Mutation thinking: a tool that returned the wrong count, dropped the message,
-    reported profilingActive=true with no session, or errored instead of degrading
+    Mutation thinking: a tool that reported profilingActive=true with no session, that
+    echoed every historical session (count>1), or that errored instead of degrading
     gracefully would all FAIL here.
     """
     r = call("get_profiling_results", {})
     assert_ok(r, "no-session profiling read must be a benign success, not an error")
 
-    s = _structured(r, "no-session no-results payload")
-    # count is exactly 0 — there are genuinely no accumulated results.
-    if s.get("count") != 0:
-        raise AssertionError("expected count==0 with no profiling run; got %r" % s.get("count"))
-    # Nothing is profiling in this environment.
+    s = _structured(r, "no-session payload")
+    # Nothing is profiling in this environment (independent of a persisted measurement).
     if s.get("profilingActive") is not False:
         raise AssertionError("expected profilingActive==False with no session; got %r"
                              % s.get("profilingActive"))
-    # The sentinel MESSAGE must name the missing precondition AND the next step.
-    msg = str(s.get("message") or "")
-    assert_contains(msg, "No profiling results available",
-                    "no-results sentinel must state there are no results")
-    assert_contains(msg, "start_profiling",
-                    "no-results sentinel must point at the start_profiling next step")
+    # Latest-only: count in {0,1}; the 0 branch asserts the actionable no-results sentinel.
+    _assert_latest_only(s, "no-session latest-only")
 
     assert_no_diff("a profiling read must not touch the project on disk")
 
 
 @e2e_test(tool="get_profiling_results", kind="read")
-def test_module_filter_on_empty_results_still_benign_no_results():
-    """moduleFilter is applied only while iterating real line results; with an empty
-    result set it is a harmless no-op. A specific (even fixture-named) filter must NOT
-    flip the contract — the tool still returns the benign count=0 no-results sentinel,
-    never an error and never a phantom non-zero count.
+def test_module_filter_does_not_break_latest_only_contract():
+    """moduleFilter is applied only while iterating real line results, so it is a harmless
+    no-op on an empty store and a per-line narrowing on a populated one. Either way it must
+    NOT flip the top-level contract — still a benign success with count in {0,1}, never an
+    error and never a phantom multi-session count.
 
-    Mutation thinking: a tool that mishandled the filter (NPE, error, or fabricated a
-    match against an empty set) would fail this.
+    Mutation thinking: a tool that mishandled the filter (NPE, error, fabricated a match)
+    or that let the filter perturb the latest-only count would fail this.
     """
     r = call("get_profiling_results", {"moduleFilter": "Calc"})
-    assert_ok(r, "moduleFilter against empty results must stay a benign success")
+    assert_ok(r, "moduleFilter must stay a benign success")
 
-    s = _structured(r, "filtered empty-results payload")
-    if s.get("count") != 0:
-        raise AssertionError("expected count==0 (no results to filter); got %r" % s.get("count"))
-    assert_contains(str(s.get("message") or ""), "No profiling results available",
-                    "filtered empty read must still surface the no-results sentinel")
+    s = _structured(r, "filtered payload")
+    _assert_latest_only(s, "filtered latest-only")
 
     assert_no_diff("a profiling read must not touch the project on disk")
 
@@ -168,9 +191,8 @@ def test_unknown_application_id_reports_profiling_inactive():
     if s.get("profilingActive") is not False:
         raise AssertionError("unknown applicationId must report profilingActive==False; got %r"
                              % s.get("profilingActive"))
-    # No real session => still the no-results sentinel.
-    assert_contains(str(s.get("message") or ""), "No profiling results available",
-                    "unknown applicationId with no run must still surface the no-results sentinel")
+    # No active session => benign latest-only contract (count in {0,1}).
+    _assert_latest_only(s, "unknown-applicationId latest-only")
     # AUDIT: an UNKNOWN applicationId is silently treated as "a valid but inactive
     # session" (profilingActive=false) — the tool does NOT distinguish "this id does not
     # exist" from "this id exists but is not profiling", so a typo'd session id yields a
@@ -196,10 +218,7 @@ def test_nonnumeric_min_frequency_coerces_to_default_not_error():
     assert_ok(r, "non-numeric minFrequency must coerce to default, not error")
 
     s = _structured(r, "non-numeric minFrequency payload")
-    if s.get("count") != 0:
-        raise AssertionError("expected count==0 with no results; got %r" % s.get("count"))
-    assert_contains(str(s.get("message") or ""), "No profiling results available",
-                    "coerced minFrequency must still surface the no-results sentinel")
+    _assert_latest_only(s, "coerced minFrequency latest-only")
     # AUDIT: a malformed minFrequency ("abc", or a fraction like "1.5") is SILENTLY
     # swallowed and replaced by the default of 1 — the caller gets no signal that their
     # filter was ignored, so a typo silently widens the result set. Fix-card: reject a
@@ -223,10 +242,7 @@ def test_negative_min_frequency_is_accepted_not_rejected():
     assert_ok(r, "negative minFrequency parses as int and is accepted (no >0 guard)")
 
     s = _structured(r, "negative minFrequency payload")
-    if s.get("count") != 0:
-        raise AssertionError("expected count==0 with no results; got %r" % s.get("count"))
-    assert_contains(str(s.get("message") or ""), "No profiling results available",
-                    "negative minFrequency must still surface the no-results sentinel")
+    _assert_latest_only(s, "negative minFrequency latest-only")
     # AUDIT: minFrequency accepts negative / zero values (no `> 0` guard); a negative
     # bound is meaningless ("called at least -5 times") and silently disables the filter.
     # Fix-card: clamp/reject minFrequency < 1 with a clear message.
@@ -253,8 +269,7 @@ def test_empty_application_id_falls_back_to_global_state():
     if s.get("profilingActive") is not False:
         raise AssertionError("empty applicationId => global state, expected profilingActive==False; got %r"
                              % s.get("profilingActive"))
-    assert_contains(str(s.get("message") or ""), "No profiling results available",
-                    "empty applicationId with no run must still surface the no-results sentinel")
+    _assert_latest_only(s, "empty-applicationId latest-only")
 
     assert_no_diff("a profiling read must not touch the project on disk")
 
@@ -273,11 +288,9 @@ def test_unknown_module_filter_yields_empty_not_error():
     assert_ok(r, "non-matching moduleFilter must be benign, not an error")
 
     s = _structured(r, "non-matching moduleFilter payload")
-    if s.get("count") != 0:
-        raise AssertionError("expected count==0 (no results) for a non-matching filter; got %r"
-                             % s.get("count"))
-    assert_contains(str(s.get("message") or ""), "No profiling results available",
-                    "non-matching filter must still surface the no-results sentinel")
+    # A non-matching filter never errors and never perturbs the latest-only count: it
+    # narrows per-line/per-module data within the single returned session, not the count.
+    _assert_latest_only(s, "non-matching filter latest-only")
 
     assert_no_diff("a profiling read must not touch the project on disk")
 
@@ -311,14 +324,12 @@ def test_detailed_format_accepted_and_matches_concise_sentinel():
     r = call("get_profiling_results", {"responseFormat": "detailed"})
     assert_ok(r, "responseFormat=detailed must be an accepted format, not an error")
 
-    s = _structured(r, "detailed no-results payload")
-    if s.get("count") != 0:
-        raise AssertionError("expected count==0 with no results; got %r" % s.get("count"))
+    s = _structured(r, "detailed payload")
     if s.get("profilingActive") is not False:
         raise AssertionError("expected profilingActive==False with no session; got %r"
                              % s.get("profilingActive"))
-    assert_contains(str(s.get("message") or ""), "No profiling results available",
-                    "detailed format must still surface the no-results sentinel")
+    # detailed must not regress the top-level latest-only contract (count in {0,1}).
+    _assert_latest_only(s, "detailed latest-only")
 
     assert_no_diff("a profiling read must not touch the project on disk")
 
@@ -353,14 +364,16 @@ def test_concise_is_default_and_leaner_than_detailed():
     cs = _structured(concise_r, "explicit-concise payload")
     bs = _structured(bogus_r, "bogus-format payload")
 
-    # The default IS concise: same benign sentinel as the explicit concise call.
+    # The default IS concise: same benign latest-only contract as the explicit concise call.
     for label, s in (("default", ds), ("concise", cs), ("bogus-fallback", bs)):
-        if s.get("count") != 0:
-            raise AssertionError("%s: expected count==0; got %r" % (label, s.get("count")))
         if s.get("profilingActive") is not False:
             raise AssertionError("%s: expected profilingActive==False; got %r"
                                  % (label, s.get("profilingActive")))
-        assert_contains(str(s.get("message") or ""), "No profiling results available",
-                        "%s call must surface the no-results sentinel" % label)
+        _assert_latest_only(s, "%s latest-only" % label)
+
+    # All three formats must agree on the top-level contract (count is format-independent).
+    if not (ds.get("count") == cs.get("count") == bs.get("count")):
+        raise AssertionError("count must be identical across default/concise/bogus; got %r/%r/%r"
+                             % (ds.get("count"), cs.get("count"), bs.get("count")))
 
     assert_no_diff("a profiling read must not touch the project on disk")
