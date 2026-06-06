@@ -23,12 +23,16 @@ import urllib.error
 # ──────────────────────────────────────────────────────────────────────────────
 MCP_HOST = os.environ.get("MCP_HOST", "127.0.0.1")
 MCP_PORT = os.environ.get("MCP_PORT", "8765")
-PROJECT = os.environ.get("MCP_PROJECT", "TestConfiguration")
+PROJECT = os.environ.get("MCP_PROJECT", "TestConfiguration")      # EDT project NAME (for MCP calls)
 
 HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))          # tests/e2e
 REPO_ROOT = os.path.abspath(os.path.join(HARNESS_DIR, "..", ".."))
-PROJECT_REL = PROJECT                                             # git path rel to repo root
-PROJECT_DIR = os.path.join(REPO_ROOT, PROJECT)                    # absolute project dir
+# The 1C fixture lives under tests/ (grouped with this suite + the YAXUnit test
+# extension), so its git path is NOT the same as the EDT project name. Keep the
+# two decoupled: PROJECT is the name MCP calls use; PROJECT_REL is the git path.
+# Override with MCP_PROJECT_REL if the fixture is relocated again.
+PROJECT_REL = os.environ.get("MCP_PROJECT_REL", "tests/" + PROJECT)  # git path rel to repo root (fwd slashes for git)
+PROJECT_DIR = os.path.join(REPO_ROOT, *PROJECT_REL.split("/"))       # absolute project dir
 
 MCP_URL = "http://%s:%s/mcp" % (MCP_HOST, MCP_PORT)
 HEALTH_URL = "http://%s:%s/health" % (MCP_HOST, MCP_PORT)
