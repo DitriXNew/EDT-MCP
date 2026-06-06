@@ -34,6 +34,21 @@ REPO_ROOT = os.path.abspath(os.path.join(HARNESS_DIR, "..", ".."))
 PROJECT_REL = os.environ.get("MCP_PROJECT_REL", "tests/" + PROJECT)  # git path rel to repo root (fwd slashes for git)
 PROJECT_DIR = os.path.join(REPO_ROOT, *PROJECT_REL.split("/"))       # absolute project dir
 
+# The YAXUnit test suite lives in a SEPARATE EDT extension project (V8ExtensionNature)
+# named "<base>.tests" — breakpoints in the test modules resolve against THIS project,
+# not the base configuration. Override with MCP_TESTS_PROJECT if the layout changes.
+TESTS_PROJECT = os.environ.get("MCP_TESTS_PROJECT", PROJECT + ".tests")
+
+# Opt-in gate for the ATTENDED live-infobase round-trip suite (test_live_roundtrip.py).
+# Those tests drive a REAL 1C runtime-client launch / debug session against a running
+# infobase with YAXUnit installed — heavy, stateful, and absent in headless CI. They
+# SKIP (E2ESkip) unless this is set, so a normal `run_all.py` stays green without an
+# infobase. Set EDT_MCP_LIVE_INFOBASE=1 (attended) to actually run them.
+LIVE_INFOBASE = os.environ.get("EDT_MCP_LIVE_INFOBASE", "").strip() not in ("", "0", "false", "no")
+# Launch configuration name the live suite drives (a runtime-client config that points
+# at the TestConfiguration infobase). Override with MCP_LIVE_LAUNCH_CONFIG.
+LIVE_LAUNCH_CONFIG = os.environ.get("MCP_LIVE_LAUNCH_CONFIG", "TestConfiguration Thin Client")
+
 MCP_URL = "http://%s:%s/mcp" % (MCP_HOST, MCP_PORT)
 HEALTH_URL = "http://%s:%s/health" % (MCP_HOST, MCP_PORT)
 
@@ -55,8 +70,26 @@ class E2EAssertion(Exception):
     """Raised when an e2e assertion fails (a normal test failure)."""
 
 
+class E2ESkip(Exception):
+    """Raised to SKIP a test (an unmet precondition, not a failure).
+
+    The orchestrator reports these as `skip` and does NOT count them against the
+    run, so the gated live-infobase suite stays out of the way of a headless run.
+    """
+
+
 def _fail(msg):
     raise E2EAssertion(msg)
+
+
+def requires_live_infobase(reason=""):
+    """Gate an ATTENDED live-infobase test. Raises E2ESkip unless EDT_MCP_LIVE_INFOBASE
+    is set, so the test is skipped (not failed) in a normal headless run. Call this as
+    the FIRST line of every test in test_live_roundtrip.py."""
+    if not LIVE_INFOBASE:
+        raise E2ESkip(
+            "live-infobase round-trip skipped (set EDT_MCP_LIVE_INFOBASE=1 to run)"
+            + (": " + reason if reason else ""))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -201,12 +234,17 @@ def wait_for_server(timeout=60):
 
 
 def wait_for_project_ready(timeout=180):
-    """Wait until no project is still building its derived data (the reference index).
+    """Wait until every project is fully indexed (state 'ready') — i.e. none is still
+    'building' its derived data AND none is 'not_available' (mid (re)load).
 
     After a `-clean` relaunch the MCP port opens (wait_for_server) BEFORE EDT finishes
     indexing, so a cascade/mutation tool (rename / delete / create) run too early would
-    hit a project whose state is 'building'. list_projects reports each project's state
-    value, so poll until none reads 'building'.
+    hit a project whose state is 'building'. A heavy preceding run (lots of
+    clean_project / reset_model) can also leave a project transiently 'not_available'
+    or 'building' while EDT recomputes the reference index — a debug launch / breakpoint
+    against such a project fails with "Project build in progress (derived data not
+    complete)". list_projects reports each project's state value, so poll until none
+    reads 'building' OR 'not_available'.
 
     Best-effort: returns True once ready (or if state cannot be read), False on timeout.
     The per-tool ProjectStateChecker guard is the real safety net — this only removes the
@@ -216,7 +254,7 @@ def wait_for_project_ready(timeout=180):
     while time.time() < deadline:
         try:
             text = (call("list_projects", {}).text or "").lower()
-            if text and "building" not in text:
+            if text and "building" not in text and "not_available" not in text:
                 return True
         except Exception:
             pass
@@ -322,6 +360,31 @@ def assert_no_diff(ctx=""):
         _fail("expected NO change to %s but found [%s]:\n%s" % (PROJECT_REL, ctx, st[:500]))
 
 
+def assert_no_substantive_diff(ctx=""):
+    """Like assert_no_diff, but tolerant of a tracked file that a live EDT autosave only
+    TOUCHED with a line-ending/whitespace normalization — under core.autocrlf such a
+    touch shows as modified in `git status` yet yields an EMPTY `git diff`. Still fails
+    on a real CONTENT change (non-empty diff) or any new/deleted/renamed file.
+
+    Use for live RUNTIME tools (a real YAXUnit run / debug launch) that must not change
+    project SOURCE but may incidentally make EDT re-touch a metadata `.mdo` on disk while
+    it updates the infobase — a CRLF touch is not the tool 'writing into the project'."""
+    # `git diff HEAD` (NOT plain `git diff`) so a STAGED in-place modify is caught too —
+    # EDT tools can leave a change staged in the index (see reset_fixture). A CRLF-only
+    # touch still normalises to an EMPTY diff under core.autocrlf, so it is tolerated; a
+    # real content change (staged or unstaged) yields a non-empty diff and fails.
+    content = _git("diff", "HEAD", "--", PROJECT_REL).stdout
+    if content.strip():
+        _fail("substantive content change to %s [%s]:\n%s" % (PROJECT_REL, ctx, content[:600]))
+    # `git diff HEAD` does not list untracked files, so scan status for new/deleted/
+    # renamed entries (a CRLF-only modify shows as ' M' with no add/delete/rename code).
+    status = _git("status", "--porcelain", "--untracked-files=all", "--", PROJECT_REL).stdout
+    for line in status.splitlines():
+        code = line[:2]
+        if "?" in code or "A" in code or "D" in code or "R" in code:
+            _fail("new/deleted/renamed file under %s [%s]:\n%s" % (PROJECT_REL, ctx, status[:500]))
+
+
 def assert_diff_contains(substr, ctx=""):
     """The on-disk change includes substr — in a modified TRACKED file (via `git diff`)
     OR in a new UNTRACKED file, INCLUDING a file inside a brand-new untracked directory.
@@ -416,6 +479,92 @@ def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
             return
         time.sleep(0.5)
     _fail("expected %s to no longer contain %r [%s]" % (rel_path, substr, ctx))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Live-infobase helpers (used only by the gated test_live_roundtrip.py suite)
+# ──────────────────────────────────────────────────────────────────────────────
+def parse_yaxunit_counts(text):
+    """Parse the YAXUnit Markdown summary table into a dict of counts + the verdict.
+
+    The report (run_yaxunit_tests, MARKDOWN) renders a `| Metric | Count |` table:
+        | Total  | 8 |   | Passed | 8 |   | Failed | 0 |   | Errors | 0 |   | Skipped | 0 |
+    followed by `**Result: PASSED**` (or FAILED). Returns e.g.
+        {"total":8,"passed":8,"failed":0,"errors":0,"skipped":0,"result":"PASSED"}
+    Keys are absent when a row is missing, so callers should use .get()."""
+    out = {}
+    for metric in ("Total", "Passed", "Failed", "Errors", "Skipped"):
+        m = re.search(r"\|\s*%s\s*\|\s*(\d+)\s*\|" % metric, text or "", re.IGNORECASE)
+        if m:
+            out[metric.lower()] = int(m.group(1))
+    verdict = re.search(r"\*\*Result:\s*([A-Za-z]+)\*\*", text or "")
+    if verdict:
+        out["result"] = verdict.group(1).upper()
+    return out
+
+
+_APP_ID_RE = re.compile(r"\*\*applicationId:\*\*\s*`([^`]+)`")
+
+
+def extract_application_id(text):
+    """Pull the applicationId out of a debug launch handle Markdown (the
+    `- **applicationId:** \\`<id>\\`` bullet from buildDebugLaunchMarkdown). Returns
+    the id string, or None if absent (e.g. the launch produced no app id)."""
+    m = _APP_ID_RE.search(text or "")
+    return m.group(1) if m else None
+
+
+def _configurations_payload(result):
+    """Return list_configurations' entries as a list of dicts. The tool is a
+    JSON-responseType tool, so the data lands in structuredContent (r.text is just a
+    'Done' placeholder). Falls back to parsing r.text if structured is absent."""
+    s = result.structured
+    if isinstance(s, dict) and isinstance(s.get("configurations"), list):
+        return s["configurations"]
+    try:
+        obj = json.loads(result.text or "")
+        if isinstance(obj, dict) and isinstance(obj.get("configurations"), list):
+            return obj["configurations"]
+    except Exception:
+        pass
+    return []
+
+
+def any_launch_running(config_name=None):
+    """True if list_configurations reports a live launch (optionally only for a given
+    config name). Reads the structured `running` flag, not a text heuristic."""
+    cfgs = _configurations_payload(call("list_configurations", {}))
+    for c in cfgs:
+        if config_name and c.get("name") != config_name:
+            continue
+        if c.get("running"):
+            return True
+    return False
+
+
+def terminate_all_live_launches():
+    """Teardown helper: kill EVERY live EDT launch (all=true,confirm=true). Idempotent
+    and safe when nothing is running (returns the benign not_found sentinel). Best
+    effort — never raises, so it can run in a finally block."""
+    try:
+        call("terminate_launch", {"all": True, "confirm": True})
+    except Exception:
+        pass
+
+
+def wait_until_no_running_launch(config_name=None, timeout=60):
+    """Poll list_configurations until no launch reports running=true (optionally only
+    for a given config). Used after terminate to confirm the infobase actually went
+    down before the next test. Returns True once quiet, False on timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if not any_launch_running(config_name):
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
 
 
 # ──────────────────────────────────────────────────────────────────────────────

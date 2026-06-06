@@ -96,7 +96,9 @@ description: How to write and run YAXUnit unit tests for a 1C configuration thro
 
 ## Пример в репо
 
-`tests/tests` — расширение `tests` (префикс `tests_`), модуль [tests_SampleTests](../../../tests/tests/src/CommonModules/tests_SampleTests/Module.bsl): 4 теста (equality; cross-config вызов `Calc.Add` из расширения; цепочка строковых ассертов; параметризованный ×3 = 6 кейсов). Прогон: `run_yaxunit_tests(launchConfigurationName="TestConfiguration Thin Client", updateBeforeLaunch=false)` → **6/6 PASSED** (предварительно один раз `update_database(...confirm=true)`).
+`tests/tests` — расширение `tests` (префикс `tests_`), модуль [tests_SampleTests](../../../tests/tests/src/CommonModules/tests_SampleTests/Module.bsl): **8 кейсов** (equality; cross-config вызов `Calc.Add` из расширения; вызов соседнего модуля расширения `tests_MathHelper`; вычитание; цепочка строковых ассертов; параметризованный ×3). **Зелёный прогон:** `run_yaxunit_tests(launchConfigurationName="TestConfiguration Thin Client", modules="tests_SampleTests")` → **8/8 PASSED**.
+
+Отдельный модуль [tests_FailureDemo](../../../tests/tests/src/CommonModules/tests_FailureDemo/Module.bsl) (1 проходящий + 1 **намеренно падающий**) проверяет, что падения корректно отражаются в счётчиках отчёта. Поэтому прогон **без фильтра** (вся расширение `extensions=["tests"]`) включает этот 1 ожидаемый fail (Total 10 → 9 passed, 1 failed) — это **by design**, не баг; для зелёного прогона фильтруй `modules="tests_SampleTests"`. Полная live round-trip e2e-валидация (pass/fail счётчики + debug suspend/resume + launch-id + profiling) — `tests/e2e/tools/test_live_roundtrip.py`, gated за `EDT_MCP_LIVE_INFOBASE=1`.
 
 ## Источники
 - [YAxUnit (движок + docs)](https://bia-technologies.github.io/yaxunit/) · [репозиторий](https://github.com/bia-technologies/yaxunit)

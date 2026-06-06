@@ -141,6 +141,17 @@ from harness import (
 # for you (reset_fixture before every test; reset_fixture+reset_model after every
 # write-metadata test). Do NOT call them in a test unless you genuinely need an
 # intermediate reset.
+#
+# Gated live-infobase helpers (used ONLY by tools/test_live_roundtrip.py, see §8.1):
+#   requires_live_infobase(reason)   # first line; raises E2ESkip unless EDT_MCP_LIVE_INFOBASE=1
+#   parse_yaxunit_counts(text)       # YAXUnit Markdown summary -> {total,passed,failed,errors,skipped,result}
+#   extract_application_id(text)     # pull applicationId out of a debug-launch handle
+#   wait_until_no_running_launch(config_name=...) / any_launch_running(config_name=...)  # infobase quiet
+#   terminate_all_live_launches()    # blanket all=true kill — available, but the suite prefers a
+#                                    # TARGETED terminate_launch by config name (a blanket kill can
+#                                    # disturb EDT's shared infobase-connection registry)
+#   assert_no_substantive_diff(ctx)  # like assert_no_diff but tolerant of an EDT CRLF .mdo touch
+#   TESTS_PROJECT ("<PROJECT>.tests"), LIVE_LAUNCH_CONFIG  # the extension project + the launch config
 
 # --- calling a tool ---
 r = call("write_module_source", {"projectName": PROJECT,
@@ -229,6 +240,20 @@ python tests/e2e/run_all.py --project TestConfiguration --junit-xml tests/e2e/e2
 - **No new dependencies** — Python **stdlib only** (`urllib`, `json`, `subprocess` for git, `re`). Do not add pip packages. (Research-backed: the official MCP SDK's in-memory transport doesn't fit a server that lives inside EDT; the hand-rolled client is kept spec-conformant instead — initialize + notifications/initialized handshake, Mcp-Session-Id + MCP-Protocol-Version headers, robust SSE.)
 - **Scope:** the suite covers **every tool** + `tools/test_coverage_ratchet.py` (fails if `tools/list` advertises a tool with no `@e2e_test`). It replaced the older `run_e2e_tests.py` monolith (now removed). **Adding a new tool?** add `tools/test_<tool>.py` — the ratchet enforces it.
 - **Filter:** `--filter <substr>` runs only tests whose name/tool matches (useful while iterating).
+
+### 8.1 The gated live-infobase round-trip suite (`tools/test_live_roundtrip.py`)
+
+Most runtime tools (YAXUnit, debug, profiling) have **no infobase/session in CI**, so their per-tool files assert the realistic *no-session SENTINEL* (see §4 env-dependent). What a headless run **cannot** prove is a real **end-to-end round-trip**: a real YAXUnit run → parsed pass/fail counts, a real breakpoint **suspend → inspect → resume**, and a launch/session **id minted by one tool and consumed by its siblings**. Those live in **one deliberately cross-tool file** — the only exception to the "one file per tool" rule (the tools it touches are already covered by their own sentinel files; this file is *supplementary* round-trip coverage).
+
+It is **gated** behind `requires_live_infobase()` (first line of every test): each test raises `E2ESkip` — reported as **`[SKIP]`, NOT a failure**, and excluded from the pass/fail denominator — unless `EDT_MCP_LIVE_INFOBASE=1`. So a normal `run_all.py` runs them as skips and stays green; an **attended** operator runs them explicitly:
+
+```
+EDT_MCP_LIVE_INFOBASE=1 python tests/e2e/run_all.py --project TestConfiguration --filter test_live_
+```
+
+Attended preconditions (the operator owns these): EDT open on the TestConfiguration workspace + MCP up; a runtime-client launch config (default `"TestConfiguration Thin Client"`, override `MCP_LIVE_LAUNCH_CONFIG`); the **YAXUnit engine (`YAxUnit.cfe`) loaded** in the infobase and the `tests` extension applied. The fail-count round-trip uses a dedicated **`tests_FailureDemo`** module (one passing + one *deliberately failing* test, kept separate so `tests_SampleTests` stays green) — a default no-filter YAXUnit run therefore includes one **intentional** failure (that is the point: it proves failures surface). Each live test quiets the infobase at **both** ends — a TARGETED `terminate_launch` on its own config name (a blanket `all=true` kill can disturb EDT's shared infobase-connection registry and break the next launch), plus `wait_for_project_ready` so a debug launch is not fired at a still-indexing project — and passes the launch's minted `applicationId` explicitly to `wait_for_break`. None touch the git source tree, but a live EDT may CRLF-touch a metadata `.mdo` while updating the infobase, so they end with `assert_no_substantive_diff()` (tolerant of a line-ending-only touch, strict on real content/structure changes).
+
+NB this suite surfaced (and fixed, same change-set) two real tool defects a headless run never could: `get_variables` leaked a raw NPE on a live frame whose `hasVariables()` was lazy (`VariableSerializer` now calls `getVariables()` directly), and `resume` with no args dead-ended on a 1C target whose `canResume()` is false while a thread is suspended (`ResumeTool` now falls back to resuming the target's suspended threads).
 
 ---
 

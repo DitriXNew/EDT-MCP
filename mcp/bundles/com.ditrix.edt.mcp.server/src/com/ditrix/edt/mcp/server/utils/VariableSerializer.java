@@ -44,11 +44,23 @@ public final class VariableSerializer
             DebugSessionRegistry registry) throws Exception
     {
         List<Map<String, Object>> out = new ArrayList<>();
-        if (frame == null || !frame.hasVariables())
+        if (frame == null)
         {
             return out;
         }
-        for (IVariable var : frame.getVariables())
+        // Do NOT gate on frame.hasVariables() here: some 1C BSL stack frames populate
+        // their internal variable array lazily, and their hasVariables() reads that
+        // array's length — throwing an NPE ("this.variables is null") when called
+        // BEFORE getVariables() has realized it. getVariables() is the populating call,
+        // so invoke it directly and guard for a null/empty result. (Observed on a live
+        // YAXUnit debug frame; the EvaluateExpression path works on the same frame, so
+        // the frame is valid — only the lazy hasVariables() probe was unsafe.)
+        IVariable[] vars = frame.getVariables();
+        if (vars == null)
+        {
+            return out;
+        }
+        for (IVariable var : vars)
         {
             out.add(serializeVariable(var, registry));
         }

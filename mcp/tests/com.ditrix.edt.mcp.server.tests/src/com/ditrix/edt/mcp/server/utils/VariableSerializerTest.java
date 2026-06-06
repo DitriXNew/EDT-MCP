@@ -13,8 +13,10 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Map;
 
+import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IValue;
 import org.eclipse.debug.core.model.IVariable;
 import org.junit.Test;
@@ -121,6 +123,49 @@ public class VariableSerializerTest
         assertEquals(VariableSerializer.MAX_VALUE_LENGTH, dto.get("value").toString().length()); //$NON-NLS-1$
         assertEquals(Boolean.TRUE, dto.get("truncated")); //$NON-NLS-1$
         assertEquals(full.length(), dto.get("fullLength")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSerializeFrameDoesNotProbeLazyHasVariables() throws Exception
+    {
+        // Regression: some 1C BSL stack frames populate their internal variable array
+        // lazily; hasVariables() reads that array's length and throws an NPE
+        // ("this.variables is null") if called BEFORE getVariables() realizes it.
+        // serializeFrame must therefore NOT gate on hasVariables() — it must go
+        // straight to getVariables() (the populating call). We simulate the platform
+        // bug by making hasVariables() blow up while getVariables() returns vars.
+        IValue value = mock(IValue.class);
+        when(value.getReferenceTypeName()).thenReturn("Number"); //$NON-NLS-1$
+        when(value.getValueString()).thenReturn("42"); //$NON-NLS-1$
+        when(value.hasVariables()).thenReturn(false);
+
+        IVariable var = mock(IVariable.class);
+        when(var.getName()).thenReturn("answer"); //$NON-NLS-1$
+        when(var.getValue()).thenReturn(value);
+
+        IStackFrame frame = mock(IStackFrame.class);
+        when(frame.hasVariables()).thenThrow(new NullPointerException(
+            "Cannot read the array length because \"this.variables\" is null")); //$NON-NLS-1$
+        when(frame.getVariables()).thenReturn(new IVariable[] {var});
+
+        List<Map<String, Object>> out = VariableSerializer.serializeFrame(frame, null);
+
+        assertEquals("the lazy frame's variables must be serialized, not lost to an NPE", //$NON-NLS-1$
+            1, out.size());
+        assertEquals("answer", out.get(0).get("name")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testSerializeFrameNullVariablesYieldsEmptyList() throws Exception
+    {
+        // Defensive: a frame whose getVariables() returns null (not an empty array)
+        // must serialize to an empty list, never an NPE.
+        IStackFrame frame = mock(IStackFrame.class);
+        when(frame.getVariables()).thenReturn(null);
+
+        List<Map<String, Object>> out = VariableSerializer.serializeFrame(frame, null);
+
+        assertTrue("null variables array must yield an empty list", out.isEmpty()); //$NON-NLS-1$
     }
 
     @Test

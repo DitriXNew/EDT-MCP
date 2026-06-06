@@ -34,14 +34,20 @@ def parse_args():
 
 
 def write_junit(results, path, final_clean):
+    # Skips are neither pass nor failure: they are reported as JUnit <skipped/> and
+    # excluded from the failure count (the gated live-infobase suite skips in a
+    # headless run and must not turn the report red).
     total = len(results) + (0 if final_clean else 1)
-    fails = sum(1 for _, s, _, _ in results if s != "pass") + (0 if final_clean else 1)
+    fails = sum(1 for _, s, _, _ in results if s not in ("pass", "skip")) + (0 if final_clean else 1)
     out = ['<?xml version="1.0" encoding="UTF-8"?>',
            '<testsuite name="edt-mcp-e2e" tests="%d" failures="%d">' % (total, fails)]
     for t, status, msg, dur in results:
         nm = su.quoteattr("%s::%s" % (t["tool"], t["name"]))
         if status == "pass":
             out.append('  <testcase name=%s time="%.3f"/>' % (nm, dur))
+        elif status == "skip":
+            out.append('  <testcase name=%s time="%.3f"><skipped message=%s/></testcase>'
+                       % (nm, dur, su.quoteattr(msg or "skipped")))
         else:
             tag = "failure" if status == "fail" else "error"
             out.append('  <testcase name=%s time="%.3f"><%s>%s</%s></testcase>'
@@ -91,6 +97,8 @@ def main():
         status, msg = "pass", ""
         try:
             t["func"]()
+        except harness.E2ESkip as e:
+            status, msg = "skip", str(e)
         except harness.E2EAssertion as e:
             status, msg = "fail", str(e)
         except Exception as e:  # noqa: BLE001 - report any unexpected error as a test error
@@ -114,7 +122,10 @@ def main():
     final_clean = (harness._status_porcelain() == "")
 
     npass = sum(1 for _, s, _, _ in results if s == "pass")
-    print("\n== %d/%d passed | fixture clean: %s ==" % (npass, len(results), final_clean))
+    nskip = sum(1 for _, s, _, _ in results if s == "skip")
+    nfail = sum(1 for _, s, _, _ in results if s not in ("pass", "skip"))
+    skip_note = (" | %d skipped" % nskip) if nskip else ""
+    print("\n== %d/%d passed%s | fixture clean: %s ==" % (npass, len(results) - nskip, skip_note, final_clean))
     if not final_clean:
         print("!! TestConfiguration left dirty:\n%s" % harness._status_porcelain()[:500])
 
@@ -122,7 +133,9 @@ def main():
         write_junit(results, args.junit, final_clean)
         print("junit -> %s" % args.junit)
 
-    sys.exit(0 if (npass == len(results) and final_clean) else 1)
+    # A skip is neither pass nor fail: the run is green when nothing FAILED and the
+    # fixture is clean (skipped gated tests do not block a headless green run).
+    sys.exit(0 if (nfail == 0 and final_clean) else 1)
 
 
 if __name__ == "__main__":
