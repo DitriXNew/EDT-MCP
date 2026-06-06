@@ -1218,7 +1218,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get profiling (performance measurement) results after a debug session: per-module, per-line call count, timing and percentage. Also reports whether profiling is currently active. Run start_profiling + the test (then stop_profiling) first. Full parameters and examples: call get_tool_guide('get_profiling_results').",
+    "description": "Get profiling (performance measurement) results after a debug session: per-module, per-line call count, timing and percentage. Returns only the MOST RECENT measurement session (historical sessions are not returned). Also reports whether profiling is currently active. Run start_profiling + the test (then stop_profiling) first. Full parameters and examples: call get_tool_guide('get_profiling_results').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -1249,7 +1249,7 @@
     "outputSchema": {
       "properties": {
         "count": {
-          "description": "Number of profiling result sets returned",
+          "description": "Number of result sets returned (0 or 1 — only the latest session)",
           "type": "integer"
         },
         "message": {
