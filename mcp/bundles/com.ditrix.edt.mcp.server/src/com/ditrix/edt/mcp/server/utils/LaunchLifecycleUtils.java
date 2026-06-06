@@ -235,6 +235,53 @@ public final class LaunchLifecycleUtils
     }
 
     /**
+     * Resolves the effective application id for a launch: returns {@code applicationId}
+     * unchanged when it is set, otherwise falls back to the project's <b>default</b>
+     * application id.
+     *
+     * <p>Needed because a runtime-client launch configuration can be created WITHOUT
+     * an explicit application binding (its {@code applicationId} attribute is empty).
+     * In that case {@code updateBeforeLaunch} has no target to update, the programmatic
+     * pre-launch update fails "Application not found", and the EDT launch delegate then
+     * pops its interactive "Update infobase before launch?" modal — which blocks the MCP
+     * call. Falling back to the project default (the same application
+     * {@code get_applications} reports as {@code defaultApplicationId}) lets the update
+     * run headlessly so no dialog appears.
+     *
+     * @param project the resolved project (may be {@code null})
+     * @param applicationId the id from the call / launch config (may be {@code null}/empty)
+     * @param appManager the application manager (may be {@code null})
+     * @return the given id when non-empty; else the project's default application id;
+     *         else the original (possibly empty) value when no default exists
+     */
+    public static String resolveDefaultApplicationId(IProject project, String applicationId,
+            IApplicationManager appManager)
+    {
+        if (applicationId != null && !applicationId.isEmpty())
+        {
+            return applicationId;
+        }
+        if (appManager == null || project == null)
+        {
+            return applicationId;
+        }
+        try
+        {
+            // getDefaultApplication may throw ApplicationException; degrade to the
+            // original id (the caller then behaves exactly as before the fallback).
+            return appManager.getDefaultApplication(project)
+                .map(IApplication::getId)
+                .orElse(applicationId);
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error resolving default application for project " //$NON-NLS-1$
+                + project.getName(), e);
+            return applicationId;
+        }
+    }
+
+    /**
      * Brings the given application's database to {@link ApplicationUpdateState#UPDATED}
      * if needed, using the same programmatic path as {@code update_database}.
      * Skips the work when the state is already {@code UPDATED} or {@code BEING_UPDATED}.

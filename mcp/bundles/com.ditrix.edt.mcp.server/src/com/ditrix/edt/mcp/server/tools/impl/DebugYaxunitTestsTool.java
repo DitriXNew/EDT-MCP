@@ -32,6 +32,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
@@ -273,6 +274,13 @@ public class DebugYaxunitTestsTool implements IMcpTool
             {
                 return ToolResult.error("IApplicationManager service not available").toJson(); //$NON-NLS-1$
             }
+
+            // A runtime-client launch config may carry no applicationId (it was not
+            // bound to an application). Fall back to the project's default application
+            // so updateBeforeLaunch has a target and the EDT launch delegate does not
+            // pop its blocking "Update infobase before launch?" modal.
+            applicationId = LaunchLifecycleUtils.resolveDefaultApplicationId(project, applicationId, appManager);
+
             if (applicationId != null && !applicationId.isEmpty())
             {
                 try
@@ -330,6 +338,15 @@ public class DebugYaxunitTestsTool implements IMcpTool
                 ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
                 String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
                 workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
+                // Stamp the resolved applicationId onto the launch so the spawned
+                // ILaunch carries it: DebugSessionRegistry keys the suspend snapshot
+                // by this id, and the response below hands the SAME id to the caller
+                // for wait_for_break. Without this, an app-less config would launch
+                // with an empty id and wait_for_break could not address the session.
+                if (applicationId != null && !applicationId.isEmpty())
+                {
+                    workingCopy.setAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, applicationId);
+                }
 
                 Activator.logInfo("Launching YAXUnit tests in DEBUG mode: config=" + matchingConfig.getName() //$NON-NLS-1$
                     + ", startup=" + startupOption); //$NON-NLS-1$
@@ -337,6 +354,11 @@ public class DebugYaxunitTestsTool implements IMcpTool
                 // Launch the working copy directly so our ATTR_STARTUP_OPTION mutation
                 // actually takes effect (DebugUITools.launch on a working copy can
                 // re-resolve to the saved config and silently drop our changes).
+                // Auto-confirm EDT's blocking "Application update" modal for the
+                // duration of this launch only (the dependent test extension keeps
+                // the app in INCREMENTAL_UPDATE_REQUIRED, which no pre-update durably
+                // clears). Manual EDT launches outside this window still prompt.
+                LaunchUpdateDialogAutoConfirmer.arm();
                 try
                 {
                     ILaunch spawned = workingCopy.launch(ILaunchManager.DEBUG_MODE,
@@ -350,6 +372,10 @@ public class DebugYaxunitTestsTool implements IMcpTool
                 {
                     Activator.logError("Failed to launch YAXUnit in debug mode", ex); //$NON-NLS-1$
                     return ToolResult.error("Launch failed: " + ex.getMessage()).toJson(); //$NON-NLS-1$
+                }
+                finally
+                {
+                    LaunchUpdateDialogAutoConfirmer.disarm();
                 }
             }
 

@@ -43,6 +43,7 @@ import com.ditrix.edt.mcp.server.utils.JUnitMarkdownFormatter;
 import com.ditrix.edt.mcp.server.utils.JUnitTestResults;
 import com.ditrix.edt.mcp.server.utils.JUnitXmlParser;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -319,6 +320,12 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
             }
 
+            // A runtime-client launch config may carry no applicationId (it was not
+            // bound to an application). Fall back to the project's default application
+            // so updateBeforeLaunch has a target and the EDT launch delegate does not
+            // pop its blocking "Update infobase before launch?" modal.
+            applicationId = LaunchLifecycleUtils.resolveDefaultApplicationId(project, applicationId, appManager);
+
             if (applicationId != null && !applicationId.isEmpty())
             {
                 try
@@ -445,12 +452,33 @@ public class RunYaxunitTestsTool implements IMcpTool
                             ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
                             String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
                             workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
+                            // Stamp the resolved applicationId onto the launch so the spawned
+                            // client carries it (an app-less config would otherwise launch with
+                            // an empty id), keeping it matchable by the terminate-before-launch
+                            // sweep keyed on applicationId.
+                            if (applicationId != null && !applicationId.isEmpty())
+                            {
+                                workingCopy.setAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, applicationId);
+                            }
 
                             Activator.logInfo("Launching YAXUnit tests: config=" + matchingConfig.getName() //$NON-NLS-1$
                                     + ", startup=" + startupOption); //$NON-NLS-1$
 
-                            launch = workingCopy.launch(ILaunchManager.RUN_MODE,
-                                new NullProgressMonitor());
+                            // Auto-confirm EDT's blocking "Application update" modal
+                            // for the duration of this launch only (the dependent
+                            // test extension keeps the app in INCREMENTAL_UPDATE_REQUIRED,
+                            // which no pre-update durably clears). Manual EDT launches
+                            // outside this window still prompt normally.
+                            LaunchUpdateDialogAutoConfirmer.arm();
+                            try
+                            {
+                                launch = workingCopy.launch(ILaunchManager.RUN_MODE,
+                                    new NullProgressMonitor());
+                            }
+                            finally
+                            {
+                                LaunchUpdateDialogAutoConfirmer.disarm();
+                            }
                             // Register BEFORE leaving the per-key lock so a concurrent
                             // auto-chain on the same IB sees this launch as owned and
                             // refuses to terminate it.
