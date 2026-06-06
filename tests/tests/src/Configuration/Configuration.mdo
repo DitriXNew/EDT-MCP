@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:Configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" xmlns:mdclassExtension="http://g5.1c.ru/v8/dt/metadata/mdclass/extension" uuid="8370b794-4832-453c-b914-79efb0648da7">
+  <name>tests</name>
+  <synonym>
+    <key>en</key>
+    <value>Tests</value>
+  </synonym>
+  <objectBelonging>Adopted</objectBelonging>
+  <extension xsi:type="mdclassExtension:ConfigurationExtension">
+    <defaultRunMode>Checked</defaultRunMode>
+    <usePurposes>Checked</usePurposes>
+    <commandInterface>Extended</commandInterface>
+    <mainSectionCommandInterface>Extended</mainSectionCommandInterface>
+    <defaultLanguage>Checked</defaultLanguage>
+    <interfaceCompatibilityMode>Checked</interfaceCompatibilityMode>
+    <compatibilityMode>Checked</compatibilityMode>
+    <defaultRoles>Extended</defaultRoles>
+  </extension>
+  <containedObjects classId="9cd510cd-abfc-11d4-9434-004095e12fc7" objectId="b021932c-2635-4b8b-b0c3-5ce4080f0548"/>
+  <containedObjects classId="9fcd25a0-4822-11d4-9414-008048da11f9" objectId="0e3f9a9b-3c54-446c-a3fe-2194a546598a"/>
+  <containedObjects classId="e3687481-0a87-462c-a166-9f34594f9bba" objectId="abc51260-b4ab-4eaf-8193-821b9590e55f"/>
+  <containedObjects classId="9de14907-ec23-4a07-96f0-85521cb6b53b" objectId="641bb678-9145-48dc-bfc4-46fee58b30d2"/>
+  <containedObjects classId="51f2d5d8-ea4d-4064-8892-82951750031e" objectId="fc564f95-82fb-4a1a-8997-142ddd845552"/>
+  <containedObjects classId="e68182ea-4237-4383-967f-90c1e3370bc7" objectId="d0f892ee-16c1-4744-8d68-c13599508442"/>
+  <containedObjects classId="fb282519-d103-4dd3-bc12-cb271d631dfc" objectId="0f9df927-d285-42f0-b157-0ac937f49903"/>
+  <keepMappingToExtendedConfigurationObjectsByIDs>true</keepMappingToExtendedConfigurationObjectsByIDs>
+  <namePrefix>tests_</namePrefix>
+  <configurationExtensionCompatibilityMode>8.5.1</configurationExtensionCompatibilityMode>
+  <configurationExtensionPurpose>Customization</configurationExtensionPurpose>
+  <defaultRunMode>ManagedApplication</defaultRunMode>
+  <usePurposes>PersonalComputer</usePurposes>
+  <defaultRoles>Role.tests_DefaultRole</defaultRoles>
+  <defaultLanguage>Language.English</defaultLanguage>
+  <compatibilityMode>8.5.1</compatibilityMode>
+  <languages uuid="b9813cc5-7b88-4b0f-8ecc-070ae4316918" extendedConfigurationObject="38ecdf43-3c5f-49b7-b0aa-26d365a57ee6">
+    <name>English</name>
+    <objectBelonging>Adopted</objectBelonging>
+    <extension xsi:type="mdclassExtension:LanguageExtension">
+      <extendedConfigurationObject>Checked</extendedConfigurationObject>
+      <languageCode>Checked</languageCode>
+    </extension>
+    <languageCode>en</languageCode>
+  </languages>
+  <commonModules>CommonModule.tests_SampleTests</commonModules>
+  <roles>Role.tests_DefaultRole</roles>
+</mdclass:Configuration>
