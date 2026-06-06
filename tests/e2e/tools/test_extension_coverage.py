@@ -257,29 +257,27 @@ def test_extension_adopted_form_marked_overridden():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# rename_metadata_object refuses to rename an ADOPTED object
+# rename_metadata_object CAN rename an ADOPTED object
 #
-# An adopted object mirrors a base object and MUST keep the base name; renaming only
-# the extension copy desyncs the names and breaks the adoption (EDT then reports the
-# adopted object's source not found, and interception/override resolution stops).
-# The tool must refuse with an actionable error, not silently produce that broken
-# state. Preview (confirm omitted) already errors, so nothing is mutated even on a
-# guard regression.
+# An adopted object's link to the base object is held by UUID in a separate field
+# (extendedConfigurationObject; keepMappingToExtendedConfigurationObjectsByIDs is on),
+# NOT by name — so renaming the extension's adopted copy keeps the adoption intact,
+# exactly as the EDT UI rename does. The tool must therefore NOT refuse adopted objects.
+# We assert the PREVIEW (confirm omitted) builds a refactoring rather than erroring;
+# preview does not mutate the project on disk.
 # ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="rename_metadata_object", kind="write")
-def test_rename_adopted_object_is_refused():
-    """Renaming an ADOPTED object is refused with an actionable error that names the
-    object and explains the base-name rule. confirm is omitted (preview), so a guard
-    regression degrades to a harmless preview rather than corrupting the adoption."""
+def test_rename_adopted_object_preview_succeeds():
+    """Previewing a rename of an ADOPTED object succeeds (builds a refactoring preview),
+    proving the tool does NOT refuse adopted objects — their base link is by UUID, not by
+    name, so the rename is valid. confirm is omitted, so nothing is mutated on disk."""
     r = call("rename_metadata_object",
-             {"projectName": TESTS_PROJECT, "objectFqn": "CommonModule.Calc", "newName": "Compute"})
-    err = assert_error(r, "rename of an adopted object")
-    assert_error_quality(err, names=["Calc"], suggests=[],
-                         ctx="adopted-object rename names the object")
-    low = err.lower()
-    if "adopt" not in low:
-        raise AssertionError("the refusal must explain the object is adopted; got: " + err)
-    if "base" not in low:
-        raise AssertionError("the refusal must point at renaming the base object; got: " + err)
-    assert_no_diff("a refused rename must not touch the project on disk")
+             {"projectName": TESTS_PROJECT, "objectFqn": "CommonModule.Calc", "newName": "CalcRenamed"})
+    assert_ok(r, "rename preview of an adopted object")
+    assert_contains(r.text, "action: preview", "the response must be a refactoring preview")
+    # It must NOT be the old adoption-refusal error.
+    low = r.text.lower()
+    if "adopted object must keep" in low or "breaks the adoption" in low:
+        raise AssertionError("the tool must no longer refuse adopted objects; got: " + r.text)
+    assert_no_diff("a rename preview must not touch the project on disk")
