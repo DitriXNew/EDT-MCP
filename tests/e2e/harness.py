@@ -52,6 +52,13 @@ LIVE_LAUNCH_CONFIG = os.environ.get("MCP_LIVE_LAUNCH_CONFIG", "TestConfiguration
 MCP_URL = "http://%s:%s/mcp" % (MCP_HOST, MCP_PORT)
 HEALTH_URL = "http://%s:%s/health" % (MCP_HOST, MCP_PORT)
 
+# Per-CALL HTTP timeout (seconds). A single MCP call that exceeds this raises a socket
+# timeout instead of blocking forever; run_all's per-TEST timeout is the outer backstop
+# that fails the test and aborts the run. Generous by default — clean_project can
+# legitimately take a while, especially right after a -clean relaunch. Override with
+# MCP_CALL_TIMEOUT.
+CALL_TIMEOUT = float(os.environ.get("MCP_CALL_TIMEOUT", "180"))
+
 # MCP protocol version this client speaks (sent as the MCP-Protocol-Version header,
 # per the 2025-11-25 Streamable HTTP transport spec).
 PROTOCOL_VERSION = os.environ.get("MCP_PROTOCOL_VERSION", "2025-11-25")
@@ -172,7 +179,7 @@ def _post(method, params):
         headers["Mcp-Session-Id"] = _SESSION_ID
     req = urllib.request.Request(MCP_URL, data=body, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
+        with urllib.request.urlopen(req, timeout=CALL_TIMEOUT) as resp:
             sid = resp.headers.get("Mcp-Session-Id")
             if sid:
                 _SESSION_ID = sid
