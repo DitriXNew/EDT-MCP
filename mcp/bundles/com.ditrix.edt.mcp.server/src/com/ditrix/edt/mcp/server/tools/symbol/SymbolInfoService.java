@@ -400,7 +400,7 @@ public class SymbolInfoService
             Object inputElement = ReflectionUtils.invokeMethod(hoverInfo, "getInputElement"); //$NON-NLS-1$
             if (inputElement != null)
             {
-                return inputElement.toString();
+                return meaningfulOrNull(inputElement.toString());
             }
         }
         catch (Exception e)
@@ -408,7 +408,28 @@ public class SymbolInfoService
             // Ignore
         }
 
-        return hoverInfo.toString();
+        // Last resort: the object's own toString. Some hovers (e.g. an
+        // annotation/quick-fix hover at a position carrying a validation marker, like
+        // BslAnnotationWithQuickFixesHover$BslAnnotationInfo) have no extractable text
+        // here and would yield a bare "ClassName@hexhash" — which is NOT useful symbol
+        // info and must not leak to the caller. Returning null lets the caller fall
+        // through to the real EObject/type resolution (Level 2) instead.
+        return meaningfulOrNull(hoverInfo.toString());
+    }
+
+    /**
+     * Returns {@code s} unless it is null/blank or a bare {@code Object.toString()}
+     * reference ({@code ClassName@hexhash}), in which case it returns {@code null} so
+     * the caller treats the hover as "no content" and falls through to real symbol
+     * resolution rather than leaking a raw object reference.
+     */
+    static String meaningfulOrNull(String s)
+    {
+        if (s == null || s.trim().isEmpty() || s.matches("[\\w.$]+@[0-9a-fA-F]+")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        return s;
     }
 
     /**
