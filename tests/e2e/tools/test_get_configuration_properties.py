@@ -35,7 +35,7 @@ no-op / wrong project / empty body would FAIL these (mutation thinking).
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
-    assert_contains, assert_no_diff, e2e_test, PROJECT,
+    assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT, TESTS_PROJECT,
 )
 
 
@@ -70,6 +70,12 @@ def test_default_project_returns_fixture_properties():
     # fallback actually resolved a concrete project.
     assert_contains(r.text, "projectName: TestConfiguration",
                     "resolved project name must be echoed back")
+    # Regression guard: a BASE configuration must NOT carry the extension-only fields
+    # (those are emitted only for a configuration extension, see the extension test).
+    assert_not_contains(r.text, "projectKind: Extension",
+                        "a base configuration must not be tagged as an Extension")
+    assert_not_contains(r.text, "namePrefix:",
+                        "a base configuration has no extension namePrefix")
     assert_no_diff("a read tool must not touch the project on disk")
 
 
@@ -100,6 +106,36 @@ def test_explicit_project_returns_synonym_and_runmode():
     assert_no_diff("a read tool must not touch the project on disk")
 
 
+@e2e_test(tool="get_configuration_properties", kind="read")
+def test_extension_project_returns_extension_properties():
+    """A configuration EXTENSION project must return its properties, NOT an error.
+
+    Regression for the owner-reported bug: the tool used to gate on
+    `instanceof IConfigurationProject`, which excludes an extension, so pointing it at
+    `TestConfiguration.tests` returned "is not a configuration project". An extension
+    is `IConfigurationAware` (shares `getConfiguration()`), so the tool now resolves it
+    and emits the extension's properties PLUS the extension-only fields.
+
+    Mutation-sensitive: a tool that still rejected the extension (the old bug) fails
+    assert_ok; one that resolved the WRONG project would not show name `tests` /
+    namePrefix `tests_`; one that did not branch on extension would omit objectBelonging.
+    """
+    r = call("get_configuration_properties", {"projectName": TESTS_PROJECT})
+    assert_ok(r, "get_configuration_properties on a configuration extension")
+    # The extension's Configuration root is named 'tests' (tests/tests Configuration.mdo).
+    assert_contains(r.text, "name: tests",
+                    "extension configuration name must be read from the model")
+    # Extension-only fields prove the extension branch ran (a base config omits these).
+    assert_contains(r.text, "projectKind: Extension",
+                    "an extension must be tagged projectKind: Extension")
+    assert_contains(r.text, "namePrefix: tests_",
+                    "the extension namePrefix (tests_) must be surfaced")
+    # The resolved project name is the extension EDT project (proves matchedProject).
+    assert_contains(r.text, "projectName: " + TESTS_PROJECT,
+                    "resolved project name must be the extension project")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix
 #
@@ -113,10 +149,10 @@ def test_explicit_project_returns_synonym_and_runmode():
 def test_nonexistent_project_errors_and_names_value():
     # configProject == null + the name does not resolve to an existing project ->
     # ToolResult.error(ProjectContext.notFoundMessage(name)) = "Project not found:
-    # <name>. Use list_projects to see available projects." (an existing-but-not-a-
-    # configuration project instead yields "Project '<name>' is not a configuration
-    # project. Use list_projects ...".) Delivered as structured JSON even though the
-    # success path is YAML.
+    # <name>. Use list_projects to see available projects." (an existing project that
+    # exposes NO 1C configuration — neither a base config nor an extension — instead
+    # yields "Project '<name>' does not expose a 1C configuration ...".) Delivered as
+    # structured JSON even though the success path is YAML.
     bad = "NoSuchProject_ZZZ_e2e"
     r = call("get_configuration_properties", {"projectName": bad})
     err = assert_error(r, "non-existent projectName")

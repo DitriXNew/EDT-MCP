@@ -17,9 +17,11 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.swt.widgets.Display;
 
+import com._1c.g5.v8.dt.core.platform.IConfigurationAware;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProject;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -132,34 +134,55 @@ public class GetConfigurationPropertiesTool implements IMcpTool
                 return ToolResult.error("Project manager not available").toJson(); //$NON-NLS-1$
             }
 
-            IConfigurationProject configProject = null;
-            
+            // Both a base configuration project AND a configuration EXTENSION project
+            // are IConfigurationAware and expose getConfiguration(), so resolve against
+            // that shared interface (NOT the narrower IConfigurationProject, which
+            // excludes extensions and made this tool error on a valid extension).
+            IConfigurationAware configProject = null;
+            IProject matchedProject = null;
+            boolean matchedIsExtension = false;
+
             // Find project by name or get first configuration project
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
             IProject[] projects = workspace.getRoot().getProjects();
-            
+
             for (IProject project : projects)
             {
                 if (!project.isOpen())
                 {
                     continue;
                 }
-                
+
                 IDtProject dtProject = dtProjectManager.getDtProject(project);
                 if (dtProject == null)
                 {
                     continue;
                 }
-                
+
                 IV8Project v8Project = v8ProjectManager.getProject(dtProject);
-                if (v8Project instanceof IConfigurationProject)
+                if (!(v8Project instanceof IConfigurationAware))
                 {
-                    if (projectName == null || projectName.isEmpty() || 
-                        project.getName().equals(projectName))
+                    continue;
+                }
+
+                if (projectName == null || projectName.isEmpty())
+                {
+                    // Default (no name given): the first base CONFIGURATION project — an
+                    // extension is not a sensible "default configuration", so skip it here.
+                    if (v8Project instanceof IConfigurationProject)
                     {
-                        configProject = (IConfigurationProject) v8Project;
+                        configProject = (IConfigurationAware) v8Project;
+                        matchedProject = project;
                         break;
                     }
+                }
+                else if (project.getName().equals(projectName))
+                {
+                    // Explicit name: accept a base configuration OR an extension.
+                    configProject = (IConfigurationAware) v8Project;
+                    matchedProject = project;
+                    matchedIsExtension = v8Project instanceof IExtensionProject;
+                    break;
                 }
             }
             
@@ -174,8 +197,10 @@ public class GetConfigurationPropertiesTool implements IMcpTool
                     {
                         return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
                     }
+                    // Exists but exposes no 1C configuration — neither a base
+                    // configuration nor an extension (both are IConfigurationAware).
                     return ToolResult.error("Project '" + projectName //$NON-NLS-1$
-                        + "' is not a configuration project. " //$NON-NLS-1$
+                        + "' does not expose a 1C configuration (not a configuration or extension project). " //$NON-NLS-1$
                         + "Use list_projects to see available projects.").toJson(); //$NON-NLS-1$
                 }
                 // No projectName given and the workspace holds no configuration
@@ -259,7 +284,29 @@ public class GetConfigurationPropertiesTool implements IMcpTool
                 appendScalar(yaml, "defaultLanguageName", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
             }
 
-            appendScalar(yaml, "projectName", configProject.getProject().getName()); //$NON-NLS-1$
+            // Extension-specific properties — emitted only for a configuration
+            // EXTENSION (a base configuration has no name prefix / purpose / extension
+            // compatibility mode), so a base config's output is unchanged.
+            if (matchedIsExtension)
+            {
+                // A synthetic marker that this project is a configuration EXTENSION.
+                // NB this is NOT the EMF MdObject.getObjectBelonging() property (that
+                // returns Adopted/Native per object) — it is a project-kind hint.
+                appendScalar(yaml, "projectKind", "Extension"); //$NON-NLS-1$ //$NON-NLS-2$
+                appendScalar(yaml, "namePrefix", configuration.getNamePrefix()); //$NON-NLS-1$
+                if (configuration.getConfigurationExtensionPurpose() != null)
+                {
+                    appendScalar(yaml, "configurationExtensionPurpose", //$NON-NLS-1$
+                        configuration.getConfigurationExtensionPurpose().toString());
+                }
+                if (configuration.getConfigurationExtensionCompatibilityMode() != null)
+                {
+                    appendScalar(yaml, "configurationExtensionCompatibilityMode", //$NON-NLS-1$
+                        configuration.getConfigurationExtensionCompatibilityMode().toString());
+                }
+            }
+
+            appendScalar(yaml, "projectName", matchedProject.getName()); //$NON-NLS-1$
 
             return yaml.toString();
         }
