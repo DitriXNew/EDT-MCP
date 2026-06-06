@@ -19,7 +19,9 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicTabularSection;
 import com._1c.g5.v8.dt.metadata.mdclass.CharacteristicsDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.DbObjectAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 
 /**
  * Universal metadata formatter that can format any MdObject type
@@ -190,19 +192,69 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     private void formatFormsCollection(StringBuilder sb, String name, Collection<?> forms, String language)
     {
         addSectionHeader(sb, name);
-        startTable(sb, "Name", "Synonym", "Form Type"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        
+        // An Origin column is added only when at least one form is ADOPTED, i.e. this is an
+        // extension's adopted object whose form(s) override the base. It marks which form is
+        // overridden (core (adopted)) vs the extension's own (extension). A base configuration
+        // never holds adopted forms, so its output is unchanged.
+        boolean showOrigin = anyAdopted(forms);
+        if (showOrigin)
+        {
+            startTable(sb, "Name", "Synonym", "Form Type", "Origin"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        else
+        {
+            startTable(sb, "Name", "Synonym", "Form Type"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+
         for (Object item : forms)
         {
             if (item instanceof BasicForm)
             {
                 BasicForm form = (BasicForm) item;
-                addTableRow(sb,
-                    form.getName(),
-                    getSynonym(form.getSynonym(), language),
-                    formatEnum(form.getFormType()));
+                if (showOrigin)
+                {
+                    addTableRow(sb,
+                        form.getName(),
+                        getSynonym(form.getSynonym(), language),
+                        formatEnum(form.getFormType()),
+                        originCell(form));
+                }
+                else
+                {
+                    addTableRow(sb,
+                        form.getName(),
+                        getSynonym(form.getSynonym(), language),
+                        formatEnum(form.getFormType()));
+                }
             }
         }
+    }
+
+    /**
+     * True when the collection holds at least one ADOPTED metadata object — i.e. an extension's
+     * adopted object whose members override the base. Used to add an Origin column only where it
+     * is meaningful, leaving a base configuration's output unchanged.
+     */
+    private static boolean anyAdopted(Collection<?> items)
+    {
+        for (Object item : items)
+        {
+            if (item instanceof MdObject && ((MdObject) item).getObjectBelonging() == ObjectBelonging.ADOPTED)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The origin label for a member of an extension's adopted object: an ADOPTED member overrides
+     * the base (core (adopted)); a NATIVE member is the extension's own (extension). Only called
+     * for collections where {@link #anyAdopted(Collection)} is true.
+     */
+    private static String originCell(MdObject item)
+    {
+        return ExtensionOriginUtils.originLabel(item.getObjectBelonging(), true);
     }
     
     /**
@@ -240,24 +292,35 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
             addSectionHeader(sb, name);
         }
         
+        // An Origin column is added only when at least one attribute is ADOPTED (an extension's
+        // adopted object whose attribute(s) override the base) - marking which attribute is
+        // overridden (core (adopted)) vs the extension's own (extension). A base configuration
+        // never holds adopted attributes, so its output keeps the original columns.
+        boolean showOrigin = anyAdopted(items);
         if (full)
         {
-            // Extended format with 10 columns
-            startTable(sb, "Name", "Synonym", "Type", "Indexing", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$
-            
+            // Extended format with 10 columns (+ Origin when adopted attributes are present)
+            java.util.List<String> headers = new java.util.ArrayList<>(java.util.Arrays.asList(
+                "Name", "Synonym", "Type", "Indexing", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$
+            if (showOrigin)
+            {
+                headers.add("Origin"); //$NON-NLS-1$
+            }
+            startTable(sb, headers.toArray(new String[0]));
+
             for (Object item : items)
             {
                 if (item instanceof BasicFeature)
                 {
                     BasicFeature attr = (BasicFeature) item;
-                    
+
                     // Get indexing if it's DbObjectAttribute
                     String indexing = DASH;
                     if (attr instanceof DbObjectAttribute)
                     {
                         indexing = formatEnum(((DbObjectAttribute) attr).getIndexing());
                     }
-                    
+
                     // Get password mode using EMF reflection (it's in BasicFeature but not in interface)
                     String passwordMode = NO;
                     try
@@ -270,7 +333,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
                     {
                         // Method doesn't exist or error - use default
                     }
-                    
+
                     // Get multiLine using EMF reflection
                     String multiLine = NO;
                     try
@@ -283,15 +346,15 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
                     {
                         // Method doesn't exist or error - use default
                     }
-                    
+
                     // Get fullTextSearch if it's DbObjectAttribute
                     String fullTextSearch = DASH;
                     if (attr instanceof DbObjectAttribute)
                     {
                         fullTextSearch = formatEnum(((DbObjectAttribute) attr).getFullTextSearch());
                     }
-                    
-                    addTableRow(sb,
+
+                    java.util.List<String> cells = new java.util.ArrayList<>(java.util.Arrays.asList(
                         attr.getName(),
                         getSynonym(attr.getSynonym(), language),
                         formatType(attr.getType()),
@@ -301,26 +364,47 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
                         passwordMode,
                         multiLine,
                         formatEnum(attr.getQuickChoice()),
-                        formatEnum(attr.getCreateOnInput())
-                    );
+                        formatEnum(attr.getCreateOnInput())));
+                    if (showOrigin)
+                    {
+                        cells.add(originCell(attr));
+                    }
+                    addTableRow(sb, cells.toArray(new String[0]));
                 }
             }
         }
         else
         {
-            // Compact format - Name, Synonym, Type
-            startTable(sb, "Name", "Synonym", "Type"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            
+            // Compact format - Name, Synonym, Type (+ Origin when adopted attributes are present)
+            if (showOrigin)
+            {
+                startTable(sb, "Name", "Synonym", "Type", "Origin"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            }
+            else
+            {
+                startTable(sb, "Name", "Synonym", "Type"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+
             for (Object item : items)
             {
                 if (item instanceof BasicFeature)
                 {
                     BasicFeature attr = (BasicFeature) item;
-                    addTableRow(sb,
-                        attr.getName(),
-                        getSynonym(attr.getSynonym(), language),
-                        formatType(attr.getType())
-                    );
+                    if (showOrigin)
+                    {
+                        addTableRow(sb,
+                            attr.getName(),
+                            getSynonym(attr.getSynonym(), language),
+                            formatType(attr.getType()),
+                            originCell(attr));
+                    }
+                    else
+                    {
+                        addTableRow(sb,
+                            attr.getName(),
+                            getSynonym(attr.getSynonym(), language),
+                            formatType(attr.getType()));
+                    }
                 }
             }
         }

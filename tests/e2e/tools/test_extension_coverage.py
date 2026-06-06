@@ -228,3 +228,58 @@ def test_extension_module_source_shows_interception():
     assert_contains(r.text, "intercepts core method",
                     "the section must state what the extension method intercepts")
     assert_no_diff("a read tool must not touch the base project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Adopted/overridden FORM (and attribute) marking in get_metadata_details
+#
+# An extension's adopted object lists, alongside the base members it adopts, which
+# of them it OVERRIDES. get_metadata_details adds an Origin column to the Forms /
+# Attributes tables when any member is ADOPTED, marking an overridden member
+# `core (adopted)` vs the extension's own `extension`. The `| Origin |` column
+# header distinguishes this from the object-level `**Origin:**` line.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_extension_adopted_form_marked_overridden():
+    """get_metadata_details(full) on the extension's adopted Catalog marks its overridden
+    ItemForm with an Origin column reading `core (adopted)` — surfacing that the FORM is
+    overridden by the extension (the owner's 'эта форма перехвачена' ask)."""
+    r = call("get_metadata_details",
+             {"projectName": TESTS_PROJECT, "objectFqns": ["Catalog.Catalog"], "full": True})
+    assert_ok(r, "get_metadata_details on the adopted Catalog (full)")
+    assert_contains(r.text, "ItemForm", "the adopted catalog's overridden form must be listed")
+    # The TABLE Origin column (distinct from the object-level **Origin:** line) proves the
+    # per-member marking ran; a base config (no adopted members) would not emit it.
+    assert_contains(r.text, "| Origin |", "the Forms table must gain an Origin column for adopted members")
+    assert_contains(r.text, "core (adopted)", "the overridden form must be marked core (adopted)")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# rename_metadata_object refuses to rename an ADOPTED object
+#
+# An adopted object mirrors a base object and MUST keep the base name; renaming only
+# the extension copy desyncs the names and breaks the adoption (EDT then reports the
+# adopted object's source not found, and interception/override resolution stops).
+# The tool must refuse with an actionable error, not silently produce that broken
+# state. Preview (confirm omitted) already errors, so nothing is mutated even on a
+# guard regression.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="rename_metadata_object", kind="write")
+def test_rename_adopted_object_is_refused():
+    """Renaming an ADOPTED object is refused with an actionable error that names the
+    object and explains the base-name rule. confirm is omitted (preview), so a guard
+    regression degrades to a harmless preview rather than corrupting the adoption."""
+    r = call("rename_metadata_object",
+             {"projectName": TESTS_PROJECT, "objectFqn": "CommonModule.Calc", "newName": "Compute"})
+    err = assert_error(r, "rename of an adopted object")
+    assert_error_quality(err, names=["Calc"], suggests=[],
+                         ctx="adopted-object rename names the object")
+    low = err.lower()
+    if "adopt" not in low:
+        raise AssertionError("the refusal must explain the object is adopted; got: " + err)
+    if "base" not in low:
+        raise AssertionError("the refusal must point at renaming the base object; got: " + err)
+    assert_no_diff("a refused rename must not touch the project on disk")

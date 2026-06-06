@@ -28,6 +28,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -104,6 +105,23 @@ public class MetadataRenameService
                 "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
                 "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
                 "Supported child types: Attribute, TabularSection, Dimension, Resource.").toJson(); //$NON-NLS-1$
+        }
+
+        // An ADOPTED object in a configuration extension (adopted from the base) MIRRORS a
+        // base object and MUST keep the base object's name. Renaming only the extension copy
+        // desyncs the names and BREAKS the adoption: EDT then reports the adopted object's source
+        // as not found, and interception/override resolution stops. Refuse (covers a top object
+        // and an adopted member) and point at the correct path - rename the BASE object instead,
+        // the adopted copy follows. This is the cleanest safe behaviour; renaming the base from
+        // the extension side is out of scope (and would be a cross-config cascade).
+        if (targetObject.getObjectBelonging() == ObjectBelonging.ADOPTED)
+        {
+            return ToolResult.error("Cannot rename '" + objectFqn + "': it is an ADOPTED object in a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "configuration extension (adopted from the " //$NON-NLS-1$
+                + "base configuration). An adopted object must keep the base object's name - renaming only the " //$NON-NLS-1$
+                + "extension copy breaks the adoption (the base object can no longer be matched). Rename the base " //$NON-NLS-1$
+                + "object in the parent (extended) configuration instead; the extension's adopted copy then " //$NON-NLS-1$
+                + "follows automatically.").toJson(); //$NON-NLS-1$
         }
 
         // Create refactoring (returns collection because it may also rename in extension projects)
