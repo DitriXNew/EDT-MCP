@@ -253,7 +253,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Launch YAXUnit tests in DEBUG mode so breakpoints fire, then call wait_for_break to inspect; use when you need to step through test-driven code, not just get a pass/fail report (use run_yaxunit_tests for that). Requires an existing 1C launch configuration and YAXUnit installed in the infobase. Full parameters and examples: call get_tool_guide('debug_yaxunit_tests').",
+    "description": "Deprecated alias for run_yaxunit_tests with debug=true. Launches YAXUnit tests in DEBUG mode so breakpoints fire, then call wait_for_break to inspect. Prefer run_yaxunit_tests(debug=true) — identical behaviour. Full parameters and examples: call get_tool_guide('debug_yaxunit_tests').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -289,46 +289,7 @@
       "type": "object"
     },
     "name": "debug_yaxunit_tests",
-    "outputSchema": {
-      "properties": {
-        "applicationId": {
-          "description": "Effective application id of the launched config",
-          "type": "string"
-        },
-        "junitXml": {
-          "description": "Full path to the junit.xml report file",
-          "type": "string"
-        },
-        "launched": {
-          "description": "Whether the debug launch was queued",
-          "type": "boolean"
-        },
-        "nextStep": {
-          "description": "Hint for the next tool call in the debug cycle",
-          "type": "string"
-        },
-        "preLaunch": {
-          "description": "Summary of pre-launch terminations and DB update",
-          "type": "string"
-        },
-        "projectName": {
-          "description": "Effective EDT project name of the launched config",
-          "type": "string"
-        },
-        "reportDir": {
-          "description": "Directory where junit.xml will be written",
-          "type": "string"
-        },
-        "success": {
-          "description": "Whether the operation succeeded",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "type": "object"
-    }
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -2227,12 +2188,16 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. Polls for up to `timeout` seconds, then returns the report or **Pending** (call again with identical arguments to keep waiting; the launch is not terminated). Requires an existing runtime-client launch configuration and the YAXUnit extension installed in the infobase. Full parameters and examples: call get_tool_guide('run_yaxunit_tests').",
+    "description": "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. Polls for up to `timeout` seconds, then returns the report or **Pending** (call again with identical arguments to keep waiting; the launch is not terminated). Pass `debug=true` to instead launch in DEBUG mode (breakpoints fire) and return at once so you can call wait_for_break. Requires an existing runtime-client launch configuration and the YAXUnit extension installed in the infobase. Full parameters and examples: call get_tool_guide('run_yaxunit_tests').",
     "inputSchema": {
       "properties": {
         "applicationId": {
           "description": "Application ID from get_applications (required if launchConfigurationName is omitted).",
           "type": "string"
+        },
+        "debug": {
+          "description": "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints fire, return immediately and call wait_for_break next (ignores timeout).",
+          "type": "boolean"
         },
         "extensions": {
           "description": "Extension names to filter tests (array; a comma-separated string is also accepted).",
@@ -2505,7 +2470,7 @@
           "type": "string"
         },
         "frames": {
-          "description": "Stack frames: frameIndex, frameRef, name, line",
+          "description": "Stack frames: frameIndex, frameRef, name, line, modulePath, project",
           "items": {
             "type": "object"
           },
@@ -2862,7 +2827,7 @@
           "type": "boolean"
         },
         "frames": {
-          "description": "Stack frames of the suspended thread",
+          "description": "Stack frames of the suspended thread (frameIndex, frameRef, name, line, modulePath, project)",
           "items": {
             "type": "object"
           },

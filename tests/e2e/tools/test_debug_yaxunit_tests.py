@@ -3,53 +3,44 @@ e2e tests for debug_yaxunit_tests (kind: read).
 
 What the tool does
 ------------------
-debug_yaxunit_tests launches YAXUnit tests in DEBUG mode (so set_breakpoint
-breakpoints trip) and returns IMMEDIATELY after the launch is queued; the caller
-is then expected to call wait_for_break. It is a RUNTIME/DEBUG tool: it drives a
-1C runtime-client launch configuration against a running infobase. It is NOT a
-project-source mutator — the only on-disk writes it makes are a private
-xUnitParams.json + junit.xml under java.io.tmpdir/edt-mcp-yaxunit-debug, never in
-the git-tracked TestConfiguration/ tree. So EVERY test ends with assert_no_diff().
+debug_yaxunit_tests is now a DEPRECATED thin ALIAS for run_yaxunit_tests with
+debug=true (the two near-twin tools were merged behind a `debug` flag). It forwards
+its arguments to run_yaxunit_tests(debug=true), which launches YAXUnit tests in
+DEBUG mode (so set_breakpoint breakpoints trip) and returns IMMEDIATELY with a
+Markdown launch handle; the caller then calls wait_for_break. It is a RUNTIME/DEBUG
+tool driving a 1C runtime-client launch against a running infobase. It is NOT a
+project-source mutator — its only on-disk writes are a private xUnitParams.json +
+junit.xml under java.io.tmpdir/edt-mcp-yaxunit-debug, never in the git-tracked
+TestConfiguration/ tree. So EVERY test ends with assert_no_diff().
 
 Response shape (IMPORTANT)
 --------------------------
-DebugYaxunitTestsTool.getResponseType() == JSON, so the real payload lands in
-Result.structured (NOT Result.text — for a JSON tool r.text is only a placeholder).
-On error the envelope is {"success": false, "error": "<message>"} and the protocol
-layer marks the result isError; assert_error()/error_text() surfaces structured.error.
+Because the alias delegates to run_yaxunit_tests, its getResponseType() is now
+MARKDOWN (it was JSON before the merge): a launch handle lands in r.text. On error
+the envelope is still the structured {"success": false, "error": "<message>"} that
+the protocol layer marks isError; assert_error()/error_text() surfaces it.
 
-ENVIRONMENT (the realistic, correct happy contract here)
---------------------------------------------------------
+ENVIRONMENT (the realistic, correct contract here)
+--------------------------------------------------
 In THIS EDT there is NO runtime-client launch configuration for TestConfiguration
-and NO running infobase / launched application. The tool can therefore never reach
-its success branch (a real workingCopy.launch()): the dual-input resolver
-(LaunchConfigUtils.resolveLaunchConfig) returns null long before any launch is
-attempted, and execute() returns a CLEAR, ACTIONABLE sentinel:
+and NO running infobase, so the delegated call never reaches a real launch: the
+shared resolver (LaunchConfigUtils.resolveLaunchConfig) returns null and the merged
+tool returns run_yaxunit_tests's actionable sentinels. Because the alias produces
+the run tool's messages VERBATIM, the assertions below mirror test_run_yaxunit_tests:
 
-    "No runtime-client launch configuration for project '<project>' and
-     application '<app>'. Use list_configurations to see what's available."
-
-That sentinel IS the happy/realistic contract in this environment: it names the
-missing precondition (no launch config for this project+application) AND the next
-step (list_configurations). We assert that exact contract; it is mutation-sensitive
-(a tool that no-opped, returned a fake success envelope, or emitted a vague/blank
-error fails it). We do NOT attempt to start an infobase / real debug launch (heavy,
-not configured) — the sentinel + the negative matrix IS the coverage.
-
-Reachable error/sentinel paths (read from DebugYaxunitTestsTool.execute, top-down)
-----------------------------------------------------------------------------------
-The dual input is: EITHER launchConfigurationName, OR (projectName + applicationId).
   1. no launchConfigurationName AND no projectName
         -> "projectName is required (or pass launchConfigurationName)"
   2. no launchConfigurationName, projectName present, no applicationId
-        -> "applicationId is required (or pass launchConfigurationName)"
-  3. launchConfigurationName given but no such config (any EDT debug type)
-        -> "Launch configuration not found: '<name>'"
+        -> "applicationId is required (or pass launchConfigurationName). Use
+            get_applications or list_configurations."
+  3. launchConfigurationName given but no such config
+        -> "Launch configuration not found: '<name>'. Use list_configurations
+            to see what's available."
   4. projectName + applicationId given but no runtime-client config matches the pair
      (the case in THIS environment, including for a non-existent project name —
-     resolveLaunchConfig just finds no matching config and returns null)
-        -> "No runtime-client launch configuration for project '<project>' and
-            application '<app>'. Use list_configurations to see what's available."
+     config resolution precedes the existence check) -> buildNoConfigError():
+        -> "No launch configuration found for project '<project>' and application
+            '<app>'. Create a launch configuration in EDT first..."
 All four are reached BEFORE any project-state / application validation or launch,
 so none of them touch a running infobase — they are deterministic in this env.
 
@@ -97,19 +88,14 @@ def test_no_launch_config_returns_clear_actionable_sentinel():
     app = "no_such_app_e2e"
     r = call("debug_yaxunit_tests", {"projectName": PROJECT, "applicationId": app})
     err = assert_error(r, "no launch config for project+application")
-    # Names BOTH the missing-precondition values (project + application) and gives
-    # the concrete next step (list_configurations). All three must be present.
+    # The delegated run_yaxunit_tests no-config sentinel echoes BOTH the project and
+    # the application id and tells the caller exactly what to do (create a launch
+    # configuration in EDT). Mirrors test_run_yaxunit_tests.
     assert_error_quality(
         err,
         names=[PROJECT, app],
-        suggests=["list_configurations"],
-        ctx="no-launch-config sentinel names project+application and points at list_configurations")
-    # Belt-and-suspenders: the sentinel must explicitly state WHAT is missing, not
-    # merely echo the values. This wording is the actionable core of the message.
-    if "no runtime-client launch configuration" not in err.lower():
-        raise AssertionError(
-            "sentinel must state the missing precondition (no runtime-client launch "
-            "configuration), got: %r" % err)
+        suggests=["Create a launch configuration"],
+        ctx="no-launch-config sentinel names project+application and is actionable")
     assert_no_diff("a debug/read tool must not touch the project source on disk")
 
 
@@ -172,16 +158,15 @@ def test_nonexistent_launch_configuration_name_errors_and_names_value():
     bad = "NoSuchLaunchConfig_ZZZ_e2e"
     r = call("debug_yaxunit_tests", {"launchConfigurationName": bad})
     err = assert_error(r, "non-existent launch configuration name")
-    # AUDIT: "Launch configuration not found: '<name>'" names the bad value but
-    # points at NO sibling tool (e.g. list_configurations, which the
-    # project+application not-found branch DOES mention). suggests=[] is deliberate;
-    # fix-card: make the by-name not-found branch actionable too (mention
-    # list_configurations to discover valid configuration names).
+    # The delegated run_yaxunit_tests by-name not-found echoes the bad value AND
+    # points at the sibling discovery tool: "Launch configuration not found:
+    # '<name>'. Use list_configurations to see what's available." Mirrors
+    # test_run_yaxunit_tests.
     assert_error_quality(
         err,
         names=[bad],
-        suggests=[],
-        ctx="by-name not-found echoes the bad configuration name")
+        suggests=["list_configurations"],
+        ctx="by-name not-found echoes the bad name and points at list_configurations")
     assert_no_diff("a rejected call must not touch the project source on disk")
 
 
@@ -205,14 +190,13 @@ def test_nonexistent_project_with_appid_errors_via_no_config_sentinel():
     # AUDIT: a non-existent project surfaces as the generic "no launch configuration"
     # sentinel (the config lookup precedes the ProjectContext.exists() check), so the
     # message blames a missing config rather than a missing project. It still names
-    # the bad project value (good) and points at list_configurations (good), but a
-    # clearer "Project not found: <name>" diagnostic is unreachable for this input.
-    # Fix-card: validate project existence before/alongside the config lookup so an
-    # unknown project gets a project-specific error.
+    # the bad project value (good) and is actionable (create a launch configuration),
+    # but a clearer "Project not found: <name>" diagnostic is unreachable for this
+    # input. Fix-card: validate project existence before/alongside the config lookup.
     assert_error_quality(
         err,
         names=[bad_project],
-        suggests=["list_configurations"],
+        suggests=["Create a launch configuration"],
         ctx="non-existent project surfaces via the no-config sentinel naming the project")
     assert_no_diff("a rejected call must not touch the project source on disk")
 

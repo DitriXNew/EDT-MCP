@@ -116,4 +116,20 @@ public class RunYaxunitTestsToolTest
         assertTrue(result.contains("\"success\":false"));
         assertTrue(result.toLowerCase().contains("required"));
     }
+
+    @Test
+    public void testSchemaDeclaresDebugFlag()
+    {
+        // The merged tool gained a debug flag (debug_yaxunit_tests is now an alias).
+        IMcpTool tool = new RunYaxunitTestsTool();
+        assertTrue("schema must declare the debug flag", tool.getInputSchema().contains("\"debug\""));
+    }
+
+    @Test
+    public void testGuideExplainsDebugMode()
+    {
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must explain debug mode and the wait_for_break next step",
+            guide.contains("debug=true") && guide.contains("wait_for_break"));
+    }
 }
