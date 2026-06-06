@@ -24,7 +24,8 @@
 
 	ЮТТесты.ДобавитьТестовыйНабор("Arithmetic")
 		.ДобавитьТест("TwoPlusTwoIsFour")
-		.ДобавитьТест("CallsBaseConfigCalcModule");
+		.ДобавитьТест("CallsBaseConfigCalcModule")
+		.ДобавитьТест("SubtractionWorks");
 
 	ЮТТесты.ДобавитьТестовыйНабор("Strings")
 		.ДобавитьТест("StringConcatenation");
@@ -47,6 +48,11 @@
 // Smallest possible assertion: value-equality.
 Процедура TwoPlusTwoIsFour() Экспорт
 	ЮТест.ОжидаетЧто(2 + 2).Равно(4);
+КонецПроцедуры
+
+// Added live to exercise the change -> run loop (subtraction).
+Процедура SubtractionWorks() Экспорт
+	ЮТест.ОжидаетЧто(10 - 3).Равно(7);
 КонецПроцедуры
 
 // A test in the extension can call code from the BASE configuration. Calc is a
