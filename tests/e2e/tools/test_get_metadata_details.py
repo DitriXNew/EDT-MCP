@@ -57,6 +57,10 @@ def test_basic_details_for_catalog_and_no_mutation():
     # (returning nothing, or the wrong object) would not produce this.
     assert_contains(r.text, "Catalog: Catalog", "main header for the resolved Catalog object")
     assert_contains(r.text, "Basic Properties", "basic-properties section must render")
+    # Every object footers its ORIGIN. In a BASE configuration that is always "core"
+    # (extension-adopted/own labels are exercised in test_extension_coverage). A
+    # regression that dropped the origin footer, or mislabelled a base object, fails.
+    assert_contains(r.text, "**Origin:** core", "a base object must be tagged Origin: core")
     # A resolved object must NOT appear in the failures table.
     if "## Errors" in r.text:
         raise AssertionError("Catalog.Catalog should resolve, but a ## Errors section was emitted:\n" + r.text[:400])

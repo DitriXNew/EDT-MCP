@@ -26,7 +26,7 @@ Extension fixture ground truth (tests/tests, English module names):
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
-    assert_contains, assert_no_diff, e2e_test, TESTS_PROJECT,
+    assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT, TESTS_PROJECT,
 )
 
 
@@ -109,3 +109,122 @@ def test_nonexistent_extension_object_errors_clearly():
     assert_error_quality(err, names=["tests_NoSuchModule"], suggests=[],
                          ctx="missing extension object names the bad value")
     assert_no_diff("a rejected read must not touch the base project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Object ORIGIN (core vs extension-adopted vs extension-own)
+#
+# Listing an EXTENSION mixes objects ADOPTED from the base configuration (to
+# override/intercept them) with the extension's OWN new objects. The Origin column
+# (get_metadata_objects) / Origin field (get_metadata_details) is the ONLY signal
+# that tells them apart; it is driven by MdObject.getObjectBelonging() read in the
+# context of the project type (ExtensionOriginUtils). A base configuration keeps the
+# original columns (no Origin) — its objects are all native, so the column would be
+# pure noise; that base-side invariant is guarded in the per-tool files.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_objects", kind="read")
+def test_extension_listing_marks_object_origin():
+    """The extension listing gains an Origin column: an adopted base object reads
+    `core (adopted)`, the extension's own object reads `extension`. A regression
+    that stopped reading objectBelonging (or dropped the column) fails here."""
+    r = call("get_metadata_objects", {"projectName": TESTS_PROJECT})
+    assert_ok(r, "get_metadata_objects on the extension")
+    assert_contains(r.text, "| Origin |", "extension listing must carry an Origin column")
+    # Calc and Catalog are ADOPTED from the base config -> core (adopted).
+    assert_contains(r.text, "core (adopted)",
+                    "an adopted base object must be marked 'core (adopted)'")
+    # tests_* are the extension's own -> extension. (The label only appears as an
+    # Origin cell here, so its presence proves the own-object branch ran.)
+    assert_contains(r.text, "| extension |",
+                    "the extension's own object must be marked 'extension'")
+    assert_no_diff("a read tool must not touch the base project on disk")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_extension_details_report_origin():
+    """get_metadata_details footers each object with its Origin: an adopted base
+    object is `core (adopted)`, the extension's own is `extension`."""
+    r = call("get_metadata_details",
+             {"projectName": TESTS_PROJECT,
+              "objectFqns": ["CommonModule.Calc", "CommonModule.tests_MathHelper"]})
+    assert_ok(r, "get_metadata_details on extension objects")
+    assert_contains(r.text, "**Origin:** core (adopted)",
+                    "the adopted CommonModule.Calc must be tagged core (adopted)")
+    assert_contains(r.text, "**Origin:** extension",
+                    "the extension's own tests_MathHelper must be tagged extension")
+    assert_no_diff("a read tool must not touch the base project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Method INTERCEPTION footer (both directions)
+#
+# The extension adopts CommonModule.Calc and annotates `tests_Test` with
+# `&ChangeAndValidate("Test")`, intercepting the core method `Test`. The code tools
+# surface this link from BOTH sides via the platform IModuleExtensionService:
+#   - reading the CORE method/module names the intercepting extension;
+#   - reading the EXTENSION method/module names the core method it intercepts.
+# A regression that lost the service wiring drops the footer and fails these.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_core_method_footer_names_intercepting_extension():
+    """Reading the CORE method appends a footer naming the extension that intercepts
+    it, the intercepting method, and the annotation kind."""
+    r = call("read_method_source",
+             {"projectName": PROJECT,
+              "modulePath": "CommonModules/Calc/Module.bsl", "methodName": "Test"})
+    assert_ok(r, "read_method_source on the intercepted core method")
+    assert_contains(r.text, "Intercepted by extension",
+                    "the core method footer must announce extension interception")
+    assert_contains(r.text, TESTS_PROJECT,
+                    "the footer must name the intercepting extension project")
+    assert_contains(r.text, "tests_Test",
+                    "the footer must name the intercepting extension method")
+    assert_contains(r.text, "&ChangeAndValidate",
+                    "the footer must name the interception annotation")
+    assert_no_diff("a read tool must not touch the base project on disk")
+
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_extension_method_footer_names_core_target():
+    """Reading the EXTENSION method appends a footer naming the core method it
+    intercepts and the annotation kind."""
+    r = call("read_method_source",
+             {"projectName": TESTS_PROJECT,
+              "modulePath": "CommonModules/Calc/Module.bsl", "methodName": "tests_Test"})
+    assert_ok(r, "read_method_source on the intercepting extension method")
+    assert_contains(r.text, "intercepts core method",
+                    "the extension method footer must announce what it intercepts")
+    assert_contains(r.text, "&ChangeAndValidate",
+                    "the footer must name the interception annotation")
+    assert_no_diff("a read tool must not touch the base project on disk")
+
+
+@e2e_test(tool="get_module_structure", kind="read")
+def test_core_module_structure_lists_interception():
+    """get_module_structure on the CORE module appends an 'Extension interception'
+    section linking its methods to the extension interceptors."""
+    r = call("get_module_structure",
+             {"projectName": PROJECT, "modulePath": "CommonModules/Calc/Module.bsl"})
+    assert_ok(r, "get_module_structure on the intercepted core module")
+    assert_contains(r.text, "Extension interception",
+                    "the core module structure must carry an interception section")
+    assert_contains(r.text, "tests_Test",
+                    "the interception section must name the extension interceptor")
+    assert_no_diff("a read tool must not touch the base project on disk")
+
+
+@e2e_test(tool="read_module_source", kind="read")
+def test_extension_module_source_shows_interception():
+    """read_module_source on the EXTENSION module appends an 'Extension interception'
+    section. (The footer touches the BSL model, which read_module_source resolves on
+    the UI thread like the sibling code tools; this guards that path.)"""
+    r = call("read_module_source",
+             {"projectName": TESTS_PROJECT, "modulePath": "CommonModules/Calc/Module.bsl"})
+    assert_ok(r, "read_module_source on the intercepting extension module")
+    assert_contains(r.text, "Extension interception",
+                    "the extension module source must carry an interception section")
+    assert_contains(r.text, "intercepts core method",
+                    "the section must state what the extension method intercepts")
+    assert_no_diff("a read tool must not touch the base project on disk")

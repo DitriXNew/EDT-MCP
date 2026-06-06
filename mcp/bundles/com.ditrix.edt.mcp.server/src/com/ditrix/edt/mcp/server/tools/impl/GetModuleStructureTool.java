@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -244,6 +245,14 @@ public class GetModuleStructureTool implements IMcpTool
         }
 
         appendMethodsTable(sb, methods, detailed);
+
+        // Extension interception: list every link between this module's methods and
+        // extension interceptors (either direction). Best-effort; omitted when none.
+        String interception = InterceptionUtils.moduleFooter(module);
+        if (interception != null)
+        {
+            sb.append(interception);
+        }
 
         return sb.toString();
     }

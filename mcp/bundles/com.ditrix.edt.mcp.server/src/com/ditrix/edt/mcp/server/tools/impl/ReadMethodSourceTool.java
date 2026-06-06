@@ -27,6 +27,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -210,6 +211,15 @@ public class ReadMethodSourceTool implements IMcpTool
             sb.append(allLines.get(i)).append('\n');
         }
         sb.append("```\n"); //$NON-NLS-1$
+
+        // Extension interception: if this is a core method intercepted by an extension
+        // (or an extension method that intercepts a core one), note it below the code.
+        // Best-effort — only the EMF path has the resolved Method model.
+        String interception = InterceptionUtils.methodFooter(module, method);
+        if (interception != null)
+        {
+            sb.append(interception);
+        }
 
         return fm.wrapContent(sb.toString());
     }

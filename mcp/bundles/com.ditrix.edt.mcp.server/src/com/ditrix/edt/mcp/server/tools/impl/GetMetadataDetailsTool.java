@@ -29,6 +29,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -247,6 +248,10 @@ public class GetMetadataDetailsTool implements IMcpTool
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
 
+        // An object's ORIGIN (core vs extension-adopted vs extension-own) is resolved
+        // against the project type, computed once for the whole request.
+        boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
+
         StringBuilder sb = new StringBuilder();
         sb.append("# Metadata Details: ").append(projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -303,6 +308,12 @@ public class GetMetadataDetailsTool implements IMcpTool
                 continue;
             }
             sb.append(MetadataFormatterRegistry.format(mdObject, full, effectiveLanguage));
+            // ORIGIN footer: core / core (adopted) / extension. For a base
+            // configuration this is always "core"; for an extension it distinguishes
+            // an adopted base object from one the extension itself owns.
+            sb.append("\n**Origin:** ") //$NON-NLS-1$
+                .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), isExtensionProject))
+                .append("\n"); //$NON-NLS-1$
             sb.append("\n---\n\n"); //$NON-NLS-1$
         }
 

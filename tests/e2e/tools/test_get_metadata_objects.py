@@ -22,7 +22,7 @@ Fixture inventory used (TestConfiguration, English Names):
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
-    assert_contains, assert_no_diff, e2e_test, PROJECT,
+    assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT,
 )
 
 
@@ -41,6 +41,11 @@ def test_lists_catalog_and_does_not_mutate():
     # Type token proves the row was built (not just an echo of our project name).
     assert_contains(r.text, "CommonModule",
                     "the 'all' listing must include common modules with their Type")
+    # A BASE configuration keeps the original columns: the Origin column (and its
+    # extension-only labels) is appended ONLY for an extension project, so a base
+    # listing must NOT carry it (extension-origin coverage: test_extension_coverage).
+    assert_not_contains(r.text, "| Origin |",
+                        "a base configuration listing must not gain the extension Origin column")
     assert_no_diff("a read tool must not touch the project on disk")
 
 

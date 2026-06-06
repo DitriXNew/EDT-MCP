@@ -8,10 +8,14 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.ui.PlatformUI;
 
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -20,6 +24,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -219,7 +224,15 @@ public class ReadModuleSourceTool implements IMcpTool
                 truncated = true;
             }
 
-            return formatOutput(projectName, modulePath, allLines, from, to, totalLines, truncated, contentHash);
+            String output = formatOutput(projectName, modulePath, allLines, from, to, totalLines, truncated, contentHash);
+
+            // Extension interception (module-level, best-effort): if this module is
+            // adopted/intercepted across the base<->extension boundary, append the
+            // links below the code. The footer touches the EMF/Xtext model, so it MUST
+            // run on the UI thread like the sibling code tools (read_method_source /
+            // get_module_structure) - the rest of this read is plain file I/O off-thread.
+            String interception = interceptionFooterOnUi(project, modulePath);
+            return interception != null ? output + interception : output;
         }
         catch (Exception e)
         {
@@ -284,5 +297,41 @@ public class ReadModuleSourceTool implements IMcpTool
         sb.append("```\n"); //$NON-NLS-1$
 
         return fm.wrapContent(sb.toString());
+    }
+
+    /**
+     * Computes the module-level extension-interception footer on the UI thread.
+     * Loading the BSL module and navigating the platform interception service touch
+     * the EMF/Xtext model, which must happen on the UI thread (the sibling code tools
+     * read_method_source / get_module_structure already do their model access there).
+     * The rest of this tool is plain file I/O and stays off-thread. Best-effort: any
+     * failure (model not indexed, no display) yields {@code null} and the footer is
+     * simply omitted, leaving the code read unaffected.
+     *
+     * @param project the project handle
+     * @param modulePath the module path from src/
+     * @return the markdown footer, or {@code null} when there is none / on failure
+     */
+    private static String interceptionFooterOnUi(IProject project, String modulePath)
+    {
+        AtomicReference<String> ref = new AtomicReference<>();
+        Runnable task = () -> ref.set(InterceptionUtils.moduleFooter(BslModuleUtils.loadModule(project, modulePath)));
+        try
+        {
+            Display display = PlatformUI.getWorkbench().getDisplay();
+            if (display.getThread() == Thread.currentThread())
+            {
+                task.run();
+            }
+            else
+            {
+                display.syncExec(task);
+            }
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("read_module_source: interception footer unavailable: " + e.getMessage()); //$NON-NLS-1$
+        }
+        return ref.get();
     }
 }

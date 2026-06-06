@@ -41,8 +41,10 @@
     </extension>
     <languageCode>en</languageCode>
   </languages>
+  <roles>Role.tests_DefaultRole</roles>
+  <commonModules>CommonModule.Calc</commonModules>
   <commonModules>CommonModule.tests_FailureDemo</commonModules>
   <commonModules>CommonModule.tests_MathHelper</commonModules>
   <commonModules>CommonModule.tests_SampleTests</commonModules>
-  <roles>Role.tests_DefaultRole</roles>
+  <catalogs>Catalog.Catalog</catalogs>
 </mdclass:Configuration>

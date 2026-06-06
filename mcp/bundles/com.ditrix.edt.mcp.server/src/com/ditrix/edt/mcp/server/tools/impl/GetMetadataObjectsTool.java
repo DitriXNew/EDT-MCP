@@ -31,6 +31,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.Task;
@@ -40,6 +41,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
@@ -337,15 +339,21 @@ public class GetMetadataObjectsTool implements IMcpTool
                        "businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs").toJson(); //$NON-NLS-1$
         }
         
+        // An object's ORIGIN (core vs extension-adopted vs extension-own) is only
+        // meaningful for an EXTENSION project, where adopted base objects are listed
+        // alongside the extension's own. Resolve the project type once and surface an
+        // Origin column only then; a base configuration keeps its original columns.
+        boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
+
         // Format output
-        return formatOutput(projectName, objects, limit, effectiveLanguage, metadataType);
+        return formatOutput(projectName, objects, limit, effectiveLanguage, metadataType, isExtensionProject);
     }
-    
+
     /**
      * Formats the output as markdown.
      */
     private String formatOutput(String projectName, List<MetadataInfo> objects, int limit,
-                                 String language, String metadataType)
+                                 String language, String metadataType, boolean isExtensionProject)
     {
         StringBuilder sb = new StringBuilder();
         
@@ -369,9 +377,18 @@ public class GetMetadataObjectsTool implements IMcpTool
         }
         
         // Table header. Cells are escaped by MarkdownUtils.tableRow, so a
-        // synonym or comment containing '|' cannot break the table.
-        sb.append(MarkdownUtils.tableHeader(
-            "Name", "Synonym", "Comment", "Type", "ObjectModule", "ManagerModule")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        // synonym or comment containing '|' cannot break the table. The Origin
+        // column is appended only for an extension project (see isExtensionProject).
+        if (isExtensionProject)
+        {
+            sb.append(MarkdownUtils.tableHeader(
+                "Name", "Synonym", "Comment", "Type", "ObjectModule", "ManagerModule", "Origin")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+        }
+        else
+        {
+            sb.append(MarkdownUtils.tableHeader(
+                "Name", "Synonym", "Comment", "Type", "ObjectModule", "ManagerModule")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        }
 
         // Table rows
         int count = 0;
@@ -385,14 +402,30 @@ public class GetMetadataObjectsTool implements IMcpTool
             // Get synonym for the specified language
             String displaySynonym = getSynonymForLanguage(info, language);
             String displayComment = info.comment != null ? info.comment : ""; //$NON-NLS-1$
+            String objectModule = info.hasObjectModule ? "Yes" : "-"; //$NON-NLS-1$ //$NON-NLS-2$
+            String managerModule = info.hasManagerModule ? "Yes" : "-"; //$NON-NLS-1$ //$NON-NLS-2$
 
-            sb.append(MarkdownUtils.tableRow(
-                info.name,
-                displaySynonym,
-                displayComment,
-                info.type,
-                info.hasObjectModule ? "Yes" : "-", //$NON-NLS-1$ //$NON-NLS-2$
-                info.hasManagerModule ? "Yes" : "-")); //$NON-NLS-1$ //$NON-NLS-2$
+            if (isExtensionProject)
+            {
+                sb.append(MarkdownUtils.tableRow(
+                    info.name,
+                    displaySynonym,
+                    displayComment,
+                    info.type,
+                    objectModule,
+                    managerModule,
+                    ExtensionOriginUtils.originLabel(info.belonging, true)));
+            }
+            else
+            {
+                sb.append(MarkdownUtils.tableRow(
+                    info.name,
+                    displaySynonym,
+                    displayComment,
+                    info.type,
+                    objectModule,
+                    managerModule));
+            }
 
             count++;
         }
@@ -620,6 +653,9 @@ public class GetMetadataObjectsTool implements IMcpTool
         info.name = mdObject.getName();
         info.type = type;
         info.comment = mdObject.getComment();
+        // ORIGIN discriminator: NATIVE vs ADOPTED. Only meaningful when the owning
+        // project is an extension; resolved into a label at format time.
+        info.belonging = mdObject.getObjectBelonging();
         
         // Get synonyms - getSynonym() returns EMap<String, String> directly
         EMap<String, String> synonym = mdObject.getSynonym();
@@ -672,5 +708,6 @@ public class GetMetadataObjectsTool implements IMcpTool
         String type;
         boolean hasObjectModule;
         boolean hasManagerModule;
+        ObjectBelonging belonging;
     }
 }
