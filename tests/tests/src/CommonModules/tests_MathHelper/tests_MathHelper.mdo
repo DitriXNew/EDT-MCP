@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:CommonModule xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="5e3ee53b-ccd5-43dc-8a61-7535d980fc0b">
+  <name>tests_MathHelper</name>
+  <synonym>
+    <key>en</key>
+    <value>Math helper</value>
+  </synonym>
+  <server>true</server>
+</mdclass:CommonModule>

@@ -25,7 +25,8 @@
 	ЮТТесты.ДобавитьТестовыйНабор("Arithmetic")
 		.ДобавитьТест("TwoPlusTwoIsFour")
 		.ДобавитьТест("CallsBaseConfigCalcModule")
-		.ДобавитьТест("SubtractionWorks");
+		.ДобавитьТест("SubtractionWorks")
+		.ДобавитьТест("MathHelperSubtracts");
 
 	ЮТТесты.ДобавитьТестовыйНабор("Strings")
 		.ДобавитьТест("StringConcatenation");
@@ -53,6 +54,12 @@
 // Added live to exercise the change -> run loop (subtraction).
 Процедура SubtractionWorks() Экспорт
 	ЮТест.ОжидаетЧто(10 - 3).Равно(7);
+КонецПроцедуры
+
+// Calls a freshly-added extension common module (tests_MathHelper) to prove a
+// new module is published into the infobase and callable at run time.
+Процедура MathHelperSubtracts() Экспорт
+	ЮТест.ОжидаетЧто(tests_MathHelper.Subtract(10, 3)).Равно(7, "tests_MathHelper.Subtract(10,3) must be 7");
 КонецПроцедуры
 
 // A test in the extension can call code from the BASE configuration. Calc is a
