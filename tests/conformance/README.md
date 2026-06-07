@@ -36,11 +36,20 @@ One real bug was found and fixed during the first run: `ping` returned
 `-32601 Method not found` (it MUST return `{}`) — fixed in commit `6935ee9`.
 
 ## CI
-`.github/workflows/conformance.yml` runs this against a live server on manual
-dispatch. The MCP server runs **inside EDT**, so the job needs an EDT host —
-either a **self-hosted runner with EDT** (like `e2e-tests.yml`) or the **headless
-EDT image** in [`docker/`](../../docker/README.md) (EDT assembled from its public
-p2 via `p2 director`, run under Xvfb on a stock Linux runner). Until that is wired
-up, run the gate locally per the dev loop (see the `edt-mcp-ready-to-deploy` skill).
+`.github/workflows/conformance.yml` runs this on **stock GitHub-hosted runners**
+(`ubuntu-latest`) — no docker image, no self-hosted runner. A `build` job builds
+the plugin once; a `conformance` job then runs a **matrix over EDT versions**
+(`2025.2`, `2026.1`), and the [`setup-edt`](../../.github/actions/setup-edt/action.yml)
+composite action materializes Eclipse + 1C:EDT of that version (from the public p2
+via `p2 director`) + the built plugin and boots EDT headless under Xvfb, so the
+conformance client can hit the local `:8765`. Protocol-only conformance needs no
+EDT project and no 1C platform license, so it runs unattended in the cloud.
+
+The plugin is compiled against the 2025.2 target, so each matrix entry is a
+runtime compatibility check; `fail-fast` is off so versions report independently.
+
+The headless-EDT boot is new — the first real CI run validates it end-to-end (the
+job uploads the EDT log as an artifact for diagnosis). Until it's confirmed green,
+also run the gate locally per the dev loop (see the `edt-mcp-ready-to-deploy` skill).
 
 The repo shows a **MCP Conformance** badge (README) reflecting the latest run.

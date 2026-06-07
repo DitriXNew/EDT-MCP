@@ -1,0 +1,136 @@
+name: "Set up headless EDT + MCP server"
+description: >
+  On a STOCK GitHub-hosted Linux runner, materialize Eclipse Platform + 1C:EDT
+  (from the public p2 update-site) + the freshly-built MCP plugin, then boot EDT
+  headless under Xvfb and wait until the MCP server answers on :8765.
+  No docker image and no self-hosted runner — everything is installed on the
+  runner via the Eclipse p2 director, the same public p2 the Tycho build uses.
+
+  Prereq: the caller must already have built the MCP plugin p2 repository
+  (mvn ... in mcp/), i.e. `plugin-repo` exists. The action exports `edt_pid`
+  (the EDT process id) so the caller can stop it in an `if: always()` step.
+
+inputs:
+  port:
+    description: "MCP server port to wait for"
+    required: false
+    default: "8765"
+  plugin-repo:
+    description: "Path to the built MCP plugin p2 repository (file:// is added)"
+    required: false
+    default: "mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository"
+  eclipse-archive:
+    description: "Eclipse Platform 4.30 (2023-12) linux-gtk-x86_64 archive URL"
+    required: false
+    default: "https://archive.eclipse.org/eclipse/downloads/drops4/R-4.30-202312010110/eclipse-platform-4.30-linux-gtk-x86_64.tar.gz"
+  edt-p2:
+    description: "1C:EDT public p2 update-site"
+    required: false
+    default: "https://edt.1c.ru/downloads/releases/ruby/2025.2/"
+  eclipse-p2:
+    description: "Eclipse release p2 (for the platform closure)"
+    required: false
+    default: "https://download.eclipse.org/releases/2023-12/"
+  orbit-p2:
+    description: "Eclipse Orbit p2 (commons-codec etc.)"
+    required: false
+    default: "https://download.eclipse.org/tools/orbit/downloads/drops/R20211213173813/repository/"
+  orbit-simrel-p2:
+    description: "Eclipse Orbit aggregation p2 (Batik / SVG)"
+    required: false
+    default: "https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.37.0/"
+  platform-support-iu:
+    description: >
+      EDT platform-support feature to also install (match the test config compat
+      mode). Leave EMPTY to install only the core EDT feature — protocol-only
+      conformance needs no config support, and dropping it avoids version-specific
+      install failures across an EDT matrix.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Xvfb + GTK/X runtime libraries
+      shell: bash
+      run: |
+        set -x
+        sudo apt-get update
+        # Tolerant install: package names differ across Ubuntu 22.04/24.04
+        # (the t64 ABI transition), so try each and ignore the ones absent.
+        PKGS="xvfb \
+          libgtk-3-0 libgtk-3-0t64 \
+          libxtst6 libxrender1 libxi6 libxrandr2 libxcb1 \
+          libgl1 libglu1-mesa \
+          libasound2 libasound2t64 \
+          libsecret-1-0 libnss3 \
+          libwebkit2gtk-4.1-0 libwebkit2gtk-4.0-37 \
+          fonts-dejavu"
+        for p in $PKGS; do
+          sudo apt-get install -y --no-install-recommends "$p" 2>/dev/null || true
+        done
+        # Xvfb is mandatory — fail loudly if it really didn't install.
+        sudo apt-get install -y --no-install-recommends xvfb
+
+    - name: Download Eclipse Platform 4.30
+      shell: bash
+      run: |
+        set -euxo pipefail
+        curl -fSL "${{ inputs.eclipse-archive }}" -o "$RUNNER_TEMP/eclipse.tar.gz"
+        mkdir -p "$RUNNER_TEMP/edt"
+        tar -xzf "$RUNNER_TEMP/eclipse.tar.gz" -C "$RUNNER_TEMP/edt"
+        test -x "$RUNNER_TEMP/edt/eclipse/eclipse"
+
+    - name: Install 1C:EDT + the MCP plugin via p2 director
+      shell: bash
+      run: |
+        set -euxo pipefail
+        ECLIPSE="$RUNNER_TEMP/edt/eclipse"
+        LOCAL_REPO="file://$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"
+        ls "$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"/content.* >/dev/null 2>&1 \
+          || { echo "ERROR: plugin p2 repository not found at ${{ inputs.plugin-repo }} (no content.* metadata) — build it first (mvn in mcp/)"; exit 1; }
+        # Augment the downloaded Eclipse in place: install the EDT feature, our
+        # MCP plugin feature, and (optionally) an EDT platform-support feature.
+        # All repos passed explicitly (followRepositoryReferences is off, matching
+        # default.target).
+        IUS="com._1c.g5.v8.dt.feature.feature.group,com.ditrix.edt.mcp.server.feature.feature.group"
+        if [ -n "${{ inputs.platform-support-iu }}" ]; then
+          IUS="$IUS,${{ inputs.platform-support-iu }}"
+        fi
+        "$ECLIPSE/eclipse" -nosplash -consoleLog \
+          -application org.eclipse.equinox.p2.director \
+          -repository "${{ inputs.edt-p2 }},${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }},$LOCAL_REPO" \
+          -installIU "$IUS" \
+          -destination "$ECLIPSE" \
+          -profileProperties org.eclipse.update.install.features=true \
+          -p2.os linux -p2.ws gtk -p2.arch x86_64 -tag init
+
+    - name: Boot EDT headless (Xvfb) and wait for the MCP server
+      shell: bash
+      env:
+        MCP_PORT: ${{ inputs.port }}
+      run: |
+        set -uo pipefail
+        ECLIPSE="$RUNNER_TEMP/edt/eclipse"
+        WS="$RUNNER_TEMP/edt-ws"
+        LOG="$RUNNER_TEMP/edt.log"
+        mkdir -p "$WS"
+        echo "edt_log=$LOG" >> "$GITHUB_ENV"
+        echo "[setup-edt] launching EDT under Xvfb (workspace=$WS) ..."
+        xvfb-run -a -s "-screen 0 1920x1080x24" \
+          "$ECLIPSE/eclipse" -data "$WS" -clean -nosplash -consoleLog \
+          --launcher.suppressErrors -vmargs -Xmx4g \
+          > "$LOG" 2>&1 &
+        echo "edt_pid=$!" >> "$GITHUB_ENV"
+        echo "[setup-edt] waiting for MCP server on :$MCP_PORT ..."
+        for i in $(seq 1 120); do
+          if curl -sf "http://127.0.0.1:$MCP_PORT/health" >/dev/null 2>&1; then
+            echo "[setup-edt] MCP server UP on $MCP_PORT"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "[setup-edt] ERROR: MCP server did not come up within ~10 min."
+        echo "----- last 200 lines of EDT log -----"
+        tail -n 200 "$LOG" || true
+        exit 1

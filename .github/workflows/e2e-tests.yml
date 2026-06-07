@@ -23,9 +23,15 @@ jobs:
       contents: read
       checks: write
       pull-requests: write
-    # E2E tests require a running EDT instance with the MCP plugin.
-    # This workflow is designed for self-hosted runners that have EDT installed,
-    # or for manual triggering against an existing MCP server.
+    # E2E tests run against a live EDT with the MCP plugin and the TestConfiguration
+    # project open. Booting EDT itself on a stock GitHub-hosted runner is solved by
+    # ./.github/actions/setup-edt (see conformance.yml), but the e2e suite ALSO needs
+    # (a) the test project imported into the EDT workspace and (b) a licensed
+    # 1C:Enterprise platform for the infobase-dependent tools (YAXUnit / debug /
+    # update_database) — neither is available on a public cloud runner. So this gate
+    # is dispatched against an environment that provides both: the local dev loop or a
+    # licensed runner (set mcp_host/mcp_port to the live server). The protocol-only
+    # conformance gate is the one that runs unattended on a GitHub-hosted runner.
 
     steps:
       - name: Checkout

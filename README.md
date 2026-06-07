@@ -5,7 +5,7 @@
 [![E2E Tests](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-tests.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-tests.yml)
 [![MCP Conformance](https://github.com/DitriXNew/EDT-MCP/actions/workflows/conformance.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/conformance.yml)
 
-> **Build & Unit Tests** run on every push (cloud CI). **E2E** and **MCP Conformance** run against a live EDT + MCP server (`workflow_dispatch`; need a self-hosted runner with EDT, or the headless `docker/` image) — their badge reflects the latest such run.
+> **Build & Unit Tests** and **MCP Conformance** run on stock GitHub-hosted runners (cloud CI) — conformance boots a headless EDT (matrix over `2025.2`/`2026.1`) installed on the runner via `p2 director`, no docker image or self-hosted runner. **E2E** runs against a live EDT with the test project + a licensed 1C platform (the local dev loop or a licensed runner; `workflow_dispatch`). Each badge reflects its latest run.
 
 # EDT MCP Server
 

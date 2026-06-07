@@ -5,66 +5,123 @@ name: MCP Conformance
 # server and compares against the committed baseline of intentional gaps, so the
 # gate catches protocol REGRESSIONS — not the known, deliberate gaps.
 #
-# NOTE: the MCP server runs INSIDE 1C:EDT, so this needs a self-hosted runner
-# that has EDT + the plugin running (same constraint as e2e-tests.yml), or manual
-# dispatch against an already-running server. A stock GitHub runner cannot host it.
+# Runs entirely on STOCK GitHub-hosted runners (ubuntu-latest): no docker image,
+# no self-hosted runner. The `build` job builds the MCP plugin once; the
+# `conformance` job then runs a MATRIX over EDT versions — the `setup-edt`
+# composite action materializes Eclipse + 1C:EDT of that version (from the public
+# p2) + the built plugin, boots EDT headless under Xvfb, and the conformance
+# client hits the local :8765. Conformance is protocol-only — no EDT project and
+# no 1C platform license needed.
+#
+# Matrix note: the plugin is COMPILED against the 2025.2 target platform, so each
+# matrix entry is a runtime compatibility check ("does the 2025.2-built plugin run
+# on EDT <version>"). fail-fast is off so versions report independently.
+#
+# NOTE: the headless-EDT boot is new; the first real CI run validates it
+# end-to-end. If it goes red, read the uploaded EDT log artifact and iterate.
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
-      mcp_host:
-        description: "MCP server host"
-        required: false
-        default: "localhost"
-      mcp_port:
-        description: "MCP server port"
-        required: false
-        default: "8765"
       spec_version:
         description: "MCP spec version to test against"
         required: false
         default: "2025-11-25"
 
 jobs:
-  conformance:
+  build:
     runs-on: ubuntu-latest
-    # Use a self-hosted runner with EDT + the MCP plugin running, or dispatch
-    # this against an existing live server (set mcp_host/mcp_port accordingly).
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Cache Tycho P2 repositories
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository/.cache/tycho
+            ~/.m2/repository/p2
+          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-tycho-p2-
+
+      - name: Build the MCP plugin (p2 repository)
+        working-directory: mcp
+        env:
+          MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
+        run: mvn clean verify --batch-mode --no-transfer-progress -T 1C -DskipTests
+
+      - name: Upload plugin p2 repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-plugin-p2
+          path: mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository
+          if-no-files-found: error
+
+  conformance:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        edt: ["2025.2", "2026.1"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Download plugin p2 repository
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp-plugin-p2
+          path: plugin-p2
+
+      - name: Set up headless EDT ${{ matrix.edt }} + MCP server
+        uses: ./.github/actions/setup-edt
+        with:
+          plugin-repo: plugin-p2
+          edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ matrix.edt }}/"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Wait for MCP server
-        env:
-          MCP_HOST: ${{ github.event.inputs.mcp_host }}
-          MCP_PORT: ${{ github.event.inputs.mcp_port }}
-        run: |
-          echo "Checking MCP server at $MCP_HOST:$MCP_PORT ..."
-          for i in $(seq 1 30); do
-            if curl -sf "http://$MCP_HOST:$MCP_PORT/health" > /dev/null 2>&1; then
-              echo "Server is ready!"
-              exit 0
-            fi
-            echo "Attempt $i/30 - waiting 5s..."
-            sleep 5
-          done
-          echo "ERROR: MCP server not available"
-          exit 1
-
       - name: Run MCP conformance suite
         env:
-          MCP_HOST: ${{ github.event.inputs.mcp_host }}
-          MCP_PORT: ${{ github.event.inputs.mcp_port }}
-          SPEC_VERSION: ${{ github.event.inputs.spec_version }}
+          SPEC_VERSION: ${{ github.event.inputs.spec_version || '2025-11-25' }}
         run: |
           npx --yes @modelcontextprotocol/conformance@latest server \
-            --url "http://$MCP_HOST:$MCP_PORT/mcp" \
+            --url "http://127.0.0.1:8765/mcp" \
             --spec-version "$SPEC_VERSION" \
             --expected-failures tests/conformance/baseline.yml
+
+      - name: Upload EDT log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-edt-log-${{ matrix.edt }}
+          path: ${{ env.edt_log }}
+          if-no-files-found: ignore
+
+      - name: Stop EDT
+        if: always()
+        run: kill "${edt_pid:-0}" 2>/dev/null || true
