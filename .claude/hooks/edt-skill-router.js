@@ -52,6 +52,11 @@ function main() {
     /(Module|Method|Symbol|Reference|Definition|ContentAssist|SearchInCode|Query|CallHierarchy|Bsl)/.test(base);
   const inAssociations = /\/(tags|groups)\//.test(p);
   const inE2eTests = /\/tests\/e2e\//.test(p);
+  // Adding/removing a tool touches the registrar and (for new EDT API) the MANIFEST — the
+  // strongest, lowest-noise signal that the full add-a-tool checklist applies.
+  const isToolWiring = /^BuiltInToolRegistrar\.java$/.test(base) || /^MANIFEST\.MF$/.test(base);
+  const isYaxunit = /yaxunit/i.test(base);
+  const isBuild = /^(compile\.sh|pom\.xml)$/.test(base);
 
   if (inE2eTests) {
     // e2e test files (Python, tests/e2e/) have names like test_get_module_structure.py
@@ -66,6 +71,15 @@ function main() {
     }
     if (inAssociations) {
       tips.push('tags/* and groups/* must share a common base, not diverge — see /edt-mcp-architecture (extract-tags-groups-shared-base)');
+    }
+    if (isToolWiring) {
+      tips.push('adding/removing a tool? follow the WHOLE checklist — use /edt-mcp-new-tool (class+schema+getGuide, registry, MANIFEST Import-Package, the unit + e2e coverage ratchets, golden regen, README, and the compile→Opus→redeploy→live contour)');
+    }
+    if (isYaxunit) {
+      tips.push('YAXUnit run/debug — use /edt-mcp-yaxunit (the YAxUnit.cfe engine must be loaded in the infobase; the "tests" extension; launch/update modal gotchas)');
+    }
+    if (isBuild) {
+      tips.push('build & validate locally — use /edt-mcp-build-test (compile.sh with JDK17 + Maven off PATH; tests need the p2 target platform; verify the DEPLOYED jar actually carries your change)');
     }
   }
 
