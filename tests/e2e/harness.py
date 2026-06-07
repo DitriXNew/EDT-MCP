@@ -269,8 +269,16 @@ def wait_for_project_ready(timeout=None):
     """
     if timeout is None:
         timeout = int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180"))
-    deadline = time.time() + timeout
-    last_log = 0.0
+    start = time.time()
+    deadline = start + timeout
+    # Seed last_log with `start` (not 0) so a SHORT wait stays silent: this function is
+    # also called after every write-metadata test (the model briefly re-indexes and is
+    # ready again within ~2s), and each such call would otherwise emit one immediate
+    # "still indexing" line — a confusing wall of identical "1199s left" entries (each a
+    # fresh call at t≈0, not one stuck wait). Logging only after 15s of ACTUAL waiting
+    # suppresses that churn and makes the counter visibly count DOWN during a genuine
+    # long cold-index wait.
+    last_log = start
     while time.time() < deadline:
         try:
             text = (call("list_projects", {}).text or "").lower()
@@ -280,8 +288,8 @@ def wait_for_project_ready(timeout=None):
             pass
         now = time.time()
         if now - last_log >= 15:
-            print("  [wait_for_project_ready] config still indexing (%ds left of %ds)..."
-                  % (int(deadline - now), timeout), flush=True)
+            print("  [wait_for_project_ready] config still indexing (%ds elapsed, %ds left of %ds)..."
+                  % (int(now - start), int(deadline - now), timeout), flush=True)
             last_log = now
         time.sleep(2)
     return False
