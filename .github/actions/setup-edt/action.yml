@@ -80,7 +80,31 @@ runs:
         # Xvfb is mandatory — fail loudly if it really didn't install.
         sudo apt-get install -y --no-install-recommends xvfb
 
+    - name: Compute EDT-base cache key
+      id: edtcache
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Key on the inputs that define the IMMUTABLE Eclipse+EDT base (NOT the plugin,
+        # which is rebuilt every run and overlaid afterwards). A new EDT version / Eclipse
+        # archive / platform-support IU ⇒ a different key ⇒ a fresh install + a new cache.
+        H=$(printf '%s|%s|%s|%s|%s' \
+              "${{ inputs.eclipse-archive }}" \
+              "${{ inputs.edt-p2 }}" \
+              "${{ inputs.eclipse-p2 }}" \
+              "${{ inputs.orbit-p2 }}" \
+              "${{ inputs.platform-support-iu }}" | sha256sum | cut -c1-16)
+        echo "key=edt-base-${{ runner.os }}-$H" >> "$GITHUB_OUTPUT"
+
+    - name: Restore cached EDT base (Eclipse + 1C:EDT, no plugin)
+      id: restore-edt
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/edt/eclipse
+        key: ${{ steps.edtcache.outputs.key }}
+
     - name: Download Eclipse Platform 4.30
+      if: steps.restore-edt.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euxo pipefail
@@ -89,33 +113,30 @@ runs:
         tar -xzf "$RUNNER_TEMP/eclipse.tar.gz" -C "$RUNNER_TEMP/edt"
         test -x "$RUNNER_TEMP/edt/eclipse/eclipse"
 
-    - name: Install 1C:EDT + the MCP plugin via p2 director
+    - name: Install the 1C:EDT base via p2 director (cache miss only)
+      if: steps.restore-edt.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -uxo pipefail
         ECLIPSE="$RUNNER_TEMP/edt/eclipse"
-        LOCAL_REPO="file://$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"
-        ls "$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"/content.* >/dev/null 2>&1 \
-          || { echo "ERROR: plugin p2 repository not found at ${{ inputs.plugin-repo }} (no content.* metadata) — build it first (mvn in mcp/)"; exit 1; }
-        # Augment the downloaded Eclipse in place: install the EDT feature, our
-        # MCP plugin feature, and (optionally) an EDT platform-support feature.
-        # All repos passed explicitly (followRepositoryReferences is off, matching
-        # default.target).
-        IUS="com._1c.g5.v8.dt.feature.feature.group,com.ditrix.edt.mcp.server.feature.feature.group"
+        # Install ONLY the EDT feature (+ optionally a platform-support feature) into the
+        # downloaded Eclipse. The MCP plugin is NOT installed here — it is overlaid in the
+        # next step so this cached base stays plugin-free (and thus reusable across commits).
+        IUS="com._1c.g5.v8.dt.feature.feature.group"
         if [ -n "${{ inputs.platform-support-iu }}" ]; then
           IUS="$IUS,${{ inputs.platform-support-iu }}"
         fi
-        # The EDT p2 (edt.1c.ru) intermittently returns 404 for individual artifacts
-        # under the burst download of the whole EDT feature (rate-limiting; the files
-        # DO exist). A failed director transaction rolls back cleanly, so retry the
-        # whole install with a cooldown to ride out the rate-limit window; p2's own
-        # transport retry handles transient read errors within an attempt.
+        # edt.1c.ru intermittently 404s individual artifacts under the burst download of the
+        # whole EDT feature (rate-limiting; the files DO exist). A failed director transaction
+        # rolls back cleanly, so retry the whole install with a cooldown to ride out the
+        # rate-limit window; p2's own transport retry handles transient read errors within an
+        # attempt. This network-heavy step runs ONLY on a cache miss (first run per version).
         ok=0
         for attempt in 1 2 3 4; do
-          echo "[setup-edt] p2 director attempt $attempt/4 ..."
+          echo "[setup-edt] EDT-base p2 director attempt $attempt/4 ..."
           if "$ECLIPSE/eclipse" -nosplash -consoleLog \
               -application org.eclipse.equinox.p2.director \
-              -repository "${{ inputs.edt-p2 }},${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }},$LOCAL_REPO" \
+              -repository "${{ inputs.edt-p2 }},${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }}" \
               -installIU "$IUS" \
               -destination "$ECLIPSE" \
               -profileProperties org.eclipse.update.install.features=true \
@@ -124,10 +145,50 @@ runs:
             ok=1
             break
           fi
-          echo "[setup-edt] director attempt $attempt failed (upstream edt.1c.ru likely rate-limited a download); cooling down 60s ..."
+          echo "[setup-edt] EDT-base attempt $attempt failed (upstream edt.1c.ru likely rate-limited a download); cooling down 60s ..."
           sleep 60
         done
-        [ "$ok" = 1 ] || { echo "[setup-edt] ERROR: p2 director failed after 4 attempts"; exit 1; }
+        [ "$ok" = 1 ] || { echo "[setup-edt] ERROR: EDT-base p2 director failed after 4 attempts"; exit 1; }
+
+    - name: Save EDT base to cache (cache miss only)
+      if: steps.restore-edt.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/edt/eclipse
+        key: ${{ steps.edtcache.outputs.key }}
+
+    - name: Overlay the freshly-built MCP plugin via p2 director (always)
+      shell: bash
+      run: |
+        set -uxo pipefail
+        ECLIPSE="$RUNNER_TEMP/edt/eclipse"
+        test -x "$ECLIPSE/eclipse" \
+          || { echo "ERROR: EDT base missing at $ECLIPSE (restore + install both failed)"; exit 1; }
+        LOCAL_REPO="file://$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"
+        ls "$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"/content.* >/dev/null 2>&1 \
+          || { echo "ERROR: plugin p2 repository not found at ${{ inputs.plugin-repo }} (no content.* metadata) — build it first (mvn in mcp/)"; exit 1; }
+        # Install the MCP plugin feature into the (possibly cached) EDT base. The plugin's
+        # EDT dependencies are already in the base profile, so only the LOCAL plugin repo +
+        # the non-rate-limited Eclipse/Orbit repos are passed — edt.1c.ru is deliberately NOT
+        # contacted here, so a cache HIT run never touches the rate-limited upstream.
+        ok=0
+        for attempt in 1 2; do
+          echo "[setup-edt] plugin overlay p2 director attempt $attempt/2 ..."
+          if "$ECLIPSE/eclipse" -nosplash -consoleLog \
+              -application org.eclipse.equinox.p2.director \
+              -repository "$LOCAL_REPO,${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }}" \
+              -installIU "com.ditrix.edt.mcp.server.feature.feature.group" \
+              -destination "$ECLIPSE" \
+              -profileProperties org.eclipse.update.install.features=true \
+              -p2.os linux -p2.ws gtk -p2.arch x86_64 -tag mcp-plugin \
+              -vmargs -Dorg.eclipse.equinox.p2.transport.ecf.retry=5; then
+            ok=1
+            break
+          fi
+          echo "[setup-edt] plugin overlay attempt $attempt failed; retrying ..."
+          sleep 10
+        done
+        [ "$ok" = 1 ] || { echo "[setup-edt] ERROR: plugin overlay p2 director failed"; exit 1; }
 
     - name: Boot EDT headless (Xvfb) and wait for the MCP server
       shell: bash

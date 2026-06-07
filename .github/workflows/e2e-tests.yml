@@ -12,17 +12,18 @@ name: E2E Tests
 # without one. The skipped runtime tools (YAXUnit run / debug / update_database)
 # stay covered in the local / licensed dev loop.
 #
-# NOTE: the headless-EDT boot + import is new; the first real CI run validates it
-# end-to-end (the EDT log is uploaded as an artifact for diagnosis). Dispatch-only
-# for now (a full run boots EDT + indexes the config — heavier than conformance).
+# Runs a MATRIX over EDT versions (2025.2 + 2026.1), fail-fast off so each reports
+# independently. setup-edt CACHES the Eclipse+EDT base per version (the slow, rate-
+# limited p2 install), then overlays the freshly-built plugin each run — so a cache
+# hit skips the upstream edt.1c.ru download entirely. The workspace index itself is
+# NOT cached (fresh import every run), so run_all waits up to E2E_PROJECT_READY_TIMEOUT
+# for indexing before aborting with one clear error.
+#
+# NOTE: the EDT log is uploaded per matrix entry for diagnosis. Dispatch-only (a full
+# run boots EDT + indexes the config — heavier than conformance).
 
 on:
-  workflow_dispatch:
-    inputs:
-      edt_version:
-        description: "EDT version (public p2 ruby/<version>/)"
-        required: false
-        default: "2026.1"
+  workflow_dispatch: {}
 
 jobs:
   build:
@@ -70,6 +71,10 @@ jobs:
       contents: read
       checks: write
       pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        edt: ["2025.2", "2026.1"]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -91,14 +96,19 @@ jobs:
           name: mcp-plugin-p2
           path: plugin-p2
 
-      - name: Set up headless EDT + MCP server (import the fixtures)
+      - name: Set up headless EDT ${{ matrix.edt }} + MCP server (import the fixtures)
         uses: ./.github/actions/setup-edt
         with:
           plugin-repo: plugin-p2
-          edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ github.event.inputs.edt_version || '2026.1' }}/"
+          edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ matrix.edt }}/"
           import-projects: "${{ github.workspace }}/tests/TestConfiguration:${{ github.workspace }}/tests/tests"
 
       - name: Run E2E tests
+        env:
+          # Cold cloud runner indexes the whole config from scratch (the EDT INSTALL is
+          # cached, the workspace index is not), so give readiness a generous ceiling
+          # before run_all aborts with a single clear error.
+          E2E_PROJECT_READY_TIMEOUT: "1200"
         run: |
           python tests/e2e/run_all.py \
             --project TestConfiguration \
@@ -109,13 +119,14 @@ jobs:
         if: always()
         continue-on-error: true
         with:
+          check_name: "E2E Test Results (EDT ${{ matrix.edt }})"
           files: tests/e2e/e2e-results.xml
 
       - name: Upload test report
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: e2e-test-results
+          name: e2e-test-results-${{ matrix.edt }}
           path: tests/e2e/e2e-results.xml
           if-no-files-found: ignore
 
@@ -123,7 +134,7 @@ jobs:
         if: ${{ always() && env.edt_log != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-edt-log
+          name: e2e-edt-log-${{ matrix.edt }}
           path: ${{ env.edt_log }}
           if-no-files-found: ignore
 

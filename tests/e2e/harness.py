@@ -245,7 +245,7 @@ def wait_for_server(timeout=60):
     raise RuntimeError("MCP server not reachable at %s" % HEALTH_URL)
 
 
-def wait_for_project_ready(timeout=180):
+def wait_for_project_ready(timeout=None):
     """Wait until every project is fully indexed (state 'ready') — i.e. none is still
     'building' its derived data AND none is 'not_available' (mid (re)load).
 
@@ -258,11 +258,19 @@ def wait_for_project_ready(timeout=180):
     complete)". list_projects reports each project's state value, so poll until none
     reads 'building' OR 'not_available'.
 
+    Timeout: the local dev loop indexes a warm workspace fast, but a COLD cloud runner
+    (first-time index of the whole config, modest 2-core CPU) takes several minutes, so
+    the default is overridable via E2E_PROJECT_READY_TIMEOUT (seconds). Progress is
+    logged periodically so a slow cloud run is visibly "still indexing", not hung.
+
     Best-effort: returns True once ready (or if state cannot be read), False on timeout.
     The per-tool ProjectStateChecker guard is the real safety net — this only removes the
     test-timing flake so a normal run starts on a fully-indexed workspace.
     """
+    if timeout is None:
+        timeout = int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180"))
     deadline = time.time() + timeout
+    last_log = 0.0
     while time.time() < deadline:
         try:
             text = (call("list_projects", {}).text or "").lower()
@@ -270,6 +278,11 @@ def wait_for_project_ready(timeout=180):
                 return True
         except Exception:
             pass
+        now = time.time()
+        if now - last_log >= 15:
+            print("  [wait_for_project_ready] config still indexing (%ds left of %ds)..."
+                  % (int(deadline - now), timeout))
+            last_log = now
         time.sleep(2)
     return False
 

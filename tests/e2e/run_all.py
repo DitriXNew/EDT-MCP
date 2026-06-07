@@ -149,8 +149,22 @@ def main():
     harness.wait_for_server()
     harness.initialize()     # proper MCP handshake (captures Mcp-Session-Id if issued)
     if not harness.wait_for_project_ready():
-        print("WARN: project still building after wait_for_project_ready timeout — "
-              "cascade/mutation tests may flake until indexing completes")
+        # The config never reached 'ready' (still building / not_available). Every
+        # metadata tool would then fail with "Could not get configuration", so running
+        # the suite produces a wall of cascade failures that hides the real cause.
+        # Abort with ONE actionable message + the project state, instead.
+        print("\nERROR: the configuration did not finish indexing (no project reached "
+              "'ready') within the wait_for_project_ready timeout. Metadata tools cannot "
+              "resolve the configuration yet, so the suite is aborted before it starts.\n"
+              "If the runner is just slow (a cold cloud runner indexes the whole config "
+              "from scratch), raise E2E_PROJECT_READY_TIMEOUT. If it never goes ready, the "
+              "project import/build is broken — check the EDT log.")
+        try:
+            print("---- list_projects ----")
+            print(harness.call("list_projects", {}).text)
+        except Exception as e:  # noqa: BLE001
+            print("(could not read list_projects: %s)" % e)
+        sys.exit(2)
     harness.final_cleanup()  # clean start: revert BOTH fixtures + sync EDT model so the run
                              # does not begin on a stale extension edit (e.g. a manual experiment)
 
