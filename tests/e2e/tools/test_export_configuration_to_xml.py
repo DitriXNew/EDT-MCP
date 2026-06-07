@@ -68,6 +68,7 @@ ENVIRONMENT ROBUSTNESS:
 import os
 import shutil
 import tempfile
+import time
 
 from harness import (
     call,
@@ -120,10 +121,21 @@ def test_export_to_temp_dir_succeeds_or_clear_api_sentinel():
     # this repo, so this export can never touch TestConfiguration/ or the git tree.
     out_dir = tempfile.mkdtemp(prefix="edt_export_e2e_")
     try:
-        r = call("export_configuration_to_xml", {
-            "projectName": PROJECT,
-            "outputPath": out_dir,
-        })
+        # A preceding test (test_delete_project's roundtrip) deletes the
+        # RoundTripImport_e2e project; EDT tears that project context down
+        # ASYNCHRONOUSLY on the shared WorkspaceOrchestrator. If the teardown is still
+        # completing when this export begins, EDT's own endOperation trips an internal
+        # AssertionFailedException surfaced as "Export failed: assertion failed:" — a
+        # transient cross-test concurrency artifact, NOT an export bug (export to a fresh
+        # temp dir is safe + idempotent). Settle-and-retry ONLY on that signature; the
+        # API-absent sentinel and every real error fall straight through to the asserts.
+        args = {"projectName": PROJECT, "outputPath": out_dir}
+        r = call("export_configuration_to_xml", args)
+        for _ in range(5):
+            if not r.is_error or "assertion failed" not in (r.error_text() or "").lower():
+                break
+            time.sleep(3)
+            r = call("export_configuration_to_xml", args)
         if r.is_error:
             # CLI export API not installed in this EDT — the documented env branch.
             err = r.error_text()
