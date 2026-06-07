@@ -102,6 +102,13 @@ jobs:
           plugin-repo: plugin-p2
           edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ matrix.edt }}/"
           import-projects: "${{ github.workspace }}/tests/TestConfiguration:${{ github.workspace }}/tests/tests"
+          # TestConfiguration is compatibilityMode 8.5.1, so EDT must know the 8.5.1
+          # platform runtime to INITIALIZE the project (DtProjectRuntimeVersionManager:
+          # an unsupported version → RuntimeVersionUnsupportedException → the config never
+          # indexes). The platform-support FEATURE supplies that (no 1cv8 binary needed for
+          # indexing); verified present in both 2025.2 and 2026.1 p2. Conformance is
+          # protocol-only and leaves this empty.
+          platform-support-iu: "com._1c.g5.v8.dt.platform.support_v8.5.1.feature.feature.group"
 
       - name: Run E2E tests
         env:
