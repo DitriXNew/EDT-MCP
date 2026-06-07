@@ -281,7 +281,7 @@ def wait_for_project_ready(timeout=None):
         now = time.time()
         if now - last_log >= 15:
             print("  [wait_for_project_ready] config still indexing (%ds left of %ds)..."
-                  % (int(deadline - now), timeout))
+                  % (int(deadline - now), timeout), flush=True)
             last_log = now
         time.sleep(2)
     return False

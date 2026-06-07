@@ -109,10 +109,28 @@ jobs:
           # cached, the workspace index is not), so give readiness a generous ceiling
           # before run_all aborts with a single clear error.
           E2E_PROJECT_READY_TIMEOUT: "1200"
+          # Unbuffer stdout: otherwise Python block-buffers in CI (stdout is a pipe), so
+          # the readiness-wait countdown only appears when the process exits — which looks
+          # like a hang during the (long) index wait. -u/PYTHONUNBUFFERED stream it live.
+          PYTHONUNBUFFERED: "1"
         run: |
-          python tests/e2e/run_all.py \
+          python -u tests/e2e/run_all.py \
             --project TestConfiguration \
             --junit-xml tests/e2e/e2e-results.xml
+
+      - name: Dump EDT IDE log (the real boot/index log — separate from this console)
+        if: always()
+        run: |
+          LOG="${edt_log:-$RUNNER_TEMP/edt.log}"
+          echo "===== EDT IDE log: $LOG ====="
+          if [ -f "$LOG" ]; then
+            echo "----- error/build/index markers -----"
+            grep -niE "error|exception|build|index|not_available|ready|McpServer|could not resolve" "$LOG" | tail -n 120 || true
+            echo "----- last 250 lines -----"
+            tail -n 250 "$LOG" || true
+          else
+            echo "(no EDT IDE log at $LOG)"
+          fi
 
       - name: Publish E2E Test Results
         uses: EnricoMi/publish-unit-test-result-action@v2
