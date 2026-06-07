@@ -5,7 +5,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Adopt (заимствовать) a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can override or intercept it - the MCP equivalent of EDT's 'Add To Extension'. Addressed by the base object FQN; pass extensionProjectName when more than one extension extends the configuration. Adopting BSL code/methods is NOT covered. Full parameters and examples: call get_tool_guide('adopt_metadata_object').",
+    "description": "Adopt a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can override or intercept it - the MCP equivalent of EDT's 'Add To Extension'. Addressed by the base object FQN; pass extensionProjectName when more than one extension extends the configuration. Adopting BSL code/methods is NOT covered. Full parameters and examples: call get_tool_guide('adopt_metadata_object').",
     "inputSchema": {
       "properties": {
         "extensionProjectName": {
@@ -2448,7 +2448,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Start performance measurement (замер производительности) on the active debug target. Enables line-level profiling: call counts and timing for every executed BSL line. Start-only and idempotent: if profiling is already active for this applicationId it stays on. Call stop_profiling to stop, then get_profiling_results to see which code was covered. Requires an active debug session (debug_launch or debug_yaxunit_tests).",
+    "description": "Start performance measurement on the active debug target. Enables line-level profiling: call counts and timing for every executed BSL line. Start-only and idempotent: if profiling is already active for this applicationId it stays on. Call stop_profiling to stop, then get_profiling_results to see which code was covered. Requires an active debug session (debug_launch or debug_yaxunit_tests).",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -2575,7 +2575,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Stop performance measurement (замер производительности) on the active debug target. Counterpart to start_profiling: deterministically switches profiling off. Idempotent: if profiling is not active for this applicationId it returns a benign result, not an error. Call get_profiling_results afterwards to retrieve the collected coverage.",
+    "description": "Stop performance measurement on the active debug target. Counterpart to start_profiling: deterministically switches profiling off. Idempotent: if profiling is not active for this applicationId it returns a benign result, not an error. Call get_profiling_results afterwards to retrieve the collected coverage.",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -2624,7 +2624,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Terminate one or more 1С launches started from THIS EDT instance; externally launched 1С clients are never touched. Select ONE target mode: launchConfigurationName, projectName+applicationId, or all=true (needs confirm=true). Full parameters and examples: call get_tool_guide('terminate_launch').",
+    "description": "Terminate one or more 1C launches started from THIS EDT instance; externally launched 1C clients are never touched. Select ONE target mode: launchConfigurationName, projectName+applicationId, or all=true (needs confirm=true). Full parameters and examples: call get_tool_guide('terminate_launch').",
     "inputSchema": {
       "properties": {
         "all": {
@@ -2640,7 +2640,7 @@
           "type": "boolean"
         },
         "force": {
-          "description": "On polite-termination timeout, escalate to an OS-level process kill; may lose unsaved 1С state. Default false. Ignored for Attach.",
+          "description": "On polite-termination timeout, escalate to an OS-level process kill; may lose unsaved 1C state. Default false. Ignored for Attach.",
           "type": "boolean"
         },
         "includeAttach": {

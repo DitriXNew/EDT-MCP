@@ -29,9 +29,9 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 
 /**
- * Terminates 1С launches started from this EDT instance. The set of
+ * Terminates 1C launches started from this EDT instance. The set of
  * affectable launches is constrained by {@link ILaunchManager#getLaunches()} —
- * any 1С client started externally (Designer, ad-hoc {@code 1cv8c.exe},
+ * any 1C client started externally (Designer, ad-hoc {@code 1cv8c.exe},
  * another EDT instance) is invisible to this tool and therefore safe.
  *
  * <p>Three selection modes (mutually exclusive):
@@ -43,13 +43,13 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
  * </ul>
  *
  * <p>Attach launches ({@code RemoteRuntime} / {@code LocalRuntime}) are
- * disconnected, not killed — the 1С cluster keeps running. Set
+ * disconnected, not killed — the 1C cluster keeps running. Set
  * {@code includeAttach=false} to skip them entirely.
  *
  * <p>By default the tool waits up to {@code timeoutSeconds} for a polite
  * {@link ILaunch#terminate()} to take effect. With {@code force=true}, an
  * unfinished termination escalates to {@link IProcess#terminate()} on the
- * launch's processes — this can lose unsaved 1С state.
+ * launch's processes — this can lose unsaved 1C state.
  */
 public class TerminateLaunchTool implements IMcpTool
 {
@@ -81,8 +81,8 @@ public class TerminateLaunchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Terminate one or more 1С launches started from THIS EDT instance; externally " //$NON-NLS-1$
-            + "launched 1С clients are never touched. Select ONE target mode: " //$NON-NLS-1$
+        return "Terminate one or more 1C launches started from THIS EDT instance; externally " //$NON-NLS-1$
+            + "launched 1C clients are never touched. Select ONE target mode: " //$NON-NLS-1$
             + "launchConfigurationName, projectName+applicationId, or all=true (needs confirm=true). " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('terminate_launch')."; //$NON-NLS-1$
     }
@@ -104,7 +104,7 @@ public class TerminateLaunchTool implements IMcpTool
                 "Required (true) when all=true; guards against accidental mass termination.") //$NON-NLS-1$
             .booleanProperty("force", //$NON-NLS-1$
                 "On polite-termination timeout, escalate to an OS-level process kill; " //$NON-NLS-1$
-                    + "may lose unsaved 1С state. Default false. Ignored for Attach.") //$NON-NLS-1$
+                    + "may lose unsaved 1C state. Default false. Ignored for Attach.") //$NON-NLS-1$
             .integerProperty("timeout", //$NON-NLS-1$
                 "Polite-wait window per launch in seconds, clamped to [1, 120]. " //$NON-NLS-1$
                     + "Default from EDT preferences (factory default 10).") //$NON-NLS-1$
@@ -363,7 +363,7 @@ public class TerminateLaunchTool implements IMcpTool
         if (all && !confirm)
         {
             return ToolResult.error("Confirmation required: pass `confirm=true` to terminate " //$NON-NLS-1$
-                + "ALL EDT-launched 1С instances. Use `list_configurations` first to see " //$NON-NLS-1$
+                + "ALL EDT-launched 1C instances. Use `list_configurations` first to see " //$NON-NLS-1$
                 + "what is currently running.").toJson(); //$NON-NLS-1$
         }
         return null;
@@ -529,7 +529,7 @@ public class TerminateLaunchTool implements IMcpTool
      * Wait criterion for attach launches: success when every debug target is
      * either terminated OR disconnected. Per Eclipse Debug Platform contract,
      * {@link IDisconnect#disconnect()} does not flip {@link ILaunch#isTerminated()};
-     * the 1С server keeps running, only the debugger detaches.
+     * the 1C server keeps running, only the debugger detaches.
      */
     private static boolean waitForAttachDone(ILaunch launch, long maxMillis)
     {
@@ -684,11 +684,11 @@ public class TerminateLaunchTool implements IMcpTool
         if (detached > 0)
         {
             sb.append("\n> Attach configurations only disconnect the debugger — " //$NON-NLS-1$
-                + "the 1С server (ragent/rphost) keeps running. " //$NON-NLS-1$
+                + "the 1C server (ragent/rphost) keeps running. " //$NON-NLS-1$
                 + "Pass `includeAttach=false` to skip Attach launches entirely.\n"); //$NON-NLS-1$
         }
         sb.append("\n> Only launches started from this EDT instance are affected. " //$NON-NLS-1$
-            + "Externally launched 1С clients are not touched by this tool.\n"); //$NON-NLS-1$
+            + "Externally launched 1C clients are not touched by this tool.\n"); //$NON-NLS-1$
         return sb.toString();
     }
 

@@ -416,8 +416,8 @@ public final class LaunchConfigUtils
     /**
      * Returns all live (non-terminated) EDT launches in the launch manager.
      *
-     * <p>This is the exhaustive set of 1С processes that the current EDT instance
-     * spawned (runtime-client) or attached to (Attach). Externally started 1С
+     * <p>This is the exhaustive set of 1C processes that the current EDT instance
+     * spawned (runtime-client) or attached to (Attach). Externally started 1C
      * clients never appear here — that is a constructive guarantee of the
      * Eclipse Debug Platform.
      *
@@ -477,7 +477,7 @@ public final class LaunchConfigUtils
                 continue;
             }
             ILaunchConfiguration config = launch.getLaunchConfiguration();
-            // Filter to EDT/1С configs only — config names are not unique across
+            // Filter to EDT/1C configs only — config names are not unique across
             // Eclipse launch types, so without this an unrelated Java/JUnit/etc.
             // launch with a matching name would be selected and (with force=true)
             // killed.

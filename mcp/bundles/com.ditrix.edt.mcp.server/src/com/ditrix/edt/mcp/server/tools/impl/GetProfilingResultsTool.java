@@ -22,7 +22,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 
 /**
- * Retrieves profiling (замер производительности) results after a debug session.
+ * Retrieves profiling results after a debug session.
  * Returns per-module, per-line execution data: call count (frequency), timing,
  * and percentage — effectively a code coverage report.
  *

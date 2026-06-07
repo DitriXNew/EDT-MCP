@@ -33,7 +33,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
- * Adopts (заимствует) a base-configuration metadata object — or one of its members
+ * Adopts a base-configuration metadata object — or one of its members
  * (a form, an attribute, a tabular section, ...) — into a configuration EXTENSION, so
  * the extension can override / intercept it. This is the MCP counterpart of EDT's
  * "Add To Extension" (Alt+F3) for the OBJECT/metadata side; adopting BSL code/methods
@@ -62,7 +62,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Adopt (заимствовать) a base-configuration metadata object or member " //$NON-NLS-1$
+        return "Adopt a base-configuration metadata object or member " //$NON-NLS-1$
             + "(object / form / attribute / tabular section / ...) into a configuration EXTENSION so the " //$NON-NLS-1$
             + "extension can override or intercept it - the MCP equivalent of EDT's 'Add To Extension'. " //$NON-NLS-1$
             + "Addressed by the base object FQN; pass extensionProjectName when more than one extension " //$NON-NLS-1$
@@ -104,7 +104,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     public String getGuide()
     {
         return "# adopt_metadata_object\n\n" //$NON-NLS-1$
-            + "Adopts (заимствовать) a base-configuration metadata object - or a member of it - into a " //$NON-NLS-1$
+            + "Adopts a base-configuration metadata object - or a member of it - into a " //$NON-NLS-1$
             + "configuration EXTENSION, the prerequisite for the extension to override/intercept it. This " //$NON-NLS-1$
             + "is the OBJECT/metadata side of EDT's 'Add To Extension' (Alt+F3). Returns JSON.\n\n" //$NON-NLS-1$
 

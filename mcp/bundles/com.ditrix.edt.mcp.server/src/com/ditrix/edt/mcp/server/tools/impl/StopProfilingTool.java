@@ -21,7 +21,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 
 /**
- * Stops 1C performance measurement (замер производительности) on the active
+ * Stops 1C performance measurement on the active
  * debug target. Counterpart to {@code start_profiling}: it deterministically
  * switches profiling OFF for the given {@code applicationId}.
  *
@@ -53,7 +53,7 @@ public class StopProfilingTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Stop performance measurement (замер производительности) on the active debug target. " //$NON-NLS-1$
+        return "Stop performance measurement on the active debug target. " //$NON-NLS-1$
             + "Counterpart to start_profiling: deterministically switches profiling off. " //$NON-NLS-1$
             + "Idempotent: if profiling is not active for this applicationId it returns a benign result, not an error. " //$NON-NLS-1$
             + "Call get_profiling_results afterwards to retrieve the collected coverage."; //$NON-NLS-1$

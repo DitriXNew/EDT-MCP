@@ -23,7 +23,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 
 /**
- * Starts 1C performance measurement (замер производительности) on the active
+ * Starts 1C performance measurement on the active
  * debug target. Once enabled, every executed BSL line is tracked with call count
  * and timing. Call {@code stop_profiling} to stop, and
  * {@code get_profiling_results} after the test finishes to retrieve which code
@@ -110,7 +110,7 @@ public class StartProfilingTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Start performance measurement (замер производительности) on the active debug target. " //$NON-NLS-1$
+        return "Start performance measurement on the active debug target. " //$NON-NLS-1$
             + "Enables line-level profiling: call counts and timing for every executed BSL line. " //$NON-NLS-1$
             + "Start-only and idempotent: if profiling is already active for this applicationId it stays on. " //$NON-NLS-1$
             + "Call stop_profiling to stop, then get_profiling_results to see which code was covered. " //$NON-NLS-1$
