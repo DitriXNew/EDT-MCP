@@ -15,6 +15,14 @@ inputs:
     description: "MCP server port to wait for"
     required: false
     default: "8765"
+  import-projects:
+    description: >
+      Optional list of project directories (separated by ':') to import into the
+      fresh workspace on boot, via the plugin's EDT_MCP_IMPORT_PROJECTS bootstrap.
+      Leave empty for protocol-only conformance (no project needed); set it for the
+      e2e gate, e.g. "$GITHUB_WORKSPACE/tests/TestConfiguration:$GITHUB_WORKSPACE/tests/tests".
+    required: false
+    default: ""
   plugin-repo:
     description: "Path to the built MCP plugin p2 repository (file:// is added)"
     required: false
@@ -116,6 +124,15 @@ runs:
         LOG="$RUNNER_TEMP/edt.log"
         mkdir -p "$WS"
         echo "edt_log=$LOG" >> "$GITHUB_ENV"
+        # The plugin's headless bootstrap (McpServerStartup): force the MCP server on
+        # (the auto-start preference is off on a fresh workspace) and, when given, import
+        # the project dirs by reference so the empty workspace comes up with them open.
+        export EDT_MCP_AUTO_START=true
+        export EDT_MCP_PORT="$MCP_PORT"
+        if [ -n "${{ inputs.import-projects }}" ]; then
+          export EDT_MCP_IMPORT_PROJECTS="${{ inputs.import-projects }}"
+          echo "[setup-edt] will import projects: $EDT_MCP_IMPORT_PROJECTS"
+        fi
         echo "[setup-edt] launching EDT under Xvfb (workspace=$WS) ..."
         xvfb-run -a -s "-screen 0 1920x1080x24" \
           "$ECLIPSE/eclipse" -data "$WS" -clean -nosplash -consoleLog \

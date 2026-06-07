@@ -1,74 +1,107 @@
 name: E2E Tests
 
+# Black-box e2e gate on a STOCK GitHub-hosted runner (ubuntu-latest): no docker
+# image, no self-hosted runner. The `build` job builds the plugin once; the `e2e`
+# job boots a headless EDT via ./.github/actions/setup-edt, which force-starts the
+# MCP server (EDT_MCP_AUTO_START) and imports the TestConfiguration fixtures into
+# an empty workspace by reference (EDT_MCP_IMPORT_PROJECTS — the plugin's headless
+# bootstrap), then runs the suite against the local :8765.
+#
+# Scope: the suite skips the live-infobase round-trip (requires_live_infobase) by
+# default, so it needs NO licensed 1C platform — EDT indexes the project model
+# without one. The skipped runtime tools (YAXUnit run / debug / update_database)
+# stay covered in the local / licensed dev loop.
+#
+# NOTE: the headless-EDT boot + import is new; the first real CI run validates it
+# end-to-end (the EDT log is uploaded as an artifact for diagnosis). Dispatch-only
+# for now (a full run boots EDT + indexes the config — heavier than conformance).
+
 on:
   workflow_dispatch:
     inputs:
-      mcp_host:
-        description: "MCP server host"
+      edt_version:
+        description: "EDT version (public p2 ruby/<version>/)"
         required: false
-        default: "localhost"
-      mcp_port:
-        description: "MCP server port"
-        required: false
-        default: "8765"
-      project_name:
-        description: "EDT project name for testing"
-        required: false
-        default: "TestConfiguration"
+        default: "2026.1"
 
 jobs:
-  e2e-test:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Cache Tycho P2 repositories
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository/.cache/tycho
+            ~/.m2/repository/p2
+          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-tycho-p2-
+
+      - name: Build the MCP plugin (p2 repository)
+        working-directory: mcp
+        env:
+          MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
+        run: mvn clean verify --batch-mode --no-transfer-progress -T 1C -DskipTests
+
+      - name: Upload plugin p2 repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-plugin-p2
+          path: mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository
+          if-no-files-found: error
+
+  e2e:
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
       checks: write
       pull-requests: write
-    # E2E tests run against a live EDT with the MCP plugin and the TestConfiguration
-    # project open. Booting EDT itself on a stock GitHub-hosted runner is solved by
-    # ./.github/actions/setup-edt (see conformance.yml), but the e2e suite ALSO needs
-    # (a) the test project imported into the EDT workspace and (b) a licensed
-    # 1C:Enterprise platform for the infobase-dependent tools (YAXUnit / debug /
-    # update_database) — neither is available on a public cloud runner. So this gate
-    # is dispatched against an environment that provides both: the local dev loop or a
-    # licensed runner (set mcp_host/mcp_port to the live server). The protocol-only
-    # conformance gate is the one that runs unattended on a GitHub-hosted runner.
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Wait for MCP server
-        env:
-          MCP_HOST: ${{ github.event.inputs.mcp_host }}
-          MCP_PORT: ${{ github.event.inputs.mcp_port }}
-        run: |
-          echo "Checking MCP server at $MCP_HOST:$MCP_PORT ..."
-          for i in $(seq 1 30); do
-            if curl -sf "http://$MCP_HOST:$MCP_PORT/health" > /dev/null 2>&1; then
-              echo "Server is ready!"
-              exit 0
-            fi
-            echo "Attempt $i/30 - waiting 5s..."
-            sleep 5
-          done
-          echo "ERROR: MCP server not available"
-          exit 1
+      - name: Download plugin p2 repository
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp-plugin-p2
+          path: plugin-p2
+
+      - name: Set up headless EDT + MCP server (import the fixtures)
+        uses: ./.github/actions/setup-edt
+        with:
+          plugin-repo: plugin-p2
+          edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ github.event.inputs.edt_version || '2026.1' }}/"
+          import-projects: "${{ github.workspace }}/tests/TestConfiguration:${{ github.workspace }}/tests/tests"
 
       - name: Run E2E tests
-        env:
-          MCP_HOST: ${{ github.event.inputs.mcp_host }}
-          MCP_PORT: ${{ github.event.inputs.mcp_port }}
-          MCP_PROJECT: ${{ github.event.inputs.project_name }}
         run: |
           python tests/e2e/run_all.py \
-            --host "$MCP_HOST" \
-            --port "$MCP_PORT" \
-            --project "$MCP_PROJECT" \
+            --project TestConfiguration \
             --junit-xml tests/e2e/e2e-results.xml
 
       - name: Publish E2E Test Results
@@ -84,3 +117,16 @@ jobs:
         with:
           name: e2e-test-results
           path: tests/e2e/e2e-results.xml
+          if-no-files-found: ignore
+
+      - name: Upload EDT log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-edt-log
+          path: ${{ env.edt_log }}
+          if-no-files-found: ignore
+
+      - name: Stop EDT
+        if: always()
+        run: kill "${edt_pid:-0}" 2>/dev/null || true
