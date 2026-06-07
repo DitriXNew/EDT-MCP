@@ -12,15 +12,21 @@ name: E2E Tests
 # without one. The skipped runtime tools (YAXUnit run / debug / update_database)
 # stay covered in the local / licensed dev loop.
 #
-# Runs a MATRIX over EDT versions (2025.2 + 2026.1), fail-fast off so each reports
-# independently. setup-edt CACHES the Eclipse+EDT base per version (the slow, rate-
-# limited p2 install), then overlays the freshly-built plugin each run — so a cache
-# hit skips the upstream edt.1c.ru download entirely. The workspace index itself is
-# NOT cached (fresh import every run), so run_all waits up to E2E_PROJECT_READY_TIMEOUT
-# for indexing before aborting with one clear error.
-#
-# NOTE: the EDT log is uploaded per matrix entry for diagnosis. Dispatch-only (a full
-# run boots EDT + indexes the config — heavier than conformance).
+# TEMP (debugging): matrix is 2026.1 ONLY — restore ["2025.2", "2026.1"] once green.
+# The EDT setup is INLINED as numbered steps (EDT setup 1/8 … 8/8) instead of the
+# ./.github/actions/setup-edt composite, so each phase is a separate line in the Actions
+# UI and you can see exactly what is cached vs what runs:
+#   1 system libs (apt)            — NOT cached
+#   2 compute cache key            — trivial
+#   3 RESTORE base cache           — the cache hit/miss is reported here
+#   4 download Eclipse             — CACHE MISS ONLY
+#   5 install EDT base via p2      — CACHE MISS ONLY (slow + rate-limited edt.1c.ru)
+#   6 SAVE base cache              — CACHE MISS ONLY
+#   7 overlay MCP plugin           — ALWAYS (fresh local p2, never edt.1c.ru)
+#   8 boot headless + wait :8765   — ALWAYS (the workspace index is NOT cached)
+# run_all then waits up to E2E_PROJECT_READY_TIMEOUT for indexing before aborting with
+# one clear error. The EDT IDE log is uploaded as an artifact + dumped to the console.
+# Dispatch-only (a full run boots EDT + indexes the config — heavier than conformance).
 
 on:
   workflow_dispatch: {}
@@ -74,7 +80,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        edt: ["2025.2", "2026.1"]
+        # TEMP: 2026.1 only while debugging the headless boot. Restore
+        # ["2025.2", "2026.1"] once green.
+        edt: ["2026.1"]
+    # The EDT setup below is INLINED (instead of the ./.github/actions/setup-edt
+    # composite) so each phase shows as its own step in the Actions UI — you can see at
+    # a glance which steps are cached/skipped vs which run. Conformance still uses the
+    # composite. These env values mirror the composite's inputs.
+    env:
+      EDT_P2: "https://edt.1c.ru/downloads/releases/ruby/${{ matrix.edt }}/"
+      ECLIPSE_ARCHIVE: "https://archive.eclipse.org/eclipse/downloads/drops4/R-4.30-202312010110/eclipse-platform-4.30-linux-gtk-x86_64.tar.gz"
+      ECLIPSE_P2: "https://download.eclipse.org/releases/2023-12/"
+      ORBIT_P2: "https://download.eclipse.org/tools/orbit/downloads/drops/R20211213173813/repository/"
+      ORBIT_SIMREL_P2: "https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.37.0/"
+      # TestConfiguration is compatibilityMode 8.5.1 → EDT needs the 8.5.1 platform-support
+      # FEATURE to initialize the project (no 1cv8 binary needed for indexing).
+      PLATFORM_SUPPORT_IU: "com._1c.g5.v8.dt.platform.support_v8.5.1.feature.feature.group"
+      PLUGIN_REPO: "plugin-p2"
+      MCP_PORT: "8765"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -96,19 +119,165 @@ jobs:
           name: mcp-plugin-p2
           path: plugin-p2
 
-      - name: Set up headless EDT ${{ matrix.edt }} + MCP server (import the fixtures)
-        uses: ./.github/actions/setup-edt
+      # ── EDT setup (inlined for per-step visibility) ──────────────────────────────
+      - name: "EDT setup 1/8 · system libs (apt — NOT cached)"
+        shell: bash
+        run: |
+          set -x
+          sudo apt-get update
+          # Tolerant install: package names differ across Ubuntu 22.04/24.04 (t64 ABI
+          # transition), so try each and ignore the ones absent.
+          PKGS="xvfb \
+            libgtk-3-0 libgtk-3-0t64 \
+            libxtst6 libxrender1 libxi6 libxrandr2 libxcb1 \
+            libgl1 libglu1-mesa \
+            libasound2 libasound2t64 \
+            libsecret-1-0 libnss3 \
+            libwebkit2gtk-4.1-0 libwebkit2gtk-4.0-37 \
+            fonts-dejavu"
+          for p in $PKGS; do
+            sudo apt-get install -y --no-install-recommends "$p" 2>/dev/null || true
+          done
+          sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: "EDT setup 2/8 · compute base cache key"
+        id: edtcache
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Key on the IMMUTABLE base inputs (NOT the plugin, which is overlaid fresh).
+          H=$(printf '%s|%s|%s|%s|%s' \
+                "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" "$PLATFORM_SUPPORT_IU" \
+                | sha256sum | cut -c1-16)
+          echo "key=edt-base-${{ runner.os }}-$H" >> "$GITHUB_OUTPUT"
+          echo "EDT-base cache key: edt-base-${{ runner.os }}-$H"
+
+      - name: "EDT setup 3/8 · RESTORE base cache (Eclipse+EDT, no plugin)"
+        id: restore-edt
+        uses: actions/cache/restore@v5
         with:
-          plugin-repo: plugin-p2
-          edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ matrix.edt }}/"
-          import-projects: "${{ github.workspace }}/tests/TestConfiguration:${{ github.workspace }}/tests/tests"
-          # TestConfiguration is compatibilityMode 8.5.1, so EDT must know the 8.5.1
-          # platform runtime to INITIALIZE the project (DtProjectRuntimeVersionManager:
-          # an unsupported version → RuntimeVersionUnsupportedException → the config never
-          # indexes). The platform-support FEATURE supplies that (no 1cv8 binary needed for
-          # indexing); verified present in both 2025.2 and 2026.1 p2. Conformance is
-          # protocol-only and leaves this empty.
-          platform-support-iu: "com._1c.g5.v8.dt.platform.support_v8.5.1.feature.feature.group"
+          path: ${{ runner.temp }}/edt/eclipse
+          key: ${{ steps.edtcache.outputs.key }}
+
+      - name: "EDT setup 4/8 · download Eclipse [CACHE MISS ONLY]"
+        if: steps.restore-edt.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fSL "$ECLIPSE_ARCHIVE" -o "$RUNNER_TEMP/eclipse.tar.gz"
+          mkdir -p "$RUNNER_TEMP/edt"
+          tar -xzf "$RUNNER_TEMP/eclipse.tar.gz" -C "$RUNNER_TEMP/edt"
+          test -x "$RUNNER_TEMP/edt/eclipse/eclipse"
+
+      - name: "EDT setup 5/8 · install EDT base via p2 [CACHE MISS ONLY — slow, rate-limited]"
+        if: steps.restore-edt.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -uxo pipefail
+          ECLIPSE="$RUNNER_TEMP/edt/eclipse"
+          IUS="com._1c.g5.v8.dt.feature.feature.group"
+          if [ -n "$PLATFORM_SUPPORT_IU" ]; then IUS="$IUS,$PLATFORM_SUPPORT_IU"; fi
+          # edt.1c.ru intermittently 404s artifacts under the burst download (rate-limit;
+          # files DO exist). A failed director transaction rolls back cleanly, so retry with
+          # a cooldown; p2's own transport retry handles transient read errors per attempt.
+          ok=0
+          for attempt in 1 2 3 4; do
+            echo "[edt] EDT-base p2 director attempt $attempt/4 ..."
+            if "$ECLIPSE/eclipse" -nosplash -consoleLog \
+                -application org.eclipse.equinox.p2.director \
+                -repository "$EDT_P2,$ECLIPSE_P2,$ORBIT_P2,$ORBIT_SIMREL_P2" \
+                -installIU "$IUS" \
+                -destination "$ECLIPSE" \
+                -profileProperties org.eclipse.update.install.features=true \
+                -p2.os linux -p2.ws gtk -p2.arch x86_64 -tag init \
+                -vmargs -Dorg.eclipse.equinox.p2.transport.ecf.retry=5; then
+              ok=1; break
+            fi
+            echo "[edt] attempt $attempt failed (edt.1c.ru likely rate-limited); cooling 60s ..."
+            sleep 60
+          done
+          [ "$ok" = 1 ] || { echo "[edt] ERROR: EDT-base p2 director failed after 4 attempts"; exit 1; }
+
+      - name: "EDT setup 6/8 · SAVE base cache [CACHE MISS ONLY]"
+        if: steps.restore-edt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/edt/eclipse
+          key: ${{ steps.edtcache.outputs.key }}
+
+      - name: "EDT setup 7/8 · overlay MCP plugin [ALWAYS — fresh, local p2, no edt.1c.ru]"
+        shell: bash
+        run: |
+          set -uxo pipefail
+          ECLIPSE="$RUNNER_TEMP/edt/eclipse"
+          test -x "$ECLIPSE/eclipse" || { echo "ERROR: EDT base missing at $ECLIPSE"; exit 1; }
+          LOCAL_REPO="file://$GITHUB_WORKSPACE/$PLUGIN_REPO"
+          ls "$GITHUB_WORKSPACE/$PLUGIN_REPO"/content.* >/dev/null 2>&1 \
+            || { echo "ERROR: plugin p2 repo not found at $PLUGIN_REPO (build it first)"; exit 1; }
+          ok=0
+          for attempt in 1 2; do
+            echo "[edt] plugin overlay attempt $attempt/2 ..."
+            if "$ECLIPSE/eclipse" -nosplash -consoleLog \
+                -application org.eclipse.equinox.p2.director \
+                -repository "$LOCAL_REPO,$ECLIPSE_P2,$ORBIT_P2,$ORBIT_SIMREL_P2" \
+                -installIU "com.ditrix.edt.mcp.server.feature.feature.group" \
+                -destination "$ECLIPSE" \
+                -profileProperties org.eclipse.update.install.features=true \
+                -p2.os linux -p2.ws gtk -p2.arch x86_64 -tag mcp-plugin \
+                -vmargs -Dorg.eclipse.equinox.p2.transport.ecf.retry=5; then
+              ok=1; break
+            fi
+            echo "[edt] plugin overlay attempt $attempt failed; retrying ..."; sleep 10
+          done
+          [ "$ok" = 1 ] || { echo "[edt] ERROR: plugin overlay failed"; exit 1; }
+
+      - name: "EDT setup 8/8 · boot headless + wait :8765 [ALWAYS — index NOT cached]"
+        shell: bash
+        run: |
+          set -uo pipefail
+          ECLIPSE="$RUNNER_TEMP/edt/eclipse"
+          WS="$RUNNER_TEMP/edt-ws"
+          LOG="$RUNNER_TEMP/edt.log"
+          mkdir -p "$WS"
+          echo "edt_log=$LOG" >> "$GITHUB_ENV"
+          export EDT_MCP_AUTO_START=true
+          export EDT_MCP_PORT="$MCP_PORT"
+          export EDT_MCP_IMPORT_PROJECTS="$GITHUB_WORKSPACE/tests/TestConfiguration:$GITHUB_WORKSPACE/tests/tests"
+          echo "[edt] importing: $EDT_MCP_IMPORT_PROJECTS"
+          # EDT runs Apache Ignite (BM store) which on JDK 17 needs java.nio/sun.nio.ch opened
+          # and the module system relaxed — exactly the flags EDT's own 1cedt.ini ships. A
+          # command-line -vmargs REPLACES the eclipse.ini block, so repeat the osgi flags too.
+          xvfb-run -a -s "-screen 0 1920x1080x24" \
+            "$ECLIPSE/eclipse" -data "$WS" -clean -nosplash -consoleLog \
+            --launcher.suppressErrors \
+            -vmargs \
+            -Xmx4g \
+            -Dosgi.requiredJavaVersion=17 \
+            -Dorg.osgi.framework.bundle.parent=ext \
+            -Dosgi.module.lock.timeout=240 \
+            -Dlog4j.formatMsgNoLookups=true \
+            -Dlog4j2.formatMsgNoLookups=true \
+            --add-modules=ALL-SYSTEM \
+            --add-opens=java.base/java.lang=ALL-UNNAMED \
+            --add-opens=java.base/java.lang.constant=ALL-UNNAMED \
+            --add-opens=java.base/java.lang.ref=ALL-UNNAMED \
+            --add-opens=java.base/java.nio=ALL-UNNAMED \
+            --add-opens=java.base/java.time=ALL-UNNAMED \
+            --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
+            --add-opens=java.base/java.net=ALL-UNNAMED \
+            > "$LOG" 2>&1 &
+          echo "edt_pid=$!" >> "$GITHUB_ENV"
+          echo "[edt] waiting for MCP server on :$MCP_PORT ..."
+          for i in $(seq 1 120); do
+            if curl -sf "http://127.0.0.1:$MCP_PORT/health" >/dev/null 2>&1; then
+              echo "[edt] MCP server UP on $MCP_PORT"; exit 0
+            fi
+            sleep 5
+          done
+          echo "[edt] ERROR: MCP server did not come up within ~10 min."
+          tail -n 200 "$LOG" || true
+          exit 1
+      # ── end EDT setup ────────────────────────────────────────────────────────────
 
       - name: Run E2E tests
         env:
