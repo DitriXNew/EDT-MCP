@@ -99,7 +99,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          # @modelcontextprotocol/conformance@latest uses fs.globSync, which is Node 22+
+          # only (Node 20 errors: "module 'fs' does not provide an export named 'globSync'").
+          node-version: "22"
 
       - name: Run MCP conformance suite
         env:
