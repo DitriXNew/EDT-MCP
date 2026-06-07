@@ -37,7 +37,10 @@ One real bug was found and fixed during the first run: `ping` returned
 
 ## CI
 `.github/workflows/conformance.yml` runs this against a live server on manual
-dispatch. It needs a **self-hosted runner with EDT** (the MCP server runs inside
-EDT — a stock GitHub runner can't host it), exactly like `e2e-tests.yml`. Until
-such a runner exists, run the gate locally per the dev loop (see the
-`edt-mcp-ready-to-deploy` skill).
+dispatch. The MCP server runs **inside EDT**, so the job needs an EDT host —
+either a **self-hosted runner with EDT** (like `e2e-tests.yml`) or the **headless
+EDT image** in [`docker/`](../../docker/README.md) (EDT assembled from its public
+p2 via `p2 director`, run under Xvfb on a stock Linux runner). Until that is wired
+up, run the gate locally per the dev loop (see the `edt-mcp-ready-to-deploy` skill).
+
+The repo shows a **MCP Conformance** badge (README) reflecting the latest run.

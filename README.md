@@ -1,5 +1,12 @@
 [![GitHub all releases](https://img.shields.io/github/downloads/DitriXNew/EDT-MCP/total)](https://github.com/DitriXNew/EDT-MCP/releases)
 ![EDT](https://img.shields.io/badge/EDT-2025.2+-blue?style=plastic)
+
+[![Build & Unit Tests](https://github.com/DitriXNew/EDT-MCP/actions/workflows/build.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/build.yml)
+[![E2E Tests](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-tests.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-tests.yml)
+[![MCP Conformance](https://github.com/DitriXNew/EDT-MCP/actions/workflows/conformance.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/conformance.yml)
+
+> **Build & Unit Tests** run on every push (cloud CI). **E2E** and **MCP Conformance** run against a live EDT + MCP server (`workflow_dispatch`; need a self-hosted runner with EDT, or the headless `docker/` image) — their badge reflects the latest such run.
+
 # EDT MCP Server
 
 MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (Claude, GitHub Copilot, Cursor, etc.) to interact with EDT workspace.
