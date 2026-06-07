@@ -110,6 +110,32 @@ public class McpToolRegistry
     }
 
     /**
+     * Returns the tools VISIBLE in {@code tools/list} (and {@code resources/list}).
+     * <p>
+     * When progressive tool disclosure is off (the default) this is exactly
+     * {@link #getEnabledTools()} — no behavior change. When it is on, the result is
+     * further narrowed to tools whose {@link Toolsets toolset} is currently visible
+     * ({@link Toolsets#CORE} plus the toolsets revealed via {@code enable_toolset},
+     * see {@link ToolsetState}), shrinking the always-loaded surface. Visibility
+     * never affects callability: a hidden tool is still registered and can be called
+     * by name (the protocol handler gates calls on {@link #isToolEnabled} only).
+     *
+     * @return the visible tools
+     */
+    public Collection<IMcpTool> getVisibleTools()
+    {
+        Collection<IMcpTool> enabled = getEnabledTools();
+        if (!Toolsets.isProgressiveDisclosureEnabled())
+        {
+            return enabled;
+        }
+        ToolsetState state = ToolsetState.getInstance();
+        return enabled.stream()
+            .filter(tool -> state.isVisible(Toolsets.toolsetOf(tool.getName())))
+            .collect(Collectors.toUnmodifiableList());
+    }
+
+    /**
      * Checks whether a registered tool is currently enabled.
      *
      * @param name the tool name

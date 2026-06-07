@@ -496,6 +496,86 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Reveal (or hide) tool groups for progressive disclosure. Pass toolsets=[ids] from list_toolsets to reveal them, then RE-REQUEST tools/list to see the newly revealed tools. Set disable=true to hide. The 'core' toolset is always visible and cannot be toggled. When progressive disclosure is off, all tools are already listed and this has no effect until you enable it in EDT Preferences → MCP Server.",
+    "inputSchema": {
+      "properties": {
+        "disable": {
+          "description": "Hide the listed toolsets instead of revealing them (default false).",
+          "type": "boolean"
+        },
+        "toolsets": {
+          "description": "Toolset ids to reveal (or hide with disable=true), e.g. [\"code\",\"debug\"]. Call list_toolsets for the valid ids.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "toolsets"
+      ],
+      "type": "object"
+    },
+    "name": "enable_toolset",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "'enabled' or 'disabled'",
+          "type": "string"
+        },
+        "applied": {
+          "description": "Toolset ids the change was applied to",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ignored": {
+          "description": "Requested ids that cannot be toggled (core)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "invalid": {
+          "description": "Requested ids that are not valid toolsets",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "note": {
+          "description": "Human-readable next step",
+          "type": "string"
+        },
+        "progressiveDisclosure": {
+          "description": "Whether progressive disclosure is currently on",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "visibleToolsets": {
+          "description": "Toolset ids visible in tools/list after the change",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Evaluate a BSL expression in the context of a suspended stack frame. Pass frameRef from wait_for_break and the expression text. WARNING: this executes arbitrary BSL code in the running 1C application.",
     "inputSchema": {
       "properties": {
@@ -1932,6 +2012,51 @@
     },
     "name": "list_subsystems",
     "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "List the tool groups (toolsets) used by progressive tool disclosure: each toolset's id, title, description, member tools, and whether it is currently visible in tools/list. When progressive disclosure is on, only the 'core' toolset plus toolsets you reveal with enable_toolset appear in tools/list; when off (default) all tools are already listed. Read-only. Use it to discover which toolset id to pass to enable_toolset.",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "list_toolsets",
+    "outputSchema": {
+      "properties": {
+        "count": {
+          "description": "Number of toolsets",
+          "type": "integer"
+        },
+        "note": {
+          "description": "Human-readable guidance for the current disclosure mode",
+          "type": "string"
+        },
+        "progressiveDisclosure": {
+          "description": "Whether progressive disclosure is currently on",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "toolsets": {
+          "description": "The toolsets (id, title, description, tools, toolCount, visible, core)",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {

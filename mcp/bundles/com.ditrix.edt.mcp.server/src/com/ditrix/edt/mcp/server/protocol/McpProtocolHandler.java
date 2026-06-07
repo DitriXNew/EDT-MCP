@@ -645,8 +645,8 @@ public class McpProtocolHandler
     private String buildToolsListResponse(Object requestId)
     {
         ToolsListResult result = new ToolsListResult();
-        
-        for (IMcpTool tool : toolRegistry.getEnabledTools())
+
+        for (IMcpTool tool : toolRegistry.getVisibleTools())
         {
             // Parse inputSchema from JSON string to JsonElement
             JsonElement schema = JsonParser.parseString(tool.getInputSchema());
@@ -682,7 +682,7 @@ public class McpProtocolHandler
     private String buildResourcesListResponse(Object requestId)
     {
         JsonArray resources = new JsonArray();
-        for (IMcpTool tool : toolRegistry.getEnabledTools())
+        for (IMcpTool tool : toolRegistry.getVisibleTools())
         {
             String name = tool.getName();
             JsonObject resource = new JsonObject();

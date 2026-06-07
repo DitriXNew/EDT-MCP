@@ -232,6 +232,28 @@ Some tools have configurable default values for parameters like result limits. T
 
 Configure these in the Tools tab by selecting a tool that has configurable parameters — the parameter editors appear in the details panel below the tool tree.
 
+### Progressive Tool Disclosure (dynamic toolsets)
+
+For clients that work better with a small initial tool surface, the server can expose
+only a **core** toolset up front and reveal the rest on demand — shrinking the
+always-loaded `tools/list`. This is **off by default** (the full list is exposed,
+unchanged); turn it on with the **Progressive disclosure** preference (or the
+`EDT_MCP_PROGRESSIVE_DISCLOSURE=true` environment variable for headless/CI runs).
+
+When on, only the `core` toolset (navigation, source read, metadata discovery, and the
+two management tools) appears in `tools/list`. To use more tools:
+
+1. Call **`list_toolsets`** to see the groups (`core`, `metadata`, `code`, `debug`,
+   `testing`, `profiling`, `forms`, `tags`, `translation`, `project`) and their tools.
+2. Call **`enable_toolset`** with `toolsets=[ids]` (e.g. `["code","debug"]`).
+3. **Re-request `tools/list`** — the revealed tools now appear.
+
+This server does not push `notifications/tools/list_changed`, so the client must
+re-list after enabling (the `enable_toolset` response says so). A hidden tool is only
+hidden from `tools/list`; it remains callable by name. These progressive-disclosure
+toolsets are distinct from the **Tool Groups** above (which the Tools tab uses to
+enable/disable tools persistently).
+
 ## Connecting AI Assistants
 
 ### VS Code / GitHub Copilot
@@ -327,6 +349,8 @@ Add to `claude_desktop_config.json`:
 | `get_edt_version` | Returns current EDT version |
 | `get_server_status` | Self-diagnosis snapshot: port, protocol/plugin/EDT version, enabled/total tool counts, plainTextMode, checksFolderConfigured, form-render JVM flags, authEnabled (no secrets) |
 | `get_tool_guide` | On-demand full how-to for a tool: description, every parameter (type, required, allowed values) and extended examples kept out of tools/list. Also available as resource `guide://<toolName>` |
+| `list_toolsets` | List the tool groups (toolsets) for progressive disclosure: id, title, member tools, and whether each is visible in `tools/list`. Read-only; discovery counterpart of `enable_toolset` |
+| `enable_toolset` | Reveal (or hide with `disable=true`) tool groups for progressive disclosure, then re-request `tools/list`. Pass `toolsets=[ids]` from `list_toolsets`; the `core` toolset is always visible |
 | `list_projects` | Lists workspace projects with properties |
 | `get_configuration_properties` | Gets 1C configuration properties |
 | `get_project_errors` | Returns EDT problems with severity/checkId/objects filters |

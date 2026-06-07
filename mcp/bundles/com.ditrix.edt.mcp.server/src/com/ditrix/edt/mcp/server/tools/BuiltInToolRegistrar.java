@@ -15,6 +15,7 @@ import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.EnableToolsetTool;
 import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ExportConfigurationToXmlTool;
 import com.ditrix.edt.mcp.server.tools.impl.FindReferencesTool;
@@ -50,6 +51,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ListConfigurationsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListSubsystemsTool;
+import com.ditrix.edt.mcp.server.tools.impl.ListToolsetsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadMethodSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.RemoveBreakpointTool;
@@ -100,6 +102,9 @@ public final class BuiltInToolRegistrar
         registry.register(new GetEdtVersionTool());
         registry.register(new GetServerStatusTool());
         registry.register(new GetToolGuideTool());
+        // Progressive tool disclosure meta-tools (core toolset)
+        registry.register(new ListToolsetsTool());
+        registry.register(new EnableToolsetTool());
         registry.register(new ListProjectsTool());
         registry.register(new GetConfigurationPropertiesTool());
         registry.register(new CleanProjectTool());
