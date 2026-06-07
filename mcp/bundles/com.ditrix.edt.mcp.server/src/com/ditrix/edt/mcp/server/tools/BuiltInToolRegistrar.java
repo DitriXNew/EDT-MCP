@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool;
@@ -166,6 +167,7 @@ public final class BuiltInToolRegistrar
         registry.register(new DeleteMetadataTool());
         registry.register(new CreateMetadataTool());
         registry.register(new ModifyMetadataTool());
+        registry.register(new AdoptMetadataObjectTool());
 
         // LanguageTool translation tools
         registry.register(new GenerateTranslationStringsTool());

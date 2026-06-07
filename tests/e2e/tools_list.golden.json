@@ -5,6 +5,68 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Adopt (заимствовать) a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can override or intercept it - the MCP equivalent of EDT's 'Add To Extension'. Addressed by the base object FQN; pass extensionProjectName when more than one extension extends the configuration. Adopting BSL code/methods is NOT covered. Full parameters and examples: call get_tool_guide('adopt_metadata_object').",
+    "inputSchema": {
+      "properties": {
+        "extensionProjectName": {
+          "description": "Target extension EDT project name; REQUIRED only when more than one extension extends the configuration (otherwise the single extension is used automatically)",
+          "type": "string"
+        },
+        "fqn": {
+          "description": "Full-name FQN of the object or member to adopt (required), e.g. 'Catalog.Products', 'Catalog.Products.Attribute.Weight', 'Catalog.Products.Form.ItemForm'",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "The BASE configuration EDT project that owns the object (NOT the extension) (required)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn"
+      ],
+      "type": "object"
+    },
+    "name": "adopt_metadata_object",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "'adopted' or 'alreadyAdopted'",
+          "type": "string"
+        },
+        "extensionProject": {
+          "description": "The extension the object was adopted into",
+          "type": "string"
+        },
+        "fqn": {
+          "description": "FQN of the adopted object in the extension",
+          "type": "string"
+        },
+        "objectBelonging": {
+          "description": "ADOPTED (the object is now an adopted copy)",
+          "type": "string"
+        },
+        "persisted": {
+          "description": "Whether the change was exported to disk",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation.",
     "inputSchema": {
       "properties": {

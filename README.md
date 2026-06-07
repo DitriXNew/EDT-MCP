@@ -179,7 +179,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 61 tools are organized into 9 semantic groups:
+All 62 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -190,7 +190,7 @@ All 61 tools are organized into 9 semantic groups:
 | **Applications & Testing** | App management, database updates, launch, termination, testing | `get_applications`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
 | **Debugging** | Breakpoints, stepping, variable inspection | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module browsing, code reading/writing, search, form layout inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create (objects, members and form members), rename, delete, set properties | `create_metadata`, `rename_metadata_object`, `delete_metadata`, `modify_metadata` |
+| **Refactoring** | Metadata create (objects, members and form members), rename, delete, set properties, adopt into an extension | `create_metadata`, `rename_metadata_object`, `delete_metadata`, `modify_metadata`, `adopt_metadata_object` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
@@ -201,7 +201,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 61 tools enabled (default) |
+| **All Tools** | All 62 tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -339,6 +339,7 @@ Add to `claude_desktop_config.json`:
 | `delete_metadata` | Delete a metadata object or attribute with reference cleanup. Preview + confirm workflow |
 | `create_metadata` | Create a metadata node by 1C full-name FQN: a top-level object (Catalog, Document, InformationRegister, AccumulationRegister, Enum, CommonModule, Report, DataProcessor) or a member (Attribute, TabularSection, Dimension, Resource, EnumValue) |
 | `modify_metadata` | Set properties of a metadata node (object or member) by full-name FQN, as `[{name, value, language?}]`, with validation (assignable + allowed enum values) |
+| `adopt_metadata_object` | Adopt (заимствовать) a base-configuration object/member (object, form, attribute, ...) into a configuration extension so it can be overridden/intercepted — the metadata side of EDT's "Add To Extension" |
 | `get_tags` | Get list of all tags defined in the project with descriptions and object counts |
 | `get_objects_by_tags` | Get metadata objects filtered by tags with tag descriptions and object FQNs |
 | `get_applications` | Get list of applications (infobases) for a project with update state |
@@ -676,6 +677,19 @@ After creating a node, run `get_project_errors` to verify.
 The synonym is keyed by the language **code**, so setting a synonym for one language does not remove the synonym stored for another.
 
 **Form members:** a form's own member (attribute / command / field / button / group / decoration) is created, edited and removed by its FQN through `create_metadata` / `modify_metadata` / `delete_metadata` (e.g. `Catalog.Products.Form.ItemForm.Attribute.Total`, `...Form.ItemForm.Field.Price`, `...Form.ItemForm.Handler.OnOpen`). Read a form's structure (items tree + attributes + commands) by passing the form FQN (`Catalog.X.Form.ItemForm` or `CommonForm.Name`) to `get_metadata_details`.
+
+#### Adopt Metadata Object Tool
+
+**`adopt_metadata_object`** - Adopt (заимствовать) a base-configuration metadata object - or a member of it (form, attribute, tabular section, ...) - into a configuration **extension**, so the extension can override / intercept it. This is the MCP equivalent of EDT's **"Add To Extension"** (Alt+F3) for the metadata side; adopting BSL code/methods (the `&Before/&After/&Around/&ChangeAndValidate` interceptors) is a separate concern and not covered. The adopt+attach is performed by the platform `IModelObjectAdopter`, which creates the adopted copy with `<objectBelonging>Adopted</objectBelonging>` and an `extendedConfigurationObject` UUID link to the base object (mapping is by-ID, so the adopted copy may later be renamed). The new `.mdo` and the extension's `Configuration.mdo` registration are force-exported to disk.
+
+**Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `projectName` | Yes | The **base configuration** EDT project that owns the object (NOT the extension) |
+| `fqn` | Yes | Object or member to adopt: `Type.Name` (`Catalog.Products`), `Type.Name.Kind.Name` (`Catalog.Products.Attribute.Weight`), or a form `Type.Name.Form.FormName` (`Catalog.Products.Form.ItemForm`) |
+| `extensionProjectName` | No | Target extension EDT project; required only when more than one extension extends the configuration (otherwise the single extension is auto-selected) |
+
+Returns `action` (`adopted`, or `alreadyAdopted` when it was already adopted), the adopted `fqn`, the `extensionProject`, `objectBelonging='ADOPTED'`, and `persisted`. Adopting a member implicitly adopts its owning object (cascade). To revert, delete the adopted copy with `delete_metadata` against the extension.
 
 ### Tag Management Tools
 
