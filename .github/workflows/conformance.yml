@@ -115,7 +115,7 @@ jobs:
             --expected-failures tests/conformance/baseline.yml
 
       - name: Upload EDT log
-        if: always()
+        if: ${{ always() && env.edt_log != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: conformance-edt-log-${{ matrix.edt }}

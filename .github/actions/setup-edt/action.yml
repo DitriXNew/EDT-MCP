@@ -92,7 +92,7 @@ runs:
     - name: Install 1C:EDT + the MCP plugin via p2 director
       shell: bash
       run: |
-        set -euxo pipefail
+        set -uxo pipefail
         ECLIPSE="$RUNNER_TEMP/edt/eclipse"
         LOCAL_REPO="file://$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"
         ls "$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"/content.* >/dev/null 2>&1 \
@@ -105,13 +105,29 @@ runs:
         if [ -n "${{ inputs.platform-support-iu }}" ]; then
           IUS="$IUS,${{ inputs.platform-support-iu }}"
         fi
-        "$ECLIPSE/eclipse" -nosplash -consoleLog \
-          -application org.eclipse.equinox.p2.director \
-          -repository "${{ inputs.edt-p2 }},${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }},$LOCAL_REPO" \
-          -installIU "$IUS" \
-          -destination "$ECLIPSE" \
-          -profileProperties org.eclipse.update.install.features=true \
-          -p2.os linux -p2.ws gtk -p2.arch x86_64 -tag init
+        # The EDT p2 (edt.1c.ru) intermittently returns 404 for individual artifacts
+        # under the burst download of the whole EDT feature (rate-limiting; the files
+        # DO exist). A failed director transaction rolls back cleanly, so retry the
+        # whole install with a cooldown to ride out the rate-limit window; p2's own
+        # transport retry handles transient read errors within an attempt.
+        ok=0
+        for attempt in 1 2 3 4; do
+          echo "[setup-edt] p2 director attempt $attempt/4 ..."
+          if "$ECLIPSE/eclipse" -nosplash -consoleLog \
+              -application org.eclipse.equinox.p2.director \
+              -repository "${{ inputs.edt-p2 }},${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }},$LOCAL_REPO" \
+              -installIU "$IUS" \
+              -destination "$ECLIPSE" \
+              -profileProperties org.eclipse.update.install.features=true \
+              -p2.os linux -p2.ws gtk -p2.arch x86_64 -tag init \
+              -vmargs -Dorg.eclipse.equinox.p2.transport.ecf.retry=5; then
+            ok=1
+            break
+          fi
+          echo "[setup-edt] director attempt $attempt failed (upstream edt.1c.ru likely rate-limited a download); cooling down 60s ..."
+          sleep 60
+        done
+        [ "$ok" = 1 ] || { echo "[setup-edt] ERROR: p2 director failed after 4 attempts"; exit 1; }
 
     - name: Boot EDT headless (Xvfb) and wait for the MCP server
       shell: bash

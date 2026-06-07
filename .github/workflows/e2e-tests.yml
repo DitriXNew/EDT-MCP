@@ -120,7 +120,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload EDT log
-        if: always()
+        if: ${{ always() && env.edt_log != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: e2e-edt-log
