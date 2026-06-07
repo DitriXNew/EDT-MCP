@@ -100,6 +100,13 @@ jobs:
       # read must be a benign sentinel, not "Profiling core bundle not found"). The core EDT
       # feature does not pull it, so install the profiling feature too.
       PROFILING_IU: "com._1c.g5.v8.dt.profiling.feature.feature.group"
+      # The extension-interception footer (read_method_source / read_module_source /
+      # get_module_structure) uses IModuleExtensionServiceProvider.INSTANCE, which resolves
+      # the real service via an extension point contributed ONLY by com._1c.g5.v8.dt.bsl.extension.
+      # The core EDT feature does not pull that bundle, so INSTANCE falls back to the no-op
+      # DefaultModuleExtensionService (everything empty) and the footer never appears. Install
+      # the bundle so the real service registers.
+      BSL_EXTENSION_IU: "com._1c.g5.v8.dt.bsl.extension"
       PLUGIN_REPO: "plugin-p2"
       MCP_PORT: "8765"
     steps:
@@ -150,8 +157,9 @@ jobs:
         run: |
           set -euo pipefail
           # Key on the IMMUTABLE base inputs (NOT the plugin, which is overlaid fresh).
-          H=$(printf '%s|%s|%s|%s|%s|%s' \
-                "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" "$PLATFORM_SUPPORT_IU" "$PROFILING_IU" \
+          H=$(printf '%s|%s|%s|%s|%s|%s|%s' \
+                "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" \
+                "$PLATFORM_SUPPORT_IU" "$PROFILING_IU" "$BSL_EXTENSION_IU" \
                 | sha256sum | cut -c1-16)
           echo "key=edt-base-${{ runner.os }}-$H" >> "$GITHUB_OUTPUT"
           echo "EDT-base cache key: edt-base-${{ runner.os }}-$H"
@@ -182,6 +190,7 @@ jobs:
           IUS="com._1c.g5.v8.dt.feature.feature.group"
           if [ -n "$PLATFORM_SUPPORT_IU" ]; then IUS="$IUS,$PLATFORM_SUPPORT_IU"; fi
           if [ -n "$PROFILING_IU" ]; then IUS="$IUS,$PROFILING_IU"; fi
+          if [ -n "$BSL_EXTENSION_IU" ]; then IUS="$IUS,$BSL_EXTENSION_IU"; fi
           # edt.1c.ru intermittently 404s artifacts under the burst download (rate-limit;
           # files DO exist). A failed director transaction rolls back cleanly, so retry with
           # a cooldown; p2's own transport retry handles transient read errors per attempt.
