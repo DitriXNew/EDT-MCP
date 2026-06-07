@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
+import com.ditrix.edt.mcp.server.SseStreamRegistry;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -403,16 +404,19 @@ public class McpHttpHandler implements HttpHandler
             exchange.getResponseHeaders().add("Connection", "keep-alive"); //$NON-NLS-1$ //$NON-NLS-2$
             exchange.sendResponseHeaders(200, 0);
 
-            // Keep SSE stream open with periodic heartbeat comments
-            try (java.io.OutputStream os = exchange.getResponseBody())
+            // Register the stream so the server can PUSH notifications to it (e.g.
+            // notifications/tools/list_changed), then keep it alive with heartbeat
+            // comments. Both heartbeat and broadcast writes go through the registered
+            // SseStream, which serializes them so frames never interleave.
+            java.io.OutputStream os = exchange.getResponseBody();
+            SseStreamRegistry.SseStream stream = SseStreamRegistry.getInstance().register(os);
+            try
             {
                 while (!Thread.currentThread().isInterrupted())
                 {
                     try
                     {
-                        byte[] heartbeat = ": keep-alive\n\n".getBytes(StandardCharsets.UTF_8); //$NON-NLS-1$
-                        os.write(heartbeat);
-                        os.flush();
+                        stream.write(": keep-alive\n\n"); //$NON-NLS-1$
                         Thread.sleep(5000);
                     }
                     catch (InterruptedException e)
@@ -427,9 +431,17 @@ public class McpHttpHandler implements HttpHandler
                     }
                 }
             }
-            catch (IOException e)
+            finally
             {
-                // Client disconnected before headers were sent
+                SseStreamRegistry.getInstance().unregister(stream);
+                try
+                {
+                    os.close();
+                }
+                catch (IOException ignore)
+                {
+                    // already closing
+                }
             }
             Activator.logInfo("SSE stream closed"); //$NON-NLS-1$
         }

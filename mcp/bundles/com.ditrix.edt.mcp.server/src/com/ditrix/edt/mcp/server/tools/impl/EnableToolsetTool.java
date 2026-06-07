@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.SseStreamRegistry;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -20,9 +21,10 @@ import com.ditrix.edt.mcp.server.tools.Toolsets;
 import com.ditrix.edt.mcp.server.tools.Toolsets.Toolset;
 
 /**
- * Reveals (or hides) tool groups for progressive tool disclosure. After it changes
- * the visible set, the client must re-request {@code tools/list} to see the newly
- * revealed tools (this server does not push {@code tools/list_changed}).
+ * Reveals (or hides) tool groups for progressive tool disclosure. When the visible
+ * set changes the server pushes {@code notifications/tools/list_changed} to any open
+ * SSE stream (capability {@code tools.listChanged}); a client without an open stream
+ * re-requests {@code tools/list} to see the newly revealed tools.
  * <p>
  * Pass {@code toolsets} (one or more toolset ids from {@code list_toolsets}); set
  * {@code disable=true} to hide them instead. The {@code core} toolset is always
@@ -168,6 +170,14 @@ public class EnableToolsetTool implements IMcpTool
                 ? "Re-request tools/list to see the updated tool set." //$NON-NLS-1$
                 : "Progressive disclosure is OFF, so tools/list already exposes every tool; this change " //$NON-NLS-1$
                     + "takes effect only once you enable it in EDT Preferences → MCP Server."); //$NON-NLS-1$
+
+            // The visible tool set changed under progressive disclosure -> push
+            // notifications/tools/list_changed to any open SSE stream. Clients without
+            // an open stream rely on the pull path (the note tells them to re-list).
+            if (pd && !applied.isEmpty())
+            {
+                SseStreamRegistry.getInstance().notifyToolsListChanged();
+            }
 
             return result.toJson();
         }

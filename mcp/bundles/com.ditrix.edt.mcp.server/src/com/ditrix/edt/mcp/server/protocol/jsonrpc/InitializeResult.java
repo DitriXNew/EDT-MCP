@@ -64,12 +64,20 @@ public class InitializeResult
     }
 
     /**
-     * Tools capability (an empty object signals that tools are supported, per the
-     * MCP capabilities convention).
+     * Tools capability. {@code listChanged} is {@code true}: the server can emit
+     * {@code notifications/tools/list_changed} over an open SSE stream when the
+     * exposed tool set changes (progressive tool disclosure — {@code enable_toolset}
+     * revealing a toolset). Clients that keep a GET SSE stream open receive the push;
+     * others re-request {@code tools/list}.
      */
     public static class Tools
     {
-        // Empty - just signals that tools are supported
+        private boolean listChanged = true;
+
+        public boolean isListChanged()
+        {
+            return listChanged;
+        }
     }
 
     /**
