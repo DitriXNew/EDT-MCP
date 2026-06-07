@@ -174,7 +174,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "value:{types:[{kind:'Number', precision:10, scale:2}]}}]}`\n\n" //$NON-NLS-1$
             + "## Result\n" //$NON-NLS-1$
             + "JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, and " //$NON-NLS-1$
-            + "`persisted`."; //$NON-NLS-1$
+            + "`persisted`.\n\n" //$NON-NLS-1$
+            + "## Reverting (no undo)\n" //$NON-NLS-1$
+            + "There is no automatic undo: to revert a change, call modify_metadata again with the " //$NON-NLS-1$
+            + "previous value (read the current value first with get_metadata_details). modify_metadata is " //$NON-NLS-1$
+            + "intentionally NOT confirm-gated because it is reversible that way; only the destructive / " //$NON-NLS-1$
+            + "high-blast-radius writes (delete_metadata, rename_metadata_object, update_database, " //$NON-NLS-1$
+            + "delete_project) are gated with a confirm-preview."; //$NON-NLS-1$
     }
 
     @Override

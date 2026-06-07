@@ -186,7 +186,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "- Members are created with DEFAULT properties (e.g. a default type); adjust with " //$NON-NLS-1$
             + "modify_metadata.\n" //$NON-NLS-1$
             + "- `persisted=false` means the in-memory change committed but the `.mdo` export did not " //$NON-NLS-1$
-            + "confirm - re-check before relying on it on disk."; //$NON-NLS-1$
+            + "confirm - re-check before relying on it on disk.\n" //$NON-NLS-1$
+            + "- No automatic undo: to revert a create, delete the node with delete_metadata (same FQN). " //$NON-NLS-1$
+            + "create_metadata is intentionally NOT confirm-gated because it is reversible that way; only the " //$NON-NLS-1$
+            + "destructive / high-blast-radius writes (delete_metadata, rename_metadata_object, " //$NON-NLS-1$
+            + "update_database, delete_project) are gated with a confirm-preview."; //$NON-NLS-1$
     }
 
     @Override
