@@ -1,34 +1,34 @@
-name: MCP Conformance
+name: MCP Conformance (reusable)
 
-# Protocol-conformance gate (separate from build.yml and e2e-tests.yml).
-# Runs the official modelcontextprotocol/conformance suite against a LIVE MCP
-# server and compares against the committed baseline of intentional gaps, so the
-# gate catches protocol REGRESSIONS — not the known, deliberate gaps.
+# REUSABLE protocol-conformance gate (on: workflow_call) — invoked once per EDT
+# version by the thin caller workflows conformance-2025.2.yml / conformance-2026.1.yml,
+# so each version gets its OWN status badge. Runs the official
+# modelcontextprotocol/conformance suite against a LIVE MCP server and compares against
+# the committed baseline of intentional gaps, so the gate catches protocol REGRESSIONS
+# — not the known, deliberate gaps.
 #
-# Runs entirely on STOCK GitHub-hosted runners (ubuntu-latest): no docker image,
-# no self-hosted runner. The `build` job builds the MCP plugin once; the
-# `conformance` job then runs a MATRIX over EDT versions — the `setup-edt`
-# composite action materializes Eclipse + 1C:EDT of that version (from the public
-# p2) + the built plugin, boots EDT headless under Xvfb, and the conformance
-# client hits the local :8765. Conformance is protocol-only — no EDT project and
-# no 1C platform license needed.
+# Runs entirely on STOCK GitHub-hosted runners (ubuntu-latest): no docker image, no
+# self-hosted runner. The `build` job builds the MCP plugin; the `conformance` job then
+# uses the `setup-edt` composite to materialize Eclipse + 1C:EDT of inputs.edt (from the
+# public p2) + the built plugin, boots EDT headless under Xvfb, and the conformance
+# client hits the local :8765. Conformance is protocol-only — no EDT project and no 1C
+# platform license needed.
 #
-# Matrix note: the plugin is COMPILED against the 2025.2 target platform, so each
-# matrix entry is a runtime compatibility check ("does the 2025.2-built plugin run
-# on EDT <version>"). fail-fast is off so versions report independently.
-#
-# NOTE: the headless-EDT boot is new; the first real CI run validates it
-# end-to-end. If it goes red, read the uploaded EDT log artifact and iterate.
+# Note: the plugin is COMPILED against the 2025.2 target platform, so a 2026.1 run is a
+# runtime compatibility check ("does the 2025.2-built plugin run on EDT 2026.1").
 
 on:
-  push:
-    branches: [master]
-  workflow_dispatch:
+  workflow_call:
     inputs:
+      edt:
+        description: "EDT version (public p2 ruby/<version>/)"
+        required: true
+        type: string
       spec_version:
         description: "MCP spec version to test against"
         required: false
         default: "2025-11-25"
+        type: string
 
 jobs:
   build:
@@ -74,10 +74,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        edt: ["2025.2", "2026.1"]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -94,11 +90,11 @@ jobs:
           name: mcp-plugin-p2
           path: plugin-p2
 
-      - name: Set up headless EDT ${{ matrix.edt }} + MCP server
+      - name: Set up headless EDT ${{ inputs.edt }} + MCP server
         uses: ./.github/actions/setup-edt
         with:
           plugin-repo: plugin-p2
-          edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ matrix.edt }}/"
+          edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ inputs.edt }}/"
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -107,7 +103,7 @@ jobs:
 
       - name: Run MCP conformance suite
         env:
-          SPEC_VERSION: ${{ github.event.inputs.spec_version || '2025-11-25' }}
+          SPEC_VERSION: ${{ inputs.spec_version }}
         run: |
           npx --yes @modelcontextprotocol/conformance@latest server \
             --url "http://127.0.0.1:8765/mcp" \
@@ -118,7 +114,7 @@ jobs:
         if: ${{ always() && env.edt_log != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: conformance-edt-log-${{ matrix.edt }}
+          name: conformance-edt-log-${{ inputs.edt }}
           path: ${{ env.edt_log }}
           if-no-files-found: ignore
 

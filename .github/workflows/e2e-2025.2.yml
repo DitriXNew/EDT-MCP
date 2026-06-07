@@ -1,0 +1,22 @@
+name: E2E 2025.2
+
+# Thin per-version caller of the reusable E2E gate (e2e-tests.yml) so EDT 2025.2 gets
+# its OWN status badge. See e2e-tests.yml for what the gate actually does.
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  e2e:
+    uses: ./.github/workflows/e2e-tests.yml
+    with:
+      edt: "2025.2"

@@ -1,37 +1,31 @@
-name: E2E Tests
+name: E2E Tests (reusable)
 
-# Black-box e2e gate on a STOCK GitHub-hosted runner (ubuntu-latest): no docker
-# image, no self-hosted runner. The `build` job builds the plugin once; the `e2e`
-# job boots a headless EDT via ./.github/actions/setup-edt, which force-starts the
-# MCP server (EDT_MCP_AUTO_START) and imports the TestConfiguration fixtures into
-# an empty workspace by reference (EDT_MCP_IMPORT_PROJECTS — the plugin's headless
-# bootstrap), then runs the suite against the local :8765.
+# REUSABLE workflow (on: workflow_call) — invoked once per EDT version by the thin
+# caller workflows e2e-2025.2.yml and e2e-2026.1.yml, so each version gets its OWN
+# status badge. Black-box e2e gate on a STOCK GitHub-hosted runner (ubuntu-latest):
+# no docker image, no self-hosted runner. The `build` job builds the plugin; the `e2e`
+# job boots a headless EDT (inlined setup, numbered steps 1/8…8/8 — each phase is a
+# separate line in the Actions UI so you can see what is cached vs what runs),
+# force-starts the MCP server (EDT_MCP_AUTO_START), imports the TestConfiguration
+# fixtures into an empty workspace (EDT_MCP_IMPORT_PROJECTS), then runs the suite
+# against the local :8765.
 #
-# Scope: the suite skips the live-infobase round-trip (requires_live_infobase) by
-# default, so it needs NO licensed 1C platform — EDT indexes the project model
-# without one. The skipped runtime tools (YAXUnit run / debug / update_database)
-# stay covered in the local / licensed dev loop.
+# Scope: skips the live-infobase round-trip (requires_live_infobase) by default, so
+# it needs NO licensed 1C platform — EDT indexes the project model without one. The
+# skipped runtime tools (YAXUnit run / debug / update_database) stay covered in the
+# local / licensed dev loop.
 #
-# Matrix: EDT 2025.2 + 2026.1 (fail-fast off, so each reports independently). The
-# extra IUs the e2e install pulls (platform-support 8.5.1, profiling.feature,
-# bsl.extension) are verified present in BOTH versions' p2.
-# The EDT setup is INLINED as numbered steps (EDT setup 1/8 … 8/8) instead of the
-# ./.github/actions/setup-edt composite, so each phase is a separate line in the Actions
-# UI and you can see exactly what is cached vs what runs:
-#   1 system libs (apt)            — NOT cached
-#   2 compute cache key            — trivial
-#   3 RESTORE base cache           — the cache hit/miss is reported here
-#   4 download Eclipse             — CACHE MISS ONLY
-#   5 install EDT base via p2      — CACHE MISS ONLY (slow + rate-limited edt.1c.ru)
-#   6 SAVE base cache              — CACHE MISS ONLY
-#   7 overlay MCP plugin           — ALWAYS (fresh local p2, never edt.1c.ru)
-#   8 boot headless + wait :8765   — ALWAYS (the workspace index is NOT cached)
-# run_all then waits up to E2E_PROJECT_READY_TIMEOUT for indexing before aborting with
-# one clear error. The EDT IDE log is uploaded as an artifact + dumped to the console.
-# Dispatch-only (a full run boots EDT + indexes the config — heavier than conformance).
+# The EDT version comes from the caller via inputs.edt. The extra IUs the install
+# pulls (platform-support 8.5.1, profiling.feature, bsl.extension) are verified
+# present in both 2025.2 and 2026.1 p2.
 
 on:
-  workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      edt:
+        description: "EDT version (public p2 ruby/<version>/)"
+        required: true
+        type: string
 
 jobs:
   build:
@@ -79,16 +73,12 @@ jobs:
       contents: read
       checks: write
       pull-requests: write
-    strategy:
-      fail-fast: false
-      matrix:
-        edt: ["2025.2", "2026.1"]
     # The EDT setup below is INLINED (instead of the ./.github/actions/setup-edt
     # composite) so each phase shows as its own step in the Actions UI — you can see at
-    # a glance which steps are cached/skipped vs which run. Conformance still uses the
-    # composite. These env values mirror the composite's inputs.
+    # a glance which steps are cached/skipped vs which run. These env values mirror the
+    # composite's inputs; the EDT version comes from the caller (inputs.edt).
     env:
-      EDT_P2: "https://edt.1c.ru/downloads/releases/ruby/${{ matrix.edt }}/"
+      EDT_P2: "https://edt.1c.ru/downloads/releases/ruby/${{ inputs.edt }}/"
       ECLIPSE_ARCHIVE: "https://archive.eclipse.org/eclipse/downloads/drops4/R-4.30-202312010110/eclipse-platform-4.30-linux-gtk-x86_64.tar.gz"
       ECLIPSE_P2: "https://download.eclipse.org/releases/2023-12/"
       ORBIT_P2: "https://download.eclipse.org/tools/orbit/downloads/drops/R20211213173813/repository/"
@@ -336,14 +326,14 @@ jobs:
         if: always()
         continue-on-error: true
         with:
-          check_name: "E2E Test Results (EDT ${{ matrix.edt }})"
+          check_name: "E2E Test Results (EDT ${{ inputs.edt }})"
           files: tests/e2e/e2e-results.xml
 
       - name: Upload test report
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: e2e-test-results-${{ matrix.edt }}
+          name: e2e-test-results-${{ inputs.edt }}
           path: tests/e2e/e2e-results.xml
           if-no-files-found: ignore
 
@@ -351,7 +341,7 @@ jobs:
         if: ${{ always() && env.edt_log != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-edt-log-${{ matrix.edt }}
+          name: e2e-edt-log-${{ inputs.edt }}
           path: ${{ env.edt_log }}
           if-no-files-found: ignore
 
