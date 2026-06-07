@@ -1,0 +1,70 @@
+name: MCP Conformance
+
+# Protocol-conformance gate (separate from build.yml and e2e-tests.yml).
+# Runs the official modelcontextprotocol/conformance suite against a LIVE MCP
+# server and compares against the committed baseline of intentional gaps, so the
+# gate catches protocol REGRESSIONS — not the known, deliberate gaps.
+#
+# NOTE: the MCP server runs INSIDE 1C:EDT, so this needs a self-hosted runner
+# that has EDT + the plugin running (same constraint as e2e-tests.yml), or manual
+# dispatch against an already-running server. A stock GitHub runner cannot host it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mcp_host:
+        description: "MCP server host"
+        required: false
+        default: "localhost"
+      mcp_port:
+        description: "MCP server port"
+        required: false
+        default: "8765"
+      spec_version:
+        description: "MCP spec version to test against"
+        required: false
+        default: "2025-11-25"
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    # Use a self-hosted runner with EDT + the MCP plugin running, or dispatch
+    # this against an existing live server (set mcp_host/mcp_port accordingly).
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Wait for MCP server
+        env:
+          MCP_HOST: ${{ github.event.inputs.mcp_host }}
+          MCP_PORT: ${{ github.event.inputs.mcp_port }}
+        run: |
+          echo "Checking MCP server at $MCP_HOST:$MCP_PORT ..."
+          for i in $(seq 1 30); do
+            if curl -sf "http://$MCP_HOST:$MCP_PORT/health" > /dev/null 2>&1; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30 - waiting 5s..."
+            sleep 5
+          done
+          echo "ERROR: MCP server not available"
+          exit 1
+
+      - name: Run MCP conformance suite
+        env:
+          MCP_HOST: ${{ github.event.inputs.mcp_host }}
+          MCP_PORT: ${{ github.event.inputs.mcp_port }}
+          SPEC_VERSION: ${{ github.event.inputs.spec_version }}
+        run: |
+          npx --yes @modelcontextprotocol/conformance@latest server \
+            --url "http://$MCP_HOST:$MCP_PORT/mcp" \
+            --spec-version "$SPEC_VERSION" \
+            --expected-failures tests/conformance/baseline.yml

@@ -1,0 +1,49 @@
+# MCP conformance baseline — expected (intentional) failures.
+#
+# Used with: npx @modelcontextprotocol/conformance@latest server \
+#   --url http://127.0.0.1:8765/mcp --spec-version 2025-11-25 \
+#   --expected-failures tests/conformance/baseline.yml
+#
+# Every scenario listed here is a DELIBERATE gap, not a bug. The gate's job is to
+# catch REGRESSIONS: if a scenario NOT listed here fails, that's a real protocol
+# defect → fix the server. If a listed scenario starts PASSING, remove it here.
+#
+# Baseline captured 2026-06-07 against the live server (8 passed / 24 failed).
+# Passing (not listed): server-initialize, ping, tools-list,
+#   server-sse-multiple-streams, resources-list, dns-rebinding-protection.
+
+server:
+  # --- Bucket 1: conformance fixture tools -------------------------------------
+  # These tools-call-* scenarios require the SERVER to ship named conformance
+  # test tools (e.g. a `test_simple_text` that returns a canned body). A
+  # production server intentionally does NOT expose test fixtures.
+  - tools-call-simple-text
+  - tools-call-image
+  - tools-call-audio
+  - tools-call-embedded-resource
+  - tools-call-mixed-content
+  - tools-call-with-logging
+  - tools-call-error
+  - tools-call-with-progress
+  - tools-call-sampling
+  - tools-call-elicitation
+
+  # --- Bucket 2: capabilities EDT-MCP does not advertise ----------------------
+  # Logging, completion, elicitation, resources-READ, and prompts are not
+  # implemented by design (see the protocol-upgrade epic — elicitation/tasks are
+  # client-gated and deferred; resources/prompts are not part of this server's
+  # surface). resources-LIST passes (empty list); only resources-READ fails.
+  - logging-set-level
+  - completion-complete
+  - elicitation-sep1034-defaults
+  - elicitation-sep1330-enums
+  - resources-read-text
+  - resources-read-binary
+  - resources-templates-read
+  - resources-subscribe
+  - resources-unsubscribe
+  - prompts-list
+  - prompts-get-simple
+  - prompts-get-with-args
+  - prompts-get-embedded-resource
+  - prompts-get-with-image

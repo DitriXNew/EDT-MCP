@@ -22,6 +22,7 @@ The `.claude/hooks/edt-skill-router.js` hook auto-suggests these when you touch 
 | `edt-mcp-e2e-testing` | Writing/running the **automated** black-box suite `tests/e2e/` (one `test_<tool>.py` per tool). |
 | `edt-mcp-testing` | **Manual** per-tool live validation — `references/<family>/<tool>.md`: exact call, expected result, gotchas. |
 | `edt-mcp-yaxunit` | Writing/running YAXUnit 1C unit tests via `run_yaxunit_tests` / `debug_yaxunit_tests`. |
+| `edt-mcp-ready-to-deploy` | **Wrapping up — the final "definition of done" gate.** Run when a piece of work is finished, before declaring it done or merging (hygiene → tests → build → README → live redeploy → golden → full e2e → conformance → clean tree). |
 
 ---
 
@@ -96,9 +97,13 @@ Each tier proves a different layer. A green lower tier does NOT prove the higher
 
 **Tier 3 — automated black-box e2e (`tests/e2e/`).** Real MCP client → live server → asserts the real effect. One `test_<tool>.py` per tool; git-fixture isolation; happy + negative + error-quality; anti-cheat; a coverage ratchet fails the suite if a tool has none. Run: `python tests/e2e/run_all.py --project TestConfiguration` (needs a live `:8765`). Read `edt-mcp-e2e-testing` (full guide `tests/e2e/SKILL.md`) before adding/editing a test. The formatter/synonym and error-shape contracts are **e2e-only** — they stay "verify in EDT".
 
+**Tier 4 — protocol conformance.** The official `modelcontextprotocol/conformance` suite validates the SERVER against the MCP wire spec (handshake, capabilities, session-id, `isError`, `ping`, SSE) — a separate layer from the e2e business-logic gate. `tests/conformance/` holds `baseline.yml` (the pinned intentional gaps) + `README.md` (the layer split). Run: `npx @modelcontextprotocol/conformance@latest server --url http://127.0.0.1:8765/mcp --spec-version 2025-11-25 --expected-failures tests/conformance/baseline.yml` → green when only the pinned gaps fail; a new failure = a protocol regression. CI: `.github/workflows/conformance.yml` (needs a self-hosted runner with EDT).
+
 **Mandatory test minimum for a change:**
 - Changed metadata/code resolution → a test for **both** languages (English `Name`, Russian `Name`, synonym). Reference: `WriteModuleSourceToolTest.testResolveRussianObjectName`.
 - New/changed tool → an `XxxToolTest` (+ the `test_<tool>.py` e2e file).
+
+> **When the whole change is done, run the `edt-mcp-ready-to-deploy` skill** — the ordered final gate (hygiene → tests written → build+unit → README → live redeploy → golden → full e2e → conformance → clean tree) that confirms everything still works before you call it done or merge.
 
 ---
 

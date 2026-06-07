@@ -42,8 +42,13 @@ bash source/compile.sh --skip-tests
 
 `tests/e2e/run_all.py` (+ `tools/test_<tool>.py`, one per tool) runs scenarios against the live server and `TestConfiguration/` with git-fixture isolation. The round-trip of Cyrillic synonyms and the synonym-keyed-by-language-code check live in `test_create_metadata.py` / `test_get_metadata_details.py`. A new tool — add `tools/test_<tool>.py`. Full guide: `edt-mcp-e2e-testing` (and `tests/e2e/SKILL.md`).
 
+## Protocol conformance
+
+A separate gate from the e2e business-logic suite: the official `modelcontextprotocol/conformance` suite validates the SERVER against the MCP wire spec (handshake, capabilities, session-id, `isError`, `ping`, SSE). Lives in `tests/conformance/` (`baseline.yml` pins the intentional gaps; `README.md` explains the layer split). Run: `npx @modelcontextprotocol/conformance@latest server --url http://127.0.0.1:8765/mcp --spec-version 2025-11-25 --expected-failures tests/conformance/baseline.yml`.
+
 ## Before committing
 - [ ] Build passes
 - [ ] Unit tests green; a new/changed tool has a test
 - [ ] If metadata/code resolution is touched — a bilingual case exists
 - [ ] (if applicable) the e2e scenario is updated
+- [ ] For a finished piece of work, run the full `edt-mcp-ready-to-deploy` checklist (build → README → live redeploy → golden → full e2e → conformance → clean tree)
