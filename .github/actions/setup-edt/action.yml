@@ -211,9 +211,31 @@ runs:
           echo "[setup-edt] will import projects: $EDT_MCP_IMPORT_PROJECTS"
         fi
         echo "[setup-edt] launching EDT under Xvfb (workspace=$WS) ..."
+        # EDT uses Apache Ignite (its BM / derived-data store), which on JDK 17 must reflect
+        # into java.nio / sun.nio.ch (DirectByteBuffer.address) and needs the module system
+        # opened up. These --add-modules / --add-opens are exactly what EDT's own 1cedt.ini
+        # ships; WITHOUT them GridUnsafe fails to initialize, the DtProject lifecycle never
+        # completes its LINKING phase, and the imported projects stay 'not_available' forever
+        # (never index). Passing -vmargs on the command line REPLACES the eclipse.ini -vmargs
+        # block, so the required osgi/log4j flags are repeated here too.
         xvfb-run -a -s "-screen 0 1920x1080x24" \
           "$ECLIPSE/eclipse" -data "$WS" -clean -nosplash -consoleLog \
-          --launcher.suppressErrors -vmargs -Xmx4g \
+          --launcher.suppressErrors \
+          -vmargs \
+          -Xmx4g \
+          -Dosgi.requiredJavaVersion=17 \
+          -Dorg.osgi.framework.bundle.parent=ext \
+          -Dosgi.module.lock.timeout=240 \
+          -Dlog4j.formatMsgNoLookups=true \
+          -Dlog4j2.formatMsgNoLookups=true \
+          --add-modules=ALL-SYSTEM \
+          --add-opens=java.base/java.lang=ALL-UNNAMED \
+          --add-opens=java.base/java.lang.constant=ALL-UNNAMED \
+          --add-opens=java.base/java.lang.ref=ALL-UNNAMED \
+          --add-opens=java.base/java.nio=ALL-UNNAMED \
+          --add-opens=java.base/java.time=ALL-UNNAMED \
+          --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
+          --add-opens=java.base/java.net=ALL-UNNAMED \
           > "$LOG" 2>&1 &
         echo "edt_pid=$!" >> "$GITHUB_ENV"
         echo "[setup-edt] waiting for MCP server on :$MCP_PORT ..."
