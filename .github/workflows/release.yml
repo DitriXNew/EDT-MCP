@@ -13,17 +13,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
           cache: maven
 
       - name: Cache Tycho P2 repositories
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.m2/repository/.cache/tycho
@@ -58,7 +58,7 @@ jobs:
           zip -r "$GITHUB_WORKSPACE/MCP-EDT.v${{ steps.version.outputs.version }}.zip" .
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: MCP-EDT v${{ steps.version.outputs.version }}
           files: MCP-EDT.v*.zip
