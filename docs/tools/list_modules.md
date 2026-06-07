@@ -1,0 +1,50 @@
+# list_modules
+
+List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). Use it to discover module paths before reading or editing code; filter by metadataType, objectName or nameFilter. Use this to enumerate a project's modules; for the methods/regions inside one module use get_module_structure. Full parameters and examples: call get_tool_guide('list_modules').
+
+## Parameters
+| Parameter | Required | Type | Description |
+| --- | --- | --- | --- |
+| projectName | yes | string | EDT project name (required) |
+| metadataType | — | string (one of: all, documents, catalogs, commonModules, informationRegisters, accumulationRegisters, reports, dataProcessors, exchangePlans, businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices) | Type filter, default 'all' (case-insensitive). |
+| objectName | — | string | Programmatic Name of one object to scope to, e.g. 'Products' (case-insensitive) |
+| nameFilter | — | string | Case-insensitive substring matched against the module path |
+| limit | — | integer | Max rows, default 200 (clamped to 1000) |
+
+## Guide
+List the BSL modules of an EDT project as a Markdown table. Each row reports the module path (relative to `src/`), the module type (`Module`, `ObjectModule`, `ManagerModule`, `FormModule`, `CommandModule`, ...), the parent metadata type and the parent object Name. Use it to discover concrete module paths before calling `read_module_source`, `read_method_source`, `write_module_source` or `get_module_structure`.
+
+## When to use
+- Enumerate every module in a project (default `metadataType: all`).
+- Narrow to one metadata kind (e.g. only `commonModules` or `documents`).
+- Find all modules belonging to a single object via `objectName`.
+- Grep module paths with `nameFilter` (e.g. only form modules).
+
+## Parameter details
+- `projectName` (required) - EDT project name.
+- `metadataType` - type filter, default `all`. Accepted values: `all`, `documents`, `catalogs`, `commonModules`, `informationRegisters`, `accumulationRegisters`, `reports`, `dataProcessors`, `exchangePlans`, `businessProcesses`, `tasks`, `constants`, `commonCommands`, `commonForms`, `webServices`, `httpServices`. An unknown value returns a `ToolResult.error` that lists the supported values.
+- `objectName` - programmatic **Name** of one metadata object to scope to (e.g. `Products`). Matched case-insensitively against the object Name, never against the synonym - pass the English or Russian Name as defined in the model, not a localized caption.
+- `nameFilter` - case-insensitive substring matched against the **module path** (e.g. `Forms/` to keep only form modules, `ManagerModule` for manager modules).
+- `limit` - max rows, default 200, clamped to 1000. A truncation notice is appended when results are capped.
+
+## Modes
+- **`metadataType: all`** scans the `src/` directory recursively, so it covers every metadata kind (including ones without a dedicated branch) and Configuration-level modules. The parent type is inferred from the top-level `src/` folder name.
+- **A specific `metadataType`** uses the EDT configuration model to enumerate objects of that kind, then collects their `.bsl` files. Single-module kinds (`commonModules`, `commonCommands`, `commonForms`, `webServices`, `httpServices`) resolve one known file; multi-module kinds (`documents`, `catalogs`, registers, `reports`, `dataProcessors`, ...) are scanned recursively so object, manager, form and command modules all appear.
+
+## Module type derivation
+The module type comes from the file name relative to the object directory. `Module.bsl` under a `Forms/` subfolder is reported as `FormModule`; a top-level `Module.bsl` (CommonModule, WebService, HTTPService) stays `Module`; otherwise the file base name is used verbatim (e.g. `ObjectModule`, `ManagerModule`, `CommandModule`).
+
+## Examples
+- Everything: `{projectName: "MyProject"}`.
+- Only common modules: `{projectName: "MyProject", metadataType: "commonModules"}`.
+- All modules of one document: `{projectName: "MyProject", metadataType: "documents", objectName: "Order"}`.
+- Only form modules across the project: `{projectName: "MyProject", nameFilter: "Forms/"}`.
+
+## Notes & gotchas
+- `objectName` resolves by programmatic Name (case-insensitive), not by synonym; a translated caption will not match.
+- `nameFilter` matches the path, while `objectName` matches the parent object - they are independent and can be combined.
+- Paths are relative to `src/`; feed them directly to the module read/write tools.
+- Output is Markdown with escaped table cells, so a `|` in a path does not break the table.
+
+---
+*Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Edit the tool's Java source, not this file.*

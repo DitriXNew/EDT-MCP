@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""
+Generate per-tool documentation from the LIVE MCP server — the single source of truth.
+
+Each tool's doc is exactly what `get_tool_guide` renders (name + description +
+Parameters table from the input schema + the in-code Guide), so the docs never drift
+from the Java tools: re-run this whenever tools change.
+
+Outputs:
+  docs/tools/<tool>.md     one rendered guide per tool
+  docs/tools/README.md     an index grouped by toolset (from list_toolsets), linking
+                           to each tool doc
+
+Usage (needs a live server, e.g. the dev EDT on :8765):
+  python docs/generate_tool_docs.py [--host 127.0.0.1] [--port 8765]
+
+Python stdlib only.
+"""
+
+import argparse
+import json
+import os
+import sys
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = os.path.join(HERE, "tools")
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(description="Generate per-tool docs from the live MCP server")
+    ap.add_argument("--host", default=os.environ.get("MCP_HOST", "127.0.0.1"))
+    ap.add_argument("--port", default=os.environ.get("MCP_PORT", "8765"))
+    return ap.parse_args()
+
+
+def rpc(url, method, params=None):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
+                       "params": params or {}}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "MCP-Protocol-Version": "2025-11-25",
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    if "error" in payload:
+        raise RuntimeError("%s -> %s" % (method, payload["error"]))
+    return payload.get("result", {})
+
+
+def call_text(url, name, arguments):
+    """Return the textual payload of a tools/call (handles content[].text and the
+    embedded-resource shape get_tool_guide uses)."""
+    res = rpc(url, "tools/call", {"name": name, "arguments": arguments})
+    for item in res.get("content", []):
+        if item.get("type") == "resource":
+            txt = (item.get("resource") or {}).get("text")
+            if txt:
+                return txt
+        if item.get("text"):
+            return item["text"]
+    return ""
+
+
+def call_structured(url, name, arguments):
+    res = rpc(url, "tools/call", {"name": name, "arguments": arguments})
+    if isinstance(res.get("structuredContent"), dict):
+        return res["structuredContent"]
+    for item in res.get("content", []):
+        if item.get("text"):
+            try:
+                return json.loads(item["text"])
+            except ValueError:
+                pass
+    return {}
+
+
+def main():
+    args = parse_args()
+    url = "http://%s:%s/mcp" % (args.host, args.port)
+
+    tools = rpc(url, "tools/list").get("tools", [])
+    if not tools:
+        print("No tools returned by tools/list — is the server up?", file=sys.stderr)
+        sys.exit(1)
+    tools_by_name = {t["name"]: t for t in tools}
+    names = sorted(tools_by_name)
+
+    # Toolset grouping for the index (best-effort: if list_toolsets is hidden/absent,
+    # fall back to a single flat group).
+    groups = []  # list of (title, description, [tool names])
+    try:
+        ts = call_structured(url, "list_toolsets", {})
+        for toolset in ts.get("toolsets", []):
+            tnames = [n for n in toolset.get("tools", []) if n in tools_by_name]
+            if tnames:
+                groups.append((toolset.get("title") or toolset.get("id"),
+                               toolset.get("description") or "", sorted(tnames)))
+    except Exception as e:  # noqa: BLE001
+        print("list_toolsets unavailable (%s) — using a flat index" % e, file=sys.stderr)
+    grouped = {n for _t, _d, ns in groups for n in ns}
+    ungrouped = [n for n in names if n not in grouped]
+    if ungrouped:
+        groups.append(("Other", "", ungrouped))
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    written = 0
+    for name in names:
+        md = call_text(url, "get_tool_guide", {"toolName": name})
+        if not md:
+            md = "# %s\n\n%s\n" % (name, tools_by_name[name].get("description", ""))
+        # Footer: these are generated; point readers at the generator.
+        md = md.rstrip() + ("\n\n---\n*Generated from the live MCP server "
+                            "(`get_tool_guide`) by `docs/generate_tool_docs.py`. "
+                            "Edit the tool's Java source, not this file.*\n")
+        with open(os.path.join(OUT_DIR, name + ".md"), "w", encoding="utf-8") as f:
+            f.write(md)
+        written += 1
+
+    # Grouped index table — reused for the docs/tools/ index and (with a path prefix)
+    # for the README block, so there is ONE generated source for both.
+    def index_lines(link_prefix, heading_level):
+        out = []
+        for title, desc, ns in groups:
+            out.append("%s %s" % ("#" * heading_level, title))
+            if desc:
+                out += ["", "> %s" % desc]
+            out += ["", "| Tool | Description |", "|------|-------------|"]
+            for n in ns:
+                d = (tools_by_name[n].get("description") or "").replace("\n", " ").strip()
+                if len(d) > 160:
+                    d = d[:157].rstrip() + "…"
+                d = d.replace("|", "\\|")
+                out.append("| [`%s`](%s%s.md) | %s |" % (n, link_prefix, n, d))
+            out.append("")
+        return out
+
+    # docs/tools/README.md — the folder index (links relative to this folder).
+    docs_idx = ["# EDT MCP Server — Tool Reference",
+                "",
+                "One page per tool: what it does, every parameter, and how it works. "
+                "Generated from the live server by `docs/generate_tool_docs.py` "
+                "(re-run to refresh; the source of truth is each tool's Java).",
+                "",
+                "**%d tools.**" % len(names),
+                ""]
+    docs_idx += index_lines("", 2)
+    with open(os.path.join(OUT_DIR, "README.md"), "w", encoding="utf-8") as f:
+        f.write("\n".join(docs_idx))
+
+    # Inject the same index into README.md between the TOOLS-INDEX markers (links from
+    # the repo root). Skipped with a notice if the markers are absent.
+    readme = os.path.join(os.path.dirname(HERE), "README.md")
+    injected = False
+    if os.path.isfile(readme):
+        text = open(readme, encoding="utf-8").read()
+        start_m, end_m = "<!-- TOOLS-INDEX:START -->", "<!-- TOOLS-INDEX:END -->"
+        si, ei = text.find(start_m), text.find(end_m)
+        if si != -1 and ei != -1 and ei > si:
+            block = "\n".join([start_m,
+                               "<!-- generated by docs/generate_tool_docs.py — do not edit by hand -->",
+                               "",
+                               "**%d tools**, grouped by toolset. Full per-tool pages under "
+                               "[docs/tools/](docs/tools/)." % len(names),
+                               ""] + index_lines("docs/tools/", 3) + [end_m])
+            text = text[:si] + block + text[ei + len(end_m):]
+            open(readme, "w", encoding="utf-8").write(text)
+            injected = True
+
+    print("Wrote %d tool docs + docs/tools/README.md; README index injected: %s"
+          % (written, injected))
+
+
+if __name__ == "__main__":
+    main()
