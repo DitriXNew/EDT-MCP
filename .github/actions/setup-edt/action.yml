@@ -132,23 +132,32 @@ runs:
         # rate-limit window; p2's own transport retry handles transient read errors within an
         # attempt. This network-heavy step runs ONLY on a cache miss (first run per version).
         ok=0
-        for attempt in 1 2 3 4; do
-          echo "[setup-edt] EDT-base p2 director attempt $attempt/4 ..."
-          if "$ECLIPSE/eclipse" -nosplash -consoleLog \
+        for attempt in 1 2 3 4 5; do
+          echo "[setup-edt] EDT-base p2 director attempt $attempt/5 ..."
+          # Bound each attempt with `timeout`: edt.1c.ru sometimes throttles a download to a
+          # near-stall from the Azure runner, which can otherwise hang the director for 30+
+          # min. A killed attempt rolls back cleanly and the p2 bundle pool persists, so the
+          # retry RESUMES with the already-fetched artifacts. The ECF read/connect timeouts
+          # make a STALLED socket fail fast (p2's own retry re-fetches it) instead of
+          # blocking the whole attempt.
+          if timeout -k 30 1200 "$ECLIPSE/eclipse" -nosplash -consoleLog \
               -application org.eclipse.equinox.p2.director \
               -repository "${{ inputs.edt-p2 }},${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }}" \
               -installIU "$IUS" \
               -destination "$ECLIPSE" \
               -profileProperties org.eclipse.update.install.features=true \
               -p2.os linux -p2.ws gtk -p2.arch x86_64 -tag init \
-              -vmargs -Dorg.eclipse.equinox.p2.transport.ecf.retry=5; then
+              -vmargs \
+              -Dorg.eclipse.equinox.p2.transport.ecf.retry=5 \
+              -Dorg.eclipse.ecf.provider.filetransfer.retrieve.readTimeout=120000 \
+              -Dorg.eclipse.ecf.provider.filetransfer.retrieve.connectTimeout=60000; then
             ok=1
             break
           fi
-          echo "[setup-edt] EDT-base attempt $attempt failed (upstream edt.1c.ru likely rate-limited a download); cooling down 60s ..."
+          echo "[setup-edt] EDT-base attempt $attempt failed/timed out (upstream edt.1c.ru likely rate-limited a download); cooling down 60s ..."
           sleep 60
         done
-        [ "$ok" = 1 ] || { echo "[setup-edt] ERROR: EDT-base p2 director failed after 4 attempts"; exit 1; }
+        [ "$ok" = 1 ] || { echo "[setup-edt] ERROR: EDT-base p2 director failed after 5 attempts"; exit 1; }
 
     - name: Save EDT base to cache (cache miss only)
       if: steps.restore-edt.outputs.cache-hit != 'true'
