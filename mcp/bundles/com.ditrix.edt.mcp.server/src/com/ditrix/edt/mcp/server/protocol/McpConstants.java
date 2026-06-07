@@ -116,6 +116,9 @@ public final class McpConstants
     /** Resources read method (returns the Markdown body of one guide:// document) */
     public static final String METHOD_RESOURCES_READ = "resources/read"; //$NON-NLS-1$
 
+    /** Ping utility method (MCP basic utilities): respond promptly with an empty result {}. */
+    public static final String METHOD_PING = "ping"; //$NON-NLS-1$
+
     /** URI scheme prefix for a per-tool how-to guide resource ({@code guide://<toolName>}) */
     public static final String GUIDE_URI_SCHEME = "guide://"; //$NON-NLS-1$
 

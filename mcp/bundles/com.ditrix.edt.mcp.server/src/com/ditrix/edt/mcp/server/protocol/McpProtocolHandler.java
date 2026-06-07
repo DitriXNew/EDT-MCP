@@ -157,6 +157,13 @@ public class McpProtocolHandler
                 return handleResourcesRead(request, requestId);
             }
 
+            // Ping utility (MCP basic utilities): a connection-health check that takes no
+            // params and MUST respond promptly with an empty result object.
+            if (McpConstants.METHOD_PING.equals(method))
+            {
+                return GsonProvider.toJson(JsonRpcResponse.success(requestId, new JsonObject()));
+            }
+
             // Method not found
             return buildErrorResponse(McpConstants.ERROR_METHOD_NOT_FOUND, "Method not found", requestId); //$NON-NLS-1$
         }

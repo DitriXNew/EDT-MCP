@@ -374,6 +374,20 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testPingReturnsEmptyResult()
+    {
+        // MCP basic-utilities ping: no params, MUST respond promptly with an empty result {}.
+        String request = buildJsonRpcRequest(1, "ping", null);
+        String response = handler.processRequest(request);
+
+        JsonObject json = parseResponse(response);
+        assertNull("ping must not be a JSON-RPC error", json.get("error"));
+        JsonObject result = json.getAsJsonObject("result");
+        assertNotNull("ping must return a result", result);
+        assertEquals("ping result must be an empty object", 0, result.entrySet().size());
+    }
+
+    @Test
     public void testToolsListWithTools()
     {
         registry.register(new StubTool("tool_alpha", "Alpha tool", "{\"type\":\"object\"}"));
