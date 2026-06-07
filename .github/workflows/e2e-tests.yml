@@ -12,7 +12,9 @@ name: E2E Tests
 # without one. The skipped runtime tools (YAXUnit run / debug / update_database)
 # stay covered in the local / licensed dev loop.
 #
-# TEMP (debugging): matrix is 2026.1 ONLY — restore ["2025.2", "2026.1"] once green.
+# Matrix: EDT 2025.2 + 2026.1 (fail-fast off, so each reports independently). The
+# extra IUs the e2e install pulls (platform-support 8.5.1, profiling.feature,
+# bsl.extension) are verified present in BOTH versions' p2.
 # The EDT setup is INLINED as numbered steps (EDT setup 1/8 … 8/8) instead of the
 # ./.github/actions/setup-edt composite, so each phase is a separate line in the Actions
 # UI and you can see exactly what is cached vs what runs:
@@ -80,9 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # TEMP: 2026.1 only while debugging the headless boot. Restore
-        # ["2025.2", "2026.1"] once green.
-        edt: ["2026.1"]
+        edt: ["2025.2", "2026.1"]
     # The EDT setup below is INLINED (instead of the ./.github/actions/setup-edt
     # composite) so each phase shows as its own step in the Actions UI — you can see at
     # a glance which steps are cached/skipped vs which run. Conformance still uses the
