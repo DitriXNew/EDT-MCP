@@ -8,7 +8,7 @@
 - `projectName` is **optional**. Omit it to summarize every project in the workspace; pass it to filter to one project (validated to exist before counting).
 - No open editor, no cursor, no `modulePath`. Does NOT mutate — no revert needed.
 
-**Call (real, 2026-06-02).** Verified live against `TestConfiguration` (EDT 2026.1.1):
+**Call (real).** Verified live against `TestConfiguration` (EDT 2026.1.1):
 ```
 get_problem_summary(
   projectName="TestConfiguration"

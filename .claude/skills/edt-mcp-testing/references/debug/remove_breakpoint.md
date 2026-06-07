@@ -1,19 +1,19 @@
-# remove_breakpoint — как тестировать
+# remove_breakpoint — how to test
 
-**Назначение.** Снять брейкпоинт — по `breakpointId` или по координатам `projectName+module+lineNumber`.
+**Purpose.** Remove a breakpoint — by `breakpointId` or by the coordinates `projectName+module+lineNumber`.
 
-**Предусловие.** Есть брейкпоинт; актуальный id взять из `list_breakpoints`.
+**Precondition.** A breakpoint exists; take the current id from `list_breakpoints`.
 
-**Вызов (реально, 2026-06-02):**
+**Call (real):**
 ```
 remove_breakpoint(breakpointId=1867)
 ```
 
-**Ожидаемый результат:**
+**Expected result:**
 ```json
 {"removed":true,"success":true}
 ```
 
-**Подводные камни.**
-- Удаление **несуществующего/устаревшего id** не ошибка, а `{"removed":false,"success":true}` — в прогоне `remove_breakpoint(1863)` (старый id со стр.5) вернул `removed:false`, потому что брейк уже жил под id 1867. **Сначала `list_breakpoints`, потом удаляй по фактическому id.**
-- Альтернатива — удаление по координатам (`projectName`+`module`+`lineNumber`), полезно когда id неизвестен.
+**Gotchas.**
+- Removing a **non-existent/stale id** is not an error but `{"removed":false,"success":true}` — in a run `remove_breakpoint(1863)` (the old id from line 5) returned `removed:false`, because the break already lived under id 1867. **First `list_breakpoints`, then remove by the actual id.**
+- An alternative is removal by coordinates (`projectName`+`module`+`lineNumber`), useful when the id is unknown.

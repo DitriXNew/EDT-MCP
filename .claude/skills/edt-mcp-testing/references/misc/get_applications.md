@@ -58,7 +58,7 @@ Field meaning (from `GetApplicationsTool`):
 ```
 
 **Gotchas.**
-- **JSON tool, with HTML/char escaping.** Output is the `ToolResult` JSON envelope. `ToolResult.toJson()` HTML-escapes characters like `>`, `<`, `&`, `=`, and the apostrophe `'` as `\uXXXX`; if you ever assert on text, match a delimiter-free substring, not raw `'…'` or `>=`.
+- **JSON tool, no HTML escaping.** Output is the `ToolResult` JSON envelope. `GsonProvider` uses `disableHtmlEscaping()`, so `ToolResult.toJson()` keeps characters like `>`, `<`, `&`, `=`, and the apostrophe `'` RAW (not `\uXXXX`); if you ever assert on text, match a delimiter-free substring for robustness, not raw `'…'` or `>=`.
 - **"Empty" is success, not error.** No applications → `success:true` with `count:0`, `applications:[]`, and the `"No applications found for project"` message. This is informational, **not** the error contract.
 - **Error contract.** Genuine failures use `ToolResult.error(...)` → `{success:false,error:"…"}` with `isError:true`. These are returned for: missing/empty `projectName` (`"projectName is required"`), project not `ready` (the `ProjectStateChecker` message), `"Project not found: <name>"`, `"Project is closed: <name>"`, `"IApplicationManager service is not available"`, and `"Error getting applications: <msg>"` (a caught `ApplicationException`). A per-application `getUpdateState` failure is *not* a tool-level error — it is captured inline as `updateState:"ERROR"` + `updateStateError` on that one app, and the call still succeeds.
 - **State gate.** Because of `checkReadyOrError`, calling against a project that is still indexing returns the not-ready error, not partial data. Re-poll `list_projects` until `State=ready`.

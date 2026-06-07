@@ -3,48 +3,47 @@ name: edt-mcp-build-test
 description: How to build the EDT-MCP Eclipse plugin (Tycho/Maven) and run its unit and e2e tests, plus the test conventions for this repo. Use when building the plugin, running or writing tests, or verifying a change before committing.
 ---
 
-# EDT-MCP — сборка и тесты
+# EDT-MCP — build and tests
 
-## Структура
+## Layout
 
-- Maven/Tycho-реактор: `mcp/` (bom, bundles, features, repositories, targets, tests).
-- Юнит-тесты: `mcp/tests/com.ditrix.edt.mcp.server.tests/src` (JUnit4, plug-in fragment).
-- E2E: `tests/e2e/run_all.py` + `tools/test_<tool>.py` (Python; гоняет MCP-сервер против `TestConfiguration/`).
+- Maven/Tycho reactor: `mcp/` (bom, bundles, features, repositories, targets, tests).
+- Unit tests: `mcp/tests/com.ditrix.edt.mcp.server.tests/src` (JUnit4, a plug-in fragment).
+- E2E: `tests/e2e/run_all.py` + `tools/test_<tool>.py` (Python; runs the MCP server against `TestConfiguration/`).
 
-## Сборка
+## Build
 
-Tycho-сборка из `mcp/` (Maven, JDK 17). Артефакт — p2 update-site в `repositories/com.ditrix.edt.mcp.server.repository/target`.
+A Tycho build from `mcp/` (Maven, JDK 17). The artifact is a p2 update-site in `repositories/com.ditrix.edt.mcp.server.repository/target`.
 
-**Локальная сборка доступна — пользуйся ей для валидации правок Java** (не «проверено только ревью/грепом»). Канонический скрипт — `source/compile.sh` (он же воспроизводит CI-флоу `mvn clean verify -T 1C` из `.github/workflows/build.yml`):
+**A local build is available — use it to validate Java edits** (don't claim "verified by review/grep only"). The canonical script is `source/compile.sh` (it reproduces the CI flow `mvn clean verify -T 1C` from `.github/workflows/build.yml`):
 
 ```bash
-# из корня репо: компиляция + юнит-тесты
+# from the repo root: compile + unit tests
 bash source/compile.sh
-# только компиляция (без Surefire) — быстрее
+# compile only (no Surefire) — faster
 bash source/compile.sh --skip-tests
 ```
 
-- Тулчейн (JDK 17 + Maven 3.9+) часто **не на `PATH`** — передавай явно: `--java-home <JDK17 home> --maven-home <maven home>` (или env `JAVA_HOME`/`MAVEN_HOME`). Конкретные пути **зависят от машины — выясняй на месте**, не хардкодь в репозиторные файлы. Точные опции — в README «Building from source».
-- **Первая сборка медленная**: Tycho тянет EDT p2-репозиторий (`edt.1c.ru`) + Eclipse SDK (сотни МБ). После прогрева кэшей (`~/.m2/repository/p2`, `.cache/tycho`) — ~1 минута. Если кэшей нет и нет сети — сборка честно не пойдёт; так и сказать, не имитировать «зелёно».
-- **Юнит-тестам тоже нужна target-платформа** (Mockito/JUnit идут из p2-таргета, не из обычного Maven Central) — зелёный `compile.sh` и есть настоящее доказательство для Java-правок; греп ловит только проблемы якорей/текста.
+- The toolchain (JDK 17 + Maven 3.9+) is often **not on `PATH`** — pass it explicitly: `--java-home <JDK17 home> --maven-home <maven home>` (or env `JAVA_HOME`/`MAVEN_HOME`). The exact paths are **machine-specific — discover them on the spot**, don't hardcode into committed files. Exact options are in README "Building from source".
+- **The first build is slow**: Tycho pulls the EDT p2 repository (`edt.1c.ru`) + the Eclipse SDK (hundreds of MB). Once the caches are warm (`~/.m2/repository/p2`, `.cache/tycho`) it runs in ~1 minute. If the caches are absent and there's no network, the build legitimately can't run — say so, don't fake "green".
+- **Unit tests need the target platform too** (Mockito/JUnit come from the p2 target, not plain Maven Central) — a green `compile.sh` is the real proof for Java edits; grep only catches anchor/text problems.
 
-## Юнит-тесты — конвенции
+## Unit tests — conventions
 
-- Один `XxxToolTest` на инструмент (`tools/impl/`), JUnit4.
-- Базовый паттерн: `tool.execute(params)` + проверка sentinel-сообщения (напр. «Project not found») для валидации аргументов. Образец — `WriteModuleSourceToolTest`.
-- **Двуязычный инвариант**: для инструментов, резолвящих метаданные/код, — кейс с русским идентификатором/синонимом (образец `WriteModuleSourceToolTest.testResolveRussianObjectName`). См. скилл `edt-mcp-bilingual`.
-- Форматтеры метаданных и debug/profiling-семейство сейчас не покрыты — при правках добавлять тесты (карточки `tests-metadata-bilingual-and-formatters`, `tests-debug-profiling-family`).
+- One `XxxToolTest` per tool (`tools/impl/`), JUnit4.
+- Base pattern: `tool.execute(params)` + a sentinel-message check (e.g. "Project not found") for argument validation. Reference: `WriteModuleSourceToolTest`.
+- **Bilingual invariant**: for tools that resolve metadata/code, a case with a Russian identifier/synonym (reference `WriteModuleSourceToolTest.testResolveRussianObjectName`). See skill `edt-mcp-bilingual`.
 
-## Цель по покрытию (вводится)
+## Coverage gate
 
-Гейт «у каждого зарегистрированного инструмента есть `XxxToolTest`» + реестро-driven проверка e2e-покрытия (карточка `tests-coverage-ci-gate`). При добавлении инструмента без теста сборка должна падать.
+`BuiltInToolTestCoverageTest` (unit) fails the build if a registered tool has no `XxxToolTest`; the e2e coverage ratchet (`tools/test_coverage_ratchet.py`) fails the suite if a `tools/list` tool has no `test_<tool>.py`. Adding a tool without a test fails the build.
 
 ## E2E
 
-`tests/e2e/run_all.py` (+ `tools/test_<tool>.py`, по одному на инструмент) — запускает сценарии против живого сервера и `TestConfiguration/` с git-фикстурной изоляцией. Покрытие enforced рэтчетом (`tools/test_coverage_ratchet.py`): инструмент в `tools/list` без теста валит сьют. Round-trip кириллических синонимов и проверка ключа синонима по коду языка — в `test_create_metadata.py` / `test_get_metadata_details.py`. Новый инструмент — добавить `tools/test_<tool>.py`.
+`tests/e2e/run_all.py` (+ `tools/test_<tool>.py`, one per tool) runs scenarios against the live server and `TestConfiguration/` with git-fixture isolation. The round-trip of Cyrillic synonyms and the synonym-keyed-by-language-code check live in `test_create_metadata.py` / `test_get_metadata_details.py`. A new tool — add `tools/test_<tool>.py`. Full guide: `edt-mcp-e2e-testing` (and `tests/e2e/SKILL.md`).
 
-## Перед коммитом
-- [ ] Сборка проходит
-- [ ] Юнит-тесты зелёные; для нового/изменённого инструмента есть тест
-- [ ] Если затронут резолв метаданных/кода — есть двуязычный кейс
-- [ ] (если применимо) e2e-сценарий обновлён
+## Before committing
+- [ ] Build passes
+- [ ] Unit tests green; a new/changed tool has a test
+- [ ] If metadata/code resolution is touched — a bilingual case exists
+- [ ] (if applicable) the e2e scenario is updated

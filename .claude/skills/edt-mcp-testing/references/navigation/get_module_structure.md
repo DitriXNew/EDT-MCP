@@ -8,7 +8,7 @@
 - `modulePath` is `src/`-relative, forward-slashed, and ends at the `.bsl` file, e.g. `CommonModules/MyModule/Module.bsl` or `Configuration/ManagedApplicationModule.bsl`.
 - Does NOT mutate — no revert needed.
 
-**Call (real, 2026-06-02).** Verified live against `TestConfiguration` (EDT 2026.1.1.1). The TestConfiguration CommonModules (`OK`, `Error`) are effectively empty, so use `Configuration/ManagedApplicationModule.bsl` for a populated result:
+**Call (real).** Verified live against `TestConfiguration` (EDT 2026.1.1.1). The TestConfiguration CommonModules (`OK`, `Error`) are effectively empty, so use `Configuration/ManagedApplicationModule.bsl` for a populated result:
 ```
 get_module_structure(
   projectName="TestConfiguration",

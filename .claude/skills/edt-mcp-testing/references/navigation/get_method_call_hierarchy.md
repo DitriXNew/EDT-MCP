@@ -8,7 +8,7 @@
 - Pick a method that actually exists. `Configuration/ManagedApplicationModule.bsl` has `OnStart` (calls `Message(...)`) and `BeforeStart` — handy fixtures. The `CommonModules/OK` and `CommonModules/Error` modules are near-empty.
 - Does NOT mutate. No revert needed.
 
-**Call (real, 2026-06-02).** Callees of `OnStart`:
+**Call (real).** Callees of `OnStart`:
 ```
 get_method_call_hierarchy(
   projectName="TestConfiguration",

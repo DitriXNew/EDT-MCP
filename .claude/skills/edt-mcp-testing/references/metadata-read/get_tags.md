@@ -4,7 +4,7 @@
 
 **Preconditions.** A running MCP server (:8765) and the project open and `State=ready` (check `list_projects` first; right after a `-clean` redeploy the index rebuilds and reads can be empty/partial until `ready`). No open editor, cursor, or built BSL index is required — tags do **not** come from the BM/Configuration model. They are persisted per project in `.settings/metadata-tags.yaml` (a SnakeYAML file: `TagConstants.SETTINGS_FOLDER` + `TAGS_FILE`); the tool reads them through `TagService.getInstance().getTagStorage(project)` (an in-memory cache backed by that file). It does **not** mutate anything, so no revert is needed. On `TestConfiguration` no tags are defined, so the result is the empty-state message (this is expected, not a failure).
 
-**Call (real, 2026-06-02).**
+**Call (real).**
 ```
 get_tags(projectName="TestConfiguration")
 ```

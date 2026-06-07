@@ -3,47 +3,49 @@ name: edt-mcp-architecture
 description: Map of the EDT-MCP plugin's target architecture — where the shared helpers live, the layering rules, and the canonical way to do project/metadata/code resolution. Use when starting work in this plugin, deciding where new code belongs, or before adding/refactoring an MCP tool.
 ---
 
-# EDT-MCP — целевая архитектура
+# EDT-MCP — target architecture
 
-Плагин 1C:EDT с MCP-сервером (~62 инструмента). Этот скилл — карта **как должно быть** (мы в процессе рефакторинга к общим хелперам). Если хелпер ниже ещё не существует в коде — это задача рефакторинга, см. ссылку на карточку в `.devtool/features/`.
+A 1C:EDT plugin with an MCP server (~62 tools). This skill maps **how it should be** (the project is mid-refactor toward shared helpers). If a helper below does not yet exist in code, it is a refactor task — see the card in `.devtool/features/`.
 
-## Раскладка пакетов
+## Package layout
 
-Корень: `mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server`
+Root: `mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server`
 
-| Пакет | Что лежит | Правило |
+| Package | Holds | Rule |
 |---|---|---|
-| `tools/impl/` | по одному классу на MCP-инструмент (`implements IMcpTool`) | **только зарегистрированные инструменты**; утилиты/базы здесь не место |
-| `tools/` | `IMcpTool`, `McpToolRegistry` | контракт и реестр |
-| `tools/metadata/` | форматтеры метаданных | рендер вывода read-инструментов |
-| `utils/` | общие хелперы | сюда выносятся переиспользуемые куски |
-| `protocol/` | MCP/JSON-RPC слой: `ToolResult`, `JsonUtils`, `JsonSchemaBuilder` | сборка ответа/схемы |
-| `tags/`, `groups/` | две Navigator-фичи | должны делить общую базу (см. ниже) |
-| `McpServer.java`, `Activator.java` | транспорт и жизненный цикл OSGi | не каталог инструментов |
+| `tools/impl/` | one class per MCP tool (`implements IMcpTool`) | **registered tools only**; no utilities/bases here |
+| `tools/` | `IMcpTool`, `McpToolRegistry` | the contract and the registry |
+| `tools/metadata/` | metadata formatters | output rendering for read tools |
+| `utils/` | shared helpers | reusable pieces go here |
+| `protocol/` | MCP/JSON-RPC layer: `ToolResult`, `JsonUtils`, `JsonSchemaBuilder` | response/schema assembly |
+| `tags/`, `groups/` | two Navigator features | must share a common base (see below) |
+| `McpServer.java`, `Activator.java` | transport and OSGi lifecycle | not a tool catalog |
 
-## Канонические общие API (использовать, не дублировать)
+## Canonical shared APIs (use, don't duplicate)
 
-- **Резолв проекта** → `ProjectContext.resolve(projectName)` → `{IProject, IV8Project, Configuration, BM}`. НЕ повторять `ResourcesPlugin.getWorkspace()...` вручную (так делают ~38 инструментов — это и есть главный дубль). _Вводится: `introduce-project-context-resolver`._
-- **Доступ к модели BM** → `BmTransactions.readModel(...)` / `writeModel(...)`. Чтения — в read-границе, записи — в write. _Вводится: `introduce-bm-transactions-helper`._
-- **Параметры инструмента** → типизированный `ToolParams` (getString/getInt/getBool/getEnum + required). НЕ парсить сырую `Map<String,String>` руками. _Вводится: `introduce-tool-params-accessor`._
-- **Резолв объекта/типа метаданных (двуязычно)** → `MetadataTypeUtils` (СУЩЕСТВУЕТ: `findObject`, `normalizeFqn`, `getAllFqnVariants`). Это общий двуязычный резолвер — не писать свой.
-- **Язык синонимов** → `MetadataLanguageUtils.resolveLanguageCode(config, explicit)` + `getSynonymForLanguage(map, code)`. Ключ синонима = **код языка** (`getLanguageCode()`), НЕ `getName()`. _Вводится: `unify-metadata-language-code-resolution`._
-- **Результат/ошибка** → `ToolResult` (СУЩЕСТВУЕТ). Ошибки только через `ToolResult.error(...)`, не голой строкой.
-- **Пагинация** → общий `Pagination` (единый `limit`/`offset`, единый формат «обрезано»). _Вводится: `standardize-pagination`._
-- **Markdown-таблицы** → общий билдер, не StringBuilder в каждом инструменте. _Вводится: `shared-markdown-and-result-builders`._
-- **Регистрация инструментов** → `BuiltInToolRegistrar`, не список внутри `McpServer`. _Вводится: `extract-builtin-tool-registrar`._
+> All helpers below exist in code. Verify the exact method name before calling (`grep`/Read).
 
-## Чего НЕ делать (анти-паттерны, выявленные ревью)
+- **Project resolution** → `ProjectContext.of(projectName)` (`.exists()`, `.project()`, `.notFoundMessage(name)`). Do not repeat `ResourcesPlugin.getWorkspace()...` by hand. (Metadata write tools get project+config via `AbstractMetadataWriteTool.resolveProjectAndConfig`.)
+- **BM model access** → `BmTransactions.read(model, name, op)` / `write(model, name, op)`. Reads in a read boundary, writes in a write boundary. Persist a metadata write to disk via `BmTransactions.forceExportToDisk(project, [topFqn, configFqn])` (a bare write only enqueues the async export).
+- **Tool parameters** → `JsonUtils.extractStringArgument/extractIntArgument/extractBooleanArgument/extractObjectArray` + `JsonUtils.requireArguments(params, ...)`. Don't parse the `Map` by hand. (There is no `ToolParams` class.)
+- **Metadata object/type resolution (bilingual)** → `MetadataTypeUtils` (`findObject`, `normalizeFqn`); an existing node/member by FQN — `MetadataNodeResolver.resolveExisting`/`resolveForCreate`; a form — `FormStructureReader.resolveMdForm`. These are the shared bilingual resolvers — don't write your own.
+- **Synonym language** → `MetadataLanguageUtils.resolveLanguageCode(config, explicit)` + `getSynonymForLanguage(map, code)`. The synonym key is the **language code** (`getLanguageCode()`), NOT `getName()`.
+- **Result/error** → `ToolResult`: `ToolResult.success().put(...)` / `ToolResult.error(...)`. Errors only via `ToolResult.error(...).toJson()`, never a bare string, never an exception escaping the tool.
+- **Pagination** → the shared `Pagination` (`utils/Pagination.java`; one `limit`/`offset`, one "truncated" format).
+- **Markdown tables** → the shared builder (escapes `|`/newline), not a per-tool StringBuilder.
+- **Tool registration** → `BuiltInToolRegistrar`, not a list inside `McpServer`. EDT services — via `Activator.getDefault().getXxx()` or `ServiceAccess.get(IFoo.class)` (+ the package in MANIFEST Import-Package).
 
-- Не копировать резолв проекта/модуля/BM в каждый инструмент — звать общий хелпер.
-- Не класть утилиты и абстрактные базы в `tools/impl/` — туда только `IMcpTool`-классы (`move-nontool-helpers-out-of-impl`).
-- Не наращивать god-классы: `RenameMetadataObjectTool`/`FindReferencesTool` делят `MetadataReferenceLocator` (`extract-metadata-reference-locator`); `McpServer` разносится (`decompose-mcpserver`).
-- `tags/*` и `groups/*` — НЕ копировать третий такой стек; обе фичи должны наследовать общую базу association-storage/service/refactoring (`extract-tags-groups-shared-base`).
+## What NOT to do (anti-patterns)
 
-## Сопутствующее
+- Don't copy project/module/BM resolution into each tool — call the shared helper.
+- Don't put utilities or abstract bases in `tools/impl/` — only `IMcpTool` classes (`move-nontool-helpers-out-of-impl`).
+- Don't grow god-classes: `RenameMetadataObjectTool`/`FindReferencesTool` share `MetadataReferenceLocator` (`extract-metadata-reference-locator`); `McpServer` is being split (`decompose-mcpserver`).
+- `tags/*` and `groups/*` — don't copy a third such stack; both features should inherit a common association-storage/service/refactoring base (`extract-tags-groups-shared-base`).
 
-- Корректность двух языков (ru/en) — скилл `edt-mcp-bilingual`.
-- Кросс-инструментальный контракт (нейминг параметров, ошибки, вывод) — скилл `edt-mcp-tool-conventions`.
-- Добавление нового инструмента — скилл `edt-mcp-new-tool`.
-- Сборка и тесты — скилл `edt-mcp-build-test`.
-- Полный список задач рефакторинга — доска `.devtool/features/*.md`.
+## Related
+
+- Two-language (ru/en) correctness — the `edt-mcp-bilingual` skill.
+- Cross-tool contract (parameter naming, errors, output) — the `edt-mcp-tool-conventions` skill.
+- Adding a new tool — the `edt-mcp-new-tool` skill.
+- Build and tests — the `edt-mcp-build-test` skill.
+- The full refactor task list — the `.devtool/features/*.md` board.

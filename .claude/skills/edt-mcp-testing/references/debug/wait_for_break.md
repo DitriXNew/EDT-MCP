@@ -1,23 +1,23 @@
-# wait_for_break — как тестировать
+# wait_for_break — how to test
 
-**Назначение.** Дождаться SUSPEND (срабатывания breakpoint) и вернуть снимок потока/фрейма (`threadId`, `frameRef`). На таймауте — `{hit:false}`, launch НЕ завершается.
+**Purpose.** Wait for a SUSPEND (a breakpoint firing) and return a thread/frame snapshot (`threadId`, `frameRef`). On a timeout — `{hit:false}`, and the launch is NOT terminated.
 
-**Предусловие.** Запущена debug-сессия с активным breakpoint (см. [SETUP](SETUP.md)). `applicationId` можно не передавать — если активна ровно одна debug-сессия, она резолвится авто (A13).
+**Precondition.** A debug session is running with an active breakpoint (see [SETUP](SETUP.md)). `applicationId` may be omitted — if exactly one debug session is active, it is resolved automatically.
 
-**Вызов (реально, 2026-06-02):**
+**Call (real):**
 ```
 wait_for_break(timeout=5)
 ```
 
-**Ожидаемый результат (брейк сработал):**
+**Expected result (the break fired):**
 ```json
 {"success":true,"hit":true,"threadId":2,"topFrameRef":3,"autoResolved":true,
  "applicationId":"attach:1C Enterprise debug process","threadName":"Thin client",
  "frames":[{"frameIndex":0,"frameRef":3,"name":"ManagedApplicationModule.OnStart() line: 9","line":9}]}
 ```
-`autoResolved:true` подтверждает A13: авто-резолв взял именно **debug**-launch. Запомни `threadId` (для `step`/`resume`) и `frameRef` (для `get_variables`/`evaluate_expression`).
+`autoResolved:true` confirms that auto-resolve took the **debug** launch. Remember `threadId` (for `step`/`resume`) and `frameRef` (for `get_variables`/`evaluate_expression`).
 
-**Подводные камни.**
-- На таймауте `{"hit":false,"reason":"timeout"}` — это НЕ ошибка; зови повторно, чтобы продолжить ждать. Launch не убивается.
-- Если активны несколько debug-launch'ей — авто-резолв вернёт неоднозначность; передавай `applicationId` явно.
-- После A13 авто-резолв игнорирует RUN-launch'и (они не дают suspend) — поэтому одиночная RUN-сессия больше не «перехватывает» авто-резолв.
+**Gotchas.**
+- On a timeout `{"hit":false,"reason":"timeout"}` — this is NOT an error; call again to keep waiting. The launch is not killed.
+- If several debug launches are active — auto-resolve returns an ambiguity; pass `applicationId` explicitly.
+- Auto-resolve ignores RUN launches (they do not suspend) — so a lone RUN session no longer "hijacks" auto-resolve.

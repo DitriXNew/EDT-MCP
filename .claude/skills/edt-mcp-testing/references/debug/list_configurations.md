@@ -1,15 +1,15 @@
-# list_configurations — как тестировать
+# list_configurations — how to test
 
-**Назначение.** Перечислить launch-конфигурации EDT (runtime-client + Attach + прочие 1С-типы) с их состоянием `running`/`suspended`.
+**Purpose.** List EDT launch configurations (runtime-client + Attach + other 1C types) with their `running`/`suspended` state.
 
-**Предусловие.** Открыт проект. Запущенная сессия не нужна (но если есть — увидишь `running:true`).
+**Precondition.** A project is open. A running session is not required (but if there is one — you will see `running:true`).
 
-**Вызов (реально, 2026-06-02):**
+**Call (real):**
 ```
 list_configurations(projectName="TestConfiguration")
 ```
 
-**Ожидаемый результат:**
+**Expected result:**
 ```json
 {"success":true,"count":1,"configurations":[
   {"name":"TestConfiguration Thin Client",
@@ -17,7 +17,7 @@ list_configurations(projectName="TestConfiguration")
    "attach":false,"project":"TestConfiguration","running":false}]}
 ```
 
-**Подводные камни.**
-- Имя из поля `name` — это то, что передаётся как `launchConfigurationName` в `debug_launch`/`run_yaxunit_tests`/`debug_yaxunit_tests`.
-- `type='attach'` — серверная отладка (HTTP-сервисы, фоновые задания); `type='client'` — клиент; `type='all'` (дефолт).
-- После `debug_launch` запущенного runtime-client EDT может показать привязанный **attach-launch** `1C Enterprise debug process` (LocalRuntime) — это нормальное состояние отладки клиента.
+**Gotchas.**
+- The `name` field is what is passed as `launchConfigurationName` to `debug_launch`/`run_yaxunit_tests`/`debug_yaxunit_tests`.
+- `type='attach'` — server-side debugging (HTTP services, background jobs); `type='client'` — client; `type='all'` (default).
+- After `debug_launch` of a running runtime-client, EDT may show the attached **attach-launch** `1C Enterprise debug process` (LocalRuntime) — this is a normal client-debug state.

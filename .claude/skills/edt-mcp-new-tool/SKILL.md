@@ -3,58 +3,58 @@ name: edt-mcp-new-tool
 description: Canonical, battle-tested checklist for adding a new MCP tool to the EDT-MCP plugin the right way — the IMcpTool surface, shared resolvers, schema, registration, MANIFEST, the two MANDATORY test ratchets (unit + e2e), the golden snapshot, README, and the full compile→review→redeploy→live contour. Use when asked to add / create / scaffold a new MCP tool / EDT tool.
 ---
 
-# EDT-MCP — добавление нового MCP-инструмента (канон)
+# EDT-MCP — adding a new MCP tool (canonical)
 
-Процедура, которая реально компилируется, проходит все ratchet'ы и валидируется вживую. Опирается на фактический текущий API — **сверяй каждый класс/метод перед использованием** (`grep`/Read, не выдумывай). Сопутствующие скиллы: `edt-mcp-architecture` (где что), `edt-mcp-tool-conventions` (нейминг/ошибки/вывод), `edt-mcp-bilingual` (ru/en), `edt-mcp-e2e-testing` (e2e-сьют), `edt-mcp-build-test` (сборка).
+The procedure that actually compiles, passes every ratchet, and validates live. It tracks the real current API — **verify each class/method before use** (`grep`/Read, don't invent). Companion skills: `edt-mcp-architecture` (where things live), `edt-mcp-tool-conventions` (naming/errors/output), `edt-mcp-bilingual` (ru/en), `edt-mcp-e2e-testing` (e2e suite), `edt-mcp-build-test` (build).
 
-> Новый тул трогает МНОГО мест. Пропустишь одно — либо ratchet краснеет (unit-coverage, e2e-coverage, tool-contract, golden), либо живой `tools/list` дрейфует. Пройди весь список.
+> A new tool touches MANY places. Miss one and either a ratchet goes red (unit-coverage, e2e-coverage, tool-contract, golden) or the live `tools/list` drifts. Walk the whole list.
 
-## Шаги
+## Steps
 
-1. **Класс** в `tools/impl/XxxTool.java`: `implements IMcpTool` (read/action) или **`extends AbstractMetadataWriteTool`** для тула, который МУТИРУЕТ модель — база гоняет `executeOnUiThread(params)` на UI-потоке (мутация модели безопасна только там), даёт `resolveProjectAndConfig(projectName)` + `unwrapCauseMessage(e)` + дефолт `getResponseType()=JSON`. В `tools/impl/` — только сам тул (утилиты/базы → `utils/`, `tools/base/`). Заведи `public static final String NAME = "xxx";` (snake_case: `get_`/`list_`/`create_`/`adopt_`…).
+1. **Class** in `tools/impl/XxxTool.java`: `implements IMcpTool` (read/action) or **`extends AbstractMetadataWriteTool`** for a tool that MUTATES the model — the base runs `executeOnUiThread(params)` on the UI thread (model mutation is safe only there), gives `resolveProjectAndConfig(projectName)` + `unwrapCauseMessage(e)` + default `getResponseType()=JSON`. `tools/impl/` holds the tool only (utilities/bases → `utils/`, `tools/base/`). Declare `public static final String NAME = "xxx";` (snake_case: `get_`/`list_`/`create_`/`adopt_`…).
 
-2. **Поверхность IMcpTool**:
+2. **IMcpTool surface**:
    - `getName()` → `NAME`.
-   - `getDescription()` — кратко, для AI-клиента (что делает + когда). **Заканчивай** на `"… Full parameters and examples: call get_tool_guide('<name>')."` (unit-тест это проверяет; описание держи компактным — бюджет `tools/list` общий).
-   - `getInputSchema()` через `JsonSchemaBuilder.object().stringProperty(name, desc[, required]).integerProperty(...).enumProperty(name, desc, "a","b").objectArrayProperty(...).build()`. **Required — это булев 3-й аргумент свойства; метода `.required(...)` НЕТ.** Имена параметров — **lowerCamelCase** (`ToolContractConsistencyTest` валит snake_case). Канон: `projectName`, `fqn`, `modulePath`, `limit`/`offset` (см. `edt-mcp-tool-conventions`).
-   - `getOutputSchema()` — объяви ключи JSON-результата (для JSON-тулов).
-   - `getGuide()` — полное how-to (параметры, примеры, г’отчи, как откатить). Отдаётся on-demand через guide-resource канал — ДЕТАЛИ сюда, не в description.
-   - `getResponseType()` — TEXT/JSON/MARKDOWN/YAML/IMAGE (можно опустить при наследовании от AbstractMetadataWriteTool → JSON).
-   - **Каждый параметр, читаемый в execute(), обязан быть в схеме, и наоборот.**
+   - `getDescription()` — short, for the AI client (what it does + when). **End** with `"… Full parameters and examples: call get_tool_guide('<name>')."` (a unit test checks this; keep the description compact — the `tools/list` budget is shared).
+   - `getInputSchema()` via `JsonSchemaBuilder.object().stringProperty(name, desc[, required]).integerProperty(...).enumProperty(name, desc, "a","b").objectArrayProperty(...).build()`. **Required is the boolean 3rd argument of a property; there is NO `.required(...)` method.** Parameter names are **lowerCamelCase** (`ToolContractConsistencyTest` fails snake_case). Canonical: `projectName`, `fqn`, `modulePath`, `limit`/`offset` (see `edt-mcp-tool-conventions`).
+   - `getOutputSchema()` — declare the JSON result keys (for JSON tools).
+   - `getGuide()` — full how-to (parameters, examples, gotchas, how to revert). Served on-demand through the guide-resource channel — put DETAILS here, not in the description.
+   - `getResponseType()` — TEXT/JSON/MARKDOWN/YAML/IMAGE (may be omitted when extending AbstractMetadataWriteTool → JSON).
+   - **Every parameter read in execute() must be in the schema, and vice versa.**
 
 3. **execute / executeOnUiThread**:
-   - Аргументы — `JsonUtils.extractStringArgument/extractIntArgument/extractBooleanArgument/extractObjectArray`; обязательные — `JsonUtils.requireArguments(params, "projectName", "fqn")` (вернёт готовый error-JSON или null).
-   - Проект/конфигурация — `ProjectContext.of(name)` (utils) или `resolveProjectAndConfig(name)` (write-база). НЕ `ResourcesPlugin.getWorkspace()…` вручную.
-   - **Модель — только внутри границы транзакции** (hard-rule CLAUDE.md): read — в read-границе, write — через `BmTransactions.write(...)`. Голый write только ставит в очередь async-экспорт `.mdo` — персисти через `BmTransactions.forceExportToDisk(project, [topObjectFqn, configurationFqn])` (передавай **TOP**-FQN; для члена — родительский top; добавь FQN `Configuration` = `((IBmObject)config).bmGetFqn()`, т.к. изменилась его коллекция).
-   - Резолв метаданных по FQN — ОБЩИМИ резолверами (не плоди 47-ю копию): `MetadataTypeUtils.normalizeFqn/findObject` (двуязычно), `MetadataNodeResolver.resolveExisting` (существующий) / `resolveForCreate` (новый), `FormStructureReader.resolveMdForm` (формы — ждёт `Type.Name.Forms.FormName` или `CommonForm.Name`). Синоним — по КОДУ языка (см. `edt-mcp-bilingual`).
-   - EDT-сервисы: типизированно через `Activator.getDefault().getXxx()` (`getConfigurationProvider`, `getV8ProjectManager`, `getDtProjectManager`, `getBmModelManager`, `getMdRefactoringService`) или `ServiceAccess.get(IFoo.class)` для wired-сервиса (binding `.toService()`) — и **добавь пакет в MANIFEST Import-Package** (шаг 5).
-   - **Ошибки — ТОЛЬКО `ToolResult.error(msg).toJson()`** (никаких выброшенных исключений наружу, никаких голых `"Error: …"`). Успех — `ToolResult.success().put(k, v)….toJson()`. Ошибка должна быть actionable (назвать плохое значение + как исправить / sibling-тул).
+   - Arguments — `JsonUtils.extractStringArgument/extractIntArgument/extractBooleanArgument/extractObjectArray`; required ones — `JsonUtils.requireArguments(params, "projectName", "fqn")` (returns a ready error-JSON or null).
+   - Project/configuration — `ProjectContext.of(name)` (utils) or `resolveProjectAndConfig(name)` (write base). NOT `ResourcesPlugin.getWorkspace()…` by hand.
+   - **Model only inside a transaction boundary** (hard rule, CLAUDE.md): reads in a read boundary, writes via `BmTransactions.write(...)`. A bare write only enqueues the async `.mdo` export — persist via `BmTransactions.forceExportToDisk(project, [topObjectFqn, configurationFqn])` (pass the **TOP** FQN; for a member, its parent top; add the `Configuration` FQN = `((IBmObject)config).bmGetFqn()` because its collection changed).
+   - Metadata resolution by FQN — use the SHARED resolvers (don't write the 47th copy): `MetadataTypeUtils.normalizeFqn/findObject` (bilingual), `MetadataNodeResolver.resolveExisting` (existing) / `resolveForCreate` (new), `FormStructureReader.resolveMdForm` (forms — expects `Type.Name.Forms.FormName` or `CommonForm.Name`). Synonym is keyed by the language CODE (see `edt-mcp-bilingual`).
+   - EDT services: typed via `Activator.getDefault().getXxx()` (`getConfigurationProvider`, `getV8ProjectManager`, `getDtProjectManager`, `getBmModelManager`, `getMdRefactoringService`) or `ServiceAccess.get(IFoo.class)` for a wired service (binding `.toService()`) — and **add the package to MANIFEST Import-Package** (step 5).
+   - **Errors ONLY via `ToolResult.error(msg).toJson()`** (no exceptions escaping the tool, no bare `"Error: …"`). Success — `ToolResult.success().put(k, v)….toJson()`. An error must be actionable (name the bad value + how to fix / sibling tool).
 
-4. **Регистрация** — в `tools/BuiltInToolRegistrar`: `import …impl.XxxTool;` + `registry.register(new XxxTool());` (рядом с сиблингами).
+4. **Registration** — in `tools/BuiltInToolRegistrar`: `import …impl.XxxTool;` + `registry.register(new XxxTool());` (next to siblings).
 
-5. **MANIFEST.MF Import-Package** — добавь каждый НОВЫЙ импортируемый пакет `com._1c.g5.*` (напр. `com._1c.g5.v8.dt.md.extension.adopt`). Пропуск = `ClassNotFound` в рантайме, не на компиляции.
+5. **MANIFEST.MF Import-Package** — add each NEW imported `com._1c.g5.*` package (e.g. `com._1c.g5.v8.dt.md.extension.adopt`). A miss is a runtime `ClassNotFound`, not a compile error.
 
-6. **Unit-тест — ОБЯЗАТЕЛЕН** (`mcp/tests/.../tools/impl/XxxToolTest.java`). `BuiltInToolTestCoverageTest` валит сборку, если у зарегистрированного тула нет `XxxToolTest`. Контракт (без живого рантайма): NAME, `getResponseType()`, description содержит `get_tool_guide('<name>')`, схема содержит все параметры, required-массив верный (и НЕ содержит optional), ключи output-схемы. Более глубокое поведение — e2e.
+6. **Unit test — MANDATORY** (`mcp/tests/.../tools/impl/XxxToolTest.java`). `BuiltInToolTestCoverageTest` fails the build if a registered tool has no `XxxToolTest`. Contract (no live runtime): NAME, `getResponseType()`, description contains `get_tool_guide('<name>')`, schema contains every parameter, the required array is correct (and excludes optional ones), output-schema keys. Deeper behaviour is e2e.
 
-7. **e2e-тест — ОБЯЗАТЕЛЕН** (`tests/e2e/tools/test_<tool>.py`). e2e coverage-ratchet валит, если у тула из `tools/list` его нет. Читай `edt-mcp-e2e-testing`. happy + негатив + error-quality; anti-cheat («упал бы тест, будь тул сломан?»). Мутирующий тул: headless предпочитай не-мутирующие кейсы (harness ресетит только БАЗОВУЮ фикстуру per-test, не расширение) + мутирующий happy валидируй ЖИВЬЁМ; для write-metadata, что гоняется headless, проверяй read-back модели И структуру на диске (`poll_diff_contains`).
+7. **e2e test — MANDATORY** (`tests/e2e/tools/test_<tool>.py`). The e2e coverage ratchet fails if a tool in `tools/list` has none. Read `edt-mcp-e2e-testing`. happy + negative + error-quality; anti-cheat ("would the test fail if the tool were broken?"). A mutating tool: prefer non-mutating cases headless (the harness resets only the BASE fixture per-test, not the extension) + validate the mutating happy path LIVE; for a write-metadata tool that runs headless, check both the model read-back AND the on-disk structure (`poll_diff_contains`).
 
-8. **Golden** — новый тул меняет `tools/list`, регенерируй и коммить: `EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter test_tools_list_matches_committed_golden_snapshot`, затем `git add tests/e2e/tools_list.golden.json`.
+8. **Golden** — a new tool changes `tools/list`; regenerate and commit: `EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter test_tools_list_matches_committed_golden_snapshot`, then `git add tests/e2e/tools_list.golden.json`.
 
-9. **README** — подними СЧЁТЧИК тулов (два места), добавь тул в таблицу группы, в плоскую таблицу тулов и в детальную секцию (параметры обязаны совпасть со схемой).
+9. **README** — bump the tool COUNT (two places), add the tool to its group table, to the flat tool table, and to the detailed section (parameters must match the schema).
 
-10. **Полный контур** (без него не говори «готово»): `bash source/compile.sh` (компиляция + unit-тесты + все ratchet'ы) → adversarial **Opus-ревью** → redeploy на dev-копию EDT (`edt-redeploy.ps1`; сигнал — лог `MCP server UP on 8765`) → **живая валидация** против `:8765` → коммит. Свежеразвёрнутый тул НЕ попадает в deferred-список MCP этой сессии — для живой проверки зови его через e2e-клиент harness (`python` → `harness.initialize(); harness.call("<name>", {...})`) или `Invoke-RestMethod`, а не через MCP-обёртку тула. См. `edt-mcp-build-test` и память про dev-loop.
+10. **Full contour** (don't say "done" without it): `bash source/compile.sh` (compile + unit tests + every ratchet) → adversarial **Opus review** → redeploy to the dev EDT copy (`edt-redeploy.ps1`; the signal is the log line `MCP server UP on 8765`) → **live validation** against `:8765` → commit. A freshly deployed tool is NOT in this session's MCP deferred list — to check it live, call it through the e2e harness client (`python` → `harness.initialize(); harness.call("<name>", {...})`) or `Invoke-RestMethod`, not the tool's MCP wrapper. See `edt-mcp-build-test` and the dev-loop memory.
 
-## Г’отчи (выстраданные)
-- **`((IBmObject)x).bmGetFqn()` валиден ТОЛЬКО на TOP-объекте** — на члене (реквизит/форма/…) бросает «may be called on top objects only». Для top бери `bmGetTopObject().bmGetFqn()`; для члена репорти входной FQN.
-- Запись модели — на UI-потоке (write-база делает это; голый `IMcpTool` должен сам обернуть в `Display.syncExec`).
-- `forceExportToDisk` хочет TOP-FQN; изменение члена — экспорт родительского top + (для нового top) FQN `Configuration`.
-- Кириллица в строковых литералах/регексах — через `\uXXXX` (Tycho non-UTF-8 safety); surface-текст — только английский.
+## Gotchas
+- **`((IBmObject)x).bmGetFqn()` is valid ONLY on a TOP object** — on a member (attribute/form/…) it throws "may be called on top objects only". For a top, use `bmGetTopObject().bmGetFqn()`; for a member, report the input FQN.
+- Model writes happen on the UI thread (the write base does this; a bare `IMcpTool` must wrap in `Display.syncExec` itself).
+- `forceExportToDisk` wants the TOP FQN; a member change exports the parent top + (for a new top) the `Configuration` FQN.
+- Cyrillic in string literals/regexes goes through `\uXXXX` (Tycho non-UTF-8 safety); surface text is English only.
 
-## Чеклист готовности
-- [ ] Класс в `tools/impl/`, NAME snake_case, параметры lowerCamelCase, каждый параметр в схеме
-- [ ] description → `get_tool_guide('<name>')`; есть getGuide/getOutputSchema
-- [ ] Общие резолверы + `ToolResult.error`; модель только в tx-границе; персист (forceExport) если write
-- [ ] Зарегистрирован в `BuiltInToolRegistrar`; новые пакеты в MANIFEST Import-Package
-- [ ] `XxxToolTest` (unit-ratchet) + `test_<tool>.py` (e2e-ratchet)
-- [ ] Golden регенерирован; README счётчик + группа + таблица + деталь
-- [ ] `compile.sh` зелёный → Opus-ревью → redeploy → живая валидация → коммит
+## Readiness checklist
+- [ ] Class in `tools/impl/`, NAME snake_case, parameters lowerCamelCase, every parameter in the schema
+- [ ] description → `get_tool_guide('<name>')`; getGuide/getOutputSchema present
+- [ ] Shared resolvers + `ToolResult.error`; model only in a tx boundary; persist (forceExport) if a write
+- [ ] Registered in `BuiltInToolRegistrar`; new packages in MANIFEST Import-Package
+- [ ] `XxxToolTest` (unit ratchet) + `test_<tool>.py` (e2e ratchet)
+- [ ] Golden regenerated; README count + group + table + detail
+- [ ] `compile.sh` green → Opus review → redeploy → live validation → commit

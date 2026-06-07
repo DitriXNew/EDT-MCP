@@ -1,20 +1,20 @@
-# resume — как тестировать
+# resume — how to test
 
-**Назначение.** Снять приостановку: по `threadId`, по `applicationId` (все потоки таргета), или без аргументов — единственный активный debug-launch.
+**Purpose.** Lift the suspension: by `threadId`, by `applicationId` (all of the target's threads), or with no arguments — the single active debug launch.
 
-**Предусловие.** Поток в suspend.
+**Precondition.** A thread is suspended.
 
-**Вызов (реально, 2026-06-02):**
+**Call (real):**
 ```
 resume(threadId=4)
 ```
-**Результат:**
+**Result:**
 ```json
 {"success":true,"scope":"thread","resumed":true}
 ```
-После `resume` поток продолжает выполнение (в прогоне `OnStart` доработал, клиент стартовал). Если breakpoint остался — на следующем проходе снова словится; для чистого завершения сними его (`remove_breakpoint`).
+After `resume` the thread continues execution (in a run `OnStart` finished and the client started). If the breakpoint remains — it is caught again on the next pass; for a clean finish remove it (`remove_breakpoint`).
 
-**Подводные камни.**
-- `scope` показывает, что снято — `thread` (по `threadId`) или весь таргет (по `applicationId`).
-- Без аргументов резюмит единственный активный debug-launch; при нескольких — передавай явный id.
-- Чтобы не словить тот же breakpoint повторно при дальнейшей работе клиента — удали его до/после resume.
+**Gotchas.**
+- `scope` shows what was resumed — `thread` (by `threadId`) or the whole target (by `applicationId`).
+- With no arguments it resumes the single active debug launch; with several — pass an explicit id.
+- To avoid catching the same breakpoint again during the client's further work — remove it before/after resume.

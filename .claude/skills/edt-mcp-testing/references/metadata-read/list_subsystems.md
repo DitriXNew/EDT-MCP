@@ -4,7 +4,7 @@
 
 **Preconditions.** The project must be open in the workspace and `State=ready` (check with `list_projects` first — right after a `-clean` redeploy the index rebuilds and the configuration model is empty/partial until ready). The tool reads the in-memory `Configuration` model via `IConfigurationProvider` (it does NOT scan `src/`). It runs on the SWT UI thread (`display.syncExec`). It does NOT mutate anything, so no revert is needed. `TestConfiguration` is a valid target; it is small, so expect a tiny tree.
 
-**Call (real, 2026-06-02).**
+**Call (real).**
 ```
 list_subsystems(projectName="TestConfiguration")
 ```

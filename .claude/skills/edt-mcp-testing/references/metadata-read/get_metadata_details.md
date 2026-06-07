@@ -7,7 +7,7 @@
 - `TestConfiguration` is small (`Catalog.Catalog`, `CommonModules` `Error`/`OK`, one form). `Catalog.Catalog` has attributes `Attribute`/`TestSynAttr`/`BmTxTest` and a form `ItemForm`, so it is the canonical representative object. `IRP` is a big real config — use it only for stress/variety.
 - Runs on the SWT UI thread (`Display.syncExec`) and reads the in-memory `Configuration` via `IConfigurationProvider` — no open editor, cursor, or transaction needed. Does NOT mutate the model or disk; no revert needed.
 
-**Call (real, 2026-06-02).**
+**Call (real).**
 ```
 get_metadata_details(
   projectName="TestConfiguration",

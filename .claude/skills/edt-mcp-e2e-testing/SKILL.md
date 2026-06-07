@@ -1,6 +1,6 @@
 ---
 name: edt-mcp-e2e-testing
-description: How to write/run the AUTOMATED black-box e2e suite (tests/e2e/) that covers all 61 EDT-MCP tools against a live server with git-fixture isolation, happy + negative + error-quality coverage, and an anti-cheat bar. Use when adding/editing a test in tests/e2e/, adding a new tool (the coverage ratchet requires a test), or running the suite. (For the older MANUAL per-tool reference checklists see edt-mcp-testing; for Java unit/build see edt-mcp-build-test.)
+description: How to write/run the AUTOMATED black-box e2e suite (tests/e2e/) that covers every EDT-MCP tool (62 today) against a live server with git-fixture isolation, happy + negative + error-quality coverage, and an anti-cheat bar. Use when adding/editing a test in tests/e2e/, adding a new tool (the coverage ratchet requires a test), or running the suite. (For the older MANUAL per-tool reference checklists see edt-mcp-testing; for Java unit/build see edt-mcp-build-test.)
 ---
 
 # EDT-MCP — automated black-box e2e suite (tests/e2e/)
@@ -8,7 +8,7 @@ description: How to write/run the AUTOMATED black-box e2e suite (tests/e2e/) tha
 > **The full, authoritative, always-current guide is `tests/e2e/SKILL.md` in the repo. READ IT before writing or running a test** — it has the harness API, the worked examples, and the anti-cheat anti-pattern list. This skill is the entrypoint + the rules in brief; the repo file wins on any disagreement (it lives with the harness).
 
 ## What this is
-A Python (stdlib-only) **black-box** suite: a real MCP client hits the **live** server on `:8765` and asserts the **real** effect. One file per tool: `tests/e2e/tools/test_<tool>.py`. Shared base: `harness.py`. Runner: `run_all.py` (serial, `--junit-xml`). All 61 tools covered (~452 tests) + `test_coverage_ratchet.py`. Different layer from Java/JUnit (which is headless and can't touch a real project).
+A Python (stdlib-only) **black-box** suite: a real MCP client hits the **live** server on `:8765` and asserts the **real** effect. One file per tool: `tests/e2e/tools/test_<tool>.py`. Shared base: `harness.py`. Runner: `run_all.py` (serial, `--junit-xml`, per-test timeout). Every registered tool covered (62 today; the coverage ratchet `test_coverage_ratchet.py` fails the suite if a `tools/list` tool has no test). Different layer from Java/JUnit (which is headless and can't touch a real project).
 
 ## Run it
 ```

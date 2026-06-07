@@ -17,7 +17,7 @@ get_content_assist(
   limit=15)
 ```
 
-**Result.** JSON (`ResponseType.JSON`). Real output captured 2026-06-02 (EDT 2026.1.1.1), trimmed to the first proposals:
+**Result.** JSON (`ResponseType.JSON`). Real output captured (EDT 2026.1.1.1), trimmed to the first proposals:
 ```json
 {"success":true,
  "file":"/TestConfiguration/src/Configuration/ManagedApplicationModule.bsl",

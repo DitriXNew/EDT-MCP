@@ -8,7 +8,7 @@
 - Read-only. Does **not** mutate the model or disk. No revert needed. The hint "Live-call is safe" holds.
 - The only parameter is `projectName` (required). There is no language argument; the result is provider/storage IDs, not translated text.
 
-**Call (real, 2026-06-02).**
+**Call (real).**
 ```
 get_translation_project_info(projectName="TestConfiguration")
 ```
@@ -40,7 +40,7 @@ providersCount: 4
 ```
 With no dictionary storage attached, the same success path emits `storagesCount: 0` and a `## Storages` section whose body is the literal `(none)`.
 
-**Actual live result in THIS harness (real, 2026-06-02).** LanguageTool is not installed, so the live call returned a structured error. The MCP text channel showed only a bare `Error` (the flaky channel — see Gotchas); the real payload is in the EDT log `D:\WS\EDT\.metadata\.log` as `structuredContent`:
+**Actual live result in THIS harness (real).** LanguageTool is not installed, so the live call returned a structured error. The MCP text channel showed only a bare `Error` (the flaky channel — see Gotchas); the real payload is in the EDT log `D:\WS\EDT\.metadata\.log` as `structuredContent`:
 ```
 {"jsonrpc":"2.0","id":325,"result":{
   "content":[{"type":"text","text":"Error"}],

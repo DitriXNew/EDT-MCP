@@ -4,7 +4,7 @@
 
 **Preconditions.** Project open in the workspace (e.g. `TestConfiguration`). No open editor, cursor position, or saved selection is required. The tool first tries the BSL EMF model (`BslModuleUtils.loadModule`, runs on the UI thread via `display.syncExec`); if the EMF model isn't available it falls back to a pure text scan (`findMethodViaText`) over the file read from workspace/filesystem (UTF-8 BOM aware). Either path works headless. Does not mutate; no revert needed.
 
-**Call (real, 2026-06-02):**
+**Call (real):**
 ```
 read_method_source(projectName="TestConfiguration", modulePath="Configuration/ManagedApplicationModule.bsl", methodName="OnStart")
 ```

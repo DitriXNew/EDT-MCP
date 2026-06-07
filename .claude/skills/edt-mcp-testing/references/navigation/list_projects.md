@@ -4,7 +4,7 @@
 
 **Preconditions.** None beyond a running MCP server (:8765). No `projectName` or any other argument is required — the tool takes no params. No open editor, no cursor position, no index dependency. It does **not** mutate anything, so no revert is needed. State is computed per project via EDT's derived-data manager, so a project that is still indexing shows `State=building` (only `ready` projects are safe for resolution/AST tools).
 
-**Call (real, 2026-06-02):**
+**Call (real):**
 ```
 list_projects()
 ```

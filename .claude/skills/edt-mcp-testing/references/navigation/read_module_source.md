@@ -4,7 +4,7 @@
 
 **Preconditions.** Project open in the workspace (e.g. `TestConfiguration`). No open editor, cursor position, or built index is required — the tool reads the file from the workspace/filesystem directly (`BslModuleUtils.readFileLines`, UTF-8 BOM aware), independent of any AST/BM model. Does not mutate; no revert needed.
 
-**Call (real, 2026-06-02) — whole 1-line module:**
+**Call (real) — whole 1-line module:**
 ```
 read_module_source(projectName="TestConfiguration", modulePath="CommonModules/Error/Module.bsl")
 ```
@@ -22,7 +22,7 @@ Error
 ```
 ```
 
-**Call (real, 2026-06-02) — empty module (edge case):**
+**Call (real) — empty module (edge case):**
 ```
 read_module_source(projectName="TestConfiguration", modulePath="CommonModules/OK/Module.bsl")
 ```

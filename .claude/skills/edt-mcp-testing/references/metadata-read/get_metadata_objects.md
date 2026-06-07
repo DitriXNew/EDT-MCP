@@ -4,7 +4,7 @@
 
 **Preconditions.** Project must be open in the workspace and `State=ready` (check with `list_projects`). Use `TestConfiguration`. The tool reads the in-memory `Configuration` model via `IConfigurationProvider` (no open editor, cursor, or filesystem scan), and runs on the SWT UI thread (`display.syncExec`). It does NOT mutate anything — no revert needed. After a `-clean` redeploy the index rebuilds and reads can be empty/partial until the project reports `ready`; poll `list_projects` first. Note: `IRP` is a large real config — prefer `TestConfiguration` for a small, deterministic result.
 
-**Call (real, 2026-06-02).** Representative single-family call (matches the project hint):
+**Call (real).** Representative single-family call (matches the project hint):
 ```
 get_metadata_objects(projectName="TestConfiguration", metadataType="catalogs")
 ```

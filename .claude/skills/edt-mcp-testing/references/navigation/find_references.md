@@ -4,7 +4,7 @@
 
 **Preconditions.** Live EDT + the project is open and indexed in the workspace (BM model built). No open editor / cursor position is required — resolution is by FQN against the configuration, not by editor state. `objectFqn` must be a **top-level** object (exactly `Type.Name`, two segments). The tool runs on the UI thread (`Display.syncExec`), so avoid hammering it concurrently with other UI-thread tools. Does not mutate; no revert needed.
 
-**Call (real, 2026-06-02):**
+**Call (real):**
 ```
 find_references(projectName="TestConfiguration",
                 objectFqn="Catalog.Catalog")

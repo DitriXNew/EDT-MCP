@@ -8,7 +8,7 @@
 - To get a real check ID, first run `get_project_errors` on `TestConfiguration` and read the `Check code` column. Real codes present there today: `common-module-type`, `org.eclipse.xtext.diagnostics.Diagnostic.Syntax`, `bsl-legacy-check-simple-statement`, `bsl-legacy-check-static-feature-access`, `bsl-legacy-check-library-module`, `md-legacy-emf-check`, `md-list-object-presentation`, `module-structure-method-in-regions`, `use-non-recommended-method`. Their `Has docs` column is `false` here precisely because the folder is unset.
 - Read-only. No model mutation, no disk write, no revert needed (it only reads a doc file).
 
-**Call (real, 2026-06-02).** Use a check code observed in `get_project_errors`:
+**Call (real).** Use a check code observed in `get_project_errors`:
 ```
 get_check_description(checkId="module-structure-method-in-regions")
 ```

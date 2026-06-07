@@ -1,19 +1,19 @@
-# debug_status — как тестировать
+# debug_status — how to test
 
-**Назначение.** Показать активные debug-launch'и: applicationId, конфиг/тип, режим (debug/run), suspended-флаг, число потоков, строку верхнего suspended-фрейма.
+**Purpose.** Show active debug launches: applicationId, config/type, mode (debug/run), suspended flag, thread count, and the line of the top suspended frame.
 
-**Предусловие.** Нет (вернёт `count:0`, если ничего не запущено — тоже валидный кейс).
+**Precondition.** None (returns `count:0` if nothing is running — also a valid case).
 
-**Вызов (реально, 2026-06-02):**
+**Call (real):**
 ```
 debug_status()
 ```
 
-**Ожидаемый результат — нет сессий:**
+**Expected result — no sessions:**
 ```json
 {"registry":{"liveFrames":0,"liveThreads":0,"activeApplications":0},"success":true,"count":0,"launches":[]}
 ```
-**Останов на breakpoint (после debug_launch + OnStart):**
+**Stopped at a breakpoint (after debug_launch + OnStart):**
 ```json
 {"registry":{"liveFrames":0,"liveThreads":1,"activeApplications":1},"success":true,"count":1,
  "launches":[{"applicationId":"attach:1C Enterprise debug process","mode":"debug","debug":true,
@@ -23,7 +23,7 @@ debug_status()
    "suspendedAt":"ManagedApplicationModule.OnStart() line: 9 @ 9","registered":true}]}
 ```
 
-**Подводные камни.**
-- `debug_status` перечисляет launch'и напрямую из менеджера — показывает и RUN, и debug (поле `mode`/`debug`). Это отличается от **auto-resolve** (`findLoneActiveApplicationId`), который после A13 берёт только DEBUG-режим.
-- `suspendedAt` — удобный признак, что брейк сработал; дальше бери фрейм через `wait_for_break`.
-- Запущенный runtime-client клиент отображается как attach-launch `1C Enterprise debug process` (LocalRuntime) с синтетическим `applicationId: "attach:<configName>"`.
+**Gotchas.**
+- `debug_status` lists launches directly from the manager — it shows both RUN and debug (the `mode`/`debug` field). This differs from **auto-resolve** (`findLoneActiveApplicationId`), which considers only the DEBUG mode.
+- `suspendedAt` is a handy sign that the break fired; then take the frame via `wait_for_break`.
+- A running runtime-client client shows up as the attach-launch `1C Enterprise debug process` (LocalRuntime) with a synthetic `applicationId: "attach:<configName>"`.

@@ -1,16 +1,16 @@
-# terminate_launch — как тестировать
+# terminate_launch — how to test
 
-**Назначение.** Завершить запущенную debug/run-сессию (закрыть клиент/отвязать attach). Используется, чтобы пересоздать сессию после `alreadyRunning`.
+**Purpose.** End a running debug/run session (close the client / detach the attach). Used to recreate a session after `alreadyRunning`.
 
-**Предусловие.** Активный launch (`debug_status` показывает `count>=1`).
+**Precondition.** An active launch (`debug_status` shows `count>=1`).
 
-**Ожидаемый вызов:**
+**Expected call:**
 ```
 terminate_launch(applicationId="attach:1C Enterprise debug process")
 ```
-(или по `launchConfigurationName` — сверь сигнатуру актуальной схемой инструмента).
+(or by `launchConfigurationName` — verify the signature against the current tool schema).
 
-**Подводные камни.**
-- **Не было в снапшоте инструментов хоста** в сессии 2026-06-02 (хотя инструмент есть в коде, commit `a3a14e9`) — если `ToolSearch`/прямой вызов недоступен, **fallback на убийство процесса**: `Stop-Process -Name 1cv8c -Force` (клиент), что приводит к завершению привязанного attach-launch. Elevated-процесс из неэлевейтед-шелла не убить (`Access denied`).
-- После `terminate_launch`/kill проверь `debug_status` → `count:0` и `Get-Process 1cv8c` → пусто.
-- Перед прогоном допиши/сверь этот референс реальным выводом, когда инструмент будет доступен в хосте.
+**Gotchas.**
+- **If it is not in the host tool snapshot** (the tool exists in code) — when `ToolSearch`/a direct call is unavailable, **fall back to killing the process**: `Stop-Process -Name 1cv8c -Force` (the client), which ends the bound attach-launch. An elevated process cannot be killed from a non-elevated shell (`Access denied`).
+- After `terminate_launch`/kill check `debug_status` → `count:0` and `Get-Process 1cv8c` → empty.
+- Before a run, fill in / verify this reference with real output when the tool is available in the host.

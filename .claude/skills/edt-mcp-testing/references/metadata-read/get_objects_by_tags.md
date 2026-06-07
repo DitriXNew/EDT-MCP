@@ -4,7 +4,7 @@
 
 **Preconditions.** Live EDT + the project open and `State=ready` (verify with `list_projects`; after a `-clean` redeploy the index/tag storage rebuilds and reads can be empty until ready). Tags are user-defined labels created in the EDT UI (or via the tag-write tools) — **TestConfiguration ships with no tags**, so a meaningful non-empty result requires first creating tags and assigning objects. Always pair this tool with `get_tags` to discover which tag names actually exist before filtering: tag names you pass that don't exist are reported under "Tags not found", they are not an error. Does not mutate; no revert needed.
 
-**Call (real, 2026-06-02):**
+**Call (real):**
 ```
 get_objects_by_tags(projectName="TestConfiguration",
                     tags=["Important", "NeedsReview"])

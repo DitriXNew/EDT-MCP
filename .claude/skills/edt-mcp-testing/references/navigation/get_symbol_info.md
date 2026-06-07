@@ -8,7 +8,7 @@
 - Resolves through the UI thread + an open Xtext editor: the tool calls `IDE.openEditor` on the workbench, reads hover via reflection, and **closes the editor afterward if it opened it** (no tab pollution). If there is no active workbench window/page or the editor won't open, it falls back to a headless EMF model load (`getSymbolInfoViaEmf`).
 - Read-only. Does **not** mutate the model or disk. No revert needed.
 
-**Call (real, 2026-06-02).** Point `line`/`column` at the first character of an identifier. Best clean result is a variable read inside a method body:
+**Call (real).** Point `line`/`column` at the first character of an identifier. Best clean result is a variable read inside a method body:
 ```
 get_symbol_info(
   projectName="TestConfiguration",

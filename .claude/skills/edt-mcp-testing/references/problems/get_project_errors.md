@@ -2,9 +2,9 @@
 
 **Purpose.** Return the configuration problems EDT's validation engine has recorded for a project (the same set you see in the "Configuration Problems" view), read from `IMarkerManager`. Each row carries the problem message, the resolved object location, the check identifier, and whether built-in docs exist for that check. Optional filters by `severity`, `checkId`, and `objects` (FQN). Read-only — never mutates the model.
 
-**Preconditions.** Live EDT + the project is open and **indexed** (BM model built). After a `-clean` redeploy the marker index is rebuilt asynchronously, so first confirm `list_projects` shows the project `State=ready` before trusting the count — a half-built index reports fewer problems. TestConfiguration is the canonical target: it contains a `CommonModule.Error` with a **deliberate syntax error** plus a few intentional metadata problems (a `Catalog.Catalog` attribute with no type, common-module settings issues), so it always yields a non-empty, stable-ish result. The tool resolves each marker's presentation lazily inside a **BM read transaction** (per project), so a freshly restarted EDT does not throw — that bug class is already fixed (commit `25d7851`). Does not mutate; no revert needed.
+**Preconditions.** Live EDT + the project is open and **indexed** (BM model built). After a `-clean` redeploy the marker index is rebuilt asynchronously, so first confirm `list_projects` shows the project `State=ready` before trusting the count — a half-built index reports fewer problems. TestConfiguration is the canonical target: it contains a `CommonModule.Error` with a **deliberate syntax error** plus a few intentional metadata problems (a `Catalog.Catalog` attribute with no type, common-module settings issues), so it always yields a non-empty, stable-ish result. The tool resolves each marker's presentation lazily inside a **BM read transaction** (per project), so a freshly restarted EDT does not throw. Does not mutate; no revert needed.
 
-**Call (real, 2026-06-02):**
+**Call (real):**
 ```
 get_project_errors(projectName="TestConfiguration")
 ```

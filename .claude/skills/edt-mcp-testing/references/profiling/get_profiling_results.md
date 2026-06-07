@@ -8,7 +8,7 @@
 - For a NON-empty result you need a prior live profiling session: an active debug session (`debug_launch` or `debug_yaxunit_tests`) → `start_profiling(applicationId=...)` → run code/tests → THEN `get_profiling_results`. Without that whole chain it returns `count: 0` (which is itself a valid, documented response and the normal state on a fresh workbench).
 - Does NOT mutate. No revert needed. Safe to call repeatedly.
 
-**Call (real, 2026-06-02).** Bare call (no active profiling session — the safe default case):
+**Call (real).** Bare call (no active profiling session — the safe default case):
 ```
 get_profiling_results()
 ```

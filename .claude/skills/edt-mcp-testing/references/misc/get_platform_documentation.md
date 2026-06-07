@@ -8,7 +8,7 @@
 - Runs on the UI thread (`Display.syncExec` via `PlatformUI.getWorkbench().getDisplay()`). After a `-clean` redeploy give the workbench a moment; an empty provider yields "no types found" rather than a crash.
 - Read-only. Does **not** mutate the model or disk. No revert needed.
 
-**Call (real, 2026-06-02).** A known type, methods only, capped:
+**Call (real).** A known type, methods only, capped:
 ```
 get_platform_documentation(
   typeName="Array",

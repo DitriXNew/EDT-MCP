@@ -4,7 +4,7 @@
 
 **Preconditions.** The project must be open in the workspace (use `TestConfiguration`). No open editor, cursor position, or built index is required — `metadataType="all"` (the default) is a pure filesystem scan of `src/`, and the specific-type filters read the in-memory `Configuration` model via `IConfigurationProvider`. The tool runs on the SWT UI thread (`display.syncExec`). It does NOT mutate anything, so no revert is needed.
 
-**Call (real, 2026-06-02).**
+**Call (real).**
 ```
 list_modules(projectName="TestConfiguration")
 ```

@@ -2,8 +2,6 @@
 
 **Purpose.** Set one or more **properties** of a metadata object *or* one of its members (attribute / tabular section / dimension / resource), addressed by a 1C full-name FQN. `properties` is an array of `{name, value, language?}`. Each property is **validated before any mutation** (fail-fast — nothing is written unless *every* property validates), then the owning top object is force-exported to its `.mdo` on disk. It can set the language-keyed **`synonym`**, the **`comment`**, and the data **`type`** (a structured type spec). To rename, use `rename_metadata_object` — `modify_metadata` refuses a `name` property and points there.
 
-> **History.** This tool subsumes the removed `set_metadata_property` (which set only `Comment`/`Synonym`) and adds property validation plus `type`-setting. Treat any older `set_metadata_property` references as folded into this tool.
-
 > **THINK TWICE — model + disk mutation.** This is a BM write tool: it mutates the in-memory model *and* rewrites the owner `.mdo`. Run it **only** on `TestConfiguration`, and **always revert** the source tree afterwards (mutate-then-revert discipline below). It is not cascading like `rename_metadata_object`, but a wrong value still dirties the model and a `.mdo` until you revert.
 
 **Preconditions.**
@@ -123,7 +121,7 @@ Field/shape notes:
 - **Discover, don't guess.** Property names and enum literals are model-driven. Read `get_metadata_details(assignable:true)` first; the error on an unknown property *also* lists the assignable set and points back to `assignable:true`, and the error on a bad enum literal lists the allowed values inline.
 - **`name` is reserved for rename.** Setting `name` is refused with a pointer to `rename_metadata_object` — `modify_metadata` never renames (no cascade).
 - **`type` is structured, never a string.** `"value": "String"` is a malformed spec (shape error citing `types`/`kind`). Use `{"types":[{"kind":...}]}`. A `Ref` at a non-ref object (e.g. `CommonModule.OK`) is a clean error (`not a reference type`), not a crash — the underlying `getRefType` would `AssertionError` on such kinds, and the tool converts that to an actionable message.
-- **Empty value never clears.** `value: ""` is rejected (error suggests `non-empty` / `does not clear`) — it does NOT silently null the property. This preserves the parity guard from the former `set_metadata_property`.
+- **Empty value never clears.** `value: ""` is rejected (error suggests `non-empty` / `does not clear`) — it does NOT silently null the property.
 - **Mutation safety / revert.** After any successful write, revert with `git checkout HEAD -- TestConfiguration && git clean -fd -- TestConfiguration`, then `-clean`-relaunch EDT so the in-memory model reloads from the reverted disk (otherwise model and `.mdo` disagree until restart). Always mutate *through MCP*, never by hand-editing `.mdo`.
 - **Disk lag.** The owner `.mdo` is exported asynchronously (sub-second). Poll the diff (`poll_diff_contains`) for the new literal rather than reading the file once.
 - **Flaky output channel.** This is a JSON-responseType tool, so the text channel is a bare `Done`/`Error` placeholder — read the **structured** payload (`action`/`applied`/`persisted`), not the echoed text. If output comes back garbled, do NOT retry-spam a write; re-verify independently via `get_metadata_details` and `git status -- TestConfiguration`, and consult the EDT log `D:\WS\EDT\.metadata\.log`.

@@ -3,40 +3,40 @@ name: edt-mcp-bilingual
 description: Correctness checklist for 1C's bilingual (Russian/English) model in EDT-MCP — synonym language-code vs name, object resolution by Name vs synonym vs TYPE token, dialect-aware vs literal code search. Use when reading, writing, resolving, formatting or searching metadata objects, synonyms, BSL identifiers or query keywords.
 ---
 
-# EDT-MCP — корректность двух языков (ru/en)
+# EDT-MCP — two-language (ru/en) correctness
 
-1С двуязычна на нескольких уровнях. Большинство багов плагина — именно здесь. Перед правкой любого инструмента, который резолвит/читает/пишет/ищет метаданные или код, пройти этот чеклист.
+1C is bilingual at several layers, and most plugin bugs live here. Before editing any tool that resolves/reads/writes/searches metadata or code, walk this checklist.
 
-## 1. Синоним метаданных ключуется по КОДУ языка
+## 1. The metadata synonym is keyed by the language CODE
 
-Синоним — `EMap<String,String>`, ключ = **код языка** (`"ru"`, `"en"`), а НЕ имя объекта `Language`.
+The synonym is an `EMap<String,String>` whose key is the **language code** (`"ru"`, `"en"`), NOT the `Language` object's name.
 
-- ✅ Писать/читать через `MetadataLanguageUtils` (вводится в `unify-metadata-language-code-resolution`): `resolveLanguageCode(config, explicit)` и `getSynonymForLanguage(map, code)`.
-- ✅ Эталон логики резолва языка: `CreateMetadataObjectTool.resolveLanguage` — explicit → `getDefaultLanguage().getLanguageCode()` → код первого языка → null.
-- ❌ НЕ `config.getDefaultLanguage().getName()` (вернёт «Russian»/«Русский» — имя, не ключ; на мультиязычной конфигурации молча промахнётся мимо EMap).
-- ❌ НЕ хардкодить `"ru"` как fallback — брать код первого настроенного языка.
+- ✅ Write/read through `MetadataLanguageUtils`: `resolveLanguageCode(config, explicit)` and `getSynonymForLanguage(map, code)`.
+- ✅ Reference language-resolution logic: `CreateMetadataObjectTool.resolveLanguage` — explicit → `getDefaultLanguage().getLanguageCode()` → the first language's code → null.
+- ❌ NOT `config.getDefaultLanguage().getName()` (returns "Russian"/"Русский" — the name, not the key; on a multi-language config it silently misses the EMap).
+- ❌ Don't hardcode `"ru"` as the fallback — use the first configured language's code.
 
-## 2. Объект резолвится по программному Name; TYPE-токен — двуязычный
+## 2. An object resolves by its programmatic Name; the TYPE token is bilingual
 
-- Имя объекта (сегмент после типа) — это **программный идентификатор**, резолв по `getName()` (см. `MetadataTypeUtils.findObject`). Синоним как идентификатор НЕ принимается.
-- TYPE-токен (Справочник/Catalog, Документ/Document …) — двуязычный, обрабатывается `MetadataTypeUtils` (`toEnglishSingular`, `normalizeFqn`, `getAllFqnVariants`).
-- В описании схемы писать честно: «русским/английским может быть только TYPE-токен; имя объекта — программный идентификатор, не синоним». Не вводить пользователя в заблуждение формулировкой «Russian names supported».
+- The object name (the segment after the type) is a **programmatic identifier**, resolved by `getName()` (see `MetadataTypeUtils.findObject`). A synonym is NOT accepted as an identifier.
+- The TYPE token (Справочник/Catalog, Документ/Document …) is bilingual, handled by `MetadataTypeUtils` (`toEnglishSingular`, `normalizeFqn`, `getAllFqnVariants`).
+- Say it honestly in the schema description: "only the TYPE token may be Russian/English; the object name is a programmatic identifier, not a synonym." Don't mislead with "Russian names supported".
 
-## 3. Запись синонима — симметрично и через общий резолвер
+## 3. Writing a synonym — symmetric, through the shared resolver
 
-- При создании объекта/реквизита, если задан синоним — писать `getSynonym().put(resolveLanguageCode(...), synonym)`.
-- Write-инструмент должен **возвращать** записанный `synonym`+`language` в ответе (симметрия с read-инструментами). См. `metadata-write-synonym-symmetry`.
+- When creating an object/attribute, if a synonym is given, write `getSynonym().put(resolveLanguageCode(...), synonym)`.
+- A write tool must **return** the written `synonym`+`language` in its response (symmetry with read tools).
 
-## 4. BSL: диалекты ru/en
+## 4. BSL: ru/en dialects
 
-- AST/индексные инструменты (find_references, get_symbol_info, go_to_definition, call_hierarchy) диалект-aware — резолв по имени символа с `equalsIgnoreCase`, нормализация не нужна.
-- `search_in_code` — **литеральный** matcher, НЕ диалект-aware: поиск английского ключевого слова не найдёт русский эквивалент. Это должно быть честно отражено в описании инструмента; для поиска идентификаторов направлять на AST-инструменты. См. `search-in-code-dialect-awareness`.
-- Регулярки с кириллицей — экранировать `\uXXXX` (как в `BslSyntaxChecker`), не сырыми UTF-8 литералами (риск порчи при не-UTF-8 сборке). См. `bsl-cyrillic-pattern-escaping`.
+- AST/index tools (find_references, get_symbol_info, go_to_definition, call_hierarchy) are dialect-aware — they resolve by symbol name with `equalsIgnoreCase`, no normalization needed.
+- `search_in_code` is a **literal** matcher, NOT dialect-aware: searching an English keyword won't find its Russian equivalent. Reflect this honestly in the tool description; for identifier search, direct the user to the AST tools.
+- Cyrillic in regexes — escape via `\uXXXX` (as in `BslSyntaxChecker`), not raw UTF-8 literals (corruption risk under a non-UTF-8 build).
 
-## 5. Запросы 1С двуязычны
+## 5. 1C queries are bilingual
 
-Ключевые слова запроса имеют ru/en диалекты (SELECT/ВЫБРАТЬ, FROM/ИЗ, WHERE/ГДЕ). `validate_query` делегирует парсеру платформы (диалект-aware) — не предполагать единственный диалект; UTF-8 при передаче текста запроса.
+Query keywords have ru/en dialects (SELECT/ВЫБРАТЬ, FROM/ИЗ, WHERE/ГДЕ). `validate_query` delegates to the platform parser (dialect-aware) — don't assume a single dialect; keep UTF-8 when passing query text.
 
-## Тест-инвариант
+## Test invariant
 
-Любая правка резолва/чтения/записи должна иметь тест, проверяющий **оба** языка: один объект адресуется английским Name, русским Name и (где применимо) синонимом — результат идентичен; синоним ключуется по коду языка, не по имени. См. карточки `tests-metadata-bilingual-and-formatters`, `tests-code-navigation-bilingual`, `tests-validate-query-ru-keywords`.
+Any change to resolution/reading/writing must have a test covering **both** languages: one object addressed by its English Name, Russian Name, and (where applicable) synonym — identical result; the synonym keyed by language code, not by name. Reference: `WriteModuleSourceToolTest.testResolveRussianObjectName`.

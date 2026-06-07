@@ -1,15 +1,15 @@
-# list_breakpoints — как тестировать
+# list_breakpoints — how to test
 
-**Назначение.** Перечислить активные line-breakpoint'ы (опц. фильтр по `projectName`).
+**Purpose.** List active line breakpoints (optional `projectName` filter).
 
-**Предусловие.** Хотя бы один `set_breakpoint` поставлен.
+**Precondition.** At least one `set_breakpoint` is placed.
 
-**Вызов (реально, 2026-06-02):**
+**Call (real):**
 ```
 list_breakpoints(projectName="TestConfiguration")
 ```
 
-**Ожидаемый результат:**
+**Expected result:**
 ```json
 {"success":true,"count":1,"breakpoints":[
   {"breakpointId":1867,"project":"TestConfiguration",
@@ -17,6 +17,6 @@ list_breakpoints(projectName="TestConfiguration")
    "lineNumber":9,"enabled":true,"modelId":"com._1c.g5.v8.dt.debug"}]}
 ```
 
-**Подводные камни.**
-- **`breakpointId` может отличаться от того, что вернул `set_breakpoint`**, если модуль сдвинулся (EDT переякорил брейкпоинт). Поэтому перед `remove_breakpoint` бери актуальный id именно отсюда (в прогоне: ставили на стр.5 → id 1863, после добавления `BeforeStart` выше реальный брейк оказался на стр.9 → id 1867).
-- `modelId":"com._1c.g5.v8.dt.debug"` подтверждает, что это BSL-брейкпоинт, а не generic-маркер.
+**Gotchas.**
+- **The `breakpointId` may differ from what `set_breakpoint` returned** if the module shifted (EDT re-anchored the breakpoint). So before `remove_breakpoint` take the current id from here (in a run: placed on line 5 → id 1863, after adding `BeforeStart` above the real break ended up on line 9 → id 1867).
+- `modelId":"com._1c.g5.v8.dt.debug"` confirms this is a BSL breakpoint, not a generic marker.

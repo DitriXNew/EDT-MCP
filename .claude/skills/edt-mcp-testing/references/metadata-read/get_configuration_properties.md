@@ -8,7 +8,7 @@
 - `projectName` is **optional**. When omitted, the tool walks the workspace and picks the **first open `IConfigurationProject`** it finds. With a busy workspace (e.g. `IRP` also open) the "first" project is not deterministic — pass `projectName` explicitly to target `TestConfiguration`.
 - Read-only. Does **not** mutate the model or disk. No revert needed. Resolution runs on the UI thread (`Display.syncExec`); avoid hammering this concurrently with other UI-thread tools.
 
-**Call (real, 2026-06-02):**
+**Call (real):**
 ```
 get_configuration_properties(projectName="TestConfiguration")
 ```
