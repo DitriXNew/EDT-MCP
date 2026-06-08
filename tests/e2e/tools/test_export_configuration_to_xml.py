@@ -104,6 +104,27 @@ def _has_xml_output(directory):
     return False
 
 
+def _is_transient_teardown_race(err):
+    """True if `err` is the known transient cross-test WorkspaceOrchestrator teardown
+    race (a preceding test's RoundTripImport_e2e project is still tearing down
+    asynchronously when this export enqueues its operation), NOT a real export bug.
+
+    EDT surfaces this race in more than one shape depending on timing:
+      - "Export failed: assertion failed: ..."                     (endOperation assertion)
+      - "... 'enqueueOperation' must be called on '[STARTING, RUNNING]'
+         phases but project '...' is on 'closing' phase"           (enqueue vs a closing project)
+    Both are the shared orchestrator rejecting work while a sibling project's async
+    teardown drains; both clear once it completes, so the safe + idempotent export to
+    a fresh temp dir is simply retried. The API-absent sentinel and every genuine
+    error (which names neither an orchestrator phase nor an assertion) fall through to
+    the asserts. The "closing"+"phase" pair is specific to EDT's project lifecycle and
+    cannot appear in a success document, the not-installed sentinel, or a bad-project
+    failure.
+    """
+    e = (err or "").lower()
+    return "assertion failed" in e or ("closing" in e and "phase" in e)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY PATH (env-robust: real export OR the clear not-installed sentinel)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -124,15 +145,18 @@ def test_export_to_temp_dir_succeeds_or_clear_api_sentinel():
         # A preceding test (test_delete_project's roundtrip) deletes the
         # RoundTripImport_e2e project; EDT tears that project context down
         # ASYNCHRONOUSLY on the shared WorkspaceOrchestrator. If the teardown is still
-        # completing when this export begins, EDT's own endOperation trips an internal
-        # AssertionFailedException surfaced as "Export failed: assertion failed:" — a
-        # transient cross-test concurrency artifact, NOT an export bug (export to a fresh
-        # temp dir is safe + idempotent). Settle-and-retry ONLY on that signature; the
+        # draining when this export begins, the shared orchestrator rejects the new
+        # operation — surfaced as either "Export failed: assertion failed:" (endOperation
+        # assertion) or "...'enqueueOperation' must be called on '[STARTING, RUNNING]'
+        # phases but project '...' is on 'closing' phase" (enqueue vs a still-closing
+        # sibling). Both are transient cross-test concurrency artifacts, NOT export bugs
+        # (export to a fresh temp dir is safe + idempotent). Settle-and-retry ONLY on
+        # those orchestrator-teardown signatures (see _is_transient_teardown_race); the
         # API-absent sentinel and every real error fall straight through to the asserts.
         args = {"projectName": PROJECT, "outputPath": out_dir}
         r = call("export_configuration_to_xml", args)
-        for _ in range(5):
-            if not r.is_error or "assertion failed" not in (r.error_text() or "").lower():
+        for _ in range(8):
+            if not r.is_error or not _is_transient_teardown_race(r.error_text()):
                 break
             time.sleep(3)
             r = call("export_configuration_to_xml", args)
