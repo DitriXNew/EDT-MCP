@@ -64,6 +64,18 @@ HEALTH_URL = "http://%s:%s/health" % (MCP_HOST, MCP_PORT)
 # MCP_CALL_TIMEOUT.
 CALL_TIMEOUT = float(os.environ.get("MCP_CALL_TIMEOUT", "180"))
 
+# Budget (seconds) for reset_model to out-wait the derived-data recompute a write-metadata
+# test schedules. A rename of a REFERENCED object (e.g. a common module) keeps the project
+# BUILDING for a long time while EDT revalidates its dependents; clean_project is REFUSED
+# until that settles, so reset_model must wait at least this long before (and after) the
+# clean — otherwise the clean is refused, the model is left un-reset, and the NEXT rename
+# blocks for minutes on EDT's still-draining pipeline (DerivedDataManager.blockAsyncPipeline).
+# Defaults to the ready timeout but never below 300s (a short local default would expire
+# mid-drain). The per-test --test-timeout must exceed it. Override with E2E_MODEL_SETTLE_TIMEOUT.
+MODEL_SETTLE_TIMEOUT = int(os.environ.get(
+    "E2E_MODEL_SETTLE_TIMEOUT",
+    str(max(int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180")), 300))))
+
 # MCP protocol version this client speaks (sent as the MCP-Protocol-Version header,
 # per the 2025-11-25 Streamable HTTP transport spec).
 PROTOCOL_VERSION = os.environ.get("MCP_PROTOCOL_VERSION", "2025-11-25")
@@ -359,23 +371,35 @@ def read_disk(relpath):
 
 
 def reset_model():
-    """Re-sync EDT's in-memory BM model to the on-disk baseline.
+    """Re-sync EDT's in-memory BM model to the on-disk baseline after a write-metadata test.
 
-    Metadata-write tools (create/add/delete/rename metadata) mutate the in-memory
-    BM model but do NOT flush every change to disk, so a git reset alone cannot
-    undo them — the model would carry the unsaved change into the next test.
-    clean_project refreshes files from disk + revalidates, discarding unsaved model
-    changes. The orchestrator calls this after each kind='write-metadata' test.
+    Metadata-write tools (create/add/delete/rename metadata) mutate the in-memory BM model
+    but do NOT flush every change to disk, so a git reset alone cannot undo them — the model
+    would carry the unsaved change into the next test. clean_project re-imports the clean disk
+    + revalidates, discarding the in-memory change. The orchestrator calls this after each
+    kind='write-metadata' test.
 
-    clean_project's revalidation re-triggers derived-data computation (the reference
-    index), so we then wait for the project to settle — otherwise the NEXT test (e.g. a
-    cascade rename/delete) could run mid-reindex and flake.
+    CRITICAL ORDERING (root cause of the rename >300s e2e timeout): a metadata write also
+    SCHEDULES a derived-data recompute, so the project is BUILDING right after the test —
+    and clean_project REFUSES a building project. The old code called clean_project FIRST
+    and swallowed the refusal (it returns an isError result, not an exception), leaving the
+    model UN-reset; the next rename then blocked for minutes inside EDT's still-draining
+    derived-data pipeline (DerivedDataManager.blockAsyncPipeline), tripping the per-test
+    timeout. So: wait for the project to SETTLE first (out-waiting that recompute) so the
+    clean is accepted, THEN clean_project (which itself blocks on its own derived-data
+    rebuild). Retry if a late-starting recompute re-flags BUILDING between the wait and the
+    call — a successful clean_project is the guarantee the model was actually reset.
     """
-    try:
-        call("clean_project", {"projectName": PROJECT})
-    except Exception:
-        pass
-    wait_for_project_ready()
+    for _ in range(3):
+        wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
+        try:
+            if not call("clean_project", {"projectName": PROJECT}).is_error:
+                break
+        except Exception:
+            pass
+    # Final settle: clean_project's revalidation re-triggers derived data; make sure the
+    # next test starts on a fully-indexed model regardless of which branch above we took.
+    wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
 
 
 def all_fixtures_status():
