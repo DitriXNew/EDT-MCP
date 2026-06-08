@@ -18,7 +18,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
    - `getDescription()` — short, for the AI client (what it does + when). **End** with `"… Full parameters and examples: call get_tool_guide('<name>')."` (a unit test checks this; keep the description compact — the `tools/list` budget is shared).
    - `getInputSchema()` via `JsonSchemaBuilder.object().stringProperty(name, desc[, required]).integerProperty(...).enumProperty(name, desc, "a","b").objectArrayProperty(...).build()`. **Required is the boolean 3rd argument of a property; there is NO `.required(...)` method.** Parameter names are **lowerCamelCase** (`ToolContractConsistencyTest` fails snake_case). Canonical: `projectName`, `fqn`, `modulePath`, `limit`/`offset` (see `edt-mcp-tool-conventions`).
    - `getOutputSchema()` — declare the JSON result keys (for JSON tools).
-   - `getGuide()` — full how-to (parameters, examples, gotchas, how to revert). Served on-demand through the guide-resource channel — put DETAILS here, not in the description.
+   - **Guide** — full how-to (parameters, examples, gotchas, how to revert), served on-demand through the guide-resource channel. Do NOT override `getGuide()`: the default loads the bundled Markdown `guides/<name>.md` via `GuideLoader`. Author the guide as that file (one per tool); the body is the `## Guide` section (the renderer adds the `# <name>` H1, description and the `## Parameters` table itself, so use `## Parameter details` for param prose). `GuideCoverageTest` fails the build if a registered tool has no guide. Override `getGuide()` only for a guide that must be computed at runtime.
    - `getResponseType()` — TEXT/JSON/MARKDOWN/YAML/IMAGE (may be omitted when extending AbstractMetadataWriteTool → JSON).
    - **Every parameter read in execute() must be in the schema, and vice versa.**
 
@@ -52,7 +52,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 
 ## Readiness checklist
 - [ ] Class in `tools/impl/`, NAME snake_case, parameters lowerCamelCase, every parameter in the schema
-- [ ] description → `get_tool_guide('<name>')`; getGuide/getOutputSchema present
+- [ ] description → `get_tool_guide('<name>')`; `guides/<name>.md` authored; getOutputSchema present
 - [ ] Shared resolvers + `ToolResult.error`; model only in a tx boundary; persist (forceExport) if a write
 - [ ] Registered in `BuiltInToolRegistrar`; new packages in MANIFEST Import-Package
 - [ ] `XxxToolTest` (unit ratchet) + `test_<tool>.py` (e2e ratchet)

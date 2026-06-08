@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools;
 import java.util.Map;
 
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
+import com.ditrix.edt.mcp.server.utils.GuideLoader;
 
 /**
  * Interface for MCP tool implementations.
@@ -130,21 +131,26 @@ public interface IMcpTool
 
     /**
      * Returns an extended, on-demand how-to guide for this tool: worked examples,
-     * full enum tables, preconditions, edge cases and bilingual (ru/en) nuances —
-     * the detail that would otherwise bloat the always-loaded {@code tools/list}.
+     * preconditions, edge cases and bilingual (ru/en) nuances — the detail that
+     * would otherwise bloat the always-loaded {@code tools/list}.
      * <p>
      * This text is NOT sent in {@code tools/list}; it is served only when a client
-     * explicitly asks for it via the {@code get_tool_guide} tool, so the
-     * {@link #getDescription()} and {@link #getInputSchema()} can stay lean
-     * (what + when + next + one-line param help) while the depth lives here. The
-     * default is an empty string, meaning "no extended guide — the description and
-     * input schema are self-contained"; {@code get_tool_guide} then synthesizes a
-     * guide from the description and the parameter schema.
+     * explicitly asks for it via the {@code get_tool_guide} tool (or the resource
+     * {@code guide://<toolName>}), so the {@link #getDescription()} and
+     * {@link #getInputSchema()} can stay lean (what + when + next + one-line param
+     * help) while the depth lives here.
+     * <p>
+     * The default loads the guide from a bundled Markdown resource
+     * {@code guides/<name>.md} via {@link com.ditrix.edt.mcp.server.utils.GuideLoader}
+     * — the single source of truth for tool guides. Adding a guide is dropping a
+     * Markdown file; a tool with no such file simply returns {@code ""} (its
+     * description and schema are then self-contained). Override only for a guide
+     * that must be computed at runtime.
      *
      * @return the extended guide as Markdown, or {@code ""} when there is none
      */
     default String getGuide()
     {
-        return ""; //$NON-NLS-1$
+        return GuideLoader.load(getName());
     }
 }

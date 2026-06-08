@@ -110,62 +110,6 @@ public class GetMetadataObjectsTool implements IMcpTool
     }
     
     @Override
-    public String getGuide()
-    {
-        return "# get_metadata_objects\n\n" //$NON-NLS-1$
-            + "List the metadata objects of a 1C configuration as a flat Markdown table. Each row " //$NON-NLS-1$
-            + "carries the object Name, its Synonym in the chosen language, Comment, the metadata " //$NON-NLS-1$
-            + "Type, and two flags - ObjectModule and ManagerModule - that show whether the object " //$NON-NLS-1$
-            + "owns the corresponding module (Yes/-).\n\n" //$NON-NLS-1$
-
-            + "## When to use\n" //$NON-NLS-1$
-            + "- Discover what objects exist in a configuration before drilling into one.\n" //$NON-NLS-1$
-            + "- Find an object by a partial Name (`nameFilter`) or narrow to a single kind " //$NON-NLS-1$
-            + "(`metadataType`).\n" //$NON-NLS-1$
-            + "- To inspect one object's attributes/forms/etc., follow up with " //$NON-NLS-1$
-            + "`get_metadata_details` using the Name and Type from this table.\n\n" //$NON-NLS-1$
-
-            + "## Parameters\n" //$NON-NLS-1$
-            + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
-            + "- `metadataType` - which kind to list; default `all`. Matching is case-insensitive. " //$NON-NLS-1$
-            + "Supported values: `all`, `documents`, `catalogs`, `informationRegisters`, " //$NON-NLS-1$
-            + "`accumulationRegisters`, `commonModules`, `enums`, `constants`, `reports`, " //$NON-NLS-1$
-            + "`dataProcessors`, `exchangePlans`, `businessProcesses`, `tasks`, `commonAttributes`, " //$NON-NLS-1$
-            + "`eventSubscriptions`, `scheduledJobs`. An unknown value returns an error listing the " //$NON-NLS-1$
-            + "supported types.\n" //$NON-NLS-1$
-            + "- `nameFilter` - case-insensitive substring matched against the object **Name only**, " //$NON-NLS-1$
-            + "never the Synonym. Omit to list everything of the chosen type.\n" //$NON-NLS-1$
-            + "- `limit` - max rows returned; default from preferences (100), clamped to 1000. A " //$NON-NLS-1$
-            + "truncation notice is appended when results are capped, while **Total** still reports " //$NON-NLS-1$
-            + "the full count.\n" //$NON-NLS-1$
-            + "- `language` - language code for the Synonym column (e.g. `en`, `ru`). Defaults to the " //$NON-NLS-1$
-            + "configuration's default language.\n\n" //$NON-NLS-1$
-
-            + "## Columns\n" //$NON-NLS-1$
-            + "- `Name` - the programmatic object name (use this with other tools).\n" //$NON-NLS-1$
-            + "- `Synonym` - localized caption for the chosen `language`.\n" //$NON-NLS-1$
-            + "- `Comment` - the object's comment, if any.\n" //$NON-NLS-1$
-            + "- `Type` - e.g. `Document`, `Catalog`, `InformationRegister`, `CommonModule`, `Enum`.\n" //$NON-NLS-1$
-            + "- `ObjectModule` - `Yes` if the object has an object/record-set/value-manager module, " //$NON-NLS-1$
-            + "else `-`.\n" //$NON-NLS-1$
-            + "- `ManagerModule` - `Yes` if the object has a manager module, else `-`.\n\n" //$NON-NLS-1$
-
-            + "## Examples\n" //$NON-NLS-1$
-            + "- Everything: `{projectName: \"MyProject\"}`.\n" //$NON-NLS-1$
-            + "- Only documents: `{projectName: \"MyProject\", metadataType: \"documents\"}`.\n" //$NON-NLS-1$
-            + "- Filter by name: `{projectName: \"MyProject\", nameFilter: \"Order\"}`.\n" //$NON-NLS-1$
-            + "- Russian synonyms: `{projectName: \"MyProject\", language: \"ru\"}`.\n\n" //$NON-NLS-1$
-
-            + "## Notes & gotchas\n" //$NON-NLS-1$
-            + "- `nameFilter` matches the programmatic Name, never the localized synonym; searching " //$NON-NLS-1$
-            + "by a translated caption will not match.\n" //$NON-NLS-1$
-            + "- The Synonym is keyed by language **code** (`en`/`ru`), not the language's display " //$NON-NLS-1$
-            + "name; an unconfigured language yields an empty synonym, not an error.\n" //$NON-NLS-1$
-            + "- Output is Markdown; table cells are escaped so a `|` in a comment or synonym does " //$NON-NLS-1$
-            + "not break the table.\n"; //$NON-NLS-1$
-    }
-
-    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.MARKDOWN;

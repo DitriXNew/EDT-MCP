@@ -91,13 +91,4 @@ public class GetToolGuideTool implements IMcpTool
 
         return GuideRenderer.render(tool);
     }
-
-    @Override
-    public String getGuide()
-    {
-        return "Use this when the lean tools/list entry is not enough — it returns the same " //$NON-NLS-1$
-            + "guide a client gets from the resource guide://<toolName>. Pass the exact tool " //$NON-NLS-1$
-            + "name (run it on itself: toolName=get_tool_guide) to see a worked example. An " //$NON-NLS-1$
-            + "unknown name returns an error pointing back to tools/list."; //$NON-NLS-1$
-    }
 }

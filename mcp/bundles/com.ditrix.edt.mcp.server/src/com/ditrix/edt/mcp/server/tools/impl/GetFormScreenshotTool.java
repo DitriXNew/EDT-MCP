@@ -56,63 +56,6 @@ public class GetFormScreenshotTool implements IMcpTool
     }
 
     @Override
-    public String getGuide()
-    {
-        return "Captures a **PNG screenshot** of a form's WYSIWYG editor as it actually renders " //$NON-NLS-1$
-            + "(the same visual EDT shows in the form designer). The response type is IMAGE - the " //$NON-NLS-1$
-            + "tool returns the PNG, not text.\n\n" //$NON-NLS-1$
-
-            + "## When to use\n" //$NON-NLS-1$
-            + "- See what a form looks like rendered, verify a layout/visibility change visually, " //$NON-NLS-1$
-            + "or attach a before/after image.\n" //$NON-NLS-1$
-            + "- If you need element positions/sizes as DATA (bounds, types, properties) rather " //$NON-NLS-1$
-            + "than a picture, use `get_form_layout_snapshot` instead.\n" //$NON-NLS-1$
-            + "- To inspect the declarative form definition, read the `.form` model; this tool is " //$NON-NLS-1$
-            + "only the rendered bitmap.\n\n" //$NON-NLS-1$
-
-            + "## Required JVM flag (read this first)\n" //$NON-NLS-1$
-            + "EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.ini` " //$NON-NLS-1$
-            + "`-vmargs` section. Without it the offscreen layout handler is never constructed and " //$NON-NLS-1$
-            + "the screenshot comes back **blank/empty**. A blank image almost always means the " //$NON-NLS-1$
-            + "flag is missing - it is NOT a bad call or a code bug, so do not retry or reshape the " //$NON-NLS-1$
-            + "arguments to \"fix\" it; add the flag and relaunch EDT.\n\n" //$NON-NLS-1$
-
-            + "## Parameter details\n" //$NON-NLS-1$
-            + "- `projectName` - EDT project name. **Required when `formPath` is specified**; " //$NON-NLS-1$
-            + "omitting it then returns the error \"projectName is required when formPath is " //$NON-NLS-1$
-            + "specified\". Ignored when targeting the active editor.\n" //$NON-NLS-1$
-            + "- `formPath` - metadata FQN of the form. If given, the tool opens and activates " //$NON-NLS-1$
-            + "that form automatically, waits for the WYSIWYG page, then captures it. If omitted, " //$NON-NLS-1$
-            + "the currently active form editor is captured.\n" //$NON-NLS-1$
-            + "- `refresh` - force a WYSIWYG refresh before capturing; default `false`. Set `true` " //$NON-NLS-1$
-            + "if the form was just edited and the rendered image may be stale.\n\n" //$NON-NLS-1$
-
-            + "### formPath format\n" //$NON-NLS-1$
-            + "`MetadataType.ObjectName.Forms.FormName`, or `CommonForm.FormName` for a common " //$NON-NLS-1$
-            + "form. Examples:\n" //$NON-NLS-1$
-            + "- `Catalog.Products.Forms.ItemForm`\n" //$NON-NLS-1$
-            + "- `Document.SalesOrder.Forms.DocumentForm`\n" //$NON-NLS-1$
-            + "- `CommonForm.MyForm`\n\n" //$NON-NLS-1$
-
-            + "## Examples\n" //$NON-NLS-1$
-            + "- Active editor, default: `{}`.\n" //$NON-NLS-1$
-            + "- Specific form: `{projectName: \"MyProj\", formPath: " //$NON-NLS-1$
-            + "\"Catalog.Products.Forms.ItemForm\"}`.\n" //$NON-NLS-1$
-            + "- Force refresh first: `{projectName: \"MyProj\", formPath: \"CommonForm.MyForm\", " //$NON-NLS-1$
-            + "refresh: true}`.\n\n" //$NON-NLS-1$
-
-            + "## Notes & gotchas\n" //$NON-NLS-1$
-            + "- Blank image => the `-DnativeFormBufferedLayoutRender=true` flag is missing (see " //$NON-NLS-1$
-            + "above), not a failure of this call.\n" //$NON-NLS-1$
-            + "- `formPath` without `projectName` is rejected before any rendering.\n" //$NON-NLS-1$
-            + "- After opening a form the tool lets the UI settle briefly; if the page is still " //$NON-NLS-1$
-            + "loading you may get \"Form editor opened but WYSIWYG page is not available\" - retry.\n" //$NON-NLS-1$
-            + "- Needs a live workbench Display and runs on the UI thread; not available headless.\n" //$NON-NLS-1$
-            + "- The saved file is named after the last FQN segment (e.g. `ItemForm.png`), or " //$NON-NLS-1$
-            + "`form.png` when capturing the active editor.\n"; //$NON-NLS-1$
-    }
-
-    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.IMAGE;

@@ -75,7 +75,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     {
         return "configuration-properties.yaml"; //$NON-NLS-1$
     }
-    
+
     @Override
     public String execute(Map<String, String> params)
     {

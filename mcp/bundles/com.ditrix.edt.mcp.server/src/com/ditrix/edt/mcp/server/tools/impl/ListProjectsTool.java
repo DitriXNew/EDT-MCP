@@ -45,7 +45,7 @@ public class ListProjectsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object().build();
     }
-    
+
     @Override
     public String execute(Map<String, String> params)
     {

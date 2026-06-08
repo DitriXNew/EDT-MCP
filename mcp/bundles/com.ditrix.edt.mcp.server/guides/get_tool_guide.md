@@ -1,0 +1,1 @@
+Use this when the lean tools/list entry is not enough — it returns the same guide a client gets from the resource guide://<toolName>. Pass the exact tool name (run it on itself: toolName=get_tool_guide) to see a worked example. An unknown name returns an error pointing back to tools/list.

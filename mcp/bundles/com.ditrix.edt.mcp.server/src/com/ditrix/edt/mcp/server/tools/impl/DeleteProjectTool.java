@@ -78,44 +78,6 @@ public class DeleteProjectTool implements IMcpTool
     }
 
     @Override
-    public String getGuide()
-    {
-        return "# delete_project\n\n" //$NON-NLS-1$
-            + "Removes an EDT project from the workspace. It is the inverse of " //$NON-NLS-1$
-            + "`import_configuration_from_xml` and the natural cleanup step after an import " //$NON-NLS-1$
-            + "round-trip (export -> import -> verify -> delete).\n\n" //$NON-NLS-1$
-
-            + "## Think twice - destructive (confirm-preview)\n\n" //$NON-NLS-1$
-            + "Removing a project is destructive. With `deleteContent=true` the project's files are " //$NON-NLS-1$
-            + "ALSO deleted from disk and cannot be recovered. The tool is guarded by a two-phase " //$NON-NLS-1$
-            + "workflow (mirroring delete_metadata):\n" //$NON-NLS-1$
-            + "1. **Preview** (`confirm` omitted / false, the default): resolves the project and " //$NON-NLS-1$
-            + "returns `action='preview'`, `confirmationRequired=true`, the project name and the " //$NON-NLS-1$
-            + "`deleteContent` flag - WITHOUT removing anything.\n" //$NON-NLS-1$
-            + "2. **Delete** (`confirm=true`): removes the project; the result reports " //$NON-NLS-1$
-            + "`action='deleted'`.\n\n" //$NON-NLS-1$
-
-            + "## Parameters\n\n" //$NON-NLS-1$
-            + "- **projectName** (required): the EDT project to remove. Must exist in the workspace " //$NON-NLS-1$
-            + "(use `list_projects` to see what is available).\n" //$NON-NLS-1$
-            + "- **deleteContent** (boolean, default false): false unregisters the project from the " //$NON-NLS-1$
-            + "workspace but leaves its files on disk (it can be re-imported); true also deletes the " //$NON-NLS-1$
-            + "files from disk (irreversible).\n" //$NON-NLS-1$
-            + "- **confirm** (boolean, default false): false previews; true performs the removal.\n\n" //$NON-NLS-1$
-
-            + "## Result\n\n" //$NON-NLS-1$
-            + "JSON with `action` ('preview'/'deleted'), `confirmationRequired` (preview only), " //$NON-NLS-1$
-            + "`project`, `deleteContent`, and a `message`.\n\n" //$NON-NLS-1$
-
-            + "## Gotchas\n\n" //$NON-NLS-1$
-            + "- The project must exist; a missing project is rejected with a `list_projects` hint.\n" //$NON-NLS-1$
-            + "- Terminate any running launch against the project first; a busy project can fail to " //$NON-NLS-1$
-            + "delete while it is held.\n" //$NON-NLS-1$
-            + "- With `deleteContent=false` the on-disk files remain and can be re-imported with " //$NON-NLS-1$
-            + "`import_configuration_from_xml`."; //$NON-NLS-1$
-    }
-
-    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;

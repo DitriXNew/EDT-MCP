@@ -1,0 +1,15 @@
+Read the top-level properties of a project's configuration (or extension): Name, Synonym, Comment, script variant, compatibility mode, default language, vendor, version and other configuration-level settings. Returns a YAML document.
+
+## When to use
+- You need the configuration's **compatibility mode**, **script variant**, or **default language** before reading or writing code/metadata - those settings drive how 1C type tokens and synonyms resolve in `ru` vs `en` elsewhere.
+- A quick identity check of a project's configuration (name / version / vendor).
+
+## Parameter details
+- `projectName` - which project to read. **Omit to use the first configuration project** in the workspace.
+
+## What you get
+A YAML document of configuration properties: `name`, `synonym`, `comment`, `scriptVariant`, `compatibilityMode`, `defaultLanguage`, `vendor`, `version` and more. Multi-valued properties (e.g. the configured languages) are nested.
+
+## Notes & gotchas
+- This describes the configuration itself, not the objects inside it: to list those use `get_metadata_objects`, and for one object's full properties use `get_metadata_details`.
+- The default language reported here is the one whose `code` (`ru`/`en`) keys every object's synonym; keep it in mind when a synonym comes back empty for another language.

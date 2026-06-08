@@ -1,0 +1,36 @@
+Returns a YAML snapshot of a form's **calculated WYSIWYG layout**: per-element bounds (x/y/width/height), element types, and display-affecting properties, plus the overall form size. The response type is TEXT (the YAML itself).
+
+## When to use
+- Inspect or compare what a form actually lays out (positions, sizes, visibility) rather than its declarative `.form` definition.
+- Verify a layout change took effect, or diff two states of the same form.
+- For a rendered PNG instead of layout data, use `get_form_screenshot`.
+
+## Required JVM flag (read this first)
+EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.ini` `-vmargs` section. Without it the layout service is constructed without an offscreen handler and the snapshot comes back **blank/empty**. A blank result almost always means the flag is missing - it is NOT a bad call or a code bug. (The default native render mode also yields only form-level metrics for some elements; per-element bounds populate when buffered layout render is active.)
+
+## Parameter details
+- `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns an error. Ignored when targeting the active editor.
+- `formPath` - metadata FQN of the form. If given, the tool opens and activates that form automatically. If omitted, the currently active form editor is used.
+- `refresh` - force a WYSIWYG refresh before capturing; default `true`. Set `false` to read the last-rendered state without re-laying-out.
+- `mode` - `compact` (default) or `full`; an unknown value returns an error.
+
+### formPath format
+`MetadataType.ObjectName.Forms.FormName`, or `CommonForm.FormName` for a common form. Examples:
+- `Catalog.Products.Forms.ItemForm`
+- `Document.SalesOrder.Forms.DocumentForm`
+- `CommonForm.MyForm`
+
+## Modes
+- `compact` (default) - only visual elements with positive bounds, and only selected display-affecting properties. Best for a readable overview.
+- `full` - every layout node (including zero-bounds/structural ones) and all non-containment properties. Verbose; use when you need the complete tree.
+
+## Examples
+- Active editor, default compact: `{}`.
+- Specific form: `{projectName: "MyProj", formPath: "Catalog.Products.Forms.ItemForm"}`.
+- Full tree, no refresh: `{formPath: "CommonForm.MyForm", projectName: "MyProj", mode: "full", refresh: false}`.
+
+## Notes & gotchas
+- Blank result => the `-DnativeFormBufferedLayoutRender=true` flag is missing (see above), not a failure of this call.
+- `formPath` without `projectName` is rejected: "projectName is required when formPath is specified".
+- Needs a live workbench Display; runs on the UI thread.
+- A "No calculated element bounds were found" warning means the form had not finished rendering yet - retry, or ensure `refresh` is `true`.

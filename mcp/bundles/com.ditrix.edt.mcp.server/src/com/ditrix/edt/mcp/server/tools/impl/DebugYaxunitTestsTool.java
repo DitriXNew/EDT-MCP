@@ -71,28 +71,6 @@ public class DebugYaxunitTestsTool implements IMcpTool
     }
 
     @Override
-    public String getGuide()
-    {
-        return "# debug_yaxunit_tests (deprecated)\n\n" //$NON-NLS-1$
-            + "**Deprecated alias.** Use `run_yaxunit_tests` with `debug=true` — identical behaviour. " //$NON-NLS-1$
-            + "This tool simply forwards its arguments to `run_yaxunit_tests(debug=true)`.\n\n" //$NON-NLS-1$
-            + "Launches YAXUnit tests in **DEBUG mode** so that breakpoints set via `set_breakpoint` trip " //$NON-NLS-1$
-            + "when the test executes the code under inspection. It does NOT poll for `junit.xml`: after " //$NON-NLS-1$
-            + "the launch is queued it returns a Markdown launch handle and you call `wait_for_break` next.\n\n" //$NON-NLS-1$
-            + "## The full debug cycle\n" //$NON-NLS-1$
-            + "```\n" //$NON-NLS-1$
-            + "set_breakpoint -> run_yaxunit_tests(debug=true) -> wait_for_break\n" //$NON-NLS-1$
-            + "  -> get_variables / evaluate_expression / step -> resume\n" //$NON-NLS-1$
-            + "```\n\n" //$NON-NLS-1$
-            + "## Parameters\n" //$NON-NLS-1$
-            + "Same as `run_yaxunit_tests` (minus `timeout`, which DEBUG mode ignores): identify the launch " //$NON-NLS-1$
-            + "by `launchConfigurationName`, or by `projectName` + `applicationId`; filter with " //$NON-NLS-1$
-            + "`extensions` / `modules` / `tests` (pin to ONE test for a predictable cycle); " //$NON-NLS-1$
-            + "`updateBeforeLaunch` (default true) silences the modal update dialog. See " //$NON-NLS-1$
-            + "`get_tool_guide('run_yaxunit_tests')` for the full reference.\n"; //$NON-NLS-1$
-    }
-
-    @Override
     public String execute(Map<String, String> params)
     {
         // Deprecated alias: forward the accepted arguments to the merged tool in

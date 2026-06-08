@@ -96,63 +96,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     @Override
-    public String getGuide()
-    {
-        return "# delete_metadata\n\n" //$NON-NLS-1$
-            + "Deletes one metadata node (a top-level object or one of its members) addressed by a 1C " //$NON-NLS-1$
-            + "full-name FQN, and cascades the cleanup to every reference across the configuration: " //$NON-NLS-1$
-            + "BSL code, forms and other metadata. Backed by EDT's md-refactoring service, so the same " //$NON-NLS-1$
-            + "reference cleanup EDT computes for the IDE delete is what gets applied. The target's " //$NON-NLS-1$
-            + "identity is its programmatic Name (not its synonym). Replaces the former " //$NON-NLS-1$
-            + "delete_metadata_object.\n\n" //$NON-NLS-1$
-            + "## Think twice\n" //$NON-NLS-1$
-            + "This is a CASCADING, hard-to-reverse deletion: a wrong target can mass-edit BSL, forms " //$NON-NLS-1$
-            + "and metadata across the whole configuration. Always preview first, run it on a " //$NON-NLS-1$
-            + "configuration you can revert (version control), and do not execute without an explicit " //$NON-NLS-1$
-            + "request. After execute, verify with get_project_errors.\n\n" //$NON-NLS-1$
-            + "## When to use\n" //$NON-NLS-1$
-            + "Use to remove an existing node and have all references cleaned automatically. To rename " //$NON-NLS-1$
-            + "instead use rename_metadata_object; to create use create_metadata.\n\n" //$NON-NLS-1$
-            + "## Two-phase workflow\n" //$NON-NLS-1$
-            + "1. Preview (confirm omitted / false): returns the refactoring title, the refactoring " //$NON-NLS-1$
-            + "items, and the affected references (referencingObject, reference feature, targetObject " //$NON-NLS-1$
-            + "FQN) plus a count. Nothing is modified.\n" //$NON-NLS-1$
-            + "2. Execute (confirm=true): performs the delete refactoring. Returns action='executed'.\n\n" //$NON-NLS-1$
-            + "## Parameters\n" //$NON-NLS-1$
-            + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
-            + "- `fqn` (required) - the delete target. Top object: 'Type.Name' (e.g. 'Catalog.Products' " //$NON-NLS-1$
-            + "deletes the whole catalog). Member: 'Type.Name.Kind.Name', including a NESTED member " //$NON-NLS-1$
-            + "(e.g. 'Catalog.X.TabularSection.T.Attribute.A'). Any node create_metadata can address - " //$NON-NLS-1$
-            + "an attribute / tabular section / dimension / resource / enum value / command / template " //$NON-NLS-1$
-            + "/ recalculation / type-specific child - can be deleted by its FQN.\n" //$NON-NLS-1$
-            + "- `confirm` (optional, default false) - false previews, true applies.\n\n" //$NON-NLS-1$
-            + "## Form members\n" //$NON-NLS-1$
-            + "A FORM member is addressed like its create/modify FQN: `Catalog.X.Form.F.<Kind>.Name` " //$NON-NLS-1$
-            + "(or `CommonForm.F.<Kind>.Name`), Kind = Attribute / Command / Field / Button / Group / " //$NON-NLS-1$
-            + "Decoration / Table, or an event Handler (`...Form.F.Handler.Event`, item-level " //$NON-NLS-1$
-            + "`...Field.Item.Handler.Event`). The same two-phase preview/confirm applies; deleting a " //$NON-NLS-1$
-            + "Group / Table cascades its contained subtree. Unlike the mdclass path there is NO " //$NON-NLS-1$
-            + "reference cascade for forms: a cross-reference to the removed member (a field's " //$NON-NLS-1$
-            + "dataPath, a button's command) is NOT rewritten - re-check with get_metadata_details " //$NON-NLS-1$
-            + "afterwards. The change persists to the form's `Form.form` on disk. " //$NON-NLS-1$
-            + "For a form member the preview's `items` list the removed element + its contained " //$NON-NLS-1$
-            + "descendants as `{name, type}` and `affectedReferencesCount` is 0 (no cascade is " //$NON-NLS-1$
-            + "computed for forms).\n\n" //$NON-NLS-1$
-            + "## Bilingual (ru/en)\n" //$NON-NLS-1$
-            + "Resolves by the programmatic Name; only the leading TYPE token and the child KIND tokens " //$NON-NLS-1$
-            + "are dialect-aware (English or Russian). The synonym is never used to locate the target.\n\n" //$NON-NLS-1$
-            + "## Examples\n" //$NON-NLS-1$
-            + "- Preview: `{projectName: 'P', fqn: 'Catalog.Products'}`\n" //$NON-NLS-1$
-            + "- Execute: `{projectName: 'P', fqn: 'Catalog.Products', confirm: true}`\n" //$NON-NLS-1$
-            + "- Delete one attribute: `{projectName: 'P', fqn: 'Document.SalesOrder.Attribute.Amount', " //$NON-NLS-1$
-            + "confirm: true}`\n\n" //$NON-NLS-1$
-            + "## Gotchas\n" //$NON-NLS-1$
-            + "- A malformed nested FQN with an odd trailing token (e.g. 'Catalog.Products.Attribute') " //$NON-NLS-1$
-            + "is rejected as not found, so a nested delete never silently falls back to the parent.\n" //$NON-NLS-1$
-            + "- Deletion targets the programmatic Name; passing a synonym will not resolve."; //$NON-NLS-1$
-    }
-
-    @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
         String err = JsonUtils.requireArguments(params, "projectName", "fqn"); //$NON-NLS-1$ //$NON-NLS-2$

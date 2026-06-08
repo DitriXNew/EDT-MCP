@@ -101,48 +101,6 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     @Override
-    public String getGuide()
-    {
-        return "# adopt_metadata_object\n\n" //$NON-NLS-1$
-            + "Adopts a base-configuration metadata object - or a member of it - into a " //$NON-NLS-1$
-            + "configuration EXTENSION, the prerequisite for the extension to override/intercept it. This " //$NON-NLS-1$
-            + "is the OBJECT/metadata side of EDT's 'Add To Extension' (Alt+F3). Returns JSON.\n\n" //$NON-NLS-1$
-
-            + "## What it does\n" //$NON-NLS-1$
-            + "Creates the adopted copy in the extension with `objectBelonging=Adopted` and an " //$NON-NLS-1$
-            + "`extendedConfigurationObject` UUID link back to the base object (mapping is by-ID, so the " //$NON-NLS-1$
-            + "adopted copy may later be renamed), then force-exports it to disk. After adopting, you can " //$NON-NLS-1$
-            + "override its properties / add the extension's own members with modify_metadata / " //$NON-NLS-1$
-            + "create_metadata against the extension project.\n\n" //$NON-NLS-1$
-
-            + "## Parameters\n" //$NON-NLS-1$
-            + "- `projectName` (required) - the BASE configuration project that owns the object. Pass the " //$NON-NLS-1$
-            + "configuration, NOT an extension.\n" //$NON-NLS-1$
-            + "- `fqn` (required) - the object or member to adopt. Top object `Type.Name` " //$NON-NLS-1$
-            + "(`Catalog.Products`); member `Type.Name.Kind.Name` " //$NON-NLS-1$
-            + "(`Catalog.Products.Attribute.Weight`, `Catalog.Products.Form.ItemForm`). The TYPE/KIND " //$NON-NLS-1$
-            + "tokens may be English or Russian; the Name parts are the programmatic Names.\n" //$NON-NLS-1$
-            + "- `extensionProjectName` (optional) - the target extension's EDT project name. Required " //$NON-NLS-1$
-            + "ONLY when several extensions extend the configuration; with exactly one extension it is " //$NON-NLS-1$
-            + "auto-selected. If you omit it and there are several, the error lists the candidates.\n\n" //$NON-NLS-1$
-
-            + "## Cascade\n" //$NON-NLS-1$
-            + "Adopting a MEMBER (or a nested object) implicitly adopts the owning object too (the parent " //$NON-NLS-1$
-            + "must exist in the extension to host the member) - this mirrors the platform behaviour.\n\n" //$NON-NLS-1$
-
-            + "## Result\n" //$NON-NLS-1$
-            + "JSON with `action` ('adopted', or 'alreadyAdopted' when it was already adopted), the " //$NON-NLS-1$
-            + "adopted `fqn`, the `extensionProject`, `objectBelonging='ADOPTED'`, and `persisted`. After " //$NON-NLS-1$
-            + "an adopt, run get_project_errors on the extension to confirm the adoption is valid.\n\n" //$NON-NLS-1$
-
-            + "## Notes & gotchas\n" //$NON-NLS-1$
-            + "- This adopts the metadata OBJECT side only. Intercepting a BSL method " //$NON-NLS-1$
-            + "(`&Before/&After/&Around/&ChangeAndValidate`) is NOT done here.\n" //$NON-NLS-1$
-            + "- An object the platform reports as not adoptable is rejected with a clear error.\n" //$NON-NLS-1$
-            + "- No automatic undo: an adopted copy is removed with delete_metadata against the extension."; //$NON-NLS-1$
-    }
-
-    @Override
     protected String executeOnUiThread(Map<String, String> params) throws Exception
     {
         String argErr = JsonUtils.requireArguments(params, "projectName", "fqn"); //$NON-NLS-1$ //$NON-NLS-2$

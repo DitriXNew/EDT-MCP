@@ -65,54 +65,6 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     }
 
     @Override
-    public String getGuide()
-    {
-        return "Reports the LanguageTool (translation) setup for one EDT project so you can " //$NON-NLS-1$
-            + "decide whether translation is configured before calling other translation tools " //$NON-NLS-1$
-            + "(e.g. `generate_translation_strings`, `translate_configuration`). Output is " //$NON-NLS-1$
-            + "Markdown with a `## Storages` list and a `## Translation providers` list, plus " //$NON-NLS-1$
-            + "front-matter counts (`storagesCount`, `providersCount`).\n\n" //$NON-NLS-1$
-
-            + "## When to use\n" //$NON-NLS-1$
-            + "- Before translating: confirm a dictionary storage is attached and which " //$NON-NLS-1$
-            + "providers (Google, Microsoft, Yandex, history, etc.) are available.\n" //$NON-NLS-1$
-            + "- To diagnose why a translation tool reports no storage: an empty " //$NON-NLS-1$
-            + "`## Storages` list means the configuration has no dictionary storage attached " //$NON-NLS-1$
-            + "yet.\n\n" //$NON-NLS-1$
-
-            + "## Parameter details\n" //$NON-NLS-1$
-            + "- `projectName` (required) - the EDT project name. Must be an open EDT project; " //$NON-NLS-1$
-            + "an unknown or closed name returns `Project not found or closed`, and a plain " //$NON-NLS-1$
-            + "(non-EDT) project returns `Not an EDT project`.\n\n" //$NON-NLS-1$
-
-            + "## Storage IDs\n" //$NON-NLS-1$
-            + "Storage IDs look like `edit:default`, `dictionary:common-camelcase`, " //$NON-NLS-1$
-            + "`dictionary:common`, `context:model`, `context:interface`. The exact set " //$NON-NLS-1$
-            + "depends on what is attached to the configuration. Each storage and provider " //$NON-NLS-1$
-            + "id is rendered VERBATIM in backticks so you can copy it straight into " //$NON-NLS-1$
-            + "`generate_translation_strings` (a storage id -> its `storageId`, a provider " //$NON-NLS-1$
-            + "id -> its `providerId`) without scraping the prose.\n\n" //$NON-NLS-1$
-
-            + "## Attaching a storage (manual, no MCP tool)\n" //$NON-NLS-1$
-            + "If the storages list is empty, a storage must be set up by the user in EDT - " //$NON-NLS-1$
-            + "there is no MCP tool for it:\n" //$NON-NLS-1$
-            + "1. Create a plain Eclipse project (File -> New -> Project -> General -> Project).\n" //$NON-NLS-1$
-            + "2. Attach it to the configuration via the configuration project's properties " //$NON-NLS-1$
-            + "(Translation settings).\n\n" //$NON-NLS-1$
-            + "The configuration itself can also act as its own storage if no separate " //$NON-NLS-1$
-            + "Eclipse project is desired.\n\n" //$NON-NLS-1$
-
-            + "## Gotchas\n" //$NON-NLS-1$
-            + "- Do NOT use any '1C:Enterprise -> Dependent translation project' wizard - the " //$NON-NLS-1$
-            + "dictionary storage project must be a plain Eclipse project.\n" //$NON-NLS-1$
-            + "- Requires EDT with LanguageTool installed; without it the tool returns " //$NON-NLS-1$
-            + "`LanguageTool IProjectInformationApi is not available`.\n\n" //$NON-NLS-1$
-
-            + "## Example\n" //$NON-NLS-1$
-            + "`{projectName: \"MyConfiguration\"}`\n"; //$NON-NLS-1$
-    }
-
-    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.MARKDOWN;

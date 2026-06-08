@@ -1,0 +1,18 @@
+Evaluates a BSL expression in the context of a suspended stack frame and returns its value and type - like a debugger watch/immediate window. Use it to compute or probe things that aren't already sitting in a variable.
+
+## When to use
+- You are suspended at a breakpoint and want to evaluate `Object.Property`, a function call, or any BSL expression against the live state.
+- Checking a condition or computing a value while paused.
+
+## Parameter details
+- `frameRef` (required) - the stable frame reference from `wait_for_break` / `step`; the expression runs in that frame's scope.
+- `expression` (required) - the BSL expression text to evaluate.
+
+## What you get
+JSON: `type` (the BSL reference type name) and `value` (string form). Long values are truncated, with `truncated: true` and `fullLength`. A BSL evaluation error comes back as an actionable error message.
+
+## Notes & gotchas
+- **This executes arbitrary BSL in the running 1C application** - it can have side effects (writes, calls). Treat it like running code, not a pure read.
+- `frameRef`s go stale after every `step`/`resume`; use the latest one or you'll get "call wait_for_break again".
+- Evaluation has a short timeout; a hanging expression returns a timeout error rather than blocking. For just reading existing variables, `get_variables` is cheaper and side-effect-free.
+- Some 1C debug models may not support expression evaluation; the tool says so clearly when no watch-expression delegate is registered.

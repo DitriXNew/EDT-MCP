@@ -72,52 +72,6 @@ public class ListSubsystemsTool implements IMcpTool
     }
 
     @Override
-    public String getGuide()
-    {
-        return "# list_subsystems\n\n" //$NON-NLS-1$
-            + "List the subsystems of a configuration as a flat table. Each row carries the " //$NON-NLS-1$
-            + "subsystem FQN, its synonym in the chosen language, comment, the " //$NON-NLS-1$
-            + "IncludeInCommandInterface flag, the number of objects in the subsystem " //$NON-NLS-1$
-            + "(content count) and the number of direct child subsystems (children count).\n\n" //$NON-NLS-1$
-
-            + "## When to use\n" //$NON-NLS-1$
-            + "- Get a configuration-wide map of subsystems before drilling into one.\n" //$NON-NLS-1$
-            + "- Find a subsystem by a partial Name (`nameFilter`).\n" //$NON-NLS-1$
-            + "- To inspect the objects inside a specific subsystem, follow up with " //$NON-NLS-1$
-            + "`get_subsystem_content` using the FQN from this table.\n\n" //$NON-NLS-1$
-
-            + "## Parameters\n" //$NON-NLS-1$
-            + "- `projectName` (required) - EDT project name.\n" //$NON-NLS-1$
-            + "- `nameFilter` - case-insensitive substring matched against the subsystem " //$NON-NLS-1$
-            + "**Name only**, not its Synonym. Omit to list everything.\n" //$NON-NLS-1$
-            + "- `recursive` - default `true`: walk the whole tree so the AI sees every " //$NON-NLS-1$
-            + "subsystem at once. Set `false` to list only top-level subsystems.\n" //$NON-NLS-1$
-            + "- `limit` - max rows returned; default from preferences (100), clamped to " //$NON-NLS-1$
-            + "1000. A truncation notice is appended when results are capped.\n" //$NON-NLS-1$
-            + "- `language` - language code for the Synonym column (e.g. `en`, `ru`). " //$NON-NLS-1$
-            + "Defaults to the configuration's default language.\n\n" //$NON-NLS-1$
-
-            + "## FQN format\n" //$NON-NLS-1$
-            + "Top-level: `Subsystem.Sales`. Nested subsystems repeat the segment: " //$NON-NLS-1$
-            + "`Subsystem.Sales.Subsystem.Orders`. These FQNs are the IDs you pass to " //$NON-NLS-1$
-            + "`get_subsystem_content`.\n\n" //$NON-NLS-1$
-
-            + "## Examples\n" //$NON-NLS-1$
-            + "- Whole tree: `{projectName: \"MyProject\"}`.\n" //$NON-NLS-1$
-            + "- Top-level only: `{projectName: \"MyProject\", recursive: false}`.\n" //$NON-NLS-1$
-            + "- Filter by name: `{projectName: \"MyProject\", nameFilter: \"Sales\"}`.\n" //$NON-NLS-1$
-            + "- Russian synonyms: `{projectName: \"MyProject\", language: \"ru\"}`.\n\n" //$NON-NLS-1$
-
-            + "## Notes & gotchas\n" //$NON-NLS-1$
-            + "- `nameFilter` matches the programmatic Name, never the localized synonym; " //$NON-NLS-1$
-            + "searching by a translated caption will not match.\n" //$NON-NLS-1$
-            + "- The Synonym column is rendered for `language` only; an unconfigured " //$NON-NLS-1$
-            + "language yields an empty synonym, not an error.\n" //$NON-NLS-1$
-            + "- Output is Markdown; table cells are escaped so `|` in a comment/synonym " //$NON-NLS-1$
-            + "does not break the table.\n"; //$NON-NLS-1$
-    }
-
-    @Override
     public ResponseType getResponseType()
     {
         return ResponseType.MARKDOWN;

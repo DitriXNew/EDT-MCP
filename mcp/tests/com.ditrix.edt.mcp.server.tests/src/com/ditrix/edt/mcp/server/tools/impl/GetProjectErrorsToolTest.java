@@ -540,7 +540,8 @@ public class GetProjectErrorsToolTest
         String guide = new GetProjectErrorsTool().getGuide();
         assertNotNull(guide);
         assertFalse("guide must be non-empty", guide.isEmpty()); //$NON-NLS-1$
-        assertTrue("guide should name the tool", guide.contains("get_project_errors")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The guide body no longer repeats the tool-name H1 (GuideRenderer emits the
+        // "# get_project_errors" title itself), so assert the migrated DETAIL instead.
         // Detail moved out of the description: the structural locator columns.
         assertTrue("guide should document the Module path locator", //$NON-NLS-1$
             guide.contains("Module path")); //$NON-NLS-1$

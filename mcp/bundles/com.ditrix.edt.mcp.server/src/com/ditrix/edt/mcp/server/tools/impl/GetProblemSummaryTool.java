@@ -53,7 +53,7 @@ public class GetProblemSummaryTool implements IMcpTool
             .stringProperty("projectName", "Name of the project (optional, all projects if not specified)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
-    
+
     @Override
     public String execute(Map<String, String> params)
     {

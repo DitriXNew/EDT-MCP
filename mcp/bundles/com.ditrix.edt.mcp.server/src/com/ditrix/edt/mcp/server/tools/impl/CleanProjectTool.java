@@ -79,7 +79,7 @@ public class CleanProjectTool implements IMcpTool
     {
         return ResponseType.JSON;
     }
-    
+
     @Override
     public String execute(Map<String, String> params)
     {

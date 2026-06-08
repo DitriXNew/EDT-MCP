@@ -82,11 +82,14 @@ public class GetContentAssistToolTest
     @Test
     public void testGuideHasMigratedDetail()
     {
-        // The exhaustive detail removed from description/schema must live in the guide.
+        // The exhaustive detail removed from description/schema must live in the guide
+        // (now served from the bundled guides/get_content_assist.md). The renderer adds
+        // the auto "## Parameters" table itself, so the guide body uses "## Parameter
+        // details" for its prose.
         String guide = new GetContentAssistTool().getGuide();
         assertNotNull(guide);
         assertFalse(guide.isEmpty());
-        assertTrue(guide.contains("## Parameters")); //$NON-NLS-1$
+        assertTrue(guide.contains("## Parameter details")); //$NON-NLS-1$
         assertTrue(guide.contains("extendedDocumentation")); //$NON-NLS-1$
         // The position/readiness nuance that no longer clutters the schema.
         assertTrue(guide.contains("1-based")); //$NON-NLS-1$
