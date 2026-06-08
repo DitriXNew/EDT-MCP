@@ -298,6 +298,12 @@ jobs:
           # cached, the workspace index is not), so give readiness a generous ceiling
           # before run_all aborts with a single clear error.
           E2E_PROJECT_READY_TIMEOUT: "1200"
+          # Per-CALL socket timeout. A cascading rename_metadata_object (Catalog: updates
+          # refs across BSL/forms/metadata + re-export + revalidate) can exceed the 180s
+          # default on a cold 2-core cloud runner — the call then times out and wedges the
+          # model for the next test. Give heavy mutating calls headroom (still < the 600s
+          # per-test timeout in run_all).
+          MCP_CALL_TIMEOUT: "300"
           # Unbuffer stdout: otherwise Python block-buffers in CI (stdout is a pipe), so
           # the readiness-wait countdown only appears when the process exits — which looks
           # like a hang during the (long) index wait. -u/PYTHONUNBUFFERED stream it live.
