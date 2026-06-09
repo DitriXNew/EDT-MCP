@@ -320,13 +320,20 @@ public class RunYaxunitTestsTool implements IMcpTool
                 {
                     ACTIVE_LAUNCHES.remove(runKey);
                     PENDING_FETCH.remove(runKey);
-                    File junitXml = findJunitXml(reportDir);
-                    if (junitXml != null)
+                    // Read under the per-IB lock so a concurrent identical call that falls through to a
+                    // fresh launch cannot cleanupTempDir(reportDir) mid-read — the fresh-run path holds
+                    // the SAME lock for cleanup+spawn. Worst case degrades from a torn parse to a clean
+                    // null. findJunitXml + readResults are fast (ms), so contention is negligible.
+                    synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
                     {
-                        return readResults(junitXml);
+                        File junitXml = findJunitXml(reportDir);
+                        if (junitXml != null)
+                        {
+                            return readResults(junitXml);
+                        }
+                        return ToolResult.error("Previous launch finished but no JUnit XML found in " //$NON-NLS-1$
+                                + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
                     }
-                    return ToolResult.error("Previous launch finished but no JUnit XML found in " //$NON-NLS-1$
-                            + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
                 }
                 String pollResult = pollLaunch(existing, reportDir, timeout, runKey);
                 if (pollResult != null)
@@ -344,16 +351,23 @@ public class RunYaxunitTestsTool implements IMcpTool
             // fetching the result of a run that finished after a Pending response gets the report;
             // any later call with the same key falls through to a fresh run. There is NO time-based
             // cache, so a genuine re-run always re-executes the tests.
-            if (PENDING_FETCH.remove(runKey))
+            // Consume + read under the per-IB lock so a concurrent identical call that falls through to
+            // a fresh launch cannot cleanupTempDir(reportDir) mid-read — the fresh-run path holds the
+            // SAME lock for cleanup+spawn. A racer blocked here finds PENDING_FETCH already drained and
+            // proceeds to a fresh run; worst case degrades from a torn parse to a clean null.
+            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
             {
-                File pending = findJunitXml(reportDir);
-                if (pending != null)
+                if (PENDING_FETCH.remove(runKey))
                 {
-                    Activator.logInfo("Delivering completed YAXUnit result for pending runKey=" + runKey); //$NON-NLS-1$
-                    return readResults(pending);
+                    File pending = findJunitXml(reportDir);
+                    if (pending != null)
+                    {
+                        Activator.logInfo("Delivering completed YAXUnit result for pending runKey=" + runKey); //$NON-NLS-1$
+                        return readResults(pending);
+                    }
+                    // Pending was reported but no report materialised (the launch died without writing
+                    // junit.xml) — fall through and start a fresh run.
                 }
-                // Pending was reported but no report materialised (the launch died without writing
-                // junit.xml) — fall through and start a fresh run.
             }
 
             // Phase 1 (quick, JVM-wide): try to reuse an active launch for this runKey.
