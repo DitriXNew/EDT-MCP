@@ -270,7 +270,13 @@ def test_live_yaxunit_rerun_reexecutes_not_cached():
     Mutation-sensitive: re-introducing the disk timestamp cache (or any 'serve the recent
     report instead of re-running' shortcut) leaves the mtime unchanged and fails here. The
     report path itself is asserted stable, so a fresh run must reuse the SAME dir (proving
-    we compare like-for-like, not two unrelated runs)."""
+    we compare like-for-like, not two unrelated runs).
+
+    NOT covered (deliberately): the 'abandoned Pending -> rerun' angle — a caller that got a
+    Pending, never fetched, then re-ran with identical args gets the prior report served ONCE
+    before the following call re-executes. That is #136's documented "ambiguous identical args"
+    tradeoff (see runTests javadoc + PENDING_FETCH); it cannot be reproduced deterministically
+    here without forcing a polling timeout, so it is left unasserted."""
     requires_live_infobase("re-runs tests_SampleTests twice to prove no stale cache")
     import os
     args = {"launchConfigurationName": LIVE_LAUNCH_CONFIG,

@@ -318,7 +318,9 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 if (existing.isTerminated())
                 {
-                    ACTIVE_LAUNCHES.remove(runKey);
+                    // Remove by identity (symmetry with pollLaunch): never drop a newer launch that a
+                    // racing identical call may have put under the same runKey since the get() above.
+                    ACTIVE_LAUNCHES.remove(runKey, existing);
                     PENDING_FETCH.remove(runKey);
                     // Read under the per-IB lock so a concurrent identical call that falls through to a
                     // fresh launch cannot cleanupTempDir(reportDir) mid-read — the fresh-run path holds
@@ -335,7 +337,8 @@ public class RunYaxunitTestsTool implements IMcpTool
                                 + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
                     }
                 }
-                String pollResult = pollLaunch(existing, reportDir, timeout, runKey);
+                String pollResult = pollLaunch(existing, reportDir, timeout, runKey,
+                        projectName, applicationId);
                 if (pollResult != null)
                 {
                     // Result delivered — forget any Pending bookkeeping so the next call re-runs.
@@ -477,7 +480,8 @@ public class RunYaxunitTestsTool implements IMcpTool
                 }
             }
 
-            String pollResult = pollLaunch(launch, reportDir, timeout, runKey);
+            String pollResult = pollLaunch(launch, reportDir, timeout, runKey,
+                    projectName, applicationId);
             if (pollResult != null)
             {
                 // Result delivered — forget any Pending bookkeeping so the next call re-runs.
@@ -608,8 +612,20 @@ public class RunYaxunitTestsTool implements IMcpTool
     /**
      * Polls a launch for up to {@code timeoutSec} seconds. Returns the parsed Markdown report
      * if the launch finished, or {@code null} if still running (caller should return a Pending message).
+     * <p>
+     * The post-completion read ({@code ACTIVE_LAUNCHES.remove} + {@link #findJunitXml} +
+     * {@link #readResults}) runs under the per-IB lock, for the SAME reason the existing-terminated
+     * and pending-fetch read paths do: a concurrent identical call that falls through to a fresh
+     * launch holds the SAME lock for {@link #cleanupTempDir}(reportDir) + spawn, so it cannot wipe
+     * {@code reportDir} mid-read. The {@code remove} is INSIDE the lock together with the read so
+     * remove-then-read is atomic against that cleanup — otherwise a racer could observe the launch
+     * already gone, fall through to a fresh run, and {@code cleanupTempDir} the directory between
+     * this thread's remove and read. The poll loop itself is deliberately OUTSIDE the lock: holding
+     * it across the {@link Thread#sleep} window would serialise the whole IB for the poll duration.
+     * Worst case still degrades from a torn parse to a clean null.
      */
-    private String pollLaunch(ILaunch launch, Path reportDir, int timeoutSec, String runKey)
+    private String pollLaunch(ILaunch launch, Path reportDir, int timeoutSec, String runKey,
+            String projectName, String applicationId)
             throws InterruptedException
     {
         long deadline = System.currentTimeMillis() + (timeoutSec * 1000L);
@@ -622,18 +638,26 @@ public class RunYaxunitTestsTool implements IMcpTool
             Thread.sleep(POLL_INTERVAL_MS);
         }
 
-        ACTIVE_LAUNCHES.remove(runKey);
-        Activator.logInfo("YAXUnit tests completed for " + runKey); //$NON-NLS-1$
-
-        File junitXml = findJunitXml(reportDir);
-        if (junitXml == null)
+        synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
         {
-            return ToolResult.error("No JUnit XML report found in " + reportDir //$NON-NLS-1$
-                    + ". Make sure YAXUnit extension is installed in the infobase " //$NON-NLS-1$
-                    + "and test configuration is correct.").toJson(); //$NON-NLS-1$
-        }
+            // Remove by identity. While this thread was blocked on the lock, a concurrent identical
+            // call could have observed THIS launch already evicted (the termination listener) and
+            // spawned a fresh one under the SAME runKey + cleanupTempDir(reportDir). An unconditional
+            // remove(runKey) would then drop that newer launch's tracking, orphaning it.
+            // remove(runKey, launch) deletes the entry only if it still maps to our own launch.
+            ACTIVE_LAUNCHES.remove(runKey, launch);
+            Activator.logInfo("YAXUnit tests completed for " + runKey); //$NON-NLS-1$
 
-        return readResults(junitXml);
+            File junitXml = findJunitXml(reportDir);
+            if (junitXml == null)
+            {
+                return ToolResult.error("No JUnit XML report found in " + reportDir //$NON-NLS-1$
+                        + ". Make sure YAXUnit extension is installed in the infobase " //$NON-NLS-1$
+                        + "and test configuration is correct.").toJson(); //$NON-NLS-1$
+            }
+
+            return readResults(junitXml);
+        }
     }
 
     /**
@@ -730,6 +754,10 @@ public class RunYaxunitTestsTool implements IMcpTool
             return;
         }
         ACTIVE_LAUNCHES.entrySet().removeIf(e -> e.getValue() == launch);
+        // PENDING_FETCH is intentionally NOT cleared here: it is keyed by runKey (String) and there is
+        // no reverse map from this ILaunch back to its key. A key left behind after an abandoned Pending
+        // is bounded by the number of distinct (config, filter) combinations, and is consumed at most
+        // once on the next identical call (the documented "ambiguous identical args" tradeoff of #136).
         LaunchLifecycleUtils.unregisterOwnedLaunch(launch);
     }
 
