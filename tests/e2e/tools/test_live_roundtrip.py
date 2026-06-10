@@ -160,6 +160,21 @@ def _assertion_line(module_rel, snippet):
     return None
 
 
+def _junit_path_from_report(report_text):
+    """Locate the on-disk junit.xml that backed a run_yaxunit_tests Markdown report.
+
+    A successful report ends with a footer pointing at the sibling report.md
+    ("*Full report saved to:* `<dir>/report.md`"); junit.xml lives next to it. This
+    runs ON the EDT host (the live suite is attended/local), so the temp path is
+    readable. Fails loudly if the footer is absent (a successful run always writes it)."""
+    import os
+    m = re.search(r"saved to:\*?\s*`([^`]+)`", report_text or "")
+    if not m:
+        _fail("run report carried no 'saved to' path to locate junit.xml:\n%s"
+              % ((report_text or "")[:400]))
+    return os.path.join(os.path.dirname(m.group(1)), "junit.xml")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. YAXUnit pass-count round-trip — REAL junit.xml -> parsed Markdown counts
 # ──────────────────────────────────────────────────────────────────────────────
@@ -232,6 +247,67 @@ def test_live_yaxunit_run_reports_real_failure_count():
         if counts.get("result") != "FAILED":
             _fail("a run with a failing test must report the FAILED verdict, got %r:\n%s"
                   % (counts, (r.text or "")[:400]))
+    finally:
+        _quiet_infobase()
+    assert_no_substantive_diff("a YAXUnit run must never write into the project tree")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1c. NO time-cache — a re-run with identical args RE-EXECUTES (regression for #136)
+# ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_live_yaxunit_rerun_reexecutes_not_cached():
+    """Two identical sequential runs must EACH execute the tests — the tool must not
+    return a stale time-cached report (issue #136: an agent fixed the code under test,
+    re-ran the SAME filter, and got the previous result back unchanged).
+
+    The discriminator is the on-disk junit.xml mtime. The 1C platform writes junit.xml
+    ONLY when a run actually executes; a fresh run wipes+recreates the stable report dir
+    first. So the second identical run MUST advance junit.xml's mtime past the first. The
+    OLD behaviour served the recent report straight from disk WITHOUT relaunching, leaving
+    the mtime unchanged — exactly what this test now forbids.
+
+    Mutation-sensitive: re-introducing the disk timestamp cache (or any 'serve the recent
+    report instead of re-running' shortcut) leaves the mtime unchanged and fails here. The
+    report path itself is asserted stable, so a fresh run must reuse the SAME dir (proving
+    we compare like-for-like, not two unrelated runs).
+
+    NOT covered (deliberately): the 'abandoned Pending -> rerun' angle — a caller that got a
+    Pending, never fetched, then re-ran with identical args gets the prior report served ONCE
+    before the following call re-executes. That is #136's documented "ambiguous identical args"
+    tradeoff (see runTests javadoc + PENDING_FETCH); it cannot be reproduced deterministically
+    here without forcing a polling timeout, so it is left unasserted."""
+    requires_live_infobase("re-runs tests_SampleTests twice to prove no stale cache")
+    import os
+    args = {"launchConfigurationName": LIVE_LAUNCH_CONFIG,
+            "modules": "tests_SampleTests", "timeout": 150}
+    try:
+        _ready_for_launch()  # quiet the infobase + wait for the index to be fully built
+        r1 = _run_yaxunit_until_done(dict(args))
+        assert_ok(r1, "first live YAXUnit run")
+        junit1 = _junit_path_from_report(r1.text)
+        if not os.path.exists(junit1):
+            _fail("first run did not leave a junit.xml at %r" % (junit1,))
+        m1 = os.path.getmtime(junit1)
+
+        # Quiet the infobase between runs (the auto-chain also terminates a live client)
+        # and let the filesystem clock advance so a re-write is observable as a newer mtime.
+        # 3s clears coarse mtime granularity (e.g. FAT/exFAT's 2s) so the strict
+        # m2 > m1 assertion below stays robust on such filesystems.
+        _quiet_infobase()
+        wait_for_project_ready(timeout=120)
+        time.sleep(3)
+
+        r2 = _run_yaxunit_until_done(dict(args))
+        assert_ok(r2, "second identical live YAXUnit run")
+        junit2 = _junit_path_from_report(r2.text)
+        if junit2 != junit1:
+            _fail("identical args produced a different report dir (%r vs %r) — the run key "
+                  "is unstable, the mtime comparison would be meaningless" % (junit1, junit2))
+        m2 = os.path.getmtime(junit2)
+        if not m2 > m1:
+            _fail("the second identical run did NOT re-execute: junit.xml mtime unchanged "
+                  "(%r -> %r). A stale time-cache regressed #136." % (m1, m2))
     finally:
         _quiet_infobase()
     assert_no_substantive_diff("a YAXUnit run must never write into the project tree")
