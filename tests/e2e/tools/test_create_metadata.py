@@ -39,6 +39,7 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    diff,
     poll_diff_contains,
     wait_for_project_ready,
     e2e_test,
@@ -612,12 +613,13 @@ def test_create_form_button_enabled_and_in_auto_command_bar():
                        {"name": "parent", "value": "AutoCommandBar"}]})
     assert_ok(r2, "create a Button inside the form's AutoCommandBar")
     poll_diff_contains(btn, ctx="the new button must land in the form's .form on disk")
-    # Inside a command bar the platform requires the CommandBarButton type (a UsualButton there is
-    # what the designer never produces).
-    poll_diff_contains("CommandBarButton",
-                       ctx="a button in the command bar must serialize the CommandBarButton type")
     poll_diff_contains("<enabled>true</enabled>",
                        ctx="a created button must be explicitly enabled like a designer-created one")
+    # Inside a command bar the platform requires the CommandBarButton type. CommandBarButton is the
+    # EMF default literal (value 0), so the XMI OMITS <type> for it - the wrong outcome would be an
+    # explicit <type>UsualButton</type> in this test's diff (which adds only the command + this button).
+    assert "UsualButton" not in diff(), \
+        "a button in the command bar must NOT serialize the UsualButton type"
     # The structure read-back shows the button nested under the bar (the verification surface).
     r3 = call("get_metadata_details", {
         "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
