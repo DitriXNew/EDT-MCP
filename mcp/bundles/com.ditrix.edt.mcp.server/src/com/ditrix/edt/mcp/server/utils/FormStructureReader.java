@@ -46,6 +46,14 @@ public final class FormStructureReader
     private static final String FEATURE_TITLE = "title"; //$NON-NLS-1$
     /** EReference name carrying the value type on a {@code FormAttribute}. */
     private static final String FEATURE_VALUE_TYPE = "valueType"; //$NON-NLS-1$
+    /** EReference name holding the form's {@code AutoCommandBar} (a containment OUTSIDE {@code items}). */
+    private static final String FEATURE_AUTO_COMMAND_BAR = "autoCommandBar"; //$NON-NLS-1$
+    /** EReference name holding a {@code FormCommand}'s contained handler container. */
+    private static final String FEATURE_ACTION = "action"; //$NON-NLS-1$
+    /** EReference name of the single {@code CommandHandler} inside a {@code FormCommandHandlerContainer}. */
+    private static final String FEATURE_HANDLER = "handler"; //$NON-NLS-1$
+    /** EReference name of the {@code CommandHandlerExtension} list inside an extension container. */
+    private static final String FEATURE_HANDLERS = "handlers"; //$NON-NLS-1$
 
     private FormStructureReader()
     {
@@ -142,12 +150,19 @@ public final class FormStructureReader
 
         sb.append("## Items\n\n"); //$NON-NLS-1$
         List<EObject> items = getReferenceList(formModel, FEATURE_ITEMS);
-        if (items.isEmpty())
+        EObject autoCommandBar = getSingleReference(formModel, FEATURE_AUTO_COMMAND_BAR);
+        if (items.isEmpty() && autoCommandBar == null)
         {
             sb.append("_(no items)_\n\n"); //$NON-NLS-1$
         }
         else
         {
+            // The form's auto command bar is a separate containment, not part of 'items'; render it
+            // first (the way the designer shows it). Address it as parent 'AutoCommandBar'.
+            if (autoCommandBar != null)
+            {
+                appendItem(sb, autoCommandBar, 0, language);
+            }
             for (EObject item : items)
             {
                 appendItem(sb, item, 0, language);
@@ -179,10 +194,11 @@ public final class FormStructureReader
         }
         else
         {
-            sb.append(MarkdownUtils.tableHeader("Name", "Title")); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(MarkdownUtils.tableHeader("Name", "Title", "Action handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             for (EObject command : commands)
             {
-                sb.append(MarkdownUtils.tableRow(nameOf(command), titleOf(command, language)));
+                sb.append(MarkdownUtils.tableRow(nameOf(command), titleOf(command, language),
+                    actionHandlerOf(command)));
             }
             sb.append('\n');
         }
@@ -349,6 +365,52 @@ public final class FormStructureReader
             names.add(name.isEmpty() ? type.eClass().getName() : name);
         }
         return String.join(", ", names); //$NON-NLS-1$
+    }
+
+    /**
+     * @return the BSL procedure name(s) bound to a form command's Action - the single
+     *         {@code CommandHandler} of a {@code FormCommandHandlerContainer} or the
+     *         {@code CommandHandlerExtension}s of an extension container - or {@code ""} when the
+     *         command has no action handler. Addressed as {@code ...Command.X.Handler.Action}.
+     */
+    private static String actionHandlerOf(EObject command)
+    {
+        EObject action = getSingleReference(command, FEATURE_ACTION);
+        if (action == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        EObject single = getSingleReference(action, FEATURE_HANDLER);
+        if (single != null)
+        {
+            return stringValue(getValue(single, FEATURE_NAME));
+        }
+        List<String> names = new ArrayList<>();
+        for (EObject handler : getReferenceList(action, FEATURE_HANDLERS))
+        {
+            String name = stringValue(getValue(handler, FEATURE_NAME));
+            if (!name.isEmpty())
+            {
+                names.add(name);
+            }
+        }
+        return String.join(", ", names); //$NON-NLS-1$
+    }
+
+    /** The value of a single-valued reference feature, or {@code null} when absent/unset. */
+    private static EObject getSingleReference(EObject object, String featureName)
+    {
+        if (object == null)
+        {
+            return null;
+        }
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
+        if (feature == null || feature.isMany())
+        {
+            return null;
+        }
+        Object value = object.eGet(feature);
+        return value instanceof EObject ? (EObject)value : null;
     }
 
     private static Object getValue(EObject object, String featureName)

@@ -180,6 +180,42 @@ public class FormStructureReaderTest
     }
 
     @Test
+    public void testRenderAutoCommandBarSubtree()
+    {
+        // The form's auto command bar is a containment OUTSIDE 'items' - the renderer must surface it
+        // (with its child buttons) or buttons created there would be invisible to clients.
+        EObject form = newForm();
+        EObject bar = newItem(MODEL.autoCommandBar, "FormCommandBar", -1); //$NON-NLS-1$
+        EObject button = newItem(MODEL.formField, "PrintButton", 3); //$NON-NLS-1$
+        addItem(bar, button);
+        form.eSet(form.eClass().getEStructuralFeature("autoCommandBar"), bar); //$NON-NLS-1$
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(md.contains("_(no items)_")); //$NON-NLS-1$
+        assertTrue(md.contains("- FormCommandBar (type: AutoCommandBar, id: -1)")); //$NON-NLS-1$
+        assertTrue(md.contains("  - PrintButton (type: FormField, id: 3)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRenderCommandActionHandlerColumn()
+    {
+        EObject form = newForm();
+        EObject command = newCommand("Print", null, "Print form"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject container = new DynamicEObjectImpl(MODEL.handlerContainer);
+        EObject handler = new DynamicEObjectImpl(MODEL.commandHandler);
+        handler.eSet(MODEL.commandHandler.getEStructuralFeature("name"), "PrintHandler"); //$NON-NLS-1$ //$NON-NLS-2$
+        container.eSet(MODEL.handlerContainer.getEStructuralFeature("handler"), handler); //$NON-NLS-1$
+        command.eSet(MODEL.formCommand.getEStructuralFeature("action"), container); //$NON-NLS-1$
+        addCommand(form, command);
+        addCommand(form, newCommand("Unbound", null, null)); //$NON-NLS-1$
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The bound BSL procedure shows in the commands table; an unbound command shows empty.
+        assertTrue(md.contains("| Print | Print form | PrintHandler |")); //$NON-NLS-1$
+        assertTrue(md.contains("| Unbound |  |  |")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRenderEscapesPipeInTableCell()
     {
         EObject form = newForm();
@@ -270,6 +306,9 @@ public class FormStructureReaderTest
         final EClass formField;
         final EClass formAttribute;
         final EClass formCommand;
+        final EClass commandHandler;
+        final EClass handlerContainer;
+        final EClass autoCommandBar;
 
         final EAttribute itemName;
         final EAttribute itemId;
@@ -318,7 +357,22 @@ public class FormStructureReaderTest
             attributeName.setEType(EcorePackage.Literals.ESTRING);
             formAttribute.getEStructuralFeatures().add(attributeName);
 
-            // FormCommand-like: name + title (EMap by language code).
+            // CommandHandler-like pair: the command's contained action holding the handler name.
+            commandHandler = factory.createEClass();
+            commandHandler.setName("CommandHandler"); //$NON-NLS-1$
+            EAttribute handlerName = factory.createEAttribute();
+            handlerName.setName("name"); //$NON-NLS-1$
+            handlerName.setEType(EcorePackage.Literals.ESTRING);
+            commandHandler.getEStructuralFeatures().add(handlerName);
+            handlerContainer = factory.createEClass();
+            handlerContainer.setName("FormCommandHandlerContainer"); //$NON-NLS-1$
+            EReference handlerRef = factory.createEReference();
+            handlerRef.setName("handler"); //$NON-NLS-1$
+            handlerRef.setEType(commandHandler);
+            handlerRef.setContainment(true);
+            handlerContainer.getEStructuralFeatures().add(handlerRef);
+
+            // FormCommand-like: name + title (EMap by language code) + the action containment.
             formCommand = factory.createEClass();
             formCommand.setName("FormCommand"); //$NON-NLS-1$
             commandName = factory.createEAttribute();
@@ -331,8 +385,19 @@ public class FormStructureReaderTest
             commandTitle.setContainment(true);
             commandTitle.setUpperBound(-1);
             formCommand.getEStructuralFeatures().add(commandTitle);
+            EReference action = factory.createEReference();
+            action.setName("action"); //$NON-NLS-1$
+            action.setEType(handlerContainer);
+            action.setContainment(true);
+            formCommand.getEStructuralFeatures().add(action);
 
-            // Form: items + attributes + formCommands.
+            // AutoCommandBar-like: a FormItem container OUTSIDE the items tree.
+            autoCommandBar = factory.createEClass();
+            autoCommandBar.setName("AutoCommandBar"); //$NON-NLS-1$
+            autoCommandBar.getESuperTypes().add(formItem);
+            autoCommandBar.getEStructuralFeatures().add(itemsReference(factory, formItem));
+
+            // Form: items + attributes + formCommands + autoCommandBar.
             form = factory.createEClass();
             form.setName("Form"); //$NON-NLS-1$
             form.getEStructuralFeatures().add(itemsReference(factory, formItem));
@@ -340,6 +405,11 @@ public class FormStructureReaderTest
                 containment(factory, "attributes", formAttribute)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(
                 containment(factory, "formCommands", formCommand)); //$NON-NLS-1$
+            EReference barRef = factory.createEReference();
+            barRef.setName("autoCommandBar"); //$NON-NLS-1$
+            barRef.setEType(autoCommandBar);
+            barRef.setContainment(true);
+            form.getEStructuralFeatures().add(barRef);
 
             pkg.getEClassifiers().add(formItem);
             pkg.getEClassifiers().add(form);
@@ -347,6 +417,9 @@ public class FormStructureReaderTest
             pkg.getEClassifiers().add(formField);
             pkg.getEClassifiers().add(formAttribute);
             pkg.getEClassifiers().add(formCommand);
+            pkg.getEClassifiers().add(commandHandler);
+            pkg.getEClassifiers().add(handlerContainer);
+            pkg.getEClassifiers().add(autoCommandBar);
         }
 
         private static EReference itemsReference(EcoreFactory factory, EClass itemType)

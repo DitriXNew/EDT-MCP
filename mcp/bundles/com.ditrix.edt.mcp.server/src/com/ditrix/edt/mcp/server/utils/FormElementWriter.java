@@ -15,6 +15,7 @@ import java.util.Map;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
+import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.common.util.TreeIterator;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
@@ -55,6 +56,13 @@ public final class FormElementWriter
     private static final String FEATURE_ID = "id"; //$NON-NLS-1$
     private static final String FEATURE_NAME = "name"; //$NON-NLS-1$
     private static final String FEATURE_VISIBLE = "visible"; //$NON-NLS-1$
+    private static final String FEATURE_ENABLED = "enabled"; //$NON-NLS-1$
+    private static final String FEATURE_USER_VISIBLE = "userVisible"; //$NON-NLS-1$
+    private static final String FEATURE_AUTO_COMMAND_BAR = "autoCommandBar"; //$NON-NLS-1$
+    private static final String FEATURE_ACTION = "action"; //$NON-NLS-1$
+    private static final String FEATURE_HANDLER = "handler"; //$NON-NLS-1$
+    private static final String FEATURE_USE = "use"; //$NON-NLS-1$
+    private static final String FEATURE_COMMON = "common"; //$NON-NLS-1$
 
     // Concrete form-model classifier names (resolved on the form EPackage).
     private static final String ECLASS_FORM_GROUP = "FormGroup"; //$NON-NLS-1$
@@ -62,8 +70,23 @@ public final class FormElementWriter
     private static final String ECLASS_FORM_ITEM = "FormItem"; //$NON-NLS-1$
     private static final String ECLASS_USUAL_GROUP_EXT_INFO = "UsualGroupExtInfo"; //$NON-NLS-1$
     private static final String ECLASS_LABEL_DECORATION_EXT_INFO = "LabelDecorationExtInfo"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
+    private static final String ECLASS_AUTO_COMMAND_BAR = "AutoCommandBar"; //$NON-NLS-1$
+    private static final String ECLASS_CONTEXT_MENU = "ContextMenu"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_COMMAND_HANDLER_CONTAINER = "FormCommandHandlerContainer"; //$NON-NLS-1$
+    private static final String ECLASS_COMMAND_HANDLER = "CommandHandler"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_USUAL_GROUP = "UsualGroup"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_LABEL = "Label"; //$NON-NLS-1$
+    /** Group {@code type} literals whose items are command-bar buttons (CommandBarButton). */
+    private static final String TYPE_LITERAL_COMMAND_BAR = "CommandBar"; //$NON-NLS-1$
+    private static final String TYPE_LITERAL_BUTTON_GROUP = "ButtonGroup"; //$NON-NLS-1$
+    private static final String TYPE_LITERAL_POPUP = "Popup"; //$NON-NLS-1$
+    /** The single handler "event" of a form command (its FQN leaf: {@code Command.X.Handler.Action}). */
+    private static final String COMMAND_ACTION_EVENT = "Action"; //$NON-NLS-1$
+    /** The parent token addressing the form's auto command bar (its {@code ChildItems} in Designer XML). */
+    private static final String AUTO_COMMAND_BAR_TOKEN = "AutoCommandBar"; //$NON-NLS-1$
+    /** The Designer-XML child-collection token, tolerated (and ignored) at the end of a parent path. */
+    private static final String CHILD_ITEMS_TOKEN = "ChildItems"; //$NON-NLS-1$
 
     /** A supported form-element kind, resolved from a (bilingual) FQN kind token. */
     public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON }
@@ -204,6 +227,7 @@ public final class FormElementWriter
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
+    private static final String RU_ACTION = cp(0x0434, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // dejstvie
 
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
@@ -351,6 +375,10 @@ public final class FormElementWriter
             return "Cannot create a form command for this form model."; //$NON-NLS-1$
         }
         setStringFeature(cmd, FEATURE_NAME, name);
+        // The platform factory's defaults: use=AdjustableBoolean(common) and currentRowUse=Auto -
+        // without them the exported command is unusable.
+        setAdjustableBooleanFeature(cmd, FEATURE_USE);
+        setEnumFeature(cmd, "currentRowUse", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
         applyTitle(cmd, titleLanguage, title);
         addToList(formModel, FEATURE_FORM_COMMANDS, cmd);
         recordKind(cmd, createdKind);
@@ -376,8 +404,13 @@ public final class FormElementWriter
             return "Cannot create a form " + classifier + " for this form model."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         setStringFeature(item, FEATURE_NAME, name);
-        setBooleanFeature(item, FEATURE_VISIBLE, true);
+        applyVisibleDefaults(item);
         setIntFeature(item, FEATURE_ID, nextItemId(formModel));
+        if (kind == Kind.DECORATION)
+        {
+            setBooleanFeature(item, "autoMaxWidth", true); //$NON-NLS-1$
+            setBooleanFeature(item, "autoMaxHeight", true); //$NON-NLS-1$
+        }
         initManagedItem(formModel, item, kind);
         applyTitle(item, titleLanguage, title);
         addToList(container, FEATURE_ITEMS, item);
@@ -415,7 +448,7 @@ public final class FormElementWriter
             return "Cannot create a form field for this form model."; //$NON-NLS-1$
         }
         setStringFeature(item, FEATURE_NAME, name);
-        setBooleanFeature(item, FEATURE_VISIBLE, true);
+        applyVisibleDefaults(item);
         setIntFeature(item, FEATURE_ID, nextItemId(formModel));
         // dataPath: a contained DataPath with segments=[attrName] (objects is transient - left empty,
         // the form's derived data recomputes it).
@@ -470,35 +503,110 @@ public final class FormElementWriter
             return "Cannot create a form button for this form model."; //$NON-NLS-1$
         }
         setStringFeature(item, FEATURE_NAME, name);
-        setBooleanFeature(item, FEATURE_VISIBLE, true);
+        applyVisibleDefaults(item);
         setIntFeature(item, FEATURE_ID, nextItemId(formModel));
-        // A standalone button; buttons have no extInfo (unlike fields/groups/decorations).
-        setEnumFeature(item, FEATURE_TYPE, "UsualButton"); //$NON-NLS-1$
+        // The button type depends on the container (the platform allows ONLY CommandBarButton /
+        // CommandBarHyperlink inside a command bar, context menu, button group or popup) - mirror
+        // FormItemTypeInformationService.getDefaultButtonType. Buttons have no extInfo.
+        setEnumFeature(item, FEATURE_TYPE,
+            isCommandBarContext(container) ? "CommandBarButton" : "UsualButton"); //$NON-NLS-1$ //$NON-NLS-2$
         EStructuralFeature cmdFeat = item.eClass().getEStructuralFeature("commandName"); //$NON-NLS-1$
         if (cmdFeat instanceof EReference)
         {
             item.eSet(cmdFeat, command);
         }
+        // The platform factory's remaining new-button defaults (FormObjectFactory.newButton); without
+        // them the exported button diverges from a designer-created one (e.g. AutoMaxWidth=false).
+        setBooleanFeature(item, "autoMaxWidth", true); //$NON-NLS-1$
+        setBooleanFeature(item, "autoMaxHeight", true); //$NON-NLS-1$
+        setBooleanFeature(item, "commandUniqueness", true); //$NON-NLS-1$
+        setEnumFeature(item, "representation", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, "shape", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, "shapeRepresentation", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, "pictureLocation", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, "representationInContextMenu", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, "locationInCommandBar", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, "placementArea", "UserCmds"); //$NON-NLS-1$ //$NON-NLS-2$
         applyTitle(item, titleLanguage, title);
         addToList(container, FEATURE_ITEMS, item);
         recordKind(item, createdKind);
         return null;
     }
 
-    /** The form root for a blank parent, the named item otherwise, or {@code null} if not found. */
+    /**
+     * Whether {@code container}'s child buttons are command-bar buttons: an auto command bar, a
+     * context menu, or a group typed CommandBar / ButtonGroup / Popup (the platform's
+     * {@code isCommandBarButtonSupport}).
+     */
+    private static boolean isCommandBarContext(EObject container)
+    {
+        String eClassName = container.eClass().getName();
+        if (ECLASS_AUTO_COMMAND_BAR.equals(eClassName) || ECLASS_CONTEXT_MENU.equals(eClassName))
+        {
+            return true;
+        }
+        if (ECLASS_FORM_GROUP.equals(eClassName))
+        {
+            String groupType = enumLiteralOf(container, FEATURE_TYPE);
+            return TYPE_LITERAL_COMMAND_BAR.equals(groupType)
+                || TYPE_LITERAL_BUTTON_GROUP.equals(groupType)
+                || TYPE_LITERAL_POPUP.equals(groupType);
+        }
+        return false;
+    }
+
+    /**
+     * Sets the new-item defaults every visual form item shares with the platform factory: visible AND
+     * enabled (the {@code enabled} EAttribute defaults to {@code false} in the model, so a created item
+     * would otherwise export as {@code <Enabled>false</Enabled>} and render disabled in the client),
+     * plus the {@code userVisible} AdjustableBoolean the model requires.
+     */
+    private static void applyVisibleDefaults(EObject item)
+    {
+        setBooleanFeature(item, FEATURE_VISIBLE, true);
+        setBooleanFeature(item, FEATURE_ENABLED, true);
+        setAdjustableBooleanFeature(item, FEATURE_USER_VISIBLE);
+    }
+
+    /**
+     * Resolves the parent container for a new visual item: the form root for a blank parent, the
+     * form's (or a named item's, e.g. a table's) auto command bar for the {@code AutoCommandBar}
+     * token, the named item otherwise, or {@code null} if not found. A dotted parent path
+     * ({@code Form.X.AutoCommandBar.ChildItems}) is tolerated: item names cannot contain dots, so only
+     * the trailing segments matter (the Designer-XML {@code ChildItems} collection token is ignored).
+     */
     private static EObject containerFor(EObject formModel, String parentName)
     {
         if (parentName == null || parentName.isEmpty())
         {
             return formModel;
         }
-        return findItem(formModel, parentName);
+        String[] segments = parentName.split("\\."); //$NON-NLS-1$
+        int last = segments.length - 1;
+        if (last > 0 && CHILD_ITEMS_TOKEN.equalsIgnoreCase(segments[last]))
+        {
+            last--;
+        }
+        String token = segments[last];
+        if (AUTO_COMMAND_BAR_TOKEN.equalsIgnoreCase(token))
+        {
+            // 'MyTable.AutoCommandBar' addresses the named item's own bar; otherwise (the bare token
+            // or a form path prefix such as 'Form.X.AutoCommandBar') it is the form's bar.
+            EObject owner = last > 0 ? findItem(formModel, segments[last - 1]) : null;
+            EObject bar = singleReference(owner != null ? owner : formModel, FEATURE_AUTO_COMMAND_BAR);
+            if (bar != null)
+            {
+                return bar;
+            }
+        }
+        return findItem(formModel, token);
     }
 
     private static String parentNotFound(String parentName)
     {
         return "Parent form item not found: " + parentName //$NON-NLS-1$
-            + ". Create the parent group first, or omit 'parent' to add at the form root."; //$NON-NLS-1$
+            + ". Use an existing item's name (see the form structure via get_metadata_details), " //$NON-NLS-1$
+            + "'AutoCommandBar' for the form's command bar, or omit 'parent' to add at the form root."; //$NON-NLS-1$
     }
 
     /** Attaches a fresh extInfo of the named concrete classifier to an item (best-effort). */
@@ -530,6 +638,10 @@ public final class FormElementWriter
     public static String createHandler(EObject container, String eventName, String procName,
         Version version, String langCode, String[] createdKind)
     {
+        if (ECLASS_FORM_COMMAND.equals(container.eClass().getName()))
+        {
+            return createCommandAction(container, eventName, procName, createdKind);
+        }
         EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
         if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
         {
@@ -596,6 +708,75 @@ public final class FormElementWriter
         addToList(container, "handlers", handler); //$NON-NLS-1$
         recordKind(handler, createdKind);
         return null;
+    }
+
+    /**
+     * Binds the ACTION handler of a form command ({@code ...Command.X.Handler.Action}): a command has
+     * no platform events, only the single {@code action} containment, so the "event" leaf must be
+     * {@code Action} (or its Russian equivalent). Builds the same
+     * {@code FormCommandHandlerContainer}/{@code CommandHandler} pair the platform's
+     * {@code ModelUtils.setCommandHandler} builds; the BSL procedure name defaults to the COMMAND name
+     * (the EDT UI's suggestion), not the event name.
+     */
+    private static String createCommandAction(EObject command, String eventName, String procName,
+        String[] createdKind)
+    {
+        if (!isActionToken(eventName))
+        {
+            return "Event '" + eventName + "' is not valid for a form command" //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Available events: " + COMMAND_ACTION_EVENT; //$NON-NLS-1$
+        }
+        EStructuralFeature actionFeat = command.eClass().getEStructuralFeature(FEATURE_ACTION);
+        if (!(actionFeat instanceof EReference))
+        {
+            return "This form model does not support a command action handler."; //$NON-NLS-1$
+        }
+        if (command.eGet(actionFeat) != null)
+        {
+            return "An event handler for '" + COMMAND_ACTION_EVENT //$NON-NLS-1$
+                + "' already exists on this command."; //$NON-NLS-1$
+        }
+        EObject container = createFromClassifier(command, ECLASS_FORM_COMMAND_HANDLER_CONTAINER);
+        EObject handler = createFromClassifier(command, ECLASS_COMMAND_HANDLER);
+        EStructuralFeature handlerFeat =
+            container != null ? container.eClass().getEStructuralFeature(FEATURE_HANDLER) : null;
+        if (handler == null || !(handlerFeat instanceof EReference))
+        {
+            return "Cannot create a command action handler for this form model."; //$NON-NLS-1$
+        }
+        String proc = (procName == null || procName.isEmpty())
+            ? stringFeature(command, FEATURE_NAME) : procName;
+        setStringFeature(handler, FEATURE_NAME, proc);
+        container.eSet(handlerFeat, handler);
+        command.eSet(actionFeat, container);
+        recordKind(handler, createdKind);
+        return null;
+    }
+
+    /** Whether the handler FQN leaf addresses a command's Action (English or Russian). */
+    private static boolean isActionToken(String eventName)
+    {
+        return COMMAND_ACTION_EVENT.equalsIgnoreCase(eventName)
+            || (eventName != null && RU_ACTION.equals(eventName.trim().toLowerCase()));
+    }
+
+    /**
+     * Resolves the element an ITEM-LEVEL handler FQN attaches to on the tx-bound form model: the named
+     * form COMMAND for a {@code Command} kind token ({@code ...Command.X.Handler.Action}), the named
+     * form ITEM otherwise; the form root for a form-level ref. Returns {@code null} when the named
+     * owner does not exist.
+     */
+    public static EObject resolveHandlerContainer(EObject formModel, FormMemberRef ref)
+    {
+        if (!ref.isItemLevel())
+        {
+            return formModel;
+        }
+        if (kindForToken(ref.itemKindToken) == Kind.COMMAND)
+        {
+            return findFormCommand(formModel, ref.itemName);
+        }
+        return findFormItem(formModel, ref.itemName);
     }
 
     /** The {@code event} EReference on the EventHandler EClass held by the {@code handlers} feature. */
@@ -956,6 +1137,15 @@ public final class FormElementWriter
      */
     public static EObject findFormHandler(EObject container, String eventName)
     {
+        if (ECLASS_FORM_COMMAND.equals(container.eClass().getName()))
+        {
+            // A command's single handler slot: its contained action (removing it clears the binding).
+            if (!isActionToken(eventName))
+            {
+                return null;
+            }
+            return singleReference(container, FEATURE_ACTION);
+        }
         EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
         if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
         {
@@ -976,16 +1166,36 @@ public final class FormElementWriter
         return null;
     }
 
-    /** Depth-first search of the whole {@code items} tree for an item by programmatic name. */
-    private static EObject findItem(EObject container, String name)
+    /**
+     * Depth-first search of ALL contained {@code FormItem}s for an item by its (form-wide unique)
+     * programmatic name. Walks every containment that holds form items - the {@code items} tree, the
+     * auto command bars (form- and table-level), context menus, extended tooltips - not just
+     * {@code items}, by filtering {@code eContents()} to {@code FormItem} instances (the same filter
+     * {@code nextItemId} uses).
+     */
+    private static EObject findItem(EObject root, String name)
     {
-        for (EObject item : referenceList(container, FEATURE_ITEMS))
+        EClassifier formItem = root.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
+        if (!(formItem instanceof EClass))
         {
-            if (name.equalsIgnoreCase(stringFeature(item, FEATURE_NAME)))
+            return null;
+        }
+        return findItemIn(root, name, (EClass)formItem);
+    }
+
+    private static EObject findItemIn(EObject container, String name, EClass formItem)
+    {
+        for (EObject child : container.eContents())
+        {
+            if (!formItem.isInstance(child))
             {
-                return item;
+                continue;
             }
-            EObject nested = findItem(item, name);
+            if (name.equalsIgnoreCase(stringFeature(child, FEATURE_NAME)))
+            {
+                return child;
+            }
+            EObject nested = findItemIn(child, name, formItem);
             if (nested != null)
             {
                 return nested;
@@ -1004,6 +1214,57 @@ public final class FormElementWriter
             }
         }
         return null;
+    }
+
+    /** The value of a single-valued EReference, or {@code null} when absent/unset/not a reference. */
+    private static EObject singleReference(EObject owner, String featureName)
+    {
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (!(feature instanceof EReference) || feature.isMany())
+        {
+            return null;
+        }
+        Object value = owner.eGet(feature);
+        return value instanceof EObject ? (EObject)value : null;
+    }
+
+    /** The literal of a set EEnum attribute (e.g. a group's {@code type}), or {@code null}. */
+    private static String enumLiteralOf(EObject owner, String featureName)
+    {
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (!(feature instanceof EAttribute)
+            || !(((EAttribute)feature).getEAttributeType() instanceof EEnum))
+        {
+            return null;
+        }
+        Object value = owner.eGet(feature);
+        if (value instanceof Enumerator)
+        {
+            return ((Enumerator)value).getLiteral();
+        }
+        return value != null ? value.toString() : null;
+    }
+
+    /**
+     * Fills a contained {@code AdjustableBoolean} feature ({@code userVisible} on a visual item,
+     * {@code use} on a command) with a fresh instance whose {@code common} flag is set - what the
+     * platform factory's {@code newAdjustableBoolean} produces. A no-op when the feature is absent.
+     */
+    private static void setAdjustableBooleanFeature(EObject owner, String featureName)
+    {
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (!(feature instanceof EReference) || feature.isMany())
+        {
+            return;
+        }
+        EClass type = ((EReference)feature).getEReferenceType();
+        if (type == null || type.getEPackage() == null || type.isAbstract())
+        {
+            return;
+        }
+        EObject adjustable = type.getEPackage().getEFactoryInstance().create(type);
+        setBooleanFeature(adjustable, FEATURE_COMMON, true);
+        owner.eSet(feature, adjustable);
     }
 
     @SuppressWarnings("unchecked")

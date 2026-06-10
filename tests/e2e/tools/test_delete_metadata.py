@@ -304,6 +304,33 @@ def test_delete_form_handler_confirm():
 
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_command_action_confirm():
+    # Issue #138: a command's Action handler is addressed the same way it is created
+    # (...Command.X.Handler.Action) - deleting it clears the binding but keeps the command.
+    cmd, proc = "DelActCmd", "DelActProc_zz"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r, "seed form command")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Command.%s.Handler.Action" % cmd,
+        "properties": [{"name": "procedure", "value": proc}]})
+    assert_ok(r, "seed the command's Action handler")
+    wait_for_project_ready()
+    r = call("delete_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Command.%s.Handler.Action" % cmd, "confirm": True})
+    assert_ok(r, "delete the command's Action handler (confirm)")
+    poll_disk_lacks(_FORM, proc, ctx="the cleared action's procedure must be gone from the .form")
+    # The command itself must survive; only its action binding was removed.
+    rb = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(rb, "read the form structure back")
+    assert_contains(rb.text, cmd, "the command must survive its action's deletion")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_delete_form_missing_member_is_error():
     r = call("delete_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.NoSuchField_zz",

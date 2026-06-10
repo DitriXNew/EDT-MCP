@@ -293,8 +293,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         if (handler)
         {
-            EObject container = ref.isItemLevel()
-                ? FormElementWriter.findFormItem(formModel, ref.itemName) : formModel;
+            // The container is the form root, a form ITEM, or a form COMMAND (whose single Action
+            // handler is its contained action - removing it clears the binding).
+            EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
             return container == null ? null : FormElementWriter.findFormHandler(container, ref.name);
         }
         return FormElementWriter.resolveFormMember(formModel, ref);

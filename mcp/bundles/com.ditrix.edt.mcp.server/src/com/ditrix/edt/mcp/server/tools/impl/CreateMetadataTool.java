@@ -626,7 +626,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
         final String eventName = ref.name;
         final String fProc = procName;
-        final String fItemName = ref.isItemLevel() ? ref.itemName : null;
+        final boolean commandOwner =
+            FormElementWriter.kindForToken(ref.itemKindToken) == FormElementWriter.Kind.COMMAND;
         final String[] createdKind = new String[1];
 
         final String contentFormFqn;
@@ -646,16 +647,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         + "empty, an ordinary/legacy form, or not yet built)"); //$NON-NLS-1$
                 }
                 // Form-level handlers attach to the form root; item-level handlers
-                // (Type.Object.Form.F.Field.Item.Handler.Event) attach to the named item.
-                EObject container = formModel;
-                if (fItemName != null)
+                // (Type.Object.Form.F.Field.Item.Handler.Event) attach to the named item; a COMMAND
+                // ref (Type.Object.Form.F.Command.C.Handler.Action) attaches to the form command.
+                EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
+                if (container == null)
                 {
-                    container = FormElementWriter.findFormItem(formModel, fItemName);
-                    if (container == null)
-                    {
-                        throw new RuntimeException("Form item not found: " + fItemName //$NON-NLS-1$
+                    throw new RuntimeException(commandOwner
+                        ? "Form command not found: " + ref.itemName //$NON-NLS-1$
+                            + ". Create the command first, then add the handler." //$NON-NLS-1$
+                        : "Form item not found: " + ref.itemName //$NON-NLS-1$
                             + ". Create the item first, then add the handler."); //$NON-NLS-1$
-                    }
                 }
                 String err = FormElementWriter.createHandler(container, eventName, fProc, version,
                     langCode, createdKind);
