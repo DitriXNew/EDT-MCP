@@ -292,9 +292,11 @@ def test_live_yaxunit_rerun_reexecutes_not_cached():
 
         # Quiet the infobase between runs (the auto-chain also terminates a live client)
         # and let the filesystem clock advance so a re-write is observable as a newer mtime.
+        # 3s clears coarse mtime granularity (e.g. FAT/exFAT's 2s) so the strict
+        # m2 > m1 assertion below stays robust on such filesystems.
         _quiet_infobase()
         wait_for_project_ready(timeout=120)
-        time.sleep(2)
+        time.sleep(3)
 
         r2 = _run_yaxunit_until_done(dict(args))
         assert_ok(r2, "second identical live YAXUnit run")

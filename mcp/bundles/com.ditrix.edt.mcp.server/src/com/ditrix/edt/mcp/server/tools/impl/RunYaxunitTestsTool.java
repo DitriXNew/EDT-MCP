@@ -318,16 +318,21 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 if (existing.isTerminated())
                 {
-                    // Remove by identity (symmetry with pollLaunch): never drop a newer launch that a
-                    // racing identical call may have put under the same runKey since the get() above.
-                    ACTIVE_LAUNCHES.remove(runKey, existing);
-                    PENDING_FETCH.remove(runKey);
-                    // Read under the per-IB lock so a concurrent identical call that falls through to a
-                    // fresh launch cannot cleanupTempDir(reportDir) mid-read — the fresh-run path holds
-                    // the SAME lock for cleanup+spawn. Worst case degrades from a torn parse to a clean
-                    // null. findJunitXml + readResults are fast (ms), so contention is negligible.
+                    // Remove + read under the per-IB lock so remove-then-read is ATOMIC against a
+                    // concurrent identical call that falls through to a fresh launch: that path holds
+                    // the SAME lock for cleanupTempDir(reportDir) + spawn, so it cannot wipe reportDir
+                    // between this thread's remove and read. With the remove OUTSIDE the lock, a racer
+                    // could observe ACTIVE_LAUNCHES already empty, take the lock first, cleanupTempDir
+                    // the fresh run's dir and delete junit.xml before this thread reads it — a spurious
+                    // "no JUnit XML" error. pollLaunch's sibling read guards the same way (see there).
+                    // remove(runKey, existing) is by identity — it never drops a newer launch a racing
+                    // identical call may have put under the same runKey since the get() above. Worst
+                    // case still degrades from a torn parse to a clean null; findJunitXml + readResults
+                    // are fast (ms), so contention is negligible.
                     synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
                     {
+                        ACTIVE_LAUNCHES.remove(runKey, existing);
+                        PENDING_FETCH.remove(runKey);
                         File junitXml = findJunitXml(reportDir);
                         if (junitXml != null)
                         {
