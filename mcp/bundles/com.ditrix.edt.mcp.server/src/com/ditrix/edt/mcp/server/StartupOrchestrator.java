@@ -25,7 +25,7 @@ import com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl;
  *       via {@code Display.asyncExec}.</li>
  * </ol>
  * Teardown reverses these on {@link #stop()}: dispose the navigator toolbar
- * customizer (non-headless, on the UI thread via {@code syncExec}), deactivate
+ * customizer (non-headless, only when already on a live UI thread), deactivate
  * the group service, then stop the {@code UpdateChecker} scheduler.
  * <p>
  * This class owns the {@link IGroupService} reference; {@link Activator}
@@ -74,30 +74,28 @@ public class StartupOrchestrator
      */
     public void stop(boolean headless)
     {
-        // Dispose UI components only in non-headless mode
+        // Dispose UI components only in non-headless mode.
+        // Never block on the UI thread from here: stop() runs on the OSGi
+        // framework shutdown thread after the workbench event loop has exited,
+        // so a syncExec never returns and pins the JVM — EDT keeps running as
+        // a background process (#135). Display.getDefault() is also forbidden
+        // here: with the display already disposed it would CREATE a new one on
+        // the shutdown thread. Listener teardown is best-effort — widgets die
+        // with the display — so run it inline only when already on a live UI
+        // thread and skip it otherwise.
         if (!headless)
         {
-            // Dispose navigator toolbar customizer
-            try
+            org.eclipse.swt.widgets.Display display = org.eclipse.swt.widgets.Display.getCurrent();
+            if (display != null && !display.isDisposed())
             {
-                org.eclipse.swt.widgets.Display display = org.eclipse.swt.widgets.Display.getDefault();
-                if (display != null && !display.isDisposed())
+                try
                 {
-                    display.syncExec(() -> {
-                        try
-                        {
-                            com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().dispose();
-                        }
-                        catch (Exception e)
-                        {
-                            // Ignore - workbench may be closing
-                        }
-                    });
+                    com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().dispose();
                 }
-            }
-            catch (Exception e)
-            {
-                // Ignore - display may be disposed
+                catch (Exception e)
+                {
+                    // Ignore - workbench may be closing
+                }
             }
         }
 

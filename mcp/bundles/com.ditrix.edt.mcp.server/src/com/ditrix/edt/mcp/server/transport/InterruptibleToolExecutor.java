@@ -81,6 +81,9 @@ public class InterruptibleToolExecutor
             }
         }, "MCP-Tool-Executor"); //$NON-NLS-1$
 
+        // Daemon: a tool call still running (or stuck) at EDT shutdown must
+        // not keep the JVM alive after the workbench has closed (#135).
+        executionThread.setDaemon(true);
         executionThread.start();
 
         // Wait for completion or user signal
