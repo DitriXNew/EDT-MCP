@@ -590,10 +590,19 @@ public final class FormElementWriter
         String token = segments[last];
         if (AUTO_COMMAND_BAR_TOKEN.equalsIgnoreCase(token))
         {
-            // 'MyTable.AutoCommandBar' addresses the named item's own bar; otherwise (the bare token
-            // or a form path prefix such as 'Form.X.AutoCommandBar') it is the form's bar.
-            EObject owner = last > 0 ? findItem(formModel, segments[last - 1]) : null;
-            EObject bar = singleReference(owner != null ? owner : formModel, FEATURE_AUTO_COMMAND_BAR);
+            // A path carrying a form token before the owner segment ('Form.X.AutoCommandBar',
+            // 'Catalog.O.Form.F.AutoCommandBar') ALWAYS addresses the FORM's bar - there the
+            // preceding segment is the form name, which may coincide with an item name. Only
+            // 'MyTable.AutoCommandBar' (no form token) probes the named item's own bar, falling
+            // back to the form's bar when the item has none.
+            boolean formPathPrefix = last > 1 && isFormToken(segments[last - 2]);
+            EObject owner = (last > 0 && !formPathPrefix)
+                ? findItem(formModel, segments[last - 1]) : null;
+            EObject bar = owner != null ? singleReference(owner, FEATURE_AUTO_COMMAND_BAR) : null;
+            if (bar == null)
+            {
+                bar = singleReference(formModel, FEATURE_AUTO_COMMAND_BAR);
+            }
             if (bar != null)
             {
                 return bar;

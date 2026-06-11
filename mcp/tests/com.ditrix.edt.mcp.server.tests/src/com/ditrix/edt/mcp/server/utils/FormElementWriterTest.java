@@ -314,6 +314,49 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testFormPathPrefixAlwaysResolvesTheFormBar()
+    {
+        // 'Form.X.AutoCommandBar' must resolve the FORM's bar even when an ITEM named X exists
+        // (here a table with its OWN bar): the segment before the bar in a form path is the form
+        // name, which legitimately may coincide with an item name.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, null));
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject tableBar = newObject(MODEL.autoCommandBar);
+        tableBar.eSet(feature(tableBar, "name"), "MyFormCommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "autoCommandBar"), tableBar); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "B1", //$NON-NLS-1$
+            "Form.MyForm.AutoCommandBar", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject formBar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        assertEquals(1, ((List<?>)formBar.eGet(feature(formBar, "items"))).size()); //$NON-NLS-1$
+        assertEquals(0, ((List<?>)tableBar.eGet(feature(tableBar, "items"))).size()); //$NON-NLS-1$
+        // Without the form token the owner probe targets the named item's OWN bar.
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "B2", //$NON-NLS-1$
+            "MyForm.AutoCommandBar", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, ((List<?>)tableBar.eGet(feature(tableBar, "items"))).size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOwnerWithoutBarFallsBackToTheFormBar()
+    {
+        // 'SomeGroup.AutoCommandBar' where the group has no bar of its own resolves the form's bar
+        // rather than failing.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, null));
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "SomeGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", group); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "B1", //$NON-NLS-1$
+            "SomeGroup.AutoCommandBar", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject formBar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        assertEquals(1, ((List<?>)formBar.eGet(feature(formBar, "items"))).size()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testCreateButtonInPopupGroupIsCommandBarButton()
     {
         EObject form = newForm();
@@ -484,6 +527,7 @@ public class FormElementWriterTest
         final EClass form;
         final EClass formGroup;
         final EClass autoCommandBar;
+        final EClass table;
 
         FormLikeModel()
         {
@@ -562,6 +606,13 @@ public class FormElementWriterTest
             autoCommandBar.getESuperTypes().add(formItem);
             autoCommandBar.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
 
+            table = f.createEClass();
+            table.setName("Table"); //$NON-NLS-1$
+            table.getESuperTypes().add(formItem);
+            table.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+
             form = f.createEClass();
             form.setName("Form"); //$NON-NLS-1$
             form.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
@@ -570,6 +621,7 @@ public class FormElementWriterTest
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
 
             pkg.getEClassifiers().add(form);
+            pkg.getEClassifiers().add(table);
             pkg.getEClassifiers().add(buttonType);
             pkg.getEClassifiers().add(placementArea);
             pkg.getEClassifiers().add(groupType);

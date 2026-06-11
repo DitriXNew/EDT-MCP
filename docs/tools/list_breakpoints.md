@@ -8,21 +8,32 @@ List active line breakpoints. Optionally filter by projectName.
 | projectName | — | string | Optional project filter |
 
 ## Guide
-Lists the line breakpoints currently registered in the workspace, optionally narrowed to one project. Use it to see what's set and to recover breakpoint ids.
+Lists the line breakpoints currently registered in the workspace, optionally narrowed to one project. Use it to see what's set and to recover breakpoint ids.
 
-## When to use
-- To check which breakpoints are active before a debug run.
-- To find the `breakpointId` of a breakpoint you want to remove.
-- To confirm a `set_breakpoint` actually registered.
 
-## Parameter details
-- `projectName` - optional filter; omit to list breakpoints across all projects.
+## When to use
 
-## What you get
-JSON: `breakpoints` (each with `breakpointId`, `project`, `file`, `lineNumber`, `enabled`, and the debug `modelId`) and a `count`.
+- To check which breakpoints are active before a debug run.
 
-## Notes & gotchas
-- The `modelId` tells you the breakpoint's debug model - a 1C BSL model id indicates a real, suspend-capable breakpoint (as opposed to a degraded marker-only one from `set_breakpoint`).
+- To find the `breakpointId` of a breakpoint you want to remove.
+
+- To confirm a `set_breakpoint` actually registered.
+
+
+## Parameter details
+
+- `projectName` - optional filter; omit to list breakpoints across all projects.
+
+
+## What you get
+
+JSON: `breakpoints` (each with `breakpointId`, `project`, `file`, `lineNumber`, `enabled`, and the debug `modelId`) and a `count`.
+
+
+## Notes & gotchas
+
+- The `modelId` tells you the breakpoint's debug model - a 1C BSL model id indicates a real, suspend-capable breakpoint (as opposed to a degraded marker-only one from `set_breakpoint`).
+
 - Remove entries with `remove_breakpoint` (pass the `breakpointId`).
 
 ---
