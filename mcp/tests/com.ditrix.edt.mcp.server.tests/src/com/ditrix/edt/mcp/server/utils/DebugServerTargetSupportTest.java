@@ -15,6 +15,12 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.Arrays;
+import java.util.List;
+
+import org.eclipse.debug.core.ILaunch;
+import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IThread;
 import org.junit.Test;
@@ -442,5 +448,338 @@ public class DebugServerTargetSupportTest
             new org.eclipse.core.runtime.Status(org.eclipse.core.runtime.IStatus.ERROR,
                 "test", "threads unavailable"))); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull(DebugServerTargetSupport.findFirstLiveClientThread(target));
+    }
+
+    // === findFirstLiveServerThread — the positive server-side signal ===
+
+    @Test
+    public void testFindFirstLiveServerThreadFindsLiveServerTyped() throws Exception
+    {
+        IRuntimeDebugTargetThread serverThread = liveTypedThread(DebugTargetType.SERVER);
+        IDebugTarget target =
+            liveTargetWithThreads(liveTypedThread(DebugTargetType.CLIENT), serverThread);
+        assertSame(serverThread, DebugServerTargetSupport.findFirstLiveServerThread(target));
+    }
+
+    @Test
+    public void testFindFirstLiveServerThreadIgnoresClientUnknownAndPlainThreads() throws Exception
+    {
+        // Only a POSITIVELY server-typed live thread counts: client, unknown and
+        // non-1C threads all classify client-side, so a thin client can never be
+        // reclassified server-side by a model hiccup.
+        IThread plain = mock(IThread.class); // non-1C, live (isTerminated() false)
+        IDebugTarget target = liveTargetWithThreads(
+            liveTypedThread(DebugTargetType.MANAGED_CLIENT),
+            liveTypedThread(DebugTargetType.UNKNOWN), plain);
+        assertNull(DebugServerTargetSupport.findFirstLiveServerThread(target));
+    }
+
+    @Test
+    public void testFindFirstLiveServerThreadIgnoresTerminatedServerThread() throws Exception
+    {
+        // The thread must be LIVE: a dead server thread is not a server signal.
+        IRuntimeDebugTargetThread dead = mock(IRuntimeDebugTargetThread.class);
+        when(dead.isTerminated()).thenReturn(true);
+        when(dead.getType()).thenReturn(DebugTargetType.SERVER);
+        assertNull(DebugServerTargetSupport.findFirstLiveServerThread(liveTargetWithThreads(dead)));
+    }
+
+    @Test
+    public void testFindFirstLiveServerThreadNullAndTerminatedTargetReturnNull()
+    {
+        assertNull(DebugServerTargetSupport.findFirstLiveServerThread(null));
+        IDebugTarget terminated = mock(IDebugTarget.class);
+        when(terminated.isTerminated()).thenReturn(true);
+        assertNull(DebugServerTargetSupport.findFirstLiveServerThread(terminated));
+    }
+
+    // === isServerTarget — review item 8: launch-owned client sessions are NOT server targets ===
+    //
+    // The target manager creates an IRuntimeDebugClientTarget for EVERY debug session
+    // (thin clients included), so the raw listDebugTargets() view overcaptured: plain
+    // client sessions took the 100ms poll loop instead of the event-driven wait,
+    // reported serverTarget:true on timeouts, and were listed twice in debug_status
+    // under a synthesized ServerApplication.<app> id. These tests pin the narrowed
+    // classification: a target is a server target only when NO live registered launch
+    // resolves to it (its events never key into the launch-based registry — polling is
+    // the only wait that works) OR it carries a live SERVER-typed thread.
+
+    /** Mocks an EDT runtime-client launch configuration with the given name. */
+    private static ILaunchConfiguration edtConfig(String name) throws Exception
+    {
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID);
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getType()).thenReturn(type);
+        when(config.getName()).thenReturn(name);
+        return config;
+    }
+
+    /** Mocks a live launch with the given configuration and debug targets. */
+    private static ILaunch liveLaunch(ILaunchConfiguration config, IDebugTarget... targets)
+    {
+        ILaunch launch = mock(ILaunch.class);
+        when(launch.isTerminated()).thenReturn(false);
+        when(launch.getLaunchConfiguration()).thenReturn(config);
+        when(launch.getDebugTargets()).thenReturn(targets);
+        return launch;
+    }
+
+    @Test
+    public void testIsServerTargetLaunchOwnedClientSessionIsNotServerTarget() throws Exception
+    {
+        // THE OVERCAPTURE CASE: a thin-client session owned by a live REGISTERED EDT
+        // launch, with a live CLIENT-typed thread. Its suspend events key into the
+        // launch-based registry, so it is NOT a server target — not listed, no poll
+        // loop, no serverTarget:true, no duplicate ServerApplication.<app> entry.
+        IDebugTarget client = liveTargetWithThreads(liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        ILaunch launch = liveLaunch(edtConfig("Cfg"), client); //$NON-NLS-1$
+        when(client.getLaunch()).thenReturn(launch);
+        assertFalse(DebugServerTargetSupport.isServerTarget(client, new ILaunch[] {launch}));
+        // ...while the duplicate-session discriminator still sees its live client
+        // thread — the detect scans the UNFILTERED enumeration (pinned below).
+        assertNotNull(DebugServerTargetSupport.findFirstLiveClientThread(client));
+    }
+
+    @Test
+    public void testIsServerTargetNoOwningLaunchIsServerTarget() throws Exception
+    {
+        // A target with NO owning Eclipse launch (e.g. an rphost debuggee) needs the
+        // bridge: nothing keys its suspend events into the launch-based registry.
+        IDebugTarget orphan = liveTargetWithThreads(liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        when(orphan.getLaunch()).thenReturn(null);
+        assertTrue(DebugServerTargetSupport.isServerTarget(orphan, new ILaunch[0]));
+    }
+
+    @Test
+    public void testIsServerTargetUnregisteredOwningLaunchIsServerTarget() throws Exception
+    {
+        // A UI-started "Debug As" session: its ILaunch never surfaces in the launch
+        // manager, so the launch-based machinery can't track it — the bridge (and
+        // its poll-based wait) is the only mechanism that works. MUST stay a server
+        // target even though target.getLaunch() answers a live EDT launch.
+        IDebugTarget uiSession = liveTargetWithThreads(liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        ILaunch unregistered = liveLaunch(edtConfig("UiCfg"), uiSession); //$NON-NLS-1$
+        when(uiSession.getLaunch()).thenReturn(unregistered);
+        assertTrue(DebugServerTargetSupport.isServerTarget(uiSession, new ILaunch[0]));
+    }
+
+    @Test
+    public void testIsServerTargetTerminatedOwningLaunchIsServerTarget() throws Exception
+    {
+        // A registered but TERMINATED owning launch no longer tracks the session.
+        IDebugTarget target = liveTargetWithThreads(liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        ILaunch dead = mock(ILaunch.class);
+        when(dead.isTerminated()).thenReturn(true);
+        when(target.getLaunch()).thenReturn(dead);
+        assertTrue(DebugServerTargetSupport.isServerTarget(target, new ILaunch[] {dead}));
+    }
+
+    @Test
+    public void testIsServerTargetServerTypedThreadWinsOverLiveOwningLaunch() throws Exception
+    {
+        // A debug-mode standalone server launched through an Eclipse launch config:
+        // live SERVER-typed thread → still a server target (its suspends are
+        // observed by the poll bridge, not the launch-based registry).
+        IDebugTarget server = liveTargetWithThreads(liveTypedThread(DebugTargetType.SERVER));
+        ILaunch launch = liveLaunch(edtConfig("Srv"), server); //$NON-NLS-1$
+        when(server.getLaunch()).thenReturn(launch);
+        assertTrue(DebugServerTargetSupport.isServerTarget(server, new ILaunch[] {launch}));
+    }
+
+    @Test
+    public void testIsServerTargetOwnershipViaGetDebugTargetsContainment() throws Exception
+    {
+        // The owning launch may resolve to the target through launch.getDebugTargets()
+        // even when target.getLaunch() answers null — still a launch-owned client.
+        IDebugTarget client = liveTargetWithThreads(liveTypedThread(DebugTargetType.CLIENT));
+        when(client.getLaunch()).thenReturn(null);
+        ILaunch launch = liveLaunch(edtConfig("Cfg"), client); //$NON-NLS-1$
+        assertFalse(DebugServerTargetSupport.isServerTarget(client, new ILaunch[] {launch}));
+    }
+
+    @Test
+    public void testIsServerTargetNonEdtOwningLaunchIsServerTarget() throws Exception
+    {
+        // A registered live launch OUTSIDE the 1C/EDT namespace yields no registry
+        // key (getApplicationIdFor == null): its events can't be keyed — keep the
+        // bridge for such a target.
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn("org.eclipse.jdt.launching.localJavaApplication"); //$NON-NLS-1$
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getType()).thenReturn(type);
+        when(config.getName()).thenReturn("JavaApp"); //$NON-NLS-1$
+        IDebugTarget target = liveTargetWithThreads(liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        ILaunch launch = liveLaunch(config, target);
+        when(target.getLaunch()).thenReturn(launch);
+        assertTrue(DebugServerTargetSupport.isServerTarget(target, new ILaunch[] {launch}));
+    }
+
+    @Test
+    public void testIsServerTargetNullTargetIsFalse()
+    {
+        assertFalse(DebugServerTargetSupport.isServerTarget(null, new ILaunch[0]));
+        assertFalse(DebugServerTargetSupport.isServerTarget(null));
+    }
+
+    @Test
+    public void testIsServerTargetHeadlessNeverThrows()
+    {
+        // Public overload against the live launch manager (empty/absent headless):
+        // a launch-less target classifies as a server target, never throws.
+        IDebugTarget orphan = mock(IDebugTarget.class);
+        when(orphan.isTerminated()).thenReturn(false);
+        when(orphan.getLaunch()).thenReturn(null);
+        assertTrue(DebugServerTargetSupport.isServerTarget(orphan));
+    }
+
+    // === findRuntimeClientDebugTarget over the UNFILTERED enumeration — D5/D7b no-regress ===
+    //
+    // Narrowing listServerTargets() must NOT narrow the duplicate-session detect: a
+    // launch-owned client session is excluded from the server-target view by design,
+    // yet it is exactly what the delegate's code-1003 "Debug session already exists"
+    // check matches. The detect therefore scans the unfiltered manager enumeration;
+    // these tests pin its matching half against explicit candidate lists.
+
+    /** Test surface mirroring the 1C target's getApplication() for the reflective scan. */
+    public interface TargetWithApplication extends IDebugTarget
+    {
+        Object getApplication();
+    }
+
+    /** Test surface mirroring IApplication (getId/getProject) for the reflective scan. */
+    public interface ApplicationStub
+    {
+        String getId();
+
+        ProjectStub getProject();
+    }
+
+    /** Test surface mirroring IProject#getName() for the reflective scan. */
+    public interface ProjectStub
+    {
+        String getName();
+    }
+
+    private static TargetWithApplication targetBoundTo(String projectName, String appId,
+        IThread... threads) throws Exception
+    {
+        ProjectStub project = mock(ProjectStub.class);
+        when(project.getName()).thenReturn(projectName);
+        ApplicationStub app = mock(ApplicationStub.class);
+        when(app.getId()).thenReturn(appId);
+        when(app.getProject()).thenReturn(project);
+        TargetWithApplication target = mock(TargetWithApplication.class);
+        when(target.isTerminated()).thenReturn(false);
+        when(target.getApplication()).thenReturn(app);
+        when(target.getThreads()).thenReturn(threads);
+        return target;
+    }
+
+    private static DebugServerTargetSupport.ServerTarget asServerTarget(IDebugTarget target)
+    {
+        return new DebugServerTargetSupport.ServerTarget(target,
+            "ServerApplication.App", "App", null); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDuplicateDetectStillMatchesLaunchOwnedClientSession() throws Exception
+    {
+        // THE NO-REGRESS PIN (review item 8): a client session OWNED by a live
+        // registered launch is NOT a server target (the filter excludes it) — but
+        // the duplicate-session detect, fed the unfiltered enumeration, must still
+        // match it on (project, delegate app id) + live CLIENT-typed thread.
+        TargetWithApplication client = targetBoundTo("Proj", "app-id", //$NON-NLS-1$ //$NON-NLS-2$
+            liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        ILaunch launch = liveLaunch(edtConfig("Cfg"), client); //$NON-NLS-1$
+        when(client.getLaunch()).thenReturn(launch);
+        assertFalse("the session the filter excludes...", //$NON-NLS-1$
+            DebugServerTargetSupport.isServerTarget(client, new ILaunch[] {launch}));
+        assertSame("...must still be found by the duplicate detect", client, //$NON-NLS-1$
+            DebugServerTargetSupport.findRuntimeClientDebugTarget(
+                Arrays.asList(asServerTarget(client)), "Proj", "app-id")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDuplicateDetectStillSkipsServerSession() throws Exception
+    {
+        // Counterpart (D7b semantics unchanged): a debug-mode standalone server —
+        // same project + app id, live SERVER-typed thread — keeps NOT matching, so
+        // it is never short-circuited or terminated by restartIfRunning.
+        TargetWithApplication server = targetBoundTo("Proj", "app-id", //$NON-NLS-1$ //$NON-NLS-2$
+            liveTypedThread(DebugTargetType.SERVER));
+        assertNull(DebugServerTargetSupport.findRuntimeClientDebugTarget(
+            Arrays.asList(asServerTarget(server)), "Proj", "app-id")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDuplicateDetectRequiresProjectAndAppIdMatch() throws Exception
+    {
+        // The delegate's criterion is BOTH keys: same project AND same app id.
+        TargetWithApplication client = targetBoundTo("Proj", "app-id", //$NON-NLS-1$ //$NON-NLS-2$
+            liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        List<DebugServerTargetSupport.ServerTarget> list = Arrays.asList(asServerTarget(client));
+        assertNull(DebugServerTargetSupport.findRuntimeClientDebugTarget(
+            list, "OtherProj", "app-id")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(DebugServerTargetSupport.findRuntimeClientDebugTarget(
+            list, "Proj", "other-app")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDuplicateDetectSkipsTerminatedTarget() throws Exception
+    {
+        TargetWithApplication client = targetBoundTo("Proj", "app-id", //$NON-NLS-1$ //$NON-NLS-2$
+            liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        when(client.isTerminated()).thenReturn(true);
+        assertNull(DebugServerTargetSupport.findRuntimeClientDebugTarget(
+            Arrays.asList(asServerTarget(client)), "Proj", "app-id")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // === matchesServerTargetId — the ONE id predicate shared by resolve() and debug_status ===
+
+    @Test
+    public void testMatchesServerTargetIdAllForms()
+    {
+        IDebugTarget target = mock(IDebugTarget.class); // getLaunch() null → no launch id
+        DebugServerTargetSupport.ServerTarget st = new DebugServerTargetSupport.ServerTarget(
+            target, "ServerApplication.App", "App", "http://srv:1550"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(DebugServerTargetSupport.matchesServerTargetId(st, "ServerApplication.App")); //$NON-NLS-1$
+        assertTrue(DebugServerTargetSupport.matchesServerTargetId(st, "App")); //$NON-NLS-1$
+        assertTrue(DebugServerTargetSupport.matchesServerTargetId(st, "http://srv:1550")); //$NON-NLS-1$
+        assertFalse(DebugServerTargetSupport.matchesServerTargetId(st, "Other")); //$NON-NLS-1$
+        assertFalse(DebugServerTargetSupport.matchesServerTargetId(st, null));
+        assertFalse(DebugServerTargetSupport.matchesServerTargetId(st, "")); //$NON-NLS-1$
+        assertFalse(DebugServerTargetSupport.matchesServerTargetId(null, "App")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMatchesServerTargetIdBareFormOfMintedIdWithoutApplicationName()
+    {
+        // Minted id keyed from the target NAME (no application, no URL): the bare
+        // form must still match — debug_status's filter historically accepted it
+        // (PREFIX + filterAppId) and the shared predicate keeps that.
+        DebugServerTargetSupport.ServerTarget st = new DebugServerTargetSupport.ServerTarget(
+            mock(IDebugTarget.class), "ServerApplication.TargetName", null, null); //$NON-NLS-1$
+        assertTrue(DebugServerTargetSupport.matchesServerTargetId(st, "TargetName")); //$NON-NLS-1$
+        assertTrue(DebugServerTargetSupport.matchesServerTargetId(st, "ServerApplication.TargetName")); //$NON-NLS-1$
+        assertFalse(DebugServerTargetSupport.matchesServerTargetId(st, "Other")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMatchesServerTargetIdOwningLaunchId() throws Exception
+    {
+        // The owning Eclipse launch's id (launch:<name> here) addresses the target
+        // too — after unification debug_status filters by it exactly like resolve().
+        IDebugTarget target = mock(IDebugTarget.class);
+        ILaunchConfiguration config = edtConfig("MyCfg"); //$NON-NLS-1$
+        ILaunch launch = mock(ILaunch.class);
+        when(launch.getLaunchConfiguration()).thenReturn(config);
+        when(target.getLaunch()).thenReturn(launch);
+        DebugServerTargetSupport.ServerTarget st = new DebugServerTargetSupport.ServerTarget(
+            target, "ServerApplication.App", "App", null); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(DebugServerTargetSupport.matchesServerTargetId(st,
+            LaunchConfigUtils.LAUNCH_APP_ID_PREFIX + "MyCfg")); //$NON-NLS-1$
+        assertFalse(DebugServerTargetSupport.matchesServerTargetId(st,
+            LaunchConfigUtils.LAUNCH_APP_ID_PREFIX + "OtherCfg")); //$NON-NLS-1$
     }
 }

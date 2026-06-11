@@ -213,18 +213,24 @@ public class DebugStatusTool implements IMcpTool
     }
 
     /**
-     * Enumerates the debug-server targets EDT tracks via
-     * {@code IRuntimeDebugClientTargetManager.listDebugTargets()} and enriches each
-     * with its REAL suspend state (walking the target's threads through the Eclipse
-     * {@link IThread} interface — the 1C target implements
+     * Enumerates the debug-server targets {@code DebugServerTargetSupport} reports
+     * and enriches each with its REAL suspend state (walking the target's threads
+     * through the Eclipse {@link IThread} interface — the 1C target implements
      * {@code org.eclipse.debug.core.model.IDebugTarget}). Surfaces server-side
      * suspends from {@code debug_yaxunit_tests} and EDT-UI-started "Debug As"
      * sessions that the Eclipse {@code ILaunchManager} view misses, and exposes a
      * stable, addressable {@code applicationId} so the other debug tools can resolve
-     * them. Fully guarded — never throws (empty when the manager service is absent).
+     * them. A thin-client session owned by a registered launch is NOT listed here —
+     * it already appears in {@code launches[]}, and duplicating it under a minted
+     * {@code ServerApplication.<app>} id misreported every client session as a
+     * server target. Fully guarded — never throws (empty when the manager service
+     * is absent).
      *
-     * @param filterAppId optional applicationId filter (matches the minted
-     *     {@code ServerApplication.<app>} id or the bare application name)
+     * @param filterAppId optional applicationId filter — matched with the SAME
+     *     predicate the resolver uses
+     *     ({@link DebugServerTargetSupport#matchesServerTargetId}): the minted
+     *     {@code ServerApplication.<app>} id (exact or bare form), the bare
+     *     application name, the debug server URL, or the owning launch's id
      * @return list of server-target descriptors (possibly empty)
      */
     private static List<Map<String, Object>> listDebugServerTargets(String filterAppId)
@@ -232,16 +238,10 @@ public class DebugStatusTool implements IMcpTool
         List<Map<String, Object>> out = new ArrayList<>();
         for (DebugServerTargetSupport.ServerTarget st : DebugServerTargetSupport.listServerTargets())
         {
-            if (filterAppId != null && !filterAppId.isEmpty())
+            if (filterAppId != null && !filterAppId.isEmpty()
+                && !DebugServerTargetSupport.matchesServerTargetId(st, filterAppId))
             {
-                boolean matches = filterAppId.equals(st.applicationId)
-                    || filterAppId.equals(st.application)
-                    || (st.applicationId != null
-                        && st.applicationId.equals(DebugServerTargetSupport.SERVER_APP_ID_PREFIX + filterAppId));
-                if (!matches)
-                {
-                    continue;
-                }
+                continue;
             }
             out.add(DebugServerTargetSupport.describe(st));
         }

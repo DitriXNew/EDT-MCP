@@ -12,6 +12,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.debug.core.DebugPlugin;
+import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IThread;
@@ -54,6 +56,20 @@ import com.ditrix.edt.mcp.server.Activator;
  * resumed, stepped, inspected ({@code getVariables}) and evaluated against
  * through the very same Eclipse-interface code paths the existing tools use for
  * thin-client launches.
+ *
+ * <h2>What counts as a "server target"</h2>
+ * The target manager creates an {@code IRuntimeDebugClientTarget} for EVERY
+ * debug session — thin-client launches included — so the raw
+ * {@code listDebugTargets()} view is NOT "the server targets". A target counts
+ * as a server target ({@link #isServerTarget(IDebugTarget)}) only when the
+ * launch-based machinery cannot serve it: it carries a live server-typed thread
+ * (debug-mode standalone server), or no live Eclipse launch registered in the
+ * launch manager resolves to it (UI-started "Debug As" sessions, rphost
+ * debuggees). A thin client owned by a live registered launch waits event-driven
+ * through the suspend registry and is deliberately excluded from
+ * {@link #listServerTargets()} — but NOT from the duplicate-session detect
+ * ({@link #findRuntimeClientDebugTarget}), which exists to find exactly such
+ * client sessions and therefore scans the unfiltered enumeration.
  *
  * <h2>Reflection boundary</h2>
  * Only the <em>discovery</em> of the targets is reflective — obtaining the
@@ -137,13 +153,56 @@ public final class DebugServerTargetSupport
 
     /**
      * Enumerates the debug-server targets EDT currently tracks, each viewed as a
-     * standard Eclipse {@link IDebugTarget}. Best-effort and fully guarded —
-     * returns an empty list (never throws) when the debug-core manager is
-     * unavailable (e.g. headless test runtime) or the API shape differs.
+     * standard Eclipse {@link IDebugTarget} — the subset of the target manager's
+     * {@code listDebugTargets()} view that genuinely needs this bridge
+     * ({@link #isServerTarget(IDebugTarget)}). The platform creates an
+     * {@code IRuntimeDebugClientTarget} for EVERY debug session, thin-client
+     * launches included; surfacing those here (a) routed plain client waits
+     * through the 100ms poll loop instead of the event-driven registry wait,
+     * (b) stamped {@code serverTarget:true} on plain-client timeout responses,
+     * and (c) listed every client session a second time in {@code debug_status}
+     * under a synthesized {@code ServerApplication.<app>} id — so a thin-client
+     * session owned by a live registered launch is filtered out. Best-effort and
+     * fully guarded — returns an empty list (never throws) when the debug-core
+     * manager is unavailable (e.g. headless test runtime) or the API shape
+     * differs.
+     *
+     * <p>The duplicate-session detect ({@link #findRuntimeClientDebugTarget})
+     * looks for exactly the CLIENT sessions this filter excludes, so it scans the
+     * unfiltered {@link #listManagedTargets()} enumeration instead.
      *
      * @return list of server targets (possibly empty)
      */
     public static List<ServerTarget> listServerTargets()
+    {
+        List<ServerTarget> out = new ArrayList<>();
+        ILaunch[] registered = registeredLaunches();
+        for (ServerTarget st : listManagedTargets())
+        {
+            if (isServerTarget(st.target, registered))
+            {
+                out.add(st);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Unfiltered enumeration of EVERY target EDT's
+     * {@code IRuntimeDebugClientTargetManager.listDebugTargets()} tracks, each
+     * viewed as a standard Eclipse {@link IDebugTarget} — thin-client sessions
+     * included (the platform creates an {@code IRuntimeDebugClientTarget} for
+     * every debug session, not only server-side ones). This is the set EDT's
+     * launch delegate scans for its "Debug session already exists" check, so
+     * {@link #findRuntimeClientDebugTarget} consumes it directly;
+     * {@link #listServerTargets()} narrows it with
+     * {@link #isServerTarget(IDebugTarget)}. Best-effort and fully guarded —
+     * returns an empty list (never throws) when the manager is unavailable
+     * (headless) or the API shape differs.
+     *
+     * @return all manager-tracked targets (possibly empty)
+     */
+    private static List<ServerTarget> listManagedTargets()
     {
         List<ServerTarget> out = new ArrayList<>();
         Object manager = Activator.getDefault() != null
@@ -190,6 +249,140 @@ public final class DebugServerTargetSupport
     }
 
     /**
+     * Classifies a manager-tracked target as a SERVER target — one that genuinely
+     * needs this bridge because the launch-based machinery cannot serve it:
+     * <ul>
+     *   <li>it carries a live server-typed thread
+     *       ({@link #findFirstLiveServerThread}: {@link DebugTargetTypeUtil#isServer}
+     *       on a live {@link IRuntimeDebugTargetThread}) — a debug-mode standalone
+     *       server, whose suspends the launch-based registry misses even when an
+     *       Eclipse launch owns the target; or</li>
+     *   <li>NO live Eclipse launch registered in the
+     *       {@link org.eclipse.debug.core.ILaunchManager} resolves to it
+     *       (UI-started "Debug As" sessions, rphost debuggees) — exactly the
+     *       sessions whose suspend events the launch-based registry can't key, so
+     *       the poll bridge is the only wait mechanism that works for them.</li>
+     * </ul>
+     * A thin-client session owned by a live registered EDT launch is NOT a server
+     * target: its suspend events key into the event-driven registry, so it must
+     * never take the poll path, never report {@code serverTarget:true}, and never
+     * be listed under a minted {@code ServerApplication.<app>} id. Best-effort and
+     * fully guarded — unreadable launch/thread state errs on the SERVER side (the
+     * poll bridge works for any live target, while a missed server target would be
+     * unaddressable). Never throws.
+     *
+     * @param target the manager-tracked target (may be {@code null})
+     * @return {@code true} when the target needs the server bridge
+     */
+    public static boolean isServerTarget(IDebugTarget target)
+    {
+        return isServerTarget(target, registeredLaunches());
+    }
+
+    /**
+     * Same as {@link #isServerTarget(IDebugTarget)} against an explicit set of
+     * registered launches — package-visible so the classification is unit-testable
+     * headless (no live {@code ILaunchManager} there).
+     *
+     * @param target the manager-tracked target (may be {@code null})
+     * @param registeredLaunches the launches registered in the launch manager
+     * @return {@code true} when the target needs the server bridge
+     */
+    static boolean isServerTarget(IDebugTarget target, ILaunch[] registeredLaunches)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+        if (findFirstLiveServerThread(target) != null)
+        {
+            return true; // positively server-side, whoever owns the launch
+        }
+        return !hasLiveOwningLaunch(target, registeredLaunches);
+    }
+
+    /**
+     * @param target the manager-tracked target (never {@code null})
+     * @param registeredLaunches the launches registered in the launch manager
+     * @return {@code true} when a live (non-terminated) launch among
+     *     {@code registeredLaunches} resolves to {@code target} — it IS the
+     *     target's {@code getLaunch()} or lists it among its
+     *     {@code getDebugTargets()} — AND that launch carries an EDT/1C
+     *     configuration the launch-based registry can key suspend events by
+     *     ({@link LaunchConfigUtils#getApplicationIdFor(ILaunch)} non-null).
+     *     Best-effort; unreadable state counts as NO owning launch (see
+     *     {@link #isServerTarget(IDebugTarget)}).
+     */
+    private static boolean hasLiveOwningLaunch(IDebugTarget target, ILaunch[] registeredLaunches)
+    {
+        if (registeredLaunches == null)
+        {
+            return false;
+        }
+        try
+        {
+            ILaunch owning = target.getLaunch();
+            for (ILaunch launch : registeredLaunches)
+            {
+                if (launch == null || launch.isTerminated())
+                {
+                    continue;
+                }
+                if (resolvesToTarget(launch, owning, target)
+                    && LaunchConfigUtils.getApplicationIdFor(launch) != null)
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Throwable e)
+        {
+            // Unreadable launch state — err on the server side: the poll bridge
+            // works for any live target, a missed server target is unaddressable.
+        }
+        return false;
+    }
+
+    /**
+     * @return {@code true} when {@code launch} resolves to {@code target}: it is the
+     *     target's own {@code getLaunch()} (identity), or the target appears among
+     *     the launch's {@code getDebugTargets()}.
+     */
+    private static boolean resolvesToTarget(ILaunch launch, ILaunch owning, IDebugTarget target)
+    {
+        if (launch == owning)
+        {
+            return true;
+        }
+        for (IDebugTarget t : launch.getDebugTargets())
+        {
+            if (t == target)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @return the launches currently registered in the Eclipse launch manager, or
+     *     an empty array when the debug plug-in is unavailable (headless). Never
+     *     {@code null}, never throws.
+     */
+    private static ILaunch[] registeredLaunches()
+    {
+        try
+        {
+            DebugPlugin plugin = DebugPlugin.getDefault();
+            return plugin != null ? plugin.getLaunchManager().getLaunches() : new ILaunch[0];
+        }
+        catch (Throwable e)
+        {
+            return new ILaunch[0];
+        }
+    }
+
+    /**
      * Finds a live runtime-client DEBUG target that EDT's launch delegate would
      * consider a duplicate of a launch for {@code (projectName, resolvedAppId)} —
      * the criterion behind the "Debug session already exists" code-1003 modal.
@@ -230,6 +423,14 @@ public final class DebugServerTargetSupport
      * type {@code DebugTargetTypeUtil.isServer} positively marks as server-side
      * never counts; unknown/non-1C threads conservatively do).
      *
+     * <p><strong>Scans the UNFILTERED enumeration.</strong> This detect looks for
+     * CLIENT sessions — exactly what the {@link #isServerTarget(IDebugTarget)}
+     * filter excludes from {@link #listServerTargets()} (a launch-owned thin client
+     * is not a server target, but it IS what the delegate's code-1003 duplicate
+     * check matches). So it deliberately iterates {@link #listManagedTargets()},
+     * the same unfiltered set the delegate scans; narrowing the server-target view
+     * must never narrow this detection.
+     *
      * <p>Best-effort and fully guarded — returns {@code null} (never throws) when the
      * target manager is unavailable (headless), the API shape differs, or nothing
      * matches.
@@ -245,7 +446,25 @@ public final class DebugServerTargetSupport
         {
             return null;
         }
-        for (ServerTarget st : listServerTargets())
+        return findRuntimeClientDebugTarget(listManagedTargets(), projectName, resolvedAppId);
+    }
+
+    /**
+     * Matching half of {@link #findRuntimeClientDebugTarget(String, String)} over an
+     * explicit candidate list — package-visible so the CLIENT-session criterion stays
+     * unit-testable headless (the manager service is absent there, so the public
+     * entry point always enumerates an empty list). Callers guarantee non-null,
+     * non-empty {@code projectName}/{@code resolvedAppId}.
+     *
+     * @param candidates the (unfiltered) manager-tracked targets to scan
+     * @param projectName the launch's target project name
+     * @param resolvedAppId the delegate-resolved application id
+     * @return the matching live runtime-client debug target, or {@code null}
+     */
+    static IDebugTarget findRuntimeClientDebugTarget(List<ServerTarget> candidates, String projectName,
+        String resolvedAppId)
+    {
+        for (ServerTarget st : candidates)
         {
             IDebugTarget target = st.target;
             if (target == null || target.isTerminated())
@@ -280,10 +499,12 @@ public final class DebugServerTargetSupport
     }
 
     /**
-     * Resolves an {@code applicationId} to a debug-server target. Accepts, in
-     * order of preference:
+     * Resolves an {@code applicationId} to a debug-server target — a target
+     * {@link #listServerTargets()} reports (launch-owned thin-client sessions
+     * resolve through the launch-based view instead) whose id matches per
+     * {@link #matchesServerTargetId(ServerTarget, String)}:
      * <ul>
-     *   <li>the minted {@code ServerApplication.<app>} id (exact match),</li>
+     *   <li>the minted {@code ServerApplication.<app>} id (exact or bare form),</li>
      *   <li>the bare application name (e.g. {@code MyConfiguration}),</li>
      *   <li>the debug server URL,</li>
      *   <li>the id of the owning Eclipse launch (real {@code ATTR_APPLICATION_ID},
@@ -301,10 +522,6 @@ public final class DebugServerTargetSupport
         {
             return null;
         }
-        String bare = applicationId.startsWith(SERVER_APP_ID_PREFIX)
-            ? applicationId.substring(SERVER_APP_ID_PREFIX.length())
-            : applicationId;
-
         ServerTarget looseMatch = null;
         for (ServerTarget st : listServerTargets())
         {
@@ -312,13 +529,7 @@ public final class DebugServerTargetSupport
             {
                 continue;
             }
-            boolean exact = applicationId.equals(st.applicationId);
-            boolean byName = bare.equals(st.application);
-            boolean byUrl = bare.equals(st.debugServerUrl);
-            // Also match by the id of the Eclipse launch that owns this server
-            // debuggee (real ATTR_APPLICATION_ID / attach:<name> / launch:<name>).
-            boolean byLaunchId = matchesOwningLaunchId(st.target, applicationId);
-            if (exact || byName || byUrl || byLaunchId)
+            if (matchesServerTargetId(st, applicationId))
             {
                 if (isAnyThreadSuspended(st.target))
                 {
@@ -331,6 +542,49 @@ public final class DebugServerTargetSupport
             }
         }
         return looseMatch;
+    }
+
+    /**
+     * Returns {@code true} when {@code applicationId} addresses the given server
+     * target. This is THE single id predicate behind {@link #resolve(String)},
+     * shared with {@code debug_status}'s {@code applicationId} filter so both
+     * match the same id forms (the status filter historically lacked the
+     * owning-launch-id form and diverged):
+     * <ul>
+     *   <li>the minted {@code ServerApplication.<app>} id — exact, or the bare
+     *       form of the same minted id (whatever key it was minted from:
+     *       application name, URL or target name),</li>
+     *   <li>the bare application name,</li>
+     *   <li>the debug server URL,</li>
+     *   <li>the id of the Eclipse launch that owns the target (real
+     *       {@code ATTR_APPLICATION_ID}, {@code attach:<name>} or
+     *       {@code launch:<name>}).</li>
+     * </ul>
+     * Best-effort; never throws.
+     *
+     * @param st the server target to test (may be {@code null})
+     * @param applicationId the id to test (may be {@code null})
+     * @return {@code true} when the id addresses the target
+     */
+    public static boolean matchesServerTargetId(ServerTarget st, String applicationId)
+    {
+        if (st == null || applicationId == null || applicationId.isEmpty())
+        {
+            return false;
+        }
+        String bare = applicationId.startsWith(SERVER_APP_ID_PREFIX)
+            ? applicationId.substring(SERVER_APP_ID_PREFIX.length())
+            : applicationId;
+        if (applicationId.equals(st.applicationId)
+            || (st.applicationId != null && st.applicationId.equals(SERVER_APP_ID_PREFIX + bare))
+            || bare.equals(st.application)
+            || bare.equals(st.debugServerUrl))
+        {
+            return true;
+        }
+        // Also match by the id of the Eclipse launch that owns this server
+        // debuggee (real ATTR_APPLICATION_ID / attach:<name> / launch:<name>).
+        return matchesOwningLaunchId(st.target, applicationId);
     }
 
     /**
@@ -489,6 +743,45 @@ public final class DebugServerTargetSupport
             for (IThread thread : target.getThreads())
             {
                 if (thread != null && !thread.isTerminated() && isClientThread(thread))
+                {
+                    return thread;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // best-effort
+        }
+        return null;
+    }
+
+    /**
+     * Finds the first non-terminated {@link IThread} of a target whose 1C type
+     * POSITIVELY classifies as server-side (the inverse of {@link #isClientThread}:
+     * {@link DebugTargetTypeUtil#isServer} on its
+     * {@link IRuntimeDebugTargetThread#getType()}), or {@code null} if the target
+     * has none. A live server-typed thread marks a debug-mode standalone server
+     * (ibsrv, presented as «Сервер») — the signal that keeps such a target a
+     * server target even when an Eclipse launch owns it (see
+     * {@link #isServerTarget(IDebugTarget)}). Unknown / non-1C / unreadable types
+     * never count (they classify as client), so a plain thin-client session can
+     * never be reclassified server-side by a model hiccup. Best-effort and fully
+     * guarded — never throws.
+     *
+     * @param target the target viewed as an Eclipse debug target
+     * @return a non-terminated server-typed thread, or {@code null}
+     */
+    public static IThread findFirstLiveServerThread(IDebugTarget target)
+    {
+        if (target == null || target.isTerminated())
+        {
+            return null;
+        }
+        try
+        {
+            for (IThread thread : target.getThreads())
+            {
+                if (thread != null && !thread.isTerminated() && !isClientThread(thread))
                 {
                     return thread;
                 }

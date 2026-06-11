@@ -109,16 +109,19 @@ public final class DebugTargetResolver
     public static Resolution resolve(String applicationId)
     {
         // 1) Launch-based view first for a concrete id: real ATTR_APPLICATION_ID,
-        //    attach:<name>, launch:<name>. This keeps every previously-working
-        //    launch/thin-client/attach path byte-for-byte identical.
+        //    attach:<name>, launch:<name> — sessions owned by a registered Eclipse
+        //    launch resolve here and wait event-driven via the suspend registry.
         if (applicationId != null && !applicationId.isEmpty())
         {
             IDebugTarget launchTarget = DebugSessionRegistry.findActiveTarget(applicationId);
             if (launchTarget != null && !launchTarget.isTerminated())
             {
-                // Even when matched via the launch manager, expose the server-target
-                // view of the SAME object when one exists, so the canonical id stays
-                // consistent across tools.
+                // A launch-owned target is exposed through the server-target view
+                // only when it genuinely IS a server target (a debug-mode standalone
+                // server — live SERVER-typed thread — whose suspends only the poll
+                // bridge observes). A plain launch-owned client session yields null
+                // here (listServerTargets excludes it), so it never takes the poll
+                // path and never reports serverTarget:true.
                 DebugServerTargetSupport.ServerTarget sameObject = serverTargetForTarget(launchTarget);
                 return new Resolution(launchTarget,
                     canonicalIdFor(launchTarget, sameObject, applicationId), sameObject, false);
@@ -221,7 +224,10 @@ public final class DebugTargetResolver
     /**
      * Returns the {@link DebugServerTargetSupport.ServerTarget} whose underlying 1C
      * target is the SAME object as {@code target} (identity match), or {@code null}
-     * when {@code target} is an ordinary Eclipse launch target.
+     * when {@code target} is not a server target — an ordinary Eclipse launch
+     * target, including a launch-owned thin-client session that the target manager
+     * also tracks but {@link DebugServerTargetSupport#listServerTargets()} excludes
+     * (such sessions wait event-driven, not via the poll bridge).
      *
      * @param target the resolved debug target
      * @return the matching server-target view, or {@code null}

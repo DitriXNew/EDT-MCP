@@ -18,7 +18,6 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
-import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.DebugTargetResolver;
 import com.ditrix.edt.mcp.server.utils.VariableSerializer;
@@ -116,22 +115,14 @@ public class GetVariablesTool implements IMcpTool
             }
             else
             {
-                // Fallback: if exactly one active debug launch is suspended, use its top frame.
-                String appId = DebugSessionRegistry.findLoneActiveApplicationId();
-                DebugSessionRegistry.SuspendSnapshot snap = appId != null ? registry.getSnapshot(appId) : null;
-                if (snap == null)
-                {
-                    // Also try the lone debug-server target (debug_yaxunit_tests / EDT-UI
-                    // server-side suspend), whose snapshot wait_for_break injected — under
-                    // the CANONICAL key (owning-launch id when one exists, minted
-                    // ServerApplication.<app> id else), not the raw minted id.
-                    DebugServerTargetSupport.ServerTarget lone =
-                        DebugServerTargetSupport.findLoneServerTarget();
-                    if (lone != null)
-                    {
-                        snap = registry.getSnapshot(DebugTargetResolver.canonicalIdFor(lone.target, lone));
-                    }
-                }
+                // Fallback: auto-resolve the single active debug session through the
+                // SAME blank-id policy every applicationId-based tool uses
+                // (DebugTargetResolver: the lone Eclipse launch, else the lone
+                // server target) and read its snapshot under the canonical key —
+                // replaces a hand-rolled condensed copy of that policy.
+                DebugTargetResolver.Resolution res = DebugTargetResolver.resolve(null);
+                DebugSessionRegistry.SuspendSnapshot snap =
+                    res != null ? registry.getSnapshot(res.canonicalId) : null;
                 if (snap == null)
                 {
                     return ToolResult.error("Provide frameRef or threadId — no single suspended debug " //$NON-NLS-1$
