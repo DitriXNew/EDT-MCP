@@ -60,6 +60,10 @@ public class GetFormScreenshotToolTest
         assertNotNull(schema);
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"formPath\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"refresh\"")); //$NON-NLS-1$
+        // The refresh contract: a forced re-render either happens or the tool errors; it must
+        // never silently return a stale image, and the schema documents that.
+        assertTrue(schema.contains("re-render")); //$NON-NLS-1$
     }
 
     @Test

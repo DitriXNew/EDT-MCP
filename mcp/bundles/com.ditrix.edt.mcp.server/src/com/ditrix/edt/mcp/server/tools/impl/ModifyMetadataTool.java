@@ -24,8 +24,10 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -34,13 +36,15 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
-import com.ditrix.edt.mcp.server.utils.FormStructureReader;
+import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -71,7 +75,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "attribute / command) addressed by a 1C full-name FQN, as " //$NON-NLS-1$
             + "properties=[{name, value, language?}]. Each property is validated (it must be " //$NON-NLS-1$
             + "assignable, and an enum value must be one of the allowed literals) with an actionable " //$NON-NLS-1$
-            + "error. Discover assignable properties + allowed values with " //$NON-NLS-1$
+            + "error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for " //$NON-NLS-1$
+            + "the form's command bar, or the form name for the form root) and/or 'position' " //$NON-NLS-1$
+            + "('first'/'last'/'before:<name>'/'after:<name>'/index) " //$NON-NLS-1$
+            + "properties. REBIND a form event handler's procedure with a 'procedure' property on a " //$NON-NLS-1$
+            + "Handler FQN, or re-point a Button at a different form command with a 'command' property. " //$NON-NLS-1$
+            + "Set a StyleItem's value with a 'value' property: a Color " //$NON-NLS-1$
+            + "{value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font " //$NON-NLS-1$
+            + "{value:{font:{faceName:'Arial',height:12,bold:true}}}. " //$NON-NLS-1$
+            + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
     }
@@ -90,6 +102,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 "Properties to set, as [{name, value, language?}] (required, at least one). 'name' is " //$NON-NLS-1$
                 + "the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new " //$NON-NLS-1$
                 + "value; 'language' is the code for a synonym (default: config default).", true) //$NON-NLS-1$
+            .booleanProperty("normalizeYo", //$NON-NLS-1$
+                "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in synonym / comment / title and any " //$NON-NLS-1$
+                + "other localized-string or free-text value being set (default true). Matches the 1C " //$NON-NLS-1$
+                + "standard mdo-ru-name-unallowed-letter. Set false to keep 'ё' exactly as supplied.") //$NON-NLS-1$
             .build();
     }
 
@@ -102,6 +118,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", "Normalized FQN of the modified node") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty("applied", "Names of the properties that were set") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("persisted", "Whether the change was exported to disk") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("normalized", //$NON-NLS-1$
+                "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
+            .stringProperty("destination", //$NON-NLS-1$
+                "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. " //$NON-NLS-1$
+                + "\"group 'Main' at index 1\"") //$NON-NLS-1$
             .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -116,12 +137,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
+        boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
         if (properties.isEmpty())
         {
             return ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
                 + "set, e.g. [{name: 'comment', value: 'Goods'}].").toJson(); //$NON-NLS-1$
         }
+
+        // 'ё'->'е' normalization is applied at the parse step to every localized-string / free-text
+        // value being set (synonym / comment / title / ...), matching mdo-ru-name-unallowed-letter.
+        // Rename is out of scope here, so there is no Name to normalize.
+        MdNameNormalizer.Report normReport = new MdNameNormalizer.Report(normalizeYo);
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -138,7 +165,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
-            return modifyFormMember(ctx, normFqn, formRef, properties);
+            return modifyFormMember(ctx, normFqn, formRef, properties, normReport);
         }
 
         MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
@@ -190,7 +217,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<PreparedChange> changes = new ArrayList<>();
         for (JsonObject prop : properties)
         {
-            String pErr = prepare(config, version, target, prop, changes);
+            String pErr = prepare(config, version, target, prop, changes, normReport);
             if (pErr != null)
             {
                 return pErr;
@@ -253,11 +280,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             applied.add(change.featureName());
         }
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
             .put("fqn", normFqn) //$NON-NLS-1$
             .put("applied", applied) //$NON-NLS-1$
-            .put("persisted", persisted) //$NON-NLS-1$
+            .put("persisted", persisted); //$NON-NLS-1$
+        normReport.addTo(result);
+        return result
             .put("message", "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .toJson();
     }
@@ -277,13 +306,52 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * concern. The member is re-navigated by name inside the transaction.</p>
      */
     private String modifyFormMember(ProjectContext ctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
+        MdNameNormalizer.Report normReport)
     {
-        // Event handlers are added/removed (create_metadata / delete_metadata), not property-modified.
+        // A handler FQN ('...Handler.Event' at form / item level) is not a property-bag member: the only
+        // supported change is REBINDING its BSL procedure ('procedure' / 'handler' property). Binding a
+        // NEW event stays in create_metadata, removing it in delete_metadata; any other property on a
+        // handler FQN is refused with that pointer.
         if (FormElementWriter.isHandlerToken(ref.kindToken) || ref.isItemLevel())
         {
-            return ToolResult.error("Modifying a form event handler is not supported. Use " //$NON-NLS-1$
-                + "create_metadata to add a handler or delete_metadata to remove it.").toJson(); //$NON-NLS-1$
+            String procName = handlerProcedureValue(properties);
+            if (procName != null)
+            {
+                // A handler rebind is structural and must not be mixed with other property changes in
+                // one call - the same policy the move ('parent'/'position') and button-command
+                // ('command') branches enforce. Reject BEFORE any mutation.
+                String mixed = firstNonHandlerRebindProperty(properties);
+                if (mixed != null)
+                {
+                    return ToolResult.error("Rebinding a handler's procedure ('procedure') cannot be " //$NON-NLS-1$
+                        + "combined with other property changes ('" + mixed + "') in one call. Rebind " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "the procedure first, then make the other changes in a separate call.").toJson(); //$NON-NLS-1$
+                }
+                return rebindFormHandler(ctx, normFqn, ref, procName);
+            }
+            return ToolResult.error("On a form event-handler FQN, modify_metadata can only REBIND the " //$NON-NLS-1$
+                + "bound procedure - pass a 'procedure' property (e.g. {name:'procedure', " //$NON-NLS-1$
+                + "value:'NewProc'}). To bind a new event use create_metadata, to remove it " //$NON-NLS-1$
+                + "delete_metadata.").toJson(); //$NON-NLS-1$
+        }
+
+        // A button's command targets a FormCommand (a form-model object, not an mdclass object), so it
+        // is not introspector-assignable; a 'command' property on a Button FQN RE-POINTS it at an
+        // existing form command.
+        if (FormElementWriter.kindForToken(ref.kindToken) == FormElementWriter.Kind.BUTTON
+            && hasCommandProperty(properties))
+        {
+            return rebindButtonCommand(ctx, normFqn, ref, properties);
+        }
+
+        // A MOVE / REORDER is expressed through the 'parent' and/or 'position' properties on a form
+        // ITEM (a field / group / decoration / button / table - anything in the items tree). It is a
+        // structural re-parent/reorder, not an eSet property change, so it is routed to its own branch
+        // (and must not be mixed with ordinary property changes in the same call).
+        if (hasMoveProperty(properties))
+        {
+            return moveFormItem(ctx, normFqn, ref, properties);
         }
 
         Configuration config = ctx.config;
@@ -291,30 +359,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
         final Version version = v8Project != null ? v8Project.getVersion() : null;
 
-        MdObject mdForm = FormStructureReader.resolveMdForm(config, ref.formPath);
-        if (mdForm == null)
-        {
-            return ToolResult.error("Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
-                + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
-                + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table).").toJson(); //$NON-NLS-1$
-        }
-        if (!(mdForm instanceof IBmObject))
-        {
-            return ToolResult.error("Form is not a BM object").toJson(); //$NON-NLS-1$
-        }
-
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
-        {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
-        }
-        IBmModel bmModel = bmModelManager.getModel(ctx.project);
-        if (bmModel == null)
-        {
-            return ToolResult.error("BM model not available").toJson(); //$NON-NLS-1$
-        }
-
-        final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
         final List<String> applied = new ArrayList<>();
 
         // Validate + apply inside ONE BM write transaction: resolve the member, validate every
@@ -322,73 +366,45 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // so the tx rolls back with no partial mutation), then apply. The member is re-navigated by
         // name inside the tx (only the form top object is re-fetchable by bmId). Building the change
         // values and setting them in the SAME tx avoids any cross-transaction detached-object concern.
-        final String contentFormFqn;
+        final boolean persisted;
         try
         {
-            contentFormFqn = BmTransactions.<String>write(bmModel, "ModifyFormMember", (tx, pm) -> //$NON-NLS-1$
-            {
-                EObject txMdForm = (EObject)tx.getObjectById(mdFormBmId);
-                if (txMdForm == null)
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
+                config, ref.formPath,
+                "Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
+                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table)."); //$NON-NLS-1$
+            persisted = FormElementWriter.writeEditableForm(fctx, "ModifyFormMember", //$NON-NLS-1$
+                (formModel, tx) ->
                 {
-                    throw new RuntimeException("Form object not found in transaction"); //$NON-NLS-1$
-                }
-                EObject formModel = FormElementWriter.getEditableForm(txMdForm);
-                if (formModel == null)
-                {
-                    throw new FormValidationException(ToolResult.error("the form has no editable " //$NON-NLS-1$
-                        + "content model (it may be empty, an ordinary/legacy form, or not yet " //$NON-NLS-1$
-                        + "built)").toJson());
-                }
-                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
-                if (member == null)
-                {
-                    throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
-                        + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                        + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
-                }
-                List<PreparedChange> changes = new ArrayList<>();
-                String moveParent = null;
-                boolean moveRequested = false;
-                for (JsonObject prop : properties)
-                {
-                    String guard = guardFormProperty(prop);
-                    if (guard != null)
+                    EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                    if (member == null)
                     {
-                        throw new FormValidationException(guard);
+                        throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
+                            + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                            + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
                     }
-                    // 'parent' on a form ITEM is a MOVE (reparent), not an eSet: the containment
-                    // change is performed by FormElementWriter.moveItem after the scalar changes.
-                    if ("parent".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+                    List<PreparedChange> changes = new ArrayList<>();
+                    for (JsonObject prop : properties)
                     {
-                        moveRequested = true;
-                        moveParent = asString(prop.get("value")); //$NON-NLS-1$
-                        continue;
+                        String guard = guardFormProperty(prop);
+                        if (guard != null)
+                        {
+                            throw new FormValidationException(guard);
+                        }
+                        String pErr = prepare(config, version, member,
+                            normalizeFormProperty(member, prop), changes, normReport);
+                        if (pErr != null)
+                        {
+                            throw new FormValidationException(pErr);
+                        }
                     }
-                    String pErr =
-                        prepare(config, version, member, normalizeFormProperty(member, prop), changes);
-                    if (pErr != null)
+                    for (PreparedChange change : changes)
                     {
-                        throw new FormValidationException(pErr);
+                        change.applyTo(member, tx);
+                        applied.add(change.featureName());
                     }
-                }
-                for (PreparedChange change : changes)
-                {
-                    change.applyTo(member, tx);
-                    applied.add(change.featureName());
-                }
-                if (moveRequested)
-                {
-                    // A failed move throws -> the whole transaction (including any scalar changes
-                    // above) rolls back, preserving the no-partial-mutation contract.
-                    String moveErr = FormElementWriter.moveItem(formModel, member, moveParent);
-                    if (moveErr != null)
-                    {
-                        throw new FormValidationException(ToolResult.error(moveErr).toJson());
-                    }
-                    applied.add("parent"); //$NON-NLS-1$
-                }
-                return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
-            });
+                });
         }
         catch (Exception e)
         {
@@ -403,15 +419,365 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to modify form member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        boolean persisted = contentFormFqn != null && !contentFormFqn.isEmpty()
-            && BmTransactions.forceExportToDisk(ctx.project, contentFormFqn);
+        ToolResult result = ToolResult.success()
+            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("applied", applied) //$NON-NLS-1$
+            .put("persisted", persisted); //$NON-NLS-1$
+        normReport.addTo(result);
+        return result
+            .put("message", "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .toJson();
+    }
 
+    /**
+     * The move property names (the structural re-parent / reorder of a form item): {@code parent}
+     * (the destination container - a group, the {@code AutoCommandBar} token, a table - or the form
+     * name / blank for the form root) and {@code position}
+     * (the destination order: {@code first} / {@code last} / {@code before:<name>} / {@code after:<name>}
+     * / a 0-based integer index). They are bilingual: ru {@code roditel} / ru {@code poziciya}.
+     */
+    private static final String PROP_PARENT = "parent"; //$NON-NLS-1$
+    private static final String PROP_POSITION = "position"; //$NON-NLS-1$
+    // ru "родитель" (roditel) / "позиция" (poziciya) - pure-ASCII source (matching the rest of the project).
+    private static final String RU_PROP_PARENT =
+        MetadataLanguageUtils.cp(0x0440, 0x043e, 0x0434, 0x0438, 0x0442, 0x0435, 0x043b, 0x044c);
+    private static final String RU_PROP_POSITION =
+        MetadataLanguageUtils.cp(0x043f, 0x043e, 0x0437, 0x0438, 0x0446, 0x0438, 0x044f);
+
+    /** Whether a property NAME is the {@code parent} move property (English or Russian). */
+    private static boolean isParentProp(String name)
+    {
+        return PROP_PARENT.equalsIgnoreCase(name) || RU_PROP_PARENT.equalsIgnoreCase(name);
+    }
+
+    /** Whether a property NAME is the {@code position} move property (English or Russian). */
+    private static boolean isPositionProp(String name)
+    {
+        return PROP_POSITION.equalsIgnoreCase(name) || RU_PROP_POSITION.equalsIgnoreCase(name);
+    }
+
+    /** Whether any property in the list is a move property ({@code parent} / {@code position}). */
+    private static boolean hasMoveProperty(List<JsonObject> properties)
+    {
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (isParentProp(name) || isPositionProp(name))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The rebind property names. {@code procedure} (alias {@code handler}) rebinds a handler's BSL
+     * procedure; {@code command} (alias {@code commandName}) re-points a button at a form command. */
+    private static final String PROP_PROCEDURE = "procedure"; //$NON-NLS-1$
+    private static final String PROP_HANDLER = "handler"; //$NON-NLS-1$
+    private static final String PROP_COMMAND = "command"; //$NON-NLS-1$
+    private static final String PROP_COMMAND_NAME = "commandName"; //$NON-NLS-1$
+
+    /**
+     * The new BSL procedure name from a {@code procedure} (or {@code handler} alias) property on a
+     * handler-rebind call, or {@code null} when no such property is present. The same key
+     * {@code create_metadata} accepts when binding a handler.
+     */
+    private static String handlerProcedureValue(List<JsonObject> properties)
+    {
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (PROP_PROCEDURE.equalsIgnoreCase(name) || PROP_HANDLER.equalsIgnoreCase(name))
+            {
+                return asString(prop.get("value")); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The name of the first property that is NOT the handler-rebind property ({@code procedure} /
+     * {@code handler} alias), or {@code null} when the list carries only rebind properties. Used to
+     * REJECT a handler-rebind call that mixes in other property changes (which the rebind path would
+     * otherwise silently drop). Package-visible for tests.
+     */
+    static String firstNonHandlerRebindProperty(List<JsonObject> properties)
+    {
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (!PROP_PROCEDURE.equalsIgnoreCase(name) && !PROP_HANDLER.equalsIgnoreCase(name))
+            {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    /** Whether any property in the list re-points a button at a form command ({@code command}). */
+    private static boolean hasCommandProperty(List<JsonObject> properties)
+    {
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (PROP_COMMAND.equalsIgnoreCase(name) || PROP_COMMAND_NAME.equalsIgnoreCase(name))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Moves / reorders a form ITEM addressed by {@code ref} (a field / group / decoration / button /
+     * table), expressed as the {@code parent} and/or {@code position} move properties. Resolves the
+     * MD-form, opens ONE BM write transaction on the re-fetched content form, re-parents / reorders the
+     * item via {@link FormElementWriter#moveItem} (which rejects an ambiguous / missing item, an
+     * unknown parent - the error advertises the {@code AutoCommandBar} token - a placement the
+     * designer forbids and a containment cycle, rolling the tx back), then
+     * force-exports the CONTENT form to its {@code Form.form} on disk - the same persistence path the
+     * property-modify branch uses. Position semantics match the dedicated move primitive exactly (the
+     * integer index is the desired FINAL 0-based position).
+     */
+    private String moveFormItem(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+    {
+        // A move addresses a form ITEM only - never an attribute / command (which are not in the items
+        // tree and have no position / parent).
+        FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
+        if (kind == FormElementWriter.Kind.ATTRIBUTE || kind == FormElementWriter.Kind.COMMAND)
+        {
+            return ToolResult.error("'parent' / 'position' move a form ITEM (field / group / " //$NON-NLS-1$
+                + "decoration / button / table); a form " + ref.kindToken + " is not positioned. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Address the item by its FQN, e.g. 'Type.Object.Form.FormName.Field.Price'.").toJson(); //$NON-NLS-1$
+        }
+
+        // A move is structural - it must not be mixed with ordinary property changes in one call.
+        String targetParent = null;
+        boolean hasParent = false;
+        String position = null;
+        boolean hasPosition = false;
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (isParentProp(name))
+            {
+                targetParent = asString(prop.get("value")); //$NON-NLS-1$
+                hasParent = true;
+            }
+            else if (isPositionProp(name))
+            {
+                position = asString(prop.get("value")); //$NON-NLS-1$
+                hasPosition = true;
+            }
+            else
+            {
+                return ToolResult.error("A move ('parent' / 'position') cannot be combined with other " //$NON-NLS-1$
+                    + "property changes ('" + name + "') in one call. Move the item first, then modify " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "its properties in a separate call.").toJson(); //$NON-NLS-1$
+            }
+        }
+        if (!hasParent && !hasPosition)
+        {
+            return ToolResult.error("Nothing to move: provide 'parent' (to re-parent) and/or " //$NON-NLS-1$
+                + "'position' (to reorder).").toJson(); //$NON-NLS-1$
+        }
+        // A re-parent with no explicit position appends to the destination (position stays null); a pure
+        // reorder keeps the current parent (targetParent stays null).
+        final String targetParentFinal = hasParent ? (targetParent == null ? "" : targetParent) : null; //$NON-NLS-1$
+        final String positionFinal = position;
+
+        final String itemName = ref.name;
+        final String[] destination = new String[1];
+        final boolean persisted;
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
+                ctx.config, ref.formPath,
+                "Form not found for '" + normFqn + "'. Address a form item as " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
+            final String mdFormName = fctx.mdForm.getName();
+            persisted = FormElementWriter.writeEditableForm(fctx, "MoveFormItem", //$NON-NLS-1$
+                (formModel, tx) -> destination[0] = FormElementWriter.moveItem(formModel, itemName,
+                    targetParentFinal, positionFinal, mdFormName));
+        }
+        catch (Exception e)
+        {
+            String validationJson = FormValidationException.jsonOf(e);
+            if (validationJson != null)
+            {
+                return validationJson;
+            }
+            Activator.logError("Error moving form item", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to move form item: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        List<String> applied = new ArrayList<>();
+        if (hasParent)
+        {
+            applied.add(PROP_PARENT);
+        }
+        if (hasPosition)
+        {
+            applied.add(PROP_POSITION);
+        }
         return ToolResult.success()
             .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
             .put("fqn", normFqn) //$NON-NLS-1$
             .put("applied", applied) //$NON-NLS-1$
             .put("persisted", persisted) //$NON-NLS-1$
-            .put("message", "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .put("destination", destination[0]) //$NON-NLS-1$
+            .put("message", "Moved form item '" + itemName + "' to " + destination[0]) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .toJson();
+    }
+
+    /**
+     * REBINDS an existing event handler (addressed by a handler FQN, {@code ...Handler.Event} at form
+     * or item level) to a different BSL procedure {@code procName}. Resolves the MD-form, opens ONE BM
+     * write transaction on the re-fetched content form, resolves the handler's CONTAINER via
+     * {@link FormElementWriter#resolveHandlerContainer} (the form root, the named item, or the form
+     * COMMAND for a {@code ...Command.C.Handler.Action} FQN - so a command's Action procedure is
+     * rebindable too), re-points the existing handler via {@link
+     * FormElementWriter#rebindHandler} (which fails clearly when no handler for the event exists, so the
+     * tx rolls back), then force-exports the CONTENT form to its {@code Form.form} on disk - the same
+     * persistence path the property-modify branch uses. Does NOT bind a NEW event (that is
+     * create_metadata's job); a single {@code procedure} property is the whole change.
+     */
+    private String rebindFormHandler(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, String procName)
+    {
+        final String eventName = ref.name;
+        final boolean commandOwner = ref.isItemLevel()
+            && FormElementWriter.kindForToken(ref.itemKindToken) == FormElementWriter.Kind.COMMAND;
+        final boolean persisted;
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
+                ctx.config, ref.formPath,
+                "Form not found for '" + normFqn + "'. Address a handler as " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'Type.Object.Form.FormName.Handler.Event' or " //$NON-NLS-1$
+                    + "'Type.Object.Form.FormName.<ItemKind>.<ItemName>.Handler.Event'."); //$NON-NLS-1$
+            persisted = FormElementWriter.writeEditableForm(fctx, "RebindFormHandler", //$NON-NLS-1$
+                (formModel, tx) ->
+                {
+                    // Form-level handlers live on the form root; item-level handlers on the named
+                    // item; a COMMAND ref (...Command.C.Handler.Action) on the form command - the
+                    // same resolution create_metadata / delete_metadata use.
+                    EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
+                    if (container == null)
+                    {
+                        throw new FormValidationException(ToolResult.error((commandOwner
+                            ? "Form command not found: " : "Form item not found: ") + ref.itemName //$NON-NLS-1$ //$NON-NLS-2$
+                            + ". Use get_metadata_details to inspect the form items.").toJson()); //$NON-NLS-1$
+                    }
+                    String err = FormElementWriter.rebindHandler(container, eventName, procName);
+                    if (err != null)
+                    {
+                        throw new FormValidationException(ToolResult.error(err).toJson());
+                    }
+                });
+        }
+        catch (Exception e)
+        {
+            String validationJson = FormValidationException.jsonOf(e);
+            if (validationJson != null)
+            {
+                return validationJson;
+            }
+            Activator.logError("Error rebinding form handler", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to rebind form handler: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        return ToolResult.success()
+            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("applied", java.util.Collections.singletonList(PROP_PROCEDURE)) //$NON-NLS-1$
+            .put("persisted", persisted) //$NON-NLS-1$
+            .put("message", "Rebound the handler for event '" + eventName + "' to procedure '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + procName + "'") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * RE-POINTS an existing button (a Button form item) at a different (existing) form command. A
+     * button's {@code commandName} references a FormCommand (a form-model object, not an mdclass
+     * object), so it is not introspector-assignable and is rebound here. Resolves the MD-form, opens ONE
+     * BM write transaction on the re-fetched content form, resolves the button and re-points it via
+     * {@link FormElementWriter#rebindButtonCommand} (which validates the command exists, rolling the tx
+     * back otherwise), then force-exports the CONTENT form to its {@code Form.form} on disk. A
+     * {@code command} change is structural-by-reference and must not be mixed with other property
+     * changes in one call.
+     */
+    private String rebindButtonCommand(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+    {
+        String commandName = null;
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (PROP_COMMAND.equalsIgnoreCase(name) || PROP_COMMAND_NAME.equalsIgnoreCase(name))
+            {
+                commandName = asString(prop.get("value")); //$NON-NLS-1$
+            }
+            else
+            {
+                return ToolResult.error("Re-pointing a button's command ('command') cannot be combined " //$NON-NLS-1$
+                    + "with other property changes ('" + name + "') in one call. Rebind the command " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "first, then modify the button's properties in a separate call.").toJson(); //$NON-NLS-1$
+            }
+        }
+        if (commandName == null || commandName.isEmpty())
+        {
+            return ToolResult.error("Provide the form command to point the button at in the 'command' " //$NON-NLS-1$
+                + "property (e.g. {name:'command', value:'Refresh'}).").toJson(); //$NON-NLS-1$
+        }
+
+        final String buttonName = ref.name;
+        final String commandNameFinal = commandName;
+        final boolean persisted;
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
+                ctx.config, ref.formPath,
+                "Form not found for '" + normFqn + "'. Address a button as " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'Type.Object.Form.FormName.Button.Name' or 'CommonForm.FormName.Button.Name'."); //$NON-NLS-1$
+            persisted = FormElementWriter.writeEditableForm(fctx, "RebindButtonCommand", //$NON-NLS-1$
+                (formModel, tx) ->
+                {
+                    EObject button = FormElementWriter.findFormItem(formModel, buttonName);
+                    if (button == null)
+                    {
+                        throw new FormValidationException(ToolResult.error("Form button not found: " //$NON-NLS-1$
+                            + buttonName + ". Use get_metadata_details to inspect the form items.") //$NON-NLS-1$
+                            .toJson());
+                    }
+                    String err =
+                        FormElementWriter.rebindButtonCommand(formModel, button, commandNameFinal);
+                    if (err != null)
+                    {
+                        throw new FormValidationException(ToolResult.error(err).toJson());
+                    }
+                });
+        }
+        catch (Exception e)
+        {
+            String validationJson = FormValidationException.jsonOf(e);
+            if (validationJson != null)
+            {
+                return validationJson;
+            }
+            Activator.logError("Error rebinding button command", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to rebind button command: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        return ToolResult.success()
+            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("applied", java.util.Collections.singletonList(PROP_COMMAND)) //$NON-NLS-1$
+            .put("persisted", persisted) //$NON-NLS-1$
+            .put("message", "Re-pointed button '" + buttonName + "' at command '" //$NON-NLS-1$ //$NON-NLS-2$
+                + commandNameFinal + "'") //$NON-NLS-1$
             .toJson();
     }
 
@@ -451,45 +817,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Thrown out of the form write lambda when a property fails validation (or the form/member cannot
-     * be resolved): carries a ready {@code ToolResult.error(...).toJson()} so the caller surfaces the
-     * actionable message instead of a generic failure. Throwing BEFORE any {@code eSet} rolls the tx
-     * back with no partial mutation.
-     */
-    private static final class FormValidationException extends RuntimeException
-    {
-        private static final long serialVersionUID = 1L;
-
-        final String json;
-
-        FormValidationException(String json)
-        {
-            super("form member validation failed"); //$NON-NLS-1$
-            this.json = json;
-        }
-
-        /** Finds a {@link FormValidationException} in the cause chain and returns its JSON, or null. */
-        static String jsonOf(Throwable t)
-        {
-            for (Throwable c = t; c != null; c = c.getCause())
-            {
-                if (c instanceof FormValidationException)
-                {
-                    return ((FormValidationException)c).json;
-                }
-            }
-            return null;
-        }
-    }
-
-    /**
      * Validates one property against the introspected schema and, on success, appends a
      * {@link PreparedChange}. Returns a JSON error string on failure, or {@code null} on success.
      * Accepts any {@link EObject} so it serves both mdclass nodes and form members (the introspector
      * and the prepared change are EClass-driven, not mdclass-specific).
      */
     private String prepare(Configuration config, Version version, EObject target, JsonObject prop,
-        List<PreparedChange> out)
+        List<PreparedChange> out, MdNameNormalizer.Report normReport)
     {
         String name = asString(prop.get("name")); //$NON-NLS-1$
         if (name == null || name.isEmpty())
@@ -504,7 +838,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         String value = asString(prop.get("value")); //$NON-NLS-1$
 
-        PropertyInfo info = MetadataPropertyIntrospector.find(target, name);
+        // findFeature classifies ONLY the matched feature and skips the current-value rendering
+        // (eGet + proxy + type rendering) that the full introspect() performs for EVERY assignable
+        // feature - prepare() never reads currentValue, and this runs on the UI thread per property.
+        PropertyInfo info = MetadataPropertyIntrospector.findFeature(target, name);
         if (info == null)
         {
             return ToolResult.error("Property '" + name + "' is not assignable on " //$NON-NLS-1$ //$NON-NLS-2$
@@ -528,7 +865,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     return ToolResult.error("Cannot determine a language code for '" + name //$NON-NLS-1$
                         + "'. Specify a 'language' code (e.g. 'en' or 'ru').").toJson(); //$NON-NLS-1$
                 }
-                out.add(PreparedChange.localized(info.feature, code, value));
+                out.add(PreparedChange.localized(info.feature, code, normReport.apply(name, value)));
                 return null;
             }
             case ENUM:
@@ -623,13 +960,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 out.add(PreparedChange.manyReference(info.feature, ids));
                 return null;
             }
+            case STYLE_VALUE:
+            {
+                StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get("value")); //$NON-NLS-1$
+                if (sv.error != null)
+                {
+                    return ToolResult.error("Invalid StyleItem '" + name + "': " + sv.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                // The style item's `type` (Color / Font) is kept consistent with the value it holds, so
+                // the change sets both the `value` and the sibling `type` feature in one shot.
+                EStructuralFeature typeFeature = target.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
+                out.add(PreparedChange.styleValue(info.feature, typeFeature, sv.value, sv.type));
+                return null;
+            }
             case STRING:
             default:
                 if (value == null || value.isEmpty())
                 {
                     return requireValueError(name);
                 }
-                out.add(PreparedChange.scalar(info.feature, value));
+                out.add(PreparedChange.scalar(info.feature, normReport.apply(name, value)));
                 return null;
         }
     }
@@ -684,7 +1034,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
     private static final class PreparedChange
     {
-        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE }
+        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, STYLE_VALUE }
 
         private final EStructuralFeature feature;
         private final Kind kind;
@@ -693,9 +1043,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         private final String localizedValue;
         /** For a REFERENCE: the target's bmId. For a MANY_REFERENCE: the targets' bmIds in order. */
         private final List<Long> referenceBmIds;
+        /** For a STYLE_VALUE: the sibling `type` feature (Color / Font), set alongside the value. */
+        private final EStructuralFeature styleTypeFeature;
+        /** For a STYLE_VALUE: the StyleElementType to set on {@link #styleTypeFeature}. */
+        private final StyleElementType styleType;
 
         private PreparedChange(EStructuralFeature feature, Kind kind, Object scalarValue,
-            String language, String localizedValue, List<Long> referenceBmIds)
+            String language, String localizedValue, List<Long> referenceBmIds,
+            EStructuralFeature styleTypeFeature, StyleElementType styleType)
         {
             this.feature = feature;
             this.kind = kind;
@@ -703,27 +1058,43 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             this.localizedLanguage = language;
             this.localizedValue = localizedValue;
             this.referenceBmIds = referenceBmIds;
+            this.styleTypeFeature = styleTypeFeature;
+            this.styleType = styleType;
         }
 
         static PreparedChange scalar(EStructuralFeature feature, Object value)
         {
-            return new PreparedChange(feature, Kind.SCALAR, value, null, null, null);
+            return new PreparedChange(feature, Kind.SCALAR, value, null, null, null, null, null);
         }
 
         static PreparedChange localized(EStructuralFeature feature, String language, String value)
         {
-            return new PreparedChange(feature, Kind.LOCALIZED, null, language, value, null);
+            return new PreparedChange(feature, Kind.LOCALIZED, null, language, value, null, null, null);
         }
 
         static PreparedChange reference(EStructuralFeature feature, long targetBmId)
         {
             return new PreparedChange(feature, Kind.REFERENCE, null, null, null,
-                java.util.Collections.singletonList(targetBmId));
+                java.util.Collections.singletonList(targetBmId), null, null);
         }
 
         static PreparedChange manyReference(EStructuralFeature feature, List<Long> targetBmIds)
         {
-            return new PreparedChange(feature, Kind.MANY_REFERENCE, null, null, null, targetBmIds);
+            return new PreparedChange(feature, Kind.MANY_REFERENCE, null, null, null, targetBmIds,
+                null, null);
+        }
+
+        /**
+         * A StyleItem value change: the freshly-built mcore {@link Value} ({@code styleValue}) is a
+         * detached containment object, so it is set directly on the re-fetched style item inside the
+         * tx (like the TYPE_DESCRIPTION scalar). The sibling {@code typeFeature} (Color / Font) is set
+         * to {@code type} in the same change so the style item's type stays consistent with its value.
+         */
+        static PreparedChange styleValue(EStructuralFeature valueFeature, EStructuralFeature typeFeature,
+            Value styleValue, StyleElementType type)
+        {
+            return new PreparedChange(valueFeature, Kind.STYLE_VALUE, styleValue, null, null, null,
+                typeFeature, type);
         }
 
         String featureName()
@@ -763,6 +1134,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         list.add(requireInTx(tx, id));
                     }
+                    return;
+                }
+                case STYLE_VALUE:
+                {
+                    // Keep the style item's `type` consistent with the value it now holds (Color / Font),
+                    // then set the freshly-built (detached) mcore Value as its containment `value`.
+                    if (styleTypeFeature != null && styleType != null)
+                    {
+                        target.eSet(styleTypeFeature, styleType);
+                    }
+                    target.eSet(feature, scalarValue);
                     return;
                 }
                 case SCALAR:

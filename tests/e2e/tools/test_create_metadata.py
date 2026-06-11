@@ -38,6 +38,7 @@ from harness import (
     assert_error_quality,
     assert_contains,
     assert_not_contains,
+    assert_diff_contains,
     assert_no_diff,
     diff,
     poll_diff_contains,
@@ -402,6 +403,81 @@ def test_create_web_service_operation_and_parameter():
         "kind must be a Parameter EClass: %r" % (r3.structured,)
     poll_diff_contains("<name>%s</name>" % par,
                        ctx="the nested WS parameter must land in the service .mdo on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Happy — FORM OBJECT creation (the BasicForm mdo + a renderable content Form)
+# A 4-part form FQN 'Type.Object.Form.FormName' creates the form itself; the content
+# form gets the render-critical autoCommandBar + form defaults and is attached under
+# its canonical FQN so its structure re-resolves.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_on_catalog():
+    # Create a NEW managed form on the fixture Catalog.Catalog and confirm it exists + renders.
+    form = "Z_McpNewForm"
+    fqn = "Catalog.Catalog.Form." + form
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r, "create form object %s" % fqn)
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    assert r.structured.get("kind") == "Form", "kind must be Form: %r" % (r.structured,)
+    assert r.structured.get("name") == form, "name must be the form name: %r" % (r.structured,)
+
+    # The new form must register in the owner Catalog.Catalog.mdo on disk (its <forms> entry) and
+    # the content Form.form must be written (the form name appears in both).
+    poll_diff_contains(form, ctx="the new form must land in the owner .mdo / Form.form on disk")
+
+    # MODEL read-back: get_metadata_details on the form FQN renders its structure (the "# Form
+    # Structure" heading proves the content form resolved - i.e. it was attached under the canonical
+    # FQN and the editable model is reachable; a store-less attach would fail to resolve here).
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+    assert_ok(d, "render the new form's structure")
+    assert_contains(d.text, "Form Structure", "the new form must render a structure (content model resolved)")
+    assert_contains(d.text, form, "the rendered structure must name the new form")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_then_add_member():
+    # End-to-end: create a form OBJECT, then add a member to it via the folded member path. This
+    # only works if the content form was created renderable + reachable.
+    form, attr = "Z_McpFormThenAttr", "NewAttr"
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Form." + form})
+    assert_ok(r1, "create form object")
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.%s.Attribute.%s" % (form, attr)})
+    assert_ok(r2, "add an attribute to the just-created form")
+    assert r2.structured.get("action") == "created", "must report created: %r" % (r2.structured,)
+    poll_diff_contains(attr, ctx="the member added to the new form must land in its Form.form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_russian_token():
+    # The form token is bilingual: "Форма" creates the form object just like "Form".
+    form = "Z_McpRuForm"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Форма." + form})
+    assert_ok(r, "create form object via the Russian form token")
+    assert r.structured.get("kind") == "Form", "kind must be Form: %r" % (r.structured,)
+    poll_diff_contains(form, ctx="the Russian-token form object must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_duplicate_is_error():
+    # Catalog.Catalog already has the fixture form "ItemForm" -> creating it again is rejected.
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm"})
+    e = assert_error(r, "duplicate form object")
+    assert_error_quality(e, names=["ItemForm"], suggests=["already exists"],
+                         ctx="creating an existing form must be a clean duplicate error")
+    assert_no_diff("a rejected duplicate form create must not change the project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_invalid_name_is_error():
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Form.1Bad-Form"})
+    e = assert_error(r, "invalid form name")
+    assert_error_quality(e, names=["1Bad-Form"], suggests=["must start with"],
+                         ctx="an invalid form name is a clean error")
+    assert_no_diff("a rejected form create must not change the project")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -801,6 +877,64 @@ def test_create_form_command_action_missing_command_is_error():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ё->е normalization — the Name leaf + synonym are normalized at the parse step
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_normalizes_yo_in_name_and_synonym_by_default():
+    # Default normalizeYo=true: 'ё' in the NAME leaf and the synonym is rewritten to 'е' at the parse
+    # step, BEFORE identifier validation, so the std474 mdo-ru-name-unallowed-letter issue never
+    # arises. The stored Name and synonym must be the 'е'-form on disk.
+    # "Серёжка" -> "Серёжка"/"Сережка" ; synonym "Тест отчёт" -> "Тест отчет".
+    name_yo = "Серёжка"      # contains ё
+    name_ye = "Сережка"           # expected stored form
+    syn_yo = "Тест отчёт"    # contains ё
+    syn_ye = "Тест отчет"         # expected stored form
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog." + name_yo,
+        "properties": [{"name": "synonym", "value": syn_yo, "language": "ru"}],
+    })
+    assert_ok(r, "create a Catalog whose Name + synonym carry ё (default normalizeYo)")
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    # The result echoes the normalized Name and reports which fields were rewritten.
+    assert r.structured.get("name") == name_ye, \
+        "the stored Name must be the е-form: %r" % (r.structured,)
+    assert r.structured.get("fqn") == "Catalog." + name_ye, \
+        "the FQN leaf must be normalized to the е-form: %r" % (r.structured,)
+    normalized = r.structured.get("normalized") or []
+    assert "name" in normalized and "synonym" in normalized, \
+        "the normalization report must list name + synonym: %r" % (r.structured,)
+    # On disk the new object's .mdo carries the е-form Name (and never the ё-form).
+    poll_diff_contains("<name>%s</name>" % name_ye,
+                       ctx="the normalized (е-form) Name must land in the new object's .mdo")
+    assert_not_contains(diff(), name_yo, "the ё-form Name must NOT appear on disk under default normalize")
+    # The synonym lands in the NEW object's own .mdo, which is an UNTRACKED file — plain
+    # diff() covers tracked modifications only, so use the untracked-aware helper.
+    assert_diff_contains(syn_ye, "the synonym must be stored in its normalized (е-form) on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_preserves_yo_when_normalize_disabled():
+    # normalizeYo=false: the 'ё' is kept exactly. 'ё' is still a valid 1C identifier character (the
+    # std474 issue is an advisory, not a hard reject), so the create succeeds and stores the ё-form.
+    name_yo = "Полёт"  # contains ё
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog." + name_yo,
+        "normalizeYo": False,
+    })
+    assert_ok(r, "create a Catalog whose Name carries ё (normalizeYo=false)")
+    assert r.structured.get("name") == name_yo, \
+        "with normalizeYo=false the ё-form Name must be preserved: %r" % (r.structured,)
+    # No field was rewritten, so the report must be absent/empty.
+    assert not (r.structured.get("normalized") or []), \
+        "no normalization must be reported when disabled: %r" % (r.structured,)
+    poll_diff_contains("<name>%s</name>" % name_yo,
+                       ctx="the ё-form Name must be stored verbatim when normalizeYo=false")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix — every rejected call: error quality + assert_no_diff()
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -878,6 +1012,71 @@ def test_create_every_top_type():
         d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [t + "." + name]})
         assert_ok(d, "read-back %s.%s" % (t, name))
         assert_contains(d.text, name, "MODEL read-back: %s.%s present" % (t, name))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Create-time-only, type-specific options (CommonModule presets, XDTO namespace)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_xdto_package_with_target_namespace():
+    # XDTOPackage needs a non-empty namespace to be valid; the targetNamespace arg sets it and
+    # the create echoes it back. The namespace also lands in the package's own .mdo on disk.
+    name = "E2EXdtoNs"
+    ns = "http://example.org/e2e/%s" % name
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "XDTOPackage." + name,
+        "targetNamespace": ns,
+    })
+    assert_ok(r, "create XDTOPackage.%s with targetNamespace" % name)
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    assert r.structured.get("targetNamespace") == ns, \
+        "the create must echo the written XDTO namespace: %r" % (r.structured,)
+    # Model read-back via get_metadata_details: get_metadata_objects has no 'xDTOPackages'
+    # type filter (its supported-type list is the common-object subset), so read the created
+    # package back by its FQN instead — same model-visibility proof, supported channel.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["XDTOPackage." + name]})
+    assert_ok(d, "get_metadata_details read-back (XDTOPackage.%s)" % name)
+    assert_contains(d.text, name, "the new XDTO package must appear in the model read-back")
+    poll_diff_contains(ns, ctx="the targetNamespace must land in the XDTOPackage .mdo on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_common_module_server_call_preset_sets_flags():
+    # commonModuleKind=ServerCall maps to the canonical server + server-call flag combo the
+    # common-module-type validator accepts. Verify the resolved flags via get_metadata_details.
+    name = "E2ECMServerCall"
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "CommonModule." + name,
+        "commonModuleKind": "ServerCall",
+    })
+    assert_ok(r, "create CommonModule.%s with commonModuleKind=ServerCall" % name)
+    assert r.structured.get("commonModuleKind") == "ServerCall", \
+        "the create must echo the resolved CommonModule kind: %r" % (r.structured,)
+
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["CommonModule." + name]})
+    assert_ok(d, "read-back CommonModule.%s flags" % name)
+    # A ServerCall module is server-side AND a server call, with no client flags set.
+    assert_contains(d.text, "ServerCall", "the read-back must show the server-call flag")
+    assert_contains(d.text, "Server", "the read-back must show the server-side flag")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_common_module_illegal_flag_combo_is_error():
+    # serverCall on a pure client kind has no validator-accepted combo and is rejected up front,
+    # before any model change (the validator would otherwise flag an arbitrary flag set).
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "CommonModule.E2EShouldNotExist",
+        "commonModuleKind": "ClientManaged",
+        "serverCall": True,
+    })
+    e = assert_error(r, "illegal CommonModule flag combo")
+    assert_error_quality(e, names=["serverCall"], suggests=["Server"],
+                         ctx="an illegal flag combo must be a clean, actionable error")
+    assert_no_diff("a rejected create must not change the project")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

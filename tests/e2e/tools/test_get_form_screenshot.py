@@ -317,11 +317,17 @@ def test_wrong_type_token_two_part_fqn_errors_actionably():
 
 @e2e_test(tool="get_form_screenshot", kind="read")
 def test_bad_forms_keyword_four_part_fqn_errors_actionably():
-    """A 4-part FQN whose 3rd segment is not the (case-insensitive) 'Forms'
-    keyword -> resolveFormFilePath returns null -> "Cannot resolve form path".
+    """A 4-part FQN whose 3rd segment is not an accepted forms keyword ->
+    resolveFormFilePath returns null -> "Cannot resolve form path".
     Exercises the 4-part branch's keyword guard specifically (distinct from the
-    part-count and type-token branches above)."""
-    bad_fqn = "Catalog.Catalog.Form.ItemForm"  # 'Form' (singular) != 'Forms'
+    part-count and type-token branches above).
+
+    NOTE: the original probe value 'Catalog.Catalog.Form.ItemForm' is no longer a
+    bad keyword — the resolver now shares ONE form-token predicate with the
+    create/modify FQN parsers (FormElementWriter.isFormToken: Form / Forms +
+    Russian equivalents, case-insensitive), so 'Form' (singular) legitimately
+    resolves to the real fixture ItemForm. Probe with a token NO parser accepts."""
+    bad_fqn = "Catalog.Catalog.Pages.ItemForm"  # 'Pages' is not a forms keyword
     r = call("get_form_screenshot", {
         "projectName": PROJECT,
         "formPath": bad_fqn,

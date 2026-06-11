@@ -7,10 +7,15 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import org.eclipse.emf.common.util.Enumerator;
@@ -28,6 +33,7 @@ import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.Kind;
 
 /**
@@ -227,6 +233,157 @@ public class FormElementWriterTest
         // A top object / too-short FQN is not a form member.
         assertNull(FormElementWriter.parse("Catalog.Products")); //$NON-NLS-1$
         assertNull(FormElementWriter.parse(null));
+    }
+
+    // ---- form-OBJECT create FQN parse ------------------------------------------------------------
+
+    @Test
+    public void testParseFormObjectCreateManaged()
+    {
+        // A 4-part form FQN addresses the FORM OBJECT to create (owner type/name + form name).
+        FormObjectRef ref = FormElementWriter.parseFormObjectCreate("Catalog.Products.Form.ItemForm"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Catalog", ref.ownerType); //$NON-NLS-1$
+        assertEquals("Products", ref.ownerName); //$NON-NLS-1$
+        assertEquals("ItemForm", ref.formName); //$NON-NLS-1$
+        assertEquals("Catalog.Products", ref.ownerFqn()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseFormObjectCreateBilingualFormToken()
+    {
+        // The form token is bilingual: "Форма" (forma) and "Forms" are both accepted.
+        String ru = "Catalog.Products." + fromCp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430) + ".F"; //$NON-NLS-1$
+        FormObjectRef ref = FormElementWriter.parseFormObjectCreate(ru);
+        assertNotNull(ref);
+        assertEquals("F", ref.formName); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.parseFormObjectCreate("Document.Inv.Forms.MainForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseFormObjectCreateRejectsNonFormObject()
+    {
+        // A form MEMBER FQN (6 parts) is NOT a form-object create (it routes to parse()).
+        assertNull(FormElementWriter.parseFormObjectCreate("Catalog.Products.Form.ItemForm.Attribute.A")); //$NON-NLS-1$
+        // A 4-part mdclass member (no form token at position 2) is not a form-object create.
+        assertNull(FormElementWriter.parseFormObjectCreate("Catalog.Products.Attribute.Weight")); //$NON-NLS-1$
+        // A CommonForm (2 parts) IS a top object - created via the normal top-level path, not here.
+        assertNull(FormElementWriter.parseFormObjectCreate("CommonForm.MyForm")); //$NON-NLS-1$
+        // A plain top object / null is not a form-object create.
+        assertNull(FormElementWriter.parseFormObjectCreate("Catalog.Products")); //$NON-NLS-1$
+        assertNull(FormElementWriter.parseFormObjectCreate(null));
+    }
+
+    // ---- form-token predicate (shared with MetadataPathResolver) ---------------------------------
+
+    @Test
+    public void testIsFormTokenAcceptsEnglishAndRussianSingularPlural()
+    {
+        assertTrue(FormElementWriter.isFormToken("Form")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isFormToken("forms")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isFormToken("FORMS")); //$NON-NLS-1$
+        // Forma (capital F-cyrillic, the predicate lowercases) -> accepted.
+        assertTrue(FormElementWriter.isFormToken(fromCp(0x0424, 0x043e, 0x0440, 0x043c, 0x0430)));
+        // Formy (plural) -> accepted.
+        assertTrue(FormElementWriter.isFormToken(fromCp(0x0424, 0x043e, 0x0440, 0x043c, 0x044b)));
+    }
+
+    @Test
+    public void testIsFormTokenRejectsOthers()
+    {
+        assertFalse(FormElementWriter.isFormToken("Template")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isFormToken("CommonForm")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isFormToken("")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isFormToken(null));
+    }
+
+    // ---- move / reorder position resolution ------------------------------------------------------
+
+    private static final List<String> SIBLINGS = Arrays.asList("A", "B", "C"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    @Test
+    public void testPositionLastAndDefault()
+    {
+        // null / blank / "last" -> the end (the dest list already EXCLUDES the moved item).
+        assertEquals(3, FormElementWriter.resolveMovePosition(null, SIBLINGS, "X")); //$NON-NLS-1$
+        assertEquals(3, FormElementWriter.resolveMovePosition("", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(3, FormElementWriter.resolveMovePosition("last", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(3, FormElementWriter.resolveMovePosition("LAST", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPositionFirst()
+    {
+        assertEquals(0, FormElementWriter.resolveMovePosition("first", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(0, FormElementWriter.resolveMovePosition("First", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPositionBeforeAndAfter()
+    {
+        // before:<name> = the sibling's own index; after:<name> = its index + 1 (case-insensitive).
+        assertEquals(0, FormElementWriter.resolveMovePosition("before:A", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, FormElementWriter.resolveMovePosition("before:B", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, FormElementWriter.resolveMovePosition("after:A", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(3, FormElementWriter.resolveMovePosition("after:C", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(2, FormElementWriter.resolveMovePosition("BEFORE:c", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPositionInteger()
+    {
+        // A plain integer is the desired FINAL 0-based index as-is (no off-by-one compensation).
+        assertEquals(0, FormElementWriter.resolveMovePosition("0", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(2, FormElementWriter.resolveMovePosition(" 2 ", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        // An index beyond the list end is returned verbatim; moveItem() then clamps it to the end.
+        assertEquals(9, FormElementWriter.resolveMovePosition("9", SIBLINGS, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPositionMalformedRejected()
+    {
+        assertMoveError("nonsense", SIBLINGS, "X", "Invalid position"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertMoveError("-1", SIBLINGS, "X", "zero or positive"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testPositionUnknownSiblingRejected()
+    {
+        assertMoveError("before:Z", SIBLINGS, "X", "not found"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertMoveError("after:", SIBLINGS, "X", "missing a sibling name"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testPositionCannotReferenceMovedItem()
+    {
+        // A before:/after: must not name the moved item itself (it is absent from the dest list anyway).
+        assertMoveError("before:B", SIBLINGS, "B", "the moved item itself"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertMoveError("after:b", SIBLINGS, "B", "the moved item itself"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testPositionFirstLastOnEmptyDest()
+    {
+        // Into an empty group both first and last resolve to index 0.
+        List<String> empty = Collections.emptyList();
+        assertEquals(0, FormElementWriter.resolveMovePosition("first", empty, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(0, FormElementWriter.resolveMovePosition("last", empty, "X")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(0, FormElementWriter.resolveMovePosition(null, empty, "X")); //$NON-NLS-1$
+    }
+
+    private static void assertMoveError(String position, List<String> dest, String moved, String fragment)
+    {
+        try
+        {
+            FormElementWriter.resolveMovePosition(position, dest, moved);
+            fail("expected a RuntimeException for position '" + position + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        catch (RuntimeException e)
+        {
+            assertNotNull(e.getMessage());
+            assertTrue("message should mention '" + fragment + "' but was: " + e.getMessage(), //$NON-NLS-1$ //$NON-NLS-2$
+                e.getMessage().contains(fragment));
+        }
     }
 
     // ==================== reflective write path (dynamic form-like EMF model) ====================
@@ -687,6 +844,225 @@ public class FormElementWriterTest
             FormElementWriter.findFormCommand(form, "Cmd"), null); //$NON-NLS-1$
         assertNotNull(notItem);
         assertTrue(notItem.contains("Attributes and commands have no visual parent")); //$NON-NLS-1$
+    }
+
+    // ---- moveItem destination contract (blank / form-name parent -> the form root; null
+    // parent -> reorder in place; named-resolution ambiguity guard) - on the form-like model -------
+
+    @Test
+    public void testMoveItemBlankParentMovesToFormRoot()
+    {
+        // The 'parent' contract: a BLANK targetParent means the FORM ROOT - it must re-parent, not
+        // fall into the reorder-in-place branch (which would silently leave the item in its group).
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "G", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "D", "G", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        String dest = FormElementWriter.moveItem(form, "D", "", null, "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(dest, dest.contains("the form root")); //$NON-NLS-1$
+        EObject deco = FormElementWriter.findFormItem(form, "D"); //$NON-NLS-1$
+        assertSame(form, deco.eContainer());
+        EObject group = FormElementWriter.findFormItem(form, "G"); //$NON-NLS-1$
+        assertEquals(0, ((List<?>)group.eGet(feature(group, "items"))).size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMoveItemFormNameParentMovesToFormRoot()
+    {
+        // The form name (case-insensitive) as targetParent is the other spelling of "the form root".
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "G", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "D", "G", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        String dest = FormElementWriter.moveItem(form, "D", "myform", null, "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(dest, dest.contains("the form root")); //$NON-NLS-1$
+        assertSame(form, FormElementWriter.findFormItem(form, "D").eContainer()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMoveItemNullParentReordersInCurrentContainer()
+    {
+        // null targetParent keeps the current container (reorder in place) - never re-parents.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "G", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "A", "G", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "B", "G", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        String dest = FormElementWriter.moveItem(form, "A", null, "last", "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(dest, dest.contains("group 'G'")); //$NON-NLS-1$
+        EObject group = FormElementWriter.findFormItem(form, "G"); //$NON-NLS-1$
+        List<?> items = (List<?>)group.eGet(feature(group, "items")); //$NON-NLS-1$
+        assertEquals(2, items.size());
+        assertSame(FormElementWriter.findFormItem(form, "B"), items.get(0)); //$NON-NLS-1$
+        assertSame(FormElementWriter.findFormItem(form, "A"), items.get(1)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMoveItemNamedGroupParentStillReparents()
+    {
+        // Regression guard: a real group name still re-parents into that group, at the requested
+        // position ('first' -> index 0 in the destination payload).
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "G", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "InG", "G", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "D", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        String dest = FormElementWriter.moveItem(form, "D", "G", "first", "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue(dest, dest.contains("group 'G'")); //$NON-NLS-1$
+        assertTrue(dest, dest.contains("at index 0")); //$NON-NLS-1$
+        EObject group = FormElementWriter.findFormItem(form, "G"); //$NON-NLS-1$
+        List<?> items = (List<?>)group.eGet(feature(group, "items")); //$NON-NLS-1$
+        assertSame(FormElementWriter.findFormItem(form, "D"), items.get(0)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMoveItemAmbiguousNameRejected()
+    {
+        // The name-resolving overload REJECTS an ambiguous item name instead of silently moving the
+        // first match (the EObject-based move never sees the ambiguity - its caller resolved already).
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "G", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject d1 = newObject(MODEL.decoration);
+        d1.eSet(feature(d1, "name"), "Dup"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", d1); //$NON-NLS-1$
+        EObject d2 = newObject(MODEL.decoration);
+        d2.eSet(feature(d2, "name"), "Dup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject group = FormElementWriter.findFormItem(form, "G"); //$NON-NLS-1$
+        addTo(group, "items", d2); //$NON-NLS-1$
+        try
+        {
+            FormElementWriter.moveItem(form, "Dup", null, "first", "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("an ambiguous item name must be rejected"); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            assertNotNull(e.getMessage());
+            assertTrue(e.getMessage(), e.getMessage().contains("ambiguous")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testMoveItemMissingNameRejected()
+    {
+        EObject form = newForm();
+        try
+        {
+            FormElementWriter.moveItem(form, "NoSuch", null, null, "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$
+            fail("a missing item name must be rejected"); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            assertNotNull(e.getMessage());
+            assertTrue(e.getMessage(), e.getMessage().contains("not found")); //$NON-NLS-1$
+            assertTrue(e.getMessage(), e.getMessage().contains("get_metadata_details")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testMoveItemCycleRejectedViaNameOverload()
+    {
+        // The cycle guard surfaces through the name overload as a thrown, user-facing error that
+        // names BOTH spellings ("itself" / "descendant" for the e2e contract, "its own contained
+        // item" for the designer-parity wording).
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Outer", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Inner", "Outer", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        try
+        {
+            FormElementWriter.moveItem(form, "Outer", "Inner", null, "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("a containment cycle must be rejected"); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            assertNotNull(e.getMessage());
+            assertTrue(e.getMessage(), e.getMessage().contains("itself")); //$NON-NLS-1$
+            assertTrue(e.getMessage(), e.getMessage().contains("descendant")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testMoveItemIntoBarByNameRetypesButton()
+    {
+        // The name overload resolves 'AutoCommandBar' like a create parent and re-derives the
+        // button type on the bar boundary - the same designer parity the EObject move has.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "Btn", null, "Print", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        String dest = FormElementWriter.moveItem(form, "Btn", "AutoCommandBar", "first", "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue(dest, dest.contains("at index 0")); //$NON-NLS-1$
+        EObject button = FormElementWriter.findFormItem(form, "Btn"); //$NON-NLS-1$
+        EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        assertSame(bar, button.eContainer());
+        assertEquals("CommandBarButton", literalOf(button, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== whole-form creation (reflective, the REAL EDT packages) =================
+    // The form EPackage is resolved from the global EMF package registry by nsURI - the design rule:
+    // NO compile-time dependency on com._1c.g5.v8.dt.form.model anywhere in the server bundle (the
+    // mdclass metamodel cannot lead there: BasicForm.form is typed by the mdclass-own AbstractForm
+    // base). The form model bundle is in the OSGi test runtime transitively, so the registry chain
+    // and the reflective whole-form defaults ARE headless-testable here.
+
+    @Test
+    public void testContentFormEClassReachableWithoutFormModelImport()
+    {
+        EClass formEClass = FormElementWriter.contentFormEClass();
+        assertNotNull(formEClass);
+        // The CONCRETE Form (the reference EType is the AbstractForm base on current EDT).
+        assertEquals("Form", formEClass.getName()); //$NON-NLS-1$
+        assertFalse(formEClass.isAbstract());
+        EPackage formPkg = formEClass.getEPackage();
+        assertNotNull(formPkg);
+        // The sibling classifiers the whole-form build resolves by name on that package.
+        assertTrue(formPkg.getEClassifier("AutoCommandBar") instanceof EClass); //$NON-NLS-1$
+        assertTrue(formPkg.getEClassifier("FormCommandInterface") instanceof EClass); //$NON-NLS-1$
+        assertTrue(formPkg.getEClassifier("FormCommandInterfaceItems") instanceof EClass); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateContentFormDefaultsOnRealFormPackage()
+    {
+        // No FORM factory (null, like a missing injector): the reflective fallback must still build
+        // a renderable content form with the designer defaults the typed build used to set.
+        EObject content = FormElementWriter.createContentForm(null, null, null);
+        assertNotNull(content);
+        assertEquals("Form", content.eClass().getName()); //$NON-NLS-1$
+        // The eight form flags.
+        for (String flag : new String[] { "saveWindowSettings", "autoTitle", "autoUrl", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "autoFillCheck", "allowFormCustomize", "enabled", "showTitle", "showCloseButton" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            assertEquals(flag, Boolean.TRUE, content.eGet(feature(content, flag)));
+        }
+        // The children grouping FormChildrenGroup.VERTICAL.
+        assertEquals("Vertical", literalOf(content, "group")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The render-critical predefined auto command bar: autoFill, LEFT, the -1 id sentinel and
+        // the canonical predefined-command-bar name (FormaKomandnayaPanel, from code points).
+        EObject bar = (EObject)content.eGet(feature(content, "autoCommandBar")); //$NON-NLS-1$
+        assertNotNull("the WYSIWYG generator requires the predefined autoCommandBar", bar); //$NON-NLS-1$
+        assertEquals("AutoCommandBar", bar.eClass().getName()); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, bar.eGet(feature(bar, "autoFill"))); //$NON-NLS-1$
+        assertEquals("Left", literalOf(bar, "horizontalAlign")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Integer.valueOf(-1), bar.eGet(feature(bar, "id"))); //$NON-NLS-1$
+        String ruBarName = fromCp(0x0424, 0x043e, 0x0440, 0x043c, 0x0430, 0x041a, 0x043e, 0x043c,
+            0x0430, 0x043d, 0x0434, 0x043d, 0x0430, 0x044f, 0x041f, 0x0430, 0x043d, 0x0435, 0x043b,
+            0x044c);
+        assertEquals(ruBarName, bar.eGet(feature(bar, "name"))); //$NON-NLS-1$
+        // The (empty) command interface holding an empty navigation panel and command bar.
+        EObject commandInterface = (EObject)content.eGet(feature(content, "commandInterface")); //$NON-NLS-1$
+        assertNotNull(commandInterface);
+        assertNotNull(commandInterface.eGet(feature(commandInterface, "navigationPanel"))); //$NON-NLS-1$
+        assertNotNull(commandInterface.eGet(feature(commandInterface, "commandBar"))); //$NON-NLS-1$
     }
 
     // ==================== dynamic form-like EMF metamodel ====================

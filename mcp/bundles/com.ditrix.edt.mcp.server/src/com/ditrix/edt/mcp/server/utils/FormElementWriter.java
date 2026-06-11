@@ -12,7 +12,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.common.util.Enumerator;
@@ -28,20 +30,40 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
+import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
+import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /**
  * Shared writer for the editable FORM CONTENT model ({@code com._1c.g5.v8.dt.form.model.Form}, a
- * separate top object reached from a {@code BasicForm} mdo via {@code getForm()}). The whole form
- * package is touched REFLECTIVELY (by feature / classifier name) so this bundle needs no compile-time
- * dependency on the form model - the same technique the form-editing tools use.
+ * separate top object reached from a {@code BasicForm} mdo via {@code getForm()}).
+ *
+ * <p>The whole form package is touched REFLECTIVELY (by feature / classifier name) so this bundle
+ * needs no compile-time dependency on the form model. Form-MEMBER editing (adding a form attribute,
+ * command or visual item, binding event handlers, moving items) resolves everything on the editable
+ * form instance's own EPackage; form-OBJECT creation ({@link #createForm}) resolves the form
+ * EPackage from the global EMF package registry by its nsURI ({@code http://g5.1c.ru/v8/dt/form} -
+ * the mdclass {@code BasicForm.form} reference is typed by the mdclass-own {@code AbstractForm}
+ * base, so the mdclass metamodel deliberately does NOT lead into the form package) and builds the
+ * renderable content form with EDT's default structure through that package's factory.</p>
  *
  * <p>This is the canonical home for the form-write logic that {@code create_metadata} (and, until
- * they are removed, the {@code add_form_*} tools) use to add a form attribute, command or visual
- * item. Mutation MUST run inside a BM write transaction on the re-fetched content form; capturing the
- * content form's own FQN for {@code forceExportToDisk} is the caller's job.</p>
+ * they are removed, the {@code add_form_*} tools) use. Mutation MUST run inside a BM write
+ * transaction on the re-fetched content form; the shared scaffold ({@link #resolveForEdit} +
+ * {@link #writeEditableForm} / {@link #readEditableForm}) owns the resolve -&gt; transact -&gt;
+ * force-export pipeline, so tools only supply the per-call work.</p>
  */
 public final class FormElementWriter
 {
@@ -65,6 +87,13 @@ public final class FormElementWriter
     private static final String FEATURE_COMMON = "common"; //$NON-NLS-1$
     private static final String FEATURE_EXTENDED_TOOLTIP = "extendedTooltip"; //$NON-NLS-1$
     private static final String FEATURE_CONTEXT_MENU = "contextMenu"; //$NON-NLS-1$
+    private static final String FEATURE_MD_FORM = "mdForm"; //$NON-NLS-1$
+    private static final String FEATURE_GROUP = "group"; //$NON-NLS-1$
+    private static final String FEATURE_COMMAND_INTERFACE = "commandInterface"; //$NON-NLS-1$
+    private static final String FEATURE_NAVIGATION_PANEL = "navigationPanel"; //$NON-NLS-1$
+    private static final String FEATURE_COMMAND_BAR = "commandBar"; //$NON-NLS-1$
+    /** {@code FormChildrenGroup.VERTICAL} - the default children grouping of a managed form. */
+    private static final String LITERAL_VERTICAL = "Vertical"; //$NON-NLS-1$
 
     // Concrete form-model classifier names (resolved on the form EPackage).
     private static final String ECLASS_FORM_GROUP = "FormGroup"; //$NON-NLS-1$
@@ -79,6 +108,8 @@ public final class FormElementWriter
     private static final String ECLASS_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND_HANDLER_CONTAINER = "FormCommandHandlerContainer"; //$NON-NLS-1$
     private static final String ECLASS_COMMAND_HANDLER = "CommandHandler"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_COMMAND_INTERFACE = "FormCommandInterface"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_COMMAND_INTERFACE_ITEMS = "FormCommandInterfaceItems"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_USUAL_GROUP = "UsualGroup"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_LABEL = "Label"; //$NON-NLS-1$
     /** Group {@code type} literals whose items are command-bar buttons (CommandBarButton). */
@@ -187,8 +218,19 @@ public final class FormElementWriter
         return null;
     }
 
-    private static boolean isFormToken(String token)
+    /**
+     * Whether {@code token} is a recognized FORM segment of an FQN / form path:
+     * {@code Form} / {@code Forms} and their Russian equivalents (singular / plural), case-insensitive.
+     * This is THE form-token predicate - every consumer that parses a form path (this writer,
+     * {@link MetadataPathResolver}) must share it so a form addressed one way (e.g. created via
+     * {@code Catalog.X.Form.Y}) stays addressable everywhere (screenshot / layout snapshot).
+     */
+    public static boolean isFormToken(String token)
     {
+        if (token == null)
+        {
+            return false;
+        }
         String s = token.toLowerCase();
         return "form".equals(s) || "forms".equals(s) //$NON-NLS-1$ //$NON-NLS-2$
             || RU_FORM.equals(s) || RU_FORMS.equals(s);
@@ -215,6 +257,55 @@ public final class FormElementWriter
         if (p.length == 2 && "CommonForm".equalsIgnoreCase(MetadataTypeUtils.toEnglishSingular(p[0]))) //$NON-NLS-1$
         {
             return p[0] + "." + p[1]; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** A parsed form-OBJECT create FQN: the owner type/name + the new form's Name. */
+    public static final class FormObjectRef
+    {
+        /** Owner metadata TYPE token, as supplied (English or Russian), e.g. {@code Catalog}. */
+        public final String ownerType;
+        /** Owner metadata object Name, e.g. {@code Products}. */
+        public final String ownerName;
+        /** Programmatic Name of the form to create, e.g. {@code ItemForm}. */
+        public final String formName;
+
+        FormObjectRef(String ownerType, String ownerName, String formName)
+        {
+            this.ownerType = ownerType;
+            this.ownerName = ownerName;
+            this.formName = formName;
+        }
+
+        /** The {@code Type.Object} owner FQN of the new form. */
+        public String ownerFqn()
+        {
+            return ownerType + "." + ownerName; //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * If {@code normFqn} addresses a FORM OBJECT to CREATE on a metadata object -
+     * {@code Type.Object.Form(s).FormName} (exactly 4 parts, a form token at position 2) - returns the
+     * parsed owner + form name; otherwise {@code null}. This is the create counterpart of
+     * {@link #parse} (which addresses a form MEMBER, 6+ parts) and of {@link #parseFormPath} (which
+     * resolves an EXISTING form for reading): a 4-part form FQN is neither a member nor a top object, so
+     * it is handled by {@code create_metadata}'s dedicated form-object branch.
+     * <p>
+     * A {@code CommonForm.Name} (2 parts) is NOT returned here: a CommonForm IS a top object and is
+     * created through the normal top-level create path.
+     */
+    public static FormObjectRef parseFormObjectCreate(String normFqn)
+    {
+        if (normFqn == null)
+        {
+            return null;
+        }
+        String[] p = normFqn.split("\\."); //$NON-NLS-1$
+        if (p.length == 4 && isFormToken(p[2]))
+        {
+            return new FormObjectRef(p[0], p[1], p[3]);
         }
         return null;
     }
@@ -290,15 +381,11 @@ public final class FormElementWriter
         return null;
     }
 
-    /** Builds a string from BMP code points (keeps this source pure ASCII). */
+    /** Builds a string from BMP code points (keeps this source pure ASCII). Delegates to the shared
+     * {@link MetadataLanguageUtils#cp}. */
     private static String cp(int... codePoints)
     {
-        StringBuilder sb = new StringBuilder(codePoints.length);
-        for (int c : codePoints)
-        {
-            sb.append((char)c);
-        }
-        return sb.toString();
+        return MetadataLanguageUtils.cp(codePoints);
     }
 
     /**
@@ -326,6 +413,228 @@ public final class FormElementWriter
             // No getForm() / inaccessible - treated as "no editable model".
         }
         return null;
+    }
+
+    // ---- shared form write-transaction scaffold ---------------------------------------------------
+    //
+    // Every form-editing tool repeats the same ~40-line pipeline: resolve the MD-form from a form
+    // path, null-check the BM services, capture the bmId, re-fetch the MD-form inside a BM
+    // transaction, hop to the editable content form, run the work, then force-export the content
+    // form's own FQN (it serializes to Form.form). The scaffold below owns that pipeline ONCE;
+    // tools supply only the per-call work and their user-visible "form not found" message. Every
+    // scaffold-level failure that carries an actionable message is thrown as a
+    // FormValidationException with the READY error JSON, so callers surface it verbatim
+    // (FormValidationException.jsonOf) from one catch block.
+
+    /** Work executed on the re-fetched editable content form inside a BM WRITE transaction. */
+    @FunctionalInterface
+    public interface FormWork
+    {
+        /**
+         * @param formModel the transaction-bound editable content form
+         * @param tx the active BM write transaction
+         */
+        void run(EObject formModel, IBmTransaction tx);
+    }
+
+    /** Read work executed on the re-fetched editable content form inside a BM READ transaction. */
+    @FunctionalInterface
+    public interface FormRead<T>
+    {
+        /**
+         * @param formModel the transaction-bound editable content form
+         * @param tx the active BM read transaction
+         * @return the read result (must not leak transaction-bound EObjects)
+         */
+        T run(EObject formModel, IBmTransaction tx);
+    }
+
+    /** Work executed on the re-fetched MD-form ({@code BasicForm}) inside a BM WRITE transaction. */
+    @FunctionalInterface
+    public interface MdFormWork
+    {
+        /**
+         * @param txMdForm the transaction-bound {@code BasicForm} mdo
+         * @param tx the active BM write transaction
+         */
+        void run(EObject txMdForm, IBmTransaction tx);
+    }
+
+    /**
+     * A resolved form-edit context: the project, its BM model and the MD-form (pre-transaction
+     * snapshot - re-fetched by {@link #mdFormBmId} inside the transaction for any mutation).
+     */
+    public static final class FormEditContext
+    {
+        /** The workspace project owning the form. */
+        public final IProject project;
+        /** The project's BM model. */
+        public final IBmModel bmModel;
+        /** Pre-transaction snapshot of the MD-form (safe for reads like {@code getName()}). */
+        public final MdObject mdForm;
+        /** The MD-form's bmId, used to re-fetch it inside the transaction. */
+        final long mdFormBmId;
+        /** The resolved form path (for error messages), or {@code null} for a pre-resolved form. */
+        final String formPath;
+
+        FormEditContext(IProject project, IBmModel bmModel, MdObject mdForm, long mdFormBmId,
+            String formPath)
+        {
+            this.project = project;
+            this.bmModel = bmModel;
+            this.mdForm = mdForm;
+            this.mdFormBmId = mdFormBmId;
+            this.formPath = formPath;
+        }
+    }
+
+    /**
+     * Resolves the form addressed by {@code formPath} (the {@code Type.Object.forms.FormName} /
+     * {@code CommonForm.Name} shape) and the BM services needed to edit it. Every failure is thrown
+     * as a {@link FormValidationException} carrying the ready error JSON ({@code formNotFoundMessage}
+     * for a missing form), so the caller's single catch block surfaces it verbatim.
+     *
+     * @param project the workspace project
+     * @param config the project configuration
+     * @param formPath the form path to resolve
+     * @param formNotFoundMessage the user-visible message when the form does not resolve
+     * @return the resolved context
+     */
+    public static FormEditContext resolveForEdit(IProject project, Configuration config,
+        String formPath, String formNotFoundMessage)
+    {
+        MdObject mdForm = FormStructureReader.resolveMdForm(config, formPath);
+        if (mdForm == null)
+        {
+            throw new FormValidationException(ToolResult.error(formNotFoundMessage).toJson());
+        }
+        return editContext(project, mdForm, formPath);
+    }
+
+    /**
+     * Builds a {@link FormEditContext} for an ALREADY-RESOLVED MD-form (a caller with its own
+     * resolution / error wording, e.g. the owned-form delete). Throws {@link FormValidationException}
+     * with the ready error JSON when the BM services are unavailable.
+     *
+     * @param project the workspace project
+     * @param mdForm the resolved MD-form
+     * @return the context
+     */
+    public static FormEditContext editContextFor(IProject project, MdObject mdForm)
+    {
+        return editContext(project, mdForm, null);
+    }
+
+    private static FormEditContext editContext(IProject project, MdObject mdForm, String formPath)
+    {
+        if (!(mdForm instanceof IBmObject))
+        {
+            throw new FormValidationException(ToolResult.error("Form is not a BM object").toJson()); //$NON-NLS-1$
+        }
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (bmModelManager == null)
+        {
+            throw new FormValidationException(
+                ToolResult.error("IBmModelManager not available").toJson()); //$NON-NLS-1$
+        }
+        IBmModel bmModel = bmModelManager.getModel(project);
+        if (bmModel == null)
+        {
+            throw new FormValidationException(ToolResult.error("BM model not available for project: " //$NON-NLS-1$
+                + project.getName()).toJson());
+        }
+        return new FormEditContext(project, bmModel, mdForm, ((IBmObject)mdForm).bmGetId(), formPath);
+    }
+
+    /**
+     * Runs {@code work} against the editable content form inside ONE BM WRITE transaction, then
+     * force-exports the content form's OWN top-object FQN (forms serialize to {@code Form.form}).
+     * The MD-form is re-fetched by bmId inside the transaction; a missing editable content model is
+     * thrown as a {@link FormValidationException} (rolling the transaction back), so an exception
+     * from {@code work} (including a {@code FormValidationException} carrying a ready JSON error)
+     * leaves no partial mutation.
+     *
+     * @param ctx the resolved context (see {@link #resolveForEdit})
+     * @param taskName a short BM task name for diagnostics
+     * @param work the mutation to run on the content form
+     * @return whether the export persisted the change to disk
+     */
+    public static boolean writeEditableForm(FormEditContext ctx, String taskName, FormWork work)
+    {
+        String contentFormFqn = BmTransactions.<String>write(ctx.bmModel, taskName, (tx, pm) ->
+        {
+            EObject formModel = editableFormInTx(ctx, tx);
+            work.run(formModel, tx);
+            // The content Form is a separate top object serialized to Form.form - export ITS fqn.
+            return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
+        });
+        return contentFormFqn != null && !contentFormFqn.isEmpty()
+            && BmTransactions.forceExportToDisk(ctx.project, contentFormFqn);
+    }
+
+    /**
+     * Runs {@code work} against the editable content form inside ONE BM READ transaction (no
+     * mutation, nothing exported). Scaffold failures are thrown like {@link #writeEditableForm}.
+     *
+     * @param ctx the resolved context (see {@link #resolveForEdit})
+     * @param taskName a short BM task name for diagnostics
+     * @param work the read to run on the content form
+     * @param <T> the read result type
+     * @return the read result
+     */
+    public static <T> T readEditableForm(FormEditContext ctx, String taskName, FormRead<T> work)
+    {
+        return BmTransactions.read(ctx.bmModel, taskName,
+            (tx, pm) -> work.run(editableFormInTx(ctx, tx), tx));
+    }
+
+    /**
+     * Runs {@code work} against the re-fetched MD-form ({@code BasicForm}) itself inside ONE BM
+     * WRITE transaction - the variant for work that mutates the MD-form / its owner rather than the
+     * content form (e.g. deleting an owned form). No editable-content check is applied and nothing
+     * is exported; the caller exports whichever top object(s) it dirtied.
+     *
+     * @param ctx the resolved context (see {@link #editContextFor})
+     * @param taskName a short BM task name for diagnostics
+     * @param work the mutation to run on the MD-form
+     */
+    public static void writeMdForm(FormEditContext ctx, String taskName, MdFormWork work)
+    {
+        BmTransactions.<Void>write(ctx.bmModel, taskName, (tx, pm) ->
+        {
+            work.run(mdFormInTx(ctx, tx), tx);
+            return null;
+        });
+    }
+
+    /** Re-fetches the MD-form inside the transaction, failing clearly when it has gone. */
+    private static EObject mdFormInTx(FormEditContext ctx, IBmTransaction tx)
+    {
+        EObject txMdForm = (EObject)tx.getObjectById(ctx.mdFormBmId);
+        if (txMdForm == null)
+        {
+            throw new RuntimeException("Form object not found in transaction"); //$NON-NLS-1$
+        }
+        return txMdForm;
+    }
+
+    /** Re-fetches the MD-form and hops to its editable content form, failing on either gap. */
+    private static EObject editableFormInTx(FormEditContext ctx, IBmTransaction tx)
+    {
+        EObject formModel = getEditableForm(mdFormInTx(ctx, tx));
+        if (formModel == null)
+        {
+            throw new FormValidationException(noEditableContentError(ctx.formPath));
+        }
+        return formModel;
+    }
+
+    /** The canonical "no editable content model" error JSON (with the form path when known). */
+    private static String noEditableContentError(String formPath)
+    {
+        String suffix = (formPath != null && !formPath.isEmpty()) ? ": " + formPath : ""; //$NON-NLS-1$ //$NON-NLS-2$
+        return ToolResult.error("the form has no editable content model (it may be empty, an " //$NON-NLS-1$
+            + "ordinary/legacy form, or not yet built)" + suffix).toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -363,6 +672,277 @@ public final class FormElementWriter
                 return createItem(formModel, kind, name, parentName, bindTarget, titleLanguage,
                     title, russianAutoNames, createdKind);
         }
+    }
+
+    // ---- form-OBJECT creation (the BasicForm mdo + its renderable content Form) ------------------
+
+    /**
+     * Creates a managed form OBJECT on {@code owner} inside an active BM write transaction: the
+     * MD-form ({@link BasicForm}, added to the owner's {@code forms} collection) AND an empty,
+     * renderable content {@code Form}, linked both ways, with the content form registered as a BM top
+     * object under the canonical external-property FQN. Mirrors the EDT "New form" wizard.
+     * <p>
+     * The content form is built by the FORM model factory ({@code formFactory}, the same
+     * {@code FormObjectFactory} the wizard uses) so it gets the predefined {@code autoCommandBar} the
+     * WYSIWYG layout generator requires - without it {@code HippoGenerator.readElement} ->
+     * {@code findHGClass(null)} throws and the form never renders. As a guard against the factory not
+     * resolving in this environment (or a future change), the render-critical {@code autoCommandBar}
+     * and the standard form-level flags are also applied explicitly here.
+     * <p>
+     * The content form is attached under {@code ITopObjectFqnGenerator.generateExternalPropertyFqn(
+     * mdForm, BASIC_FORM__FORM)} - the SAME FQN EDT's own form infrastructure uses - so the BM
+     * namespace assigns it a store and later look-ups resolve; any other FQN leaves it store-less and
+     * access fails with "No store … assigned to namespace".
+     *
+     * @param tx the active BM write transaction
+     * @param owner the owner metadata object, re-fetched inside {@code tx}
+     * @param formName the programmatic Name of the new form (already validated)
+     * @param synonymLanguage the resolved synonym language CODE, or {@code null} when no synonym
+     * @param synonym the synonym text, or {@code null}
+     * @param comment the comment text to set on the MD-form, or {@code null}
+     * @param setAsDefault when {@code true}, registers the form as the owner's default object form
+     * @param mdFactory the MD model-object factory (creates the BasicForm)
+     * @param formFactory the FORM model-object factory (creates the content Form), may be {@code null}
+     * @param fqnGenerator the top-object FQN generator (computes the content form's canonical FQN)
+     * @param version the platform version
+     * @return the content form's own top-object FQN (serialized to {@code Form.form}), for force-export
+     */
+    public static String createForm(IBmTransaction tx, MdObject owner, String formName,
+        String synonymLanguage, String synonym, String comment, boolean setAsDefault,
+        IModelObjectFactory mdFactory, IModelObjectFactory formFactory,
+        ITopObjectFqnGenerator fqnGenerator, Version version)
+    {
+        EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature("forms"); //$NON-NLS-1$
+        if (formsFeature == null || !(formsFeature.getEType() instanceof EClass))
+        {
+            throw new RuntimeException("Object type '" + owner.eClass().getName() //$NON-NLS-1$
+                + "' does not support forms."); //$NON-NLS-1$
+        }
+        if (findOwnedFormByName(owner, formsFeature, formName) != null)
+        {
+            throw new RuntimeException("Form already exists: " + formName); //$NON-NLS-1$
+        }
+        EClass mdFormEClass = (EClass)formsFeature.getEType();
+
+        // (1) The MD-form via the standard MD factory (wizard-equivalent).
+        BasicForm mdForm = (BasicForm)mdFactory.create(mdFormEClass, version);
+        if (mdForm == null)
+        {
+            throw new RuntimeException("Factory returned null for form type: " + mdFormEClass.getName()); //$NON-NLS-1$
+        }
+        mdForm.setName(formName);
+        mdForm.setUuid(UUID.randomUUID());
+        if (synonym != null && !synonym.isEmpty() && synonymLanguage != null)
+        {
+            mdForm.getSynonym().put(synonymLanguage, synonym);
+        }
+        if (comment != null && !comment.isEmpty())
+        {
+            mdForm.setComment(comment);
+        }
+
+        // (2) The content form, built by the FORM factory so it gets EDT's default structure
+        // (autoCommandBar, command interface, form flags). Falls back to a manual minimal-but-
+        // renderable build if the factory is unavailable.
+        EObject content = createContentForm(formFactory, owner, version);
+
+        // (3) Link MD-form <-> content form (both directions, by feature - no typed form API).
+        mdForm.eSet(MdClassPackage.Literals.BASIC_FORM__FORM, content);
+        setSingleReference(content, FEATURE_MD_FORM, mdForm);
+
+        // (4) Add the MD-form to the owner's forms collection BEFORE generating the content FQN, so the
+        // MD-form has a resolvable parent chain (owner -> configuration) and therefore a resolvable FQN.
+        addToList(owner, "forms", mdForm); //$NON-NLS-1$
+
+        // (5) Register the content form as a BM top object under the canonical external-property FQN.
+        String contentFqn = fqnGenerator.generateExternalPropertyFqn(mdForm,
+            MdClassPackage.Literals.BASIC_FORM__FORM);
+        if (contentFqn == null || contentFqn.isEmpty())
+        {
+            throw new RuntimeException("Could not generate the content-form FQN for: " + formName); //$NON-NLS-1$
+        }
+        tx.attachTopObject((IBmObject)content, contentFqn);
+
+        // (6) Fill default references / usePurposes as the wizard does.
+        mdFactory.fillDefaultReferences(mdForm);
+
+        // (7) Optionally set as the owner's default object form.
+        if (setAsDefault)
+        {
+            setDefaultObjectForm(owner, mdForm);
+        }
+        return contentFqn;
+    }
+
+    /**
+     * Builds the content {@code Form} with EDT's default structure. Prefers the FORM model factory
+     * ({@code FormObjectFactory}) - {@code create(Form, owner, version)} produces exactly what the
+     * "New form" wizard builds (predefined {@code autoCommandBar}, command interface, form flags).
+     * Falls back to a bare EFactory create when the factory is absent. In both cases the
+     * render-critical {@code autoCommandBar} and the standard form-level defaults are applied
+     * explicitly afterwards, so the form renders whether or not the factory ran.
+     * <p>
+     * Fully reflective: the {@code Form} EClass is reached through {@link #contentFormEClass()} (the
+     * EMF package registry, by nsURI), so no compile-time dependency on
+     * {@code com._1c.g5.v8.dt.form.model} is needed. Package-visible for the headless unit test.
+     */
+    static EObject createContentForm(IModelObjectFactory formFactory, MdObject owner, Version version)
+    {
+        EClass formEClass = contentFormEClass();
+        EObject content = null;
+        if (formFactory != null)
+        {
+            content = formFactory.create(formEClass, owner, version);
+        }
+        if (content == null)
+        {
+            content = formEClass.getEPackage().getEFactoryInstance().create(formEClass);
+        }
+        // Guard: the factory may not run in this environment (its injector may be absent), or a future
+        // change may stop seeding the command bar. Ensure the render-critical element is present.
+        if (singleReference(content, FEATURE_AUTO_COMMAND_BAR) == null)
+        {
+            setSingleReference(content, FEATURE_AUTO_COMMAND_BAR, createDefaultAutoCommandBar(content));
+        }
+        applyFormDefaults(content);
+        return content;
+    }
+
+    /** The form model EPackage nsURI ({@code com._1c.g5.v8.dt.form.model.FormPackage.eNS_URI}). */
+    private static final String FORM_PACKAGE_NS_URI = "http://g5.1c.ru/v8/dt/form"; //$NON-NLS-1$
+
+    /**
+     * The CONCRETE content {@code Form} EClass, reached WITHOUT a form-model import: the form
+     * EPackage is resolved from the global EMF package registry by its nsURI
+     * ({@code http://g5.1c.ru/v8/dt/form}) and the {@code Form} classifier by name on it. The
+     * mdclass metamodel cannot lead here - the {@code BasicForm.form} reference is deliberately
+     * typed by the mdclass-own {@code AbstractForm} base, NOT by the form package - so the registry
+     * is the one compile-time-free route. Package-visible for the headless unit test.
+     *
+     * @throws RuntimeException (wrapped into the tool error by the caller) when the form model
+     *     package is not available in this platform
+     */
+    static EClass contentFormEClass()
+    {
+        EPackage formPkg = EPackage.Registry.INSTANCE.getEPackage(FORM_PACKAGE_NS_URI);
+        EClassifier concrete = formPkg != null ? formPkg.getEClassifier("Form") : null; //$NON-NLS-1$
+        if (!(concrete instanceof EClass))
+        {
+            throw new RuntimeException("The form model EPackage (" + FORM_PACKAGE_NS_URI //$NON-NLS-1$
+                + ") is not available in this platform."); //$NON-NLS-1$
+        }
+        return (EClass)concrete;
+    }
+
+    /**
+     * Sets the standard default form-level properties a managed form authored in EDT has - the eight
+     * form flags ({@code saveWindowSettings}, {@code autoTitle}, {@code autoUrl}, {@code autoFillCheck},
+     * {@code allowFormCustomize}, {@code enabled}, {@code showTitle}, {@code showCloseButton}) true, the
+     * children grouping {@code FormChildrenGroup.VERTICAL}, and an (empty) {@code FormCommandInterface}
+     * holding an empty navigation panel and command bar - so an MCP-created form matches the reference
+     * regardless of whether {@code FormObjectFactory} resolved and ran. The {@code autoCommandBar} is
+     * created separately (it is render-critical); this method does not touch it. Reflective (by
+     * feature / classifier name), like every other write in this class.
+     */
+    private static void applyFormDefaults(EObject form)
+    {
+        setBooleanFeature(form, "saveWindowSettings", true); //$NON-NLS-1$
+        setBooleanFeature(form, "autoTitle", true); //$NON-NLS-1$
+        setBooleanFeature(form, "autoUrl", true); //$NON-NLS-1$
+        setBooleanFeature(form, "autoFillCheck", true); //$NON-NLS-1$
+        setBooleanFeature(form, "allowFormCustomize", true); //$NON-NLS-1$
+        setBooleanFeature(form, FEATURE_ENABLED, true);
+        setBooleanFeature(form, "showTitle", true); //$NON-NLS-1$
+        setBooleanFeature(form, "showCloseButton", true); //$NON-NLS-1$
+        setEnumFeature(form, FEATURE_GROUP, LITERAL_VERTICAL);
+
+        EObject commandInterface = createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE);
+        if (commandInterface != null)
+        {
+            setSingleReference(commandInterface, FEATURE_NAVIGATION_PANEL,
+                createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE_ITEMS));
+            setSingleReference(commandInterface, FEATURE_COMMAND_BAR,
+                createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE_ITEMS));
+            setSingleReference(form, FEATURE_COMMAND_INTERFACE, commandInterface);
+        }
+    }
+
+    /**
+     * Builds the form's predefined automatic command bar, mirroring
+     * {@code FormObjectFactory.newAutoCommandBar}: {@code autoFill = true}, {@code horizontalAlign =
+     * LEFT}, id {@code -1} (the sentinel EDT persists for a form's own predefined command bar, keeping
+     * it out of the regular element id space). A name is assigned so the element is well-formed; EDT
+     * renames predefined items to their canonical names on the next form sync.
+     *
+     * @param formModel any object of the form package (resolves the {@code AutoCommandBar} classifier)
+     * @return the bar, or {@code null} when the classifier does not resolve
+     */
+    private static EObject createDefaultAutoCommandBar(EObject formModel)
+    {
+        EObject bar = createFromClassifier(formModel, ECLASS_AUTO_COMMAND_BAR);
+        if (bar == null)
+        {
+            return null;
+        }
+        setBooleanFeature(bar, "autoFill", true); //$NON-NLS-1$
+        setEnumFeature(bar, "horizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
+        setIntFeature(bar, FEATURE_ID, -1);
+        setStringFeature(bar, FEATURE_NAME, RU_FORM_COMMAND_BAR);
+        return bar;
+    }
+
+    /** ru "ФормаКоманднаяПанель" - the canonical predefined-command-bar name (pure-ASCII source). */
+    private static final String RU_FORM_COMMAND_BAR = cp(0x0424, 0x043e, 0x0440, 0x043c, 0x0430,
+        0x041a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x043d, 0x0430, 0x044f,
+        0x041f, 0x0430, 0x043d, 0x0435, 0x043b, 0x044c);
+
+    /**
+     * Sets the owner's default object form via {@code setDefaultObjectForm(...)} when present. Uses
+     * reflection because that setter is declared per owner type without a common interface; a missing
+     * setter is reported clearly rather than failing silently.
+     */
+    private static void setDefaultObjectForm(MdObject owner, BasicForm mdForm)
+    {
+        for (Method method : owner.getClass().getMethods())
+        {
+            if (!"setDefaultObjectForm".equals(method.getName())) //$NON-NLS-1$
+            {
+                continue;
+            }
+            Class<?>[] paramTypes = method.getParameterTypes();
+            if (paramTypes.length == 1 && paramTypes[0].isInstance(mdForm))
+            {
+                try
+                {
+                    method.invoke(owner, mdForm);
+                    return;
+                }
+                catch (ReflectiveOperationException e)
+                {
+                    throw new RuntimeException("Failed to set default object form", e); //$NON-NLS-1$
+                }
+            }
+        }
+        throw new RuntimeException("Owner type '" + owner.eClass().getName() //$NON-NLS-1$
+            + "' has no compatible setDefaultObjectForm(...) method; create the form without " //$NON-NLS-1$
+            + "setAsDefault and assign it manually."); //$NON-NLS-1$
+    }
+
+    /** Finds a form by Name in the owner's {@code forms} collection (case-insensitive), or null. */
+    private static EObject findOwnedFormByName(EObject owner, EStructuralFeature formsFeature, String name)
+    {
+        Object value = owner.eGet(formsFeature);
+        if (value instanceof EList<?>)
+        {
+            for (Object form : (EList<?>)value)
+            {
+                if (form instanceof MdObject && name.equalsIgnoreCase(((MdObject)form).getName()))
+                {
+                    return (EObject)form;
+                }
+            }
+        }
+        return null;
     }
 
     private static String createAttribute(EObject formModel, String name, String titleLanguage,
@@ -462,17 +1042,117 @@ public final class FormElementWriter
         return null;
     }
 
+    // ---- move / reorder -------------------------------------------------------------------------
+
+    /** Position spec prefixes (the integer / {@code first} / {@code last} forms have no prefix). */
+    private static final String POS_FIRST = "first"; //$NON-NLS-1$
+    private static final String POS_LAST = "last"; //$NON-NLS-1$
+    private static final String POS_BEFORE = "before:"; //$NON-NLS-1$
+    private static final String POS_AFTER = "after:"; //$NON-NLS-1$
+
     /**
      * Moves an EXISTING visual form item under a new parent container (the form root for a blank
      * {@code parentName}, the auto command bar for the {@code AutoCommandBar} token, a named item
-     * otherwise), with the same placement validation a create applies. A button's type is re-derived
-     * when it crosses a command-bar boundary (CommandBarButton &harr; UsualButton). The designer's
-     * auto-children (tooltips / context menus / command bars) are not movable. Must run inside a BM
-     * write transaction on the tx-bound form model.
+     * otherwise), appending it at the end - the position-less variant of
+     * {@link #moveItem(EObject, EObject, String, String, String)}.
      *
      * @return {@code null} on success, or a human-readable error message
      */
     public static String moveItem(EObject formModel, EObject item, String parentName)
+    {
+        return moveItem(formModel, item, parentName, null, null);
+    }
+
+    /**
+     * Moves an EXISTING visual form item under a new parent container and/or to a new position among
+     * the destination's children. The parent resolves like a create ({@code containerFor}): the form
+     * root for a blank {@code parentName} OR the form's own name ({@code formName}), the auto command
+     * bar for the {@code AutoCommandBar} token, a named container otherwise - with the same placement
+     * validation a create applies. A button's type is re-derived when it crosses a command-bar
+     * boundary (CommandBarButton &harr; UsualButton). The designer's auto-children (tooltips /
+     * context menus / command bars) are not movable. The {@code position} spec ({@code first} /
+     * {@code last} / {@code before:&lt;name&gt;} / {@code after:&lt;name&gt;} / a 0-based FINAL
+     * integer index, see {@link #resolveMovePosition}) picks the insertion index; {@code null}
+     * appends at the end. Must run inside a BM write transaction on the tx-bound form model.
+     *
+     * @return {@code null} on success, or a human-readable error message (a malformed position spec
+     *     THROWS a {@code RuntimeException} carrying the user-facing message instead)
+     */
+    public static String moveItem(EObject formModel, EObject item, String parentName, String position,
+        String formName)
+    {
+        boolean toRoot = parentName == null || parentName.isEmpty()
+            || (formName != null && parentName.equalsIgnoreCase(formName));
+        EObject container = toRoot ? formModel : containerFor(formModel, parentName);
+        if (container == null)
+        {
+            return parentNotFound(parentName);
+        }
+        return moveItemInto(formModel, item, container,
+            toRoot ? "the form root" : parentName, position); //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves the moved item BY NAME - rejecting an AMBIGUOUS name (more than one match anywhere in
+     * the form-item tree) instead of silently moving the first match - then delegates to the
+     * container-resolving move. This is the {@code modify_metadata} entry point and implements its
+     * 'parent' contract: {@code null} keeps the CURRENT container (a pure reorder); blank or the
+     * form's own name means the form ROOT; anything else resolves like a create parent (a group /
+     * table / {@code AutoCommandBar} / ...).
+     *
+     * @param formModel the editable form content model (tx-bound)
+     * @param itemName the programmatic name of the item to move
+     * @param targetParent the destination container name; blank or equal to {@code formName} means
+     *     the form root; {@code null} keeps the item in its current container (reorder in place)
+     * @param position the destination position spec, or {@code null} to append at the end
+     * @param formName the MD-form Name (matching it as {@code targetParent} means the form root)
+     * @return a human-readable description of where the item ended up (e.g. {@code "group 'Main' at
+     *     index 1"})
+     * @throws RuntimeException with a user-facing message on any rejection (the calling write lambda
+     *     rolls back with no partial mutation)
+     */
+    public static String moveItem(EObject formModel, String itemName, String targetParent,
+        String position, String formName)
+    {
+        EObject item = findUniqueItem(formModel, itemName);
+        if (item == null)
+        {
+            throw new RuntimeException("Form item not found: '" + itemName //$NON-NLS-1$
+                + "'. Use get_metadata_details on the form to inspect its items."); //$NON-NLS-1$
+        }
+        String err;
+        if (targetParent == null)
+        {
+            // Reorder in place: the destination is the item's CURRENT container.
+            EObject container = item.eContainer();
+            if (container == null)
+            {
+                throw new RuntimeException("Form item '" + itemName //$NON-NLS-1$
+                    + "' has no parent container and cannot be moved."); //$NON-NLS-1$
+            }
+            err = moveItemInto(formModel, item, container, containerLabel(formModel, container),
+                position);
+        }
+        else
+        {
+            err = moveItem(formModel, item, targetParent, position, formName);
+        }
+        if (err != null)
+        {
+            throw new RuntimeException(err);
+        }
+        return destinationOf(formModel, item);
+    }
+
+    /**
+     * The shared move core: validates the item and the destination (the designer-parity guards a
+     * create applies), resolves the insertion index, performs the containment move and re-derives a
+     * button's type. ALL validation precedes the first mutation, so an error leaves the model
+     * untouched (and the surrounding BM transaction rolls back clean).
+     */
+    @SuppressWarnings("unchecked")
+    private static String moveItemInto(EObject formModel, EObject item, EObject container,
+        String parentLabel, String position)
     {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
         if (!(formItem instanceof EClass) || !((EClass)formItem).isInstance(item))
@@ -487,11 +1167,6 @@ public final class FormElementWriter
             return "'" + stringFeature(item, FEATURE_NAME) + "' is a designer auto-child (" //$NON-NLS-1$ //$NON-NLS-2$
                 + item.eClass().getName() + ") and cannot be moved."; //$NON-NLS-1$
         }
-        EObject container = containerFor(formModel, parentName);
-        if (container == null)
-        {
-            return parentNotFound(parentName);
-        }
         if (container == item)
         {
             return "An item cannot become its own parent."; //$NON-NLS-1$
@@ -501,14 +1176,14 @@ public final class FormElementWriter
             if (ancestor == item)
             {
                 return "Cannot move '" + stringFeature(item, FEATURE_NAME) //$NON-NLS-1$
-                    + "' into its own contained item '" + parentName + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' into its own contained item '" + parentLabel //$NON-NLS-1$
+                    + "': an item cannot be moved into itself or its own descendant."; //$NON-NLS-1$
             }
         }
         Kind kind = kindForEClass(item.eClass().getName());
         if (kind != null)
         {
-            String invalid = validatePlacement(kind, container,
-                parentName == null || parentName.isEmpty() ? "the form root" : parentName); //$NON-NLS-1$
+            String invalid = validatePlacement(kind, container, parentLabel);
             if (invalid != null)
             {
                 return invalid;
@@ -517,17 +1192,173 @@ public final class FormElementWriter
         EStructuralFeature itemsFeature = container.eClass().getEStructuralFeature(FEATURE_ITEMS);
         if (!(itemsFeature instanceof EReference) || !itemsFeature.isMany())
         {
-            return "The parent '" + parentName + "' (" + container.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+            return "The parent '" + parentLabel + "' (" + container.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
                 + ") cannot hold nested items."; //$NON-NLS-1$
         }
-        // Adding to the new containment list MOVES the EObject in EMF (single-container invariant).
-        addToList(container, FEATURE_ITEMS, item);
+        EList<EObject> destItems = (EList<EObject>)container.eGet(itemsFeature);
+        // Resolve the index BEFORE any mutation (a bad position spec throws and leaves the model
+        // untouched). The sibling names EXCLUDE the moved item, so the integer index is the desired
+        // FINAL 0-based position in both the reorder-in-place and the cross-container case.
+        List<String> destNames = new ArrayList<>(destItems.size());
+        for (EObject sibling : destItems)
+        {
+            if (sibling != item)
+            {
+                destNames.add(stringFeature(sibling, FEATURE_NAME));
+            }
+        }
+        int index = resolveMovePosition(position, destNames, stringFeature(item, FEATURE_NAME));
+        EList<EObject> sourceItems =
+            (EList<EObject>)item.eContainer().eGet(item.eContainmentFeature());
+        sourceItems.remove(item);
+        if (index < 0 || index > destItems.size())
+        {
+            index = destItems.size();
+        }
+        destItems.add(index, item);
         if ("Button".equals(item.eClass().getName())) //$NON-NLS-1$
         {
             setEnumFeature(item, FEATURE_TYPE,
                 isCommandBarContext(container) ? "CommandBarButton" : "UsualButton"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
+    }
+
+    /**
+     * Resolves a requested {@code position} into a 0-based insertion index in a destination list whose
+     * sibling names are {@code destNames} (already EXCLUDING the moved item). The {@code first} /
+     * {@code last} / {@code before:<name>} / {@code after:<name>} forms are name-relative; a plain
+     * integer is the desired FINAL index as-is. Pure (no model dependency) so it is unit-testable.
+     *
+     * @param position the position spec, or {@code null} / blank / {@code last} for the end
+     * @param destNames the destination sibling names in order (without the moved item)
+     * @param movedName the moved item's name (a {@code before:}/{@code after:} reference to it is rejected)
+     * @return the 0-based insertion index
+     * @throws RuntimeException with a user-facing message on a malformed spec or unknown sibling
+     */
+    public static int resolveMovePosition(String position, List<String> destNames, String movedName)
+    {
+        if (position == null || position.isEmpty() || POS_LAST.equalsIgnoreCase(position))
+        {
+            return destNames.size();
+        }
+        if (POS_FIRST.equalsIgnoreCase(position))
+        {
+            return 0;
+        }
+        String lower = position.toLowerCase(java.util.Locale.ROOT);
+        if (lower.startsWith(POS_BEFORE))
+        {
+            return indexOfSibling(destNames, position.substring(POS_BEFORE.length()).trim(), movedName);
+        }
+        if (lower.startsWith(POS_AFTER))
+        {
+            return indexOfSibling(destNames, position.substring(POS_AFTER.length()).trim(), movedName) + 1;
+        }
+        try
+        {
+            int idx = Integer.parseInt(position.trim());
+            if (idx < 0)
+            {
+                throw new RuntimeException("Invalid position index '" + position //$NON-NLS-1$
+                    + "': must be zero or positive."); //$NON-NLS-1$
+            }
+            return idx;
+        }
+        catch (NumberFormatException e)
+        {
+            throw new RuntimeException("Invalid position '" + position //$NON-NLS-1$
+                + "'. Expected an integer index, 'first', 'last', 'before:<name>' or 'after:<name>'."); //$NON-NLS-1$
+        }
+    }
+
+    /** The 0-based index of {@code sibling} in {@code destNames} (case-insensitive), or throws. */
+    private static int indexOfSibling(List<String> destNames, String sibling, String movedName)
+    {
+        if (sibling.isEmpty())
+        {
+            throw new RuntimeException("Position reference is missing a sibling name " //$NON-NLS-1$
+                + "(use 'before:<name>' or 'after:<name>')."); //$NON-NLS-1$
+        }
+        if (sibling.equalsIgnoreCase(movedName))
+        {
+            throw new RuntimeException("Position cannot reference the moved item itself: '" //$NON-NLS-1$
+                + sibling + "'."); //$NON-NLS-1$
+        }
+        for (int i = 0; i < destNames.size(); i++)
+        {
+            if (sibling.equalsIgnoreCase(destNames.get(i)))
+            {
+                return i;
+            }
+        }
+        throw new RuntimeException("Sibling '" + sibling //$NON-NLS-1$
+            + "' not found in the destination container."); //$NON-NLS-1$
+    }
+
+    /** Where the item now lives, for the move result: the container label + the final 0-based index. */
+    @SuppressWarnings("unchecked")
+    private static String destinationOf(EObject formModel, EObject item)
+    {
+        EObject container = item.eContainer();
+        int index = ((EList<EObject>)container.eGet(item.eContainmentFeature())).indexOf(item);
+        return containerLabel(formModel, container) + " at index " + index; //$NON-NLS-1$
+    }
+
+    /** "the form root" / "group 'X'" / "'X' (AutoCommandBar)" - the user-facing container label. */
+    private static String containerLabel(EObject formModel, EObject container)
+    {
+        if (container == formModel)
+        {
+            return "the form root"; //$NON-NLS-1$
+        }
+        if (ECLASS_FORM_GROUP.equals(container.eClass().getName()))
+        {
+            return "group '" + stringFeature(container, FEATURE_NAME) + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return "'" + stringFeature(container, FEATURE_NAME) + "' (" + container.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+            + ")"; //$NON-NLS-1$
+    }
+
+    /**
+     * Finds a form item by name anywhere in the form-item tree (the same all-containment walk
+     * {@code findItem} uses: items, command bars, context menus, tooltips), REJECTING an ambiguous
+     * name (more than one match) with a clear error rather than silently picking the first match.
+     * Returns the unique match, or {@code null} when none exists.
+     */
+    private static EObject findUniqueItem(EObject formModel, String name)
+    {
+        EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
+        if (!(formItem instanceof EClass))
+        {
+            return null;
+        }
+        List<EObject> matches = new ArrayList<>();
+        collectItemsByName(formModel, name, (EClass)formItem, matches);
+        if (matches.size() > 1)
+        {
+            throw new RuntimeException("Form item name '" + name //$NON-NLS-1$
+                + "' is ambiguous (it matches more than one item)."); //$NON-NLS-1$
+        }
+        return matches.isEmpty() ? null : matches.get(0);
+    }
+
+    /** Collects every {@code FormItem} in the tree whose name matches (case-insensitive). */
+    private static void collectItemsByName(EObject container, String name, EClass formItem,
+        List<EObject> out)
+    {
+        for (EObject child : container.eContents())
+        {
+            if (!formItem.isInstance(child))
+            {
+                continue;
+            }
+            if (name.equalsIgnoreCase(stringFeature(child, FEATURE_NAME)))
+            {
+                out.add(child);
+            }
+            collectItemsByName(child, name, formItem, out);
+        }
     }
 
     /** The placement-rule {@link Kind} for a concrete item EClass name, or {@code null} when none. */
@@ -1529,6 +2360,108 @@ public final class FormElementWriter
         return null;
     }
 
+    // ---- rebind: change an EXISTING handler's procedure / a button's command --------------------
+
+    /**
+     * Re-points an EXISTING event handler on {@code container} (the form root, a form item or a form
+     * COMMAND) to a different BSL procedure. For an item / the form root it finds the handler bound
+     * to {@code eventName} (English or Russian, case-insensitive) and overwrites its procedure
+     * {@code name}; for a form command ({@code ...Command.X.Handler.Action}) the single Action's
+     * contained {@code CommandHandler} is renamed. Does NOT bind a new event (that is
+     * {@code create_metadata} via {@link #createHandler}); a missing handler is reported so the caller
+     * can steer the user to create it. Reflective, so no compile-time form-model dependency. Call on
+     * the tx-bound form model.
+     *
+     * @param container the form root, the owning form item or the form command (already resolved on
+     *     the tx-bound model, see {@link #resolveHandlerContainer})
+     * @param eventName the event whose handler to rebind (e.g. {@code OnChange}, or {@code Action}
+     *     for a command)
+     * @param procName the new BSL handler procedure name (must be non-blank)
+     * @return {@code null} on success, or a human-readable error message
+     */
+    public static String rebindHandler(EObject container, String eventName, String procName)
+    {
+        if (ECLASS_FORM_COMMAND.equals(container.eClass().getName()))
+        {
+            // A command's single handler "event" is its Action: rename the CommandHandler inside the
+            // action containment (the pair createCommandAction builds).
+            if (procName == null || procName.isEmpty())
+            {
+                return "Provide the new handler procedure name in the 'procedure' property " //$NON-NLS-1$
+                    + "(e.g. {name:'procedure', value:'PriceOnChange'})."; //$NON-NLS-1$
+            }
+            if (!isActionToken(eventName))
+            {
+                return "Event '" + eventName + "' is not valid for a form command" //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". Available events: " + COMMAND_ACTION_EVENT; //$NON-NLS-1$
+            }
+            EObject action = singleReference(container, FEATURE_ACTION);
+            EObject handler = action != null ? singleReference(action, FEATURE_HANDLER) : null;
+            if (handler == null)
+            {
+                return "No event handler for '" + eventName + "' exists on this element to rebind. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Use create_metadata on the handler FQN to bind it first."; //$NON-NLS-1$
+            }
+            setStringFeature(handler, FEATURE_NAME, procName);
+            return null;
+        }
+        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
+        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        {
+            return "The form element '" + container.eClass().getName() //$NON-NLS-1$
+                + "' cannot hold event handlers."; //$NON-NLS-1$
+        }
+        if (procName == null || procName.isEmpty())
+        {
+            return "Provide the new handler procedure name in the 'procedure' property " //$NON-NLS-1$
+                + "(e.g. {name:'procedure', value:'PriceOnChange'})."; //$NON-NLS-1$
+        }
+        EObject handler = findFormHandler(container, eventName);
+        if (handler == null)
+        {
+            return "No event handler for '" + eventName + "' exists on this element to rebind. Use " //$NON-NLS-1$ //$NON-NLS-2$
+                + "create_metadata on the handler FQN to bind it first."; //$NON-NLS-1$
+        }
+        setStringFeature(handler, FEATURE_NAME, procName);
+        return null;
+    }
+
+    /**
+     * Re-points an EXISTING button at a different (existing) form command: validates that
+     * {@code button} carries a {@code commandName} reference and that a {@code FormCommand} named
+     * {@code commandName} exists on {@code formModel}, then sets the reference. A button's
+     * {@code commandName} targets a FormCommand (a form-model object, not an mdclass object), so it
+     * is not introspector-assignable and is rebound here. Reflective, so no compile-time form-model
+     * dependency. Call on the tx-bound form model.
+     *
+     * @param formModel the editable form content model (tx-bound)
+     * @param button the button form item (already resolved on the tx-bound model)
+     * @param commandName the name of the existing form command to point the button at
+     * @return {@code null} on success, or a human-readable error message
+     */
+    public static String rebindButtonCommand(EObject formModel, EObject button, String commandName)
+    {
+        EStructuralFeature cmdFeat = button.eClass().getEStructuralFeature("commandName"); //$NON-NLS-1$
+        if (!(cmdFeat instanceof EReference))
+        {
+            return "The form item '" + button.eClass().getName() //$NON-NLS-1$
+                + "' has no 'commandName' reference; only a Button runs a form command."; //$NON-NLS-1$
+        }
+        if (commandName == null || commandName.isEmpty())
+        {
+            return "Provide the form command to point the button at in the 'command' property " //$NON-NLS-1$
+                + "(e.g. {name:'command', value:'Refresh'})."; //$NON-NLS-1$
+        }
+        EObject command = findByName(referenceList(formModel, FEATURE_FORM_COMMANDS), commandName);
+        if (command == null)
+        {
+            return "Form command '" + commandName + "' not found - create it first " //$NON-NLS-1$ //$NON-NLS-2$
+                + "(create_metadata on the form's Command FQN), then re-point the button at it."; //$NON-NLS-1$
+        }
+        button.eSet(cmdFeat, command);
+        return null;
+    }
+
     /**
      * Depth-first search of ALL contained {@code FormItem}s for an item by its (form-wide unique)
      * programmatic name. Walks every containment that holds form items - the {@code items} tree, the
@@ -1589,6 +2522,17 @@ public final class FormElementWriter
         }
         Object value = owner.eGet(feature);
         return value instanceof EObject ? (EObject)value : null;
+    }
+
+    /** Sets a single-valued EReference by feature name; a no-op when the feature is absent / not a
+     * single-valued reference or {@code value} is {@code null} (best-effort, like the other setters). */
+    private static void setSingleReference(EObject owner, String featureName, EObject value)
+    {
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (feature instanceof EReference && !feature.isMany() && value != null)
+        {
+            owner.eSet(feature, value);
+        }
     }
 
     /** The literal of a set EEnum attribute (e.g. a group's {@code type}), or {@code null}. */
