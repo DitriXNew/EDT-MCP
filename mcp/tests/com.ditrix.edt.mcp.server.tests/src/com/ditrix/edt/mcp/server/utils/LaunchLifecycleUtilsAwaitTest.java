@@ -133,6 +133,32 @@ public class LaunchLifecycleUtilsAwaitTest
     }
 
     @Test
+    public void testWaitForInfobaseAppliedIsTheSyncedGate() throws ApplicationException
+    {
+        // The package-private wrapper waitForInfobaseApplied (no production caller
+        // today — kept as the canonical post-update gate and this test seam) must
+        // behave exactly like awaitUpdateState with the SYNCED predicate: an entry
+        // UPDATED returns immediately, and null arguments degrade to UNKNOWN
+        // without throwing.
+        IApplication app = mock(IApplication.class);
+        AtomicReference<IApplicationListener> captured = new AtomicReference<>();
+        int[] addCount = {0};
+        int[] removeCount = {0};
+        IApplicationManager mgr = mockManagerCapturingListener(app,
+            ApplicationUpdateState.UPDATED, captured, addCount, removeCount);
+
+        assertEquals(ApplicationUpdateState.UPDATED,
+            LaunchLifecycleUtils.waitForInfobaseApplied(mgr, app));
+        assertEquals("listener must be registered exactly once", 1, addCount[0]);
+        assertEquals("listener must be removed exactly once", 1, removeCount[0]);
+
+        assertEquals("null manager must degrade to UNKNOWN", ApplicationUpdateState.UNKNOWN,
+            LaunchLifecycleUtils.waitForInfobaseApplied(null, app));
+        assertEquals("null application must degrade to UNKNOWN", ApplicationUpdateState.UNKNOWN,
+            LaunchLifecycleUtils.waitForInfobaseApplied(mgr, null));
+    }
+
+    @Test
     public void testWakesOnUpdateStateChangedEvent() throws ApplicationException, InterruptedException
     {
         // Entry state does NOT satisfy `done`; a background thread later delivers an

@@ -381,6 +381,41 @@ public class LaunchUpdateDialogAutoConfirmerTest
             LaunchUpdateDialogAutoConfirmer.isKeepExistingLabel(DEBUG_SESSION_BODY));
     }
 
+    // === per-dialog auto-press decision (chooseConfirmAction) ===
+
+    @Test
+    public void test1003WithKeepButtonPressesIt()
+    {
+        // The 1003 modal with the labelled keep-button present: press it — the
+        // existing session survives and the new client starts alongside.
+        assertEquals(LaunchUpdateDialogAutoConfirmer.ConfirmAction.PRESS_KEEP_BUTTON,
+            LaunchUpdateDialogAutoConfirmer.chooseConfirmAction(true, true));
+    }
+
+    @Test
+    public void test1003WithoutKeepButtonCancelsNeverPressesDefault()
+    {
+        // CRITICAL (the fallback pin): when the keep-button is NOT found by label,
+        // the dialog is CANCELLED — the 1003 modal's DEFAULT button is the
+        // destructive 'Stop existing and start new', and pressing it blind would
+        // terminate the very session the keep-press exists to protect. Cancelling
+        // aborts only the NEW launch (non-destructive) instead of hanging on the
+        // modal or killing the existing session.
+        assertEquals(LaunchUpdateDialogAutoConfirmer.ConfirmAction.CANCEL_DIALOG,
+            LaunchUpdateDialogAutoConfirmer.chooseConfirmAction(true, false));
+    }
+
+    @Test
+    public void testUpdateModalPressesDefaultButton()
+    {
+        // The 'Application update' modal still completes via its default button
+        // ('Update then run') — the keep-button flag is meaningless for it.
+        assertEquals(LaunchUpdateDialogAutoConfirmer.ConfirmAction.PRESS_DEFAULT_BUTTON,
+            LaunchUpdateDialogAutoConfirmer.chooseConfirmAction(false, false));
+        assertEquals(LaunchUpdateDialogAutoConfirmer.ConfirmAction.PRESS_DEFAULT_BUTTON,
+            LaunchUpdateDialogAutoConfirmer.chooseConfirmAction(false, true));
+    }
+
     @Test
     public void testUnbalancedDisarmIsNoOp()
     {

@@ -74,7 +74,7 @@ import com.ditrix.edt.mcp.server.Activator;
  *       the caller did NOT opt out of the DB update ({@code updateBeforeLaunch}),
  *       so opting out leaves EDT's "Update then run" modal for a human while the
  *       1003 modal is still auto-confirmed. The back-compat {@link #arm()} arms the
- *       update matcher only (the YAXUnit callers).</li>
+ *       update matcher only.</li>
  *   <li>Each matcher is reentrant via its own counter; concurrent launches share
  *       ONE filter, which is installed while EITHER matcher is armed and removed by
  *       the last {@code disarm} of both. Each branch of the listener fires only
@@ -183,7 +183,9 @@ public final class LaunchUpdateDialogAutoConfirmer
      * (LAUNCH_ANYWAY) button. Matching the button by its label — rather than by a
      * fixed index — keeps the press correct even if EDT reorders the button bar; an
      * exact, whole-label compare so no unrelated button is pressed. If none of these
-     * labels is found, the press falls back to the shell's default button.
+     * labels is found, the dialog is CANCELLED instead (see
+     * {@link ConfirmAction#CANCEL_DIALOG}) — its default button is the destructive
+     * "Stop existing and start new" and is never pressed blind.
      */
     static final Set<String> DEBUG_SESSION_KEEP_BUTTONS = Collections.unmodifiableSet(
         new LinkedHashSet<>(Arrays.asList(DEBUG_SESSION_KEEP_BUTTON, DEBUG_SESSION_KEEP_BUTTON_RU)));
@@ -259,8 +261,9 @@ public final class LaunchUpdateDialogAutoConfirmer
      * Arms the update-dialog matcher only — the back-compat entry point. MUST be
      * paired with {@link #disarm()}. Equivalent to {@code arm(true, false)}: the
      * "Application update" modal is auto-confirmed, the code-1003 modal is NOT.
-     * The YAXUnit callers ({@code RunYaxunitTestsTool}) use this — they only need
-     * the update modal pressed.
+     * Kept for callers that need only the update modal pressed unconditionally;
+     * the YAXUnit tools now gate both matchers per call site via
+     * {@link #arm(boolean, boolean)}.
      */
     public static void arm()
     {
@@ -642,8 +645,55 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * Auto-completes a matched dialog by pressing the right button, chosen PER
-     * DIALOG:
+     * How a matched dialog is auto-completed — the pure outcome of
+     * {@link #chooseConfirmAction} (and the unit-test seam pinning the 1003
+     * fallback policy).
+     */
+    enum ConfirmAction
+    {
+        /**
+         * 1003 modal, labelled keep-button present: press "Keep existing and
+         * start new" (LAUNCH_ANYWAY).
+         */
+        PRESS_KEEP_BUTTON,
+        /**
+         * 1003 modal whose keep-button could not be located by label: CANCEL the
+         * dialog — never press the default button, which on this modal is the
+         * destructive "Stop existing and start new" (RESTART_APPLICATION) and
+         * would terminate the very session the keep-press exists to protect.
+         */
+        CANCEL_DIALOG,
+        /** The "Application update" modal: press its default button ("Update then run"). */
+        PRESS_DEFAULT_BUTTON;
+    }
+
+    /**
+     * Pure decision (and test seam): how should a dialog this filter matched be
+     * auto-completed? The update modal always completes via its default button.
+     * The 1003 modal completes via the labelled keep-button when one was found;
+     * when the label lookup fails (an unshipped locale, a reworded button) the
+     * dialog is CANCELLED instead — cancelling aborts only the NEW launch and is
+     * non-destructive, whereas the modal's default button would stop the
+     * existing session.
+     *
+     * @param debugSessionDialog {@code true} when the dialog body matched the
+     *            code-1003 "Debug session already exists" modal
+     * @param keepButtonFound {@code true} when {@link #findKeepExistingButton}
+     *            located the labelled keep-button (only meaningful for the 1003 modal)
+     * @return the action that completes the dialog
+     */
+    static ConfirmAction chooseConfirmAction(boolean debugSessionDialog, boolean keepButtonFound)
+    {
+        if (!debugSessionDialog)
+        {
+            return ConfirmAction.PRESS_DEFAULT_BUTTON;
+        }
+        return keepButtonFound ? ConfirmAction.PRESS_KEEP_BUTTON : ConfirmAction.CANCEL_DIALOG;
+    }
+
+    /**
+     * Auto-completes a matched dialog, the action chosen PER DIALOG by
+     * {@link #chooseConfirmAction}:
      * <ul>
      *   <li><b>code-1003 "Debug session already exists"</b> (body matches
      *       {@link #isDebugSessionExistsBody}) → press the <b>"Keep existing and
@@ -653,8 +703,11 @@ public final class LaunchUpdateDialogAutoConfirmer
      *       (a standalone-server debug target, or another client in a race) ALIVE and
      *       starts the new client alongside it — pressing the DEFAULT button here
      *       (index 0, "Stop existing and start new" / RESTART_APPLICATION) would
-     *       wrongly TERMINATE it. If the keep-button label is not found, falls back to
-     *       the default button.</li>
+     *       wrongly TERMINATE it. If the keep-button label is not found, the dialog
+     *       is CANCELLED ({@link Shell#close()} — JFace maps the close to the
+     *       dialog's Cancel) and the miss is logged: the existing session survives
+     *       and the new launch aborts cleanly instead of stopping it
+     *       ({@link ConfirmAction#CANCEL_DIALOG}).</li>
      *   <li><b>"Application update" modal</b> (everything else this filter matched)
      *       → press the <b>default</b> button ("Update then run", index 0), unchanged.</li>
      * </ul>
@@ -671,47 +724,42 @@ public final class LaunchUpdateDialogAutoConfirmer
             // Distinguish the two modals (the body walk is cheap and also drives the
             // per-dialog button choice + the log trail an unattended run leaves).
             boolean debugSessionDialog = isDebugSessionExistsBody(readDialogBody(shell));
-            Button button = null;
-            String reason;
-            if (debugSessionDialog)
+            Button keepButton = debugSessionDialog ? findKeepExistingButton(shell) : null;
+            switch (chooseConfirmAction(debugSessionDialog, keepButton != null))
             {
-                // The 1003 modal: keep the existing session, start the new one ALONGSIDE
-                // it (LAUNCH_ANYWAY) — never the default "stop existing" button.
-                button = findKeepExistingButton(shell);
-                if (button != null)
-                {
-                    reason = "keep existing and start new"; //$NON-NLS-1$
-                }
-                else
-                {
-                    // No labelled keep-button found — fall back to the default button so
-                    // the launch still completes rather than hanging on the modal.
-                    button = shell.getDefaultButton();
-                    reason = "keep-button not found, fell back to default button"; //$NON-NLS-1$
-                }
-            }
-            else
-            {
-                // The update modal: press its default button ("Update then run").
-                button = shell.getDefaultButton();
-                reason = "default button"; //$NON-NLS-1$
-            }
-            if (button == null || button.isDisposed())
-            {
-                return;
-            }
-            if (debugSessionDialog)
-            {
+            case PRESS_KEEP_BUTTON:
+                // The 1003 modal: keep the existing session, start the new one
+                // ALONGSIDE it (LAUNCH_ANYWAY) — never the default "stop existing".
                 Activator.logInfo("Auto-confirming debug-session dialog '" //$NON-NLS-1$
-                    + safeShellText(shell) + "' via button '" + safeText(button) //$NON-NLS-1$
-                    + "' (" + reason + ")"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else
-            {
+                    + safeShellText(shell) + "' via button '" + safeText(keepButton) //$NON-NLS-1$
+                    + "' (keep existing and start new)"); //$NON-NLS-1$
+                pressButton(keepButton);
+                return;
+            case CANCEL_DIALOG:
+                // No labelled keep-button found. The default button here is the
+                // DESTRUCTIVE "Stop existing and start new" — never press it blind.
+                // Cancel the dialog instead (Shell.close() = the dialog's Cancel):
+                // the existing session survives and the new launch aborts cleanly
+                // rather than hanging on the modal.
+                Activator.logError("Auto-confirm: keep-button not found by label in " //$NON-NLS-1$
+                    + "debug-session dialog '" + safeShellText(shell) //$NON-NLS-1$
+                    + "' — cancelling the dialog instead of pressing its destructive " //$NON-NLS-1$
+                    + "default button", null); //$NON-NLS-1$
+                shell.close();
+                return;
+            case PRESS_DEFAULT_BUTTON:
+            default:
+                // The update modal: press its default button ("Update then run").
+                Button button = shell.getDefaultButton();
+                if (button == null || button.isDisposed())
+                {
+                    return;
+                }
                 Activator.logInfo("Auto-confirming launch dialog '" + safeShellText(shell) //$NON-NLS-1$
                     + "' via button '" + safeText(button) + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+                pressButton(button);
+                return;
             }
-            pressButton(button);
         }
         catch (RuntimeException e)
         {
@@ -725,8 +773,9 @@ public final class LaunchUpdateDialogAutoConfirmer
      * — among all {@link Button}s in the shell's widget tree. Matching by label,
      * rather than a fixed index, stays correct if EDT reorders the button bar. Returns
      * the first non-disposed match, or {@code null} when no labelled keep-button is
-     * present (caller then falls back to the default button). Bounded-depth, fully
-     * guarded — never throws onto the UI thread.
+     * present (the caller then CANCELS the dialog — see {@link #chooseConfirmAction};
+     * the default button here is the destructive "stop existing" choice).
+     * Bounded-depth, fully guarded — never throws onto the UI thread.
      *
      * @param shell the 1003 dialog shell (may be {@code null}/disposed)
      * @return the keep-existing button, or {@code null}

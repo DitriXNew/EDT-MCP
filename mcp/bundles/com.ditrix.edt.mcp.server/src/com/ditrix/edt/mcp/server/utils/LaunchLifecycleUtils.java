@@ -445,9 +445,9 @@ public final class LaunchLifecycleUtils
      * only <em>waited</em> for derived data, but the wait returns immediately when
      * nothing is scheduled — so a stale extension {@code .cfe} was never
      * regenerated and {@code appManager.update(...)} simply consumed the existing
-     * (stale) export artifact. {@link IDerivedDataManager#recomputeAll()} (exactly
-     * what {@code refresh_model} uses) forces the extension's model — and thus its
-     * {@code .cfe} — to be rebuilt before the update.
+     * (stale) export artifact. {@link IDerivedDataManager#recomputeAll()} — EDT's
+     * forced derived-data recompute — forces the extension's model, and thus its
+     * {@code .cfe}, to be rebuilt before the update.
      *
      * <p>Sequence:
      * <ol>
@@ -475,8 +475,9 @@ public final class LaunchLifecycleUtils
         }
 
         // Phase 1: schedule a forced recompute for every open project up front,
-        // so all extension rebuilds are queued before we start blocking. This is
-        // the same provider/manager access pattern RefreshModelTool uses.
+        // so all extension rebuilds are queued before we start blocking, via the
+        // standard IDtProjectManager -> IDerivedDataManagerProvider ->
+        // IDerivedDataManager.recomputeAll() chain.
         for (IProject project : projects)
         {
             if (project == null || !project.exists() || !project.isOpen())
@@ -1075,11 +1076,12 @@ public final class LaunchLifecycleUtils
      * Waits (event-driven) until the given application's infobase is observed to be
      * {@link ApplicationUpdateState#UPDATED} (the DB has actually applied the
      * configuration/extension change), treating {@link ApplicationUpdateState#BEING_UPDATED}
-     * as "keep waiting", up to {@link #syncApplyTimeoutMs}. Public so
-     * {@code update_database} can reuse exactly the same gate the YAXUnit
-     * auto-chain uses: {@code appManager.update(...)} can return before the DB
-     * application finishes, so callers must wait for the observed {@code UPDATED}
-     * before treating the IB as in sync. Wakes on EDT's
+     * as "keep waiting", up to {@link #syncApplyTimeoutMs}. Package-private on
+     * purpose: nothing in production calls it today — the auto-chain
+     * ({@link #updateApplicationIfNeeded}) applies the same
+     * {@link #awaitUpdateState} gate inline — so this is kept only as the
+     * canonical "block until the IB applied the update" wrapper (and its unit-test
+     * seam), NOT as public API. Wakes on EDT's
      * {@link ApplicationEventType#UPDATE_STATE_CHANGED} event rather than polling
      * the lagging cached state.
      *
@@ -1089,7 +1091,7 @@ public final class LaunchLifecycleUtils
      * @return the last observed state; {@link ApplicationUpdateState#UPDATED} on
      *         success, otherwise the terminal/last state on timeout
      */
-    public static ApplicationUpdateState waitForInfobaseApplied(IApplicationManager appManager,
+    static ApplicationUpdateState waitForInfobaseApplied(IApplicationManager appManager,
             IApplication application)
     {
         return awaitUpdateState(appManager, application,

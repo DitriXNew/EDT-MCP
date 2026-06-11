@@ -70,8 +70,8 @@ public class DebugLaunchTool implements IMcpTool
         return "Start an EDT debug session: either an existing config by launchConfigurationName " //$NON-NLS-1$
             + "(runtime client OR Attach, the latter needed to debug server-side code), or a " //$NON-NLS-1$
             + "runtime-client config matched by projectName + applicationId. If that config is " //$NON-NLS-1$
-            + "already running it short-circuits with alreadyRunning:true (terminate_launch first " //$NON-NLS-1$
-            + "to force a restart). " //$NON-NLS-1$
+            + "already running it short-circuits with alreadyRunning:true; pass " //$NON-NLS-1$
+            + "restartIfRunning:true to terminate the existing session and relaunch fresh. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('debug_launch')."; //$NON-NLS-1$
     }
 
@@ -789,7 +789,8 @@ public class DebugLaunchTool implements IMcpTool
      *       <em>unconditionally</em> on this debug path (independent of
      *       {@code autoConfirmUpdateDialog}). With {@code restartIfRunning=true} and a
      *       {@code terminate()} that times out, the relaunch can still race a residual
-     *       1003 modal; auto-pressing its default ("stop existing and start new")
+     *       1003 modal; auto-pressing its "Keep existing and start new" button (located
+     *       by label — never the destructive default "stop existing and start new")
      *       keeps an unattended call from hanging. Pressing it performs NO DB update,
      *       so it does not undo the {@code updateBeforeLaunch=false} opt-out.</li>
      * </ul>

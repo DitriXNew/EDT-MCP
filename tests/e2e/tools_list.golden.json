@@ -254,7 +254,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Start an EDT debug session: either an existing config by launchConfigurationName (runtime client OR Attach, the latter needed to debug server-side code), or a runtime-client config matched by projectName + applicationId. If that config is already running it short-circuits with alreadyRunning:true (terminate_launch first to force a restart). Full parameters and examples: call get_tool_guide('debug_launch').",
+    "description": "Start an EDT debug session: either an existing config by launchConfigurationName (runtime client OR Attach, the latter needed to debug server-side code), or a runtime-client config matched by projectName + applicationId. If that config is already running it short-circuits with alreadyRunning:true; pass restartIfRunning:true to terminate the existing session and relaunch fresh. Full parameters and examples: call get_tool_guide('debug_launch').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -422,7 +422,7 @@
           "type": "string"
         },
         "updateBeforeLaunch": {
-          "description": "Default true: terminate any live client and run a silent DB update first so no modal 'Update database?' dialog blocks the call; false keeps legacy delegate behaviour.",
+          "description": "Default true: terminate any live client and run a silent DB update first so no modal 'Update database?' dialog blocks the call; false keeps legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear.",
           "type": "boolean"
         },
         "updateScope": {
@@ -2647,7 +2647,7 @@
           "type": "integer"
         },
         "updateBeforeLaunch": {
-          "description": "Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale). Results are never served from a cache — a completed run is re-executed on the next identical call regardless of this flag.",
+          "description": "Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale). false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are never served from a cache — a completed run is re-executed on the next identical call regardless of this flag.",
           "type": "boolean"
         },
         "updateScope": {

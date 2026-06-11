@@ -11,4 +11,4 @@ set_breakpoint -> run_yaxunit_tests(debug=true) -> wait_for_break
 ```
 
 ## Parameter details
-Same as `run_yaxunit_tests` (minus `timeout`, which DEBUG mode ignores): identify the launch by `launchConfigurationName`, or by `projectName` + `applicationId`; filter with `extensions` / `modules` / `tests` (pin to ONE test for a predictable cycle); `updateBeforeLaunch` (default true) silences the modal update dialog. See `get_tool_guide('run_yaxunit_tests')` for the full reference.
+Same as `run_yaxunit_tests` (minus `timeout`, which DEBUG mode ignores): identify the launch by `launchConfigurationName`, or by `projectName` + `applicationId`; filter with `extensions` / `modules` / `tests` (pin to ONE test for a predictable cycle); `updateBeforeLaunch` (default true) silences the modal update dialog — `false` keeps legacy delegate behaviour (no fresh-run client sweep, no auto-confirmed update dialog; platform dialogs may appear). See `get_tool_guide('run_yaxunit_tests')` for the full reference.

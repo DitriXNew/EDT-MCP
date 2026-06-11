@@ -6,7 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -248,11 +250,80 @@ public class RunYaxunitTestsToolTest
     @Test
     public void testGuideDocumentsDebug1003RaceNetConfirmer()
     {
-        // Ratchet: the debug launch site arms the session matcher
-        // (arm(true, true)) as the race net behind the sweep — the guide documents the
-        // 'Keep existing and start new' auto-press so the contract can't drift.
+        // Ratchet: the debug launch site arms the session matcher unconditionally
+        // (arm(updateBeforeLaunch, true)) as the race net behind the sweep — the
+        // guide documents the 'Keep existing and start new' auto-press so the
+        // contract can't drift.
         String guide = new RunYaxunitTestsTool().getGuide();
         assertTrue("guide must document the 1003 'Keep existing and start new' race net",
             guide.contains("Keep existing and start new")); //$NON-NLS-1$
+        assertTrue("guide must say the race net stays armed regardless of updateBeforeLaunch",
+            guide.contains("regardless of `updateBeforeLaunch`")); //$NON-NLS-1$
+    }
+
+    // ============ updateBeforeLaunch gates the debug sweep and the arming ============
+
+    @Test
+    public void testDebugSweepGatedOnUpdateBeforeLaunch()
+    {
+        // The fresh-run sweep (ensureNoExistingClientSession) is PART of the
+        // updateBeforeLaunch auto-chain: it runs with true and is SKIPPED with
+        // false (legacy delegate behaviour) — sweeping after the caller opted out
+        // would terminate a session the caller asked to leave alone.
+        assertTrue("updateBeforeLaunch=true must run the fresh-run sweep",
+            RunYaxunitTestsTool.shouldSweepExistingClientSession(true));
+        assertFalse("updateBeforeLaunch=false must SKIP the fresh-run sweep",
+            RunYaxunitTestsTool.shouldSweepExistingClientSession(false));
+    }
+
+    @Test
+    public void testRunPathArmFlagsFollowUpdateBeforeLaunch()
+    {
+        // RUN path: the update matcher follows updateBeforeLaunch (auto-pressing
+        // 'Update then run' after the opt-out would perform the very DB update the
+        // caller disabled); the 1003 session matcher is NEVER armed here (the
+        // debug-session check does not apply to a RUN-mode spawn).
+        assertArrayEquals("default RUN arming is update-only",
+            new boolean[] {true, false}, RunYaxunitTestsTool.runPathArmFlags(true));
+        assertArrayEquals("opted-out RUN arming presses nothing",
+            new boolean[] {false, false}, RunYaxunitTestsTool.runPathArmFlags(false));
+    }
+
+    @Test
+    public void testDebugPathArmFlagsGateUpdateMatcherOnly()
+    {
+        // DEBUG path: the update matcher follows updateBeforeLaunch (same opt-out
+        // contract as the RUN path, mirroring DebugLaunchTool); the 1003 session
+        // matcher stays armed UNCONDITIONALLY as the race net behind the sweep —
+        // its auto-press is the non-destructive keep-button, so it never undoes
+        // the opt-out.
+        assertArrayEquals("default DEBUG arming covers both modals",
+            new boolean[] {true, true}, RunYaxunitTestsTool.debugPathArmFlags(true));
+        assertArrayEquals("opted-out DEBUG arming keeps ONLY the 1003 race net",
+            new boolean[] {false, true}, RunYaxunitTestsTool.debugPathArmFlags(false));
+    }
+
+    @Test
+    public void testSchemaDocumentsUpdateBeforeLaunchFalseContract()
+    {
+        // Ratchet: the schema must document what false actually does now — no
+        // sweep, no auto-confirm, platform dialogs may appear.
+        String schema = new RunYaxunitTestsTool().getInputSchema();
+        assertTrue("schema must document the legacy-behaviour opt-out",
+            schema.contains("legacy delegate behaviour")); //$NON-NLS-1$
+        assertTrue("schema must warn that platform dialogs may appear on opt-out",
+            schema.contains("platform dialogs may appear")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsDebugSweepSkippedOnOptOut()
+    {
+        // Ratchet: the guide must condition the fresh-run sweep on
+        // updateBeforeLaunch=true and document that false skips it.
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must scope the FRESH-run sweep to updateBeforeLaunch=true",
+            guide.contains("With `updateBeforeLaunch=true`")); //$NON-NLS-1$
+        assertTrue("guide must document that updateBeforeLaunch=false skips the sweep",
+            guide.contains("the sweep is skipped")); //$NON-NLS-1$
     }
 }
