@@ -32,6 +32,7 @@ import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.Kind;
@@ -1033,9 +1034,10 @@ public class FormElementWriterTest
     @Test
     public void testCreateContentFormDefaultsOnRealFormPackage()
     {
-        // No FORM factory (null, like a missing injector): the reflective fallback must still build
-        // a renderable content form with the designer defaults the typed build used to set.
-        EObject content = FormElementWriter.createContentForm(null, null, null);
+        // No FORM factory (null, like a missing injector) and no version (null = the legacy shape,
+        // preserving the writer's previous behavior): the reflective fallback must still build a
+        // renderable content form with the designer defaults the typed build used to set.
+        EObject content = FormElementWriter.createContentForm(null, null, null, true);
         assertNotNull(content);
         assertEquals("Form", content.eClass().getName()); //$NON-NLS-1$
         // The eight form flags.
@@ -1047,7 +1049,8 @@ public class FormElementWriterTest
         // The children grouping FormChildrenGroup.VERTICAL.
         assertEquals("Vertical", literalOf(content, "group")); //$NON-NLS-1$ //$NON-NLS-2$
         // The render-critical predefined auto command bar: autoFill, LEFT, the -1 id sentinel and
-        // the canonical predefined-command-bar name (FormaKomandnayaPanel, from code points).
+        // the canonical Russian predefined-command-bar name (russianAutoNames=true;
+        // FormaKomandnayaPanel, from code points).
         EObject bar = (EObject)content.eGet(feature(content, "autoCommandBar")); //$NON-NLS-1$
         assertNotNull("the WYSIWYG generator requires the predefined autoCommandBar", bar); //$NON-NLS-1$
         assertEquals("AutoCommandBar", bar.eClass().getName()); //$NON-NLS-1$
@@ -1063,6 +1066,51 @@ public class FormElementWriterTest
         assertNotNull(commandInterface);
         assertNotNull(commandInterface.eGet(feature(commandInterface, "navigationPanel"))); //$NON-NLS-1$
         assertNotNull(commandInterface.eGet(feature(commandInterface, "commandBar"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateContentFormEnglishBarName()
+    {
+        // russianAutoNames=false (English script variant): the fallback predefined command bar gets
+        // the canonical English name, like the designer's default-name provider builds it
+        // (getFormDefaultName 'Form' + the COMMAND_BAR item name 'CommandBar').
+        EObject content = FormElementWriter.createContentForm(null, null, null, false);
+        EObject bar = (EObject)content.eGet(feature(content, "autoCommandBar")); //$NON-NLS-1$
+        assertNotNull(bar);
+        assertEquals("FormCommandBar", bar.eGet(feature(bar, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCreateContentFormPre851VersionBranch()
+    {
+        // version < 8.5.1 (and <= 8.3.22): the designer wizard (FormObjectFactory.newForm) uses the
+        // legacy children grouping VERTICAL, the legacy boolean showTitle=true, and does NOT set
+        // saveWindowSettings (only versions > 8.3.22 get it).
+        EObject content = FormElementWriter.createContentForm(null, null, Version.V8_3_20, true);
+        assertEquals("Vertical", literalOf(content, "group")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.TRUE, content.eGet(feature(content, "showTitle"))); //$NON-NLS-1$
+        assertEquals("saveWindowSettings is only set for versions > 8.3.22", //$NON-NLS-1$
+            Boolean.FALSE, content.eGet(feature(content, "saveWindowSettings"))); //$NON-NLS-1$
+        // The version-independent flags stay set.
+        assertEquals(Boolean.TRUE, content.eGet(feature(content, "autoTitle"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, content.eGet(feature(content, "showCloseButton"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateContentFormModern851VersionBranch()
+    {
+        // version >= 8.5.1: the wizard uses group=AUTO and showTitle851=AUTO (NOT the legacy boolean
+        // showTitle), and saveWindowSettings=true (8.5.1 > 8.3.22). The ShowTitle851 enum's literal
+        // string is "auto" while its name is "Auto" - the writer must resolve either.
+        EObject content = FormElementWriter.createContentForm(null, null, Version.V8_5_1, true);
+        assertEquals("Auto", literalOf(content, "group")); //$NON-NLS-1$ //$NON-NLS-2$
+        String showTitle851 = literalOf(content, "showTitle851"); //$NON-NLS-1$
+        assertNotNull("showTitle851 must be set on the 8.5.1+ branch", showTitle851); //$NON-NLS-1$
+        assertTrue("showTitle851 must be Auto but was: " + showTitle851, //$NON-NLS-1$
+            "Auto".equalsIgnoreCase(showTitle851)); //$NON-NLS-1$
+        assertEquals("the legacy showTitle boolean is not set on the 8.5.1+ branch", //$NON-NLS-1$
+            Boolean.FALSE, content.eGet(feature(content, "showTitle"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, content.eGet(feature(content, "saveWindowSettings"))); //$NON-NLS-1$
     }
 
     // ==================== dynamic form-like EMF metamodel ====================

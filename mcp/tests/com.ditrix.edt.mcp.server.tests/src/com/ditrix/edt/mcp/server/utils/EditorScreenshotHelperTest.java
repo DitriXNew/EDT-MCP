@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -299,5 +300,150 @@ public class EditorScreenshotHelperTest
     {
         assertFalse("a null representation must never report a rendered image", //$NON-NLS-1$
             EditorScreenshotHelper.ensureRenderedFormImage(null, SHORT_TIMEOUT_MS, true));
+    }
+
+    // ==================== synchronous render path (the dead-sync-render fix) ====================
+    //
+    // renderRequestedFormSynchronously must obtain the CommandInterfaceMapping and NativeRenderEvent
+    // classes from the located rebuildInternal method's OWN parameter types (resolved by the form
+    // bundle's classloader), never via Class.forName on this bundle's classloader - whose
+    // Import-Package deliberately lacks com._1c.g5.v8.dt.form.mapping.model and
+    // com._1c.g5.v8.dt.form.model, so the old Class.forName always threw ClassNotFoundException and
+    // silently disabled the whole synchronous path (refresh=true then cleared formImageData, depended
+    // on this path to repopulate it, and timed out). These fakes pin the parameter-type contract
+    // headlessly: the classes the helper drives the render with are EXACTLY paramTypes[1]/[2] of the
+    // arity-4 rebuildInternal it located.
+
+    /** Stand-in for {@code com._1c.g5.v8.dt.form.mapping.model.CommandInterfaceMapping}. */
+    public static final class FakeCommandInterfaceMapping
+    {
+    }
+
+    /**
+     * Stand-in for {@code com._1c.g5.v8.dt.form.model.NativeRenderEvent} with its static
+     * {@code buildUpdateEvent()} factory (public, so the helper's plain {@code getMethod} +
+     * {@code invoke(null)} works exactly as it does against the real class).
+     */
+    public static final class FakeNativeRenderEvent
+    {
+        public static FakeNativeRenderEvent buildUpdateEvent()
+        {
+            return new FakeNativeRenderEvent();
+        }
+    }
+
+    /** Controller stand-in recording which mapping class the helper requested the root for. */
+    private static final class FakeMappingController
+    {
+        Class<?> requestedMappingClass;
+
+        @SuppressWarnings("unused") // invoked reflectively (MappingController.getMappingRoot(Class))
+        Object getMappingRoot(Class<?> mappingClass)
+        {
+            requestedMappingClass = mappingClass;
+            return new FakeCommandInterfaceMapping();
+        }
+    }
+
+    /**
+     * Fake of the synchronous-render surface of {@code FormWysiwygRepresentation}: the {@code form} /
+     * {@code controller} / {@code formImageData} fields, the private
+     * {@code rebuildInternal(Form, CommandInterfaceMapping, NativeRenderEvent, boolean)} whose
+     * parameter types here are the FAKE classes the helper must pick up, and the async
+     * {@code rebuild(boolean)} fallback, which records that it was (not) used.
+     */
+    private static final class FakeSyncRepresentation
+    {
+        final Object form = new Object();
+        final FakeMappingController controller = new FakeMappingController();
+        ImageData formImageData;
+        Object lastEvent;
+        Boolean lastUpdateOnly;
+        final AtomicInteger asyncRebuilds = new AtomicInteger();
+
+        @SuppressWarnings("unused") // invoked reflectively (the synchronous render body)
+        private void rebuildInternal(Object renderedForm, FakeCommandInterfaceMapping mapping,
+            FakeNativeRenderEvent event, boolean updateOnly)
+        {
+            lastEvent = event;
+            lastUpdateOnly = Boolean.valueOf(updateOnly);
+            formImageData = nonEmptyImage();
+        }
+
+        @SuppressWarnings("unused") // the async fallback hook; must stay UNUSED when sync hooks exist
+        void rebuild(boolean full)
+        {
+            asyncRebuilds.incrementAndGet();
+        }
+    }
+
+    /**
+     * A representation whose only arity-4 {@code rebuildInternal} has a different shape (no trailing
+     * boolean): the helper must NOT mis-invoke it and must use the async fallback instead.
+     */
+    private static final class FakeWrongShapeRepresentation
+    {
+        @SuppressWarnings("unused")
+        final Object form = new Object();
+        @SuppressWarnings("unused")
+        final FakeMappingController controller = new FakeMappingController();
+        ImageData formImageData;
+        final AtomicInteger asyncRebuilds = new AtomicInteger();
+
+        @SuppressWarnings("unused") // a different overload shape; must never be invoked
+        private void rebuildInternal(Object a, Object b, Object c, String notABoolean)
+        {
+            throw new AssertionError("rebuildInternal of a foreign shape must not be invoked"); //$NON-NLS-1$
+        }
+
+        @SuppressWarnings("unused") // invoked reflectively by the async fallback
+        void rebuild(boolean full)
+        {
+            asyncRebuilds.incrementAndGet();
+            formImageData = nonEmptyImage();
+        }
+    }
+
+    @Test
+    public void testSyncRenderResolvesClassesFromRebuildInternalParameterTypes()
+    {
+        FakeSyncRepresentation rep = new FakeSyncRepresentation();
+
+        assertTrue("the synchronous render path must run and produce the image", //$NON-NLS-1$
+            EditorScreenshotHelper.ensureRenderedFormImage(rep, SHORT_TIMEOUT_MS, false));
+        assertSame("the mapping root must be requested with rebuildInternal's parameter type [1]", //$NON-NLS-1$
+            FakeCommandInterfaceMapping.class, rep.controller.requestedMappingClass);
+        assertTrue("the render event must be built via parameter type [2]'s static buildUpdateEvent", //$NON-NLS-1$
+            rep.lastEvent instanceof FakeNativeRenderEvent);
+        assertEquals("updateOnly=false - a full layout/render pass", Boolean.FALSE, rep.lastUpdateOnly); //$NON-NLS-1$
+        assertEquals("the async rebuild fallback must NOT be used when the sync hooks exist", //$NON-NLS-1$
+            0, rep.asyncRebuilds.get());
+    }
+
+    @Test
+    public void testForceRefreshSatisfiedBySynchronousRender()
+    {
+        // The refresh=true flow that was broken by the dead sync path: the stale buffer is cleared and
+        // the synchronous render (RENDERED outcome) repopulates it during this call.
+        FakeSyncRepresentation rep = new FakeSyncRepresentation();
+        rep.formImageData = nonEmptyImage(); // the potentially stale pre-edit buffer
+
+        assertTrue("refresh=true must be satisfied by a completed synchronous render", //$NON-NLS-1$
+            EditorScreenshotHelper.ensureRenderedFormImage(rep, SHORT_TIMEOUT_MS, true));
+        assertTrue("the synchronous render must actually have run", //$NON-NLS-1$
+            rep.lastEvent instanceof FakeNativeRenderEvent);
+        assertEquals("the async rebuild fallback must NOT be used when the sync hooks exist", //$NON-NLS-1$
+            0, rep.asyncRebuilds.get());
+    }
+
+    @Test
+    public void testSyncRenderForeignShapeFallsBackToAsyncRebuild()
+    {
+        FakeWrongShapeRepresentation rep = new FakeWrongShapeRepresentation();
+
+        assertTrue("the async fallback must still produce the image", //$NON-NLS-1$
+            EditorScreenshotHelper.ensureRenderedFormImage(rep, SHORT_TIMEOUT_MS, false));
+        assertTrue("a rebuildInternal of a foreign shape must route to the async fallback", //$NON-NLS-1$
+            rep.asyncRebuilds.get() >= 1);
     }
 }

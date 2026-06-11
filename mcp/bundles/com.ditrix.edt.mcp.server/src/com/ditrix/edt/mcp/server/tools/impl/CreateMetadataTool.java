@@ -661,6 +661,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return propErr;
         }
         boolean setAsDefault = JsonUtils.extractBooleanArgument(params, "setAsDefault", false); //$NON-NLS-1$
+        boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, "expectedNotExists", false); //$NON-NLS-1$
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -679,6 +680,20 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (!(owner instanceof IBmObject))
         {
             return ToolResult.error("Owner object is not a BM object").toJson(); //$NON-NLS-1$
+        }
+
+        // The same duplicate / stale-intent precondition every other create applies (the main branch
+        // checks via resolveExisting; a 4-part form FQN resolves on the owner's forms collection).
+        // The in-transaction "Form already exists" guard below stays as the race-safety net.
+        if (FormElementWriter.findOwnedForm(owner, ref.formName) != null)
+        {
+            if (expectedNotExists)
+            {
+                return ToolResult.error("Precondition failed: you set expectedNotExists, but " + normFqn //$NON-NLS-1$
+                    + " already exists. Your snapshot is stale - re-read with get_metadata_objects, " //$NON-NLS-1$
+                    + "then update the existing node instead of creating a duplicate.").toJson(); //$NON-NLS-1$
+            }
+            return ToolResult.error("Node already exists: " + normFqn).toJson(); //$NON-NLS-1$
         }
 
         // Resolve the synonym language now (needs the configuration); only when a synonym was given.
@@ -729,6 +744,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String synonym = props.synonym;
         final String comment = props.comment;
         final boolean fSetAsDefault = setAsDefault;
+        // The fallback predefined command-bar name follows the configuration script variant, like
+        // the designer's default-name provider (FormObjectDefaultNameProvider).
+        final boolean russianAutoNames = config.getScriptVariant() == ScriptVariant.RUSSIAN;
 
         final String contentFormFqn;
         try
@@ -741,7 +759,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
                 }
                 return FormElementWriter.createForm(tx, (MdObject)txOwner, formName, synonymLanguage,
-                    synonym, comment, fSetAsDefault, mdFactory, formFactory, fqnGenerator, version);
+                    synonym, comment, fSetAsDefault, mdFactory, formFactory, fqnGenerator, version,
+                    russianAutoNames);
             });
         }
         catch (Exception e)

@@ -19,6 +19,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.ui.IEditorPart;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
@@ -110,6 +111,21 @@ public class FormLayoutSnapshotService
                 return errorYaml("WYSIWYG representation is not available"); //$NON-NLS-1$
             }
 
+            // Identity guard (b), mirrored from get_form_screenshot: the layout (hippoLayForm) and the
+            // form image are produced together from a single createHippoSession(tx, this.form, ...)
+            // call on the representation's OWN form model, so the snapshot belongs to whatever form
+            // THIS representation renders. Confirm that model is the requested form before reading the
+            // layout; otherwise fail explicitly rather than return another form's layout (the same
+            // silent wrong-form defect get_form_screenshot had).
+            if (formPath != null && !formPath.isEmpty()
+                && !EditorScreenshotHelper.representationFormMatches(representation, formPath))
+            {
+                return errorYaml("The WYSIWYG editor for '" + formPath //$NON-NLS-1$
+                    + "' does not render the requested form model. No layout snapshot was taken to " //$NON-NLS-1$
+                    + "avoid returning another form's layout; try again once the requested form's " //$NON-NLS-1$
+                    + "editor is fully open."); //$NON-NLS-1$
+            }
+
             Object hippoLayForm = ReflectionUtils.getFieldValue(representation, HIPPO_LAY_FORM_FIELD);
             if (!(hippoLayForm instanceof EObject))
             {
@@ -157,16 +173,30 @@ public class FormLayoutSnapshotService
         }
     }
 
+    /**
+     * Resolves the WYSIWYG page the snapshot is read from. For a requested {@code formPath} the form
+     * is opened via {@link EditorScreenshotHelper#openForm} and the page is resolved from <i>that</i>
+     * editor part ({@link EditorScreenshotHelper#waitForFormEditorPageOf}), NOT from the global
+     * {@code FormEditor.getActiveFormEditorPage()} lookup that returns whatever form editor currently
+     * holds workbench focus — the same wrong-form defect {@code get_form_screenshot} had. The opened
+     * editor's model FQN is then verified against the requested form (identity guard (a)); a mismatch
+     * throws an {@link IllegalStateException} whose message the caller reports verbatim. Without a
+     * {@code formPath} the globally active page is used, as before.
+     */
     private Object resolveEditorPage(String projectName, String formPath) throws Exception
     {
         if (formPath != null && !formPath.isEmpty())
         {
-            String openError = EditorScreenshotHelper.openAndActivateForm(projectName, formPath);
-            if (openError != null)
+            // Open the requested form and keep a direct handle on the editor opened for it.
+            EditorScreenshotHelper.OpenFormResult openResult =
+                EditorScreenshotHelper.openForm(projectName, formPath);
+            if (!openResult.isSuccess())
             {
-                throw new IllegalStateException(extractToolErrorMessage(openError));
+                throw new IllegalStateException(extractToolErrorMessage(openResult.getError()));
             }
+            IEditorPart editorPart = openResult.getEditorPart();
 
+            // Let the UI settle after activation (same budget as get_form_screenshot).
             Display display = Display.getCurrent();
             for (int i = 0; i < 5; i++)
             {
@@ -174,7 +204,25 @@ public class FormLayoutSnapshotService
                 Thread.sleep(100);
             }
 
-            return EditorScreenshotHelper.waitForFormEditorPage();
+            // Resolve the WYSIWYG page from THIS editor part (findPage); the helper owns the shared
+            // wait/re-activate loop, replacing the global-active-page wait used here before.
+            Object editorPage = EditorScreenshotHelper.waitForFormEditorPageOf(editorPart);
+            if (editorPage == null)
+            {
+                return null;
+            }
+
+            // Identity guard (a): the opened editor must correspond to the requested form before its
+            // layout is read; otherwise fail explicitly instead of returning the wrong form's layout.
+            String actualFqn = EditorScreenshotHelper.getFormEditorFqn(editorPart);
+            if (actualFqn != null && !EditorScreenshotHelper.fqnMatchesFormPath(actualFqn, formPath))
+            {
+                throw new IllegalStateException("Form editor does not match the requested form. " //$NON-NLS-1$
+                    + "Requested '" + formPath + "' but the opened editor is '" + actualFqn //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'. No layout snapshot was taken to avoid returning the wrong form's layout; " //$NON-NLS-1$
+                    + "try again once the requested form's editor is fully open."); //$NON-NLS-1$
+            }
+            return editorPage;
         }
 
         return EditorScreenshotHelper.getActiveFormEditorPage();

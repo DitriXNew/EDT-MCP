@@ -6,11 +6,11 @@
 
 package com.ditrix.edt.mcp.server;
 
-import java.lang.reflect.Method;
-
 import org.eclipse.core.runtime.Platform;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
+import org.osgi.framework.Filter;
+import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.util.tracker.ServiceTracker;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
@@ -26,6 +26,7 @@ import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
+import com._1c.g5.wiring.ServiceProperties;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
@@ -56,6 +57,16 @@ public class EdtServices
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
     private ServiceTracker<ITopObjectFqnGenerator, ITopObjectFqnGenerator> topObjectFqnGeneratorTracker;
+
+    /**
+     * The FORM-model {@link IModelObjectFactory}, tracked with an LDAP filter on the EDT wiring
+     * service-name property: {@code FormPlugin.start()} registers the form bundle's factory as an
+     * OSGi {@code IModelObjectFactory} service with
+     * {@code ServiceProperties.named("FormModelObjectFactory")} (= {@code service.name}); the filter
+     * selects exactly that one among the many per-language {@code IModelObjectFactory} services. See
+     * {@link #getFormModelObjectFactory()}.
+     */
+    private ServiceTracker<IModelObjectFactory, IModelObjectFactory> formModelObjectFactoryTracker;
     /**
      * EDT workspace CLI APIs are tracked by String class name and invoked via
      * reflection from the tools, keeping this bundle build-independent of
@@ -138,6 +149,19 @@ public class EdtServices
 
         topObjectFqnGeneratorTracker = new ServiceTracker<>(context, ITopObjectFqnGenerator.class, null);
         topObjectFqnGeneratorTracker.open();
+
+        try
+        {
+            Filter formFactoryFilter = context.createFilter("(&(objectClass=" //$NON-NLS-1$
+                + IModelObjectFactory.class.getName() + ")(" + ServiceProperties.SERVICE_NAME //$NON-NLS-1$
+                + "=" + FORM_MODEL_OBJECT_FACTORY_SERVICE_NAME + "))"); //$NON-NLS-1$ //$NON-NLS-2$
+            formModelObjectFactoryTracker = new ServiceTracker<>(context, formFactoryFilter, null);
+            formModelObjectFactoryTracker.open();
+        }
+        catch (InvalidSyntaxException e)
+        {
+            Activator.logError("Invalid form IModelObjectFactory service filter", e); //$NON-NLS-1$
+        }
 
         exportConfigurationFilesApiTracker = new ServiceTracker<>(
             context, "com._1c.g5.v8.dt.cli.api.workspace.IExportConfigurationFilesApi", null); //$NON-NLS-1$
@@ -241,6 +265,11 @@ public class EdtServices
         {
             topObjectFqnGeneratorTracker.close();
             topObjectFqnGeneratorTracker = null;
+        }
+        if (formModelObjectFactoryTracker != null)
+        {
+            formModelObjectFactoryTracker.close();
+            formModelObjectFactoryTracker = null;
         }
         if (exportConfigurationFilesApiTracker != null)
         {
@@ -498,17 +527,21 @@ public class EdtServices
         return null;
     }
 
-    /** Symbolic name of the EDT form bundle that owns the form Guice injector. */
+    /** Symbolic name of the EDT form bundle that contributes the form-model object factory. */
     private static final String FORM_BUNDLE_ID = "com._1c.g5.v8.dt.form"; //$NON-NLS-1$
 
-    /** Internal (non-exported) class that exposes the form bundle Guice injector. */
-    private static final String FORM_PLUGIN_CLASS = "com._1c.g5.v8.dt.internal.form.FormPlugin"; //$NON-NLS-1$
+    /**
+     * The wiring service name ({@code service.name} OSGi property / Guice binding annotation) the
+     * form bundle registers its {@link IModelObjectFactory} under (see
+     * {@code FormRuntimeModule.configureIModelObjectFactory} and {@code FormPlugin.start()}).
+     */
+    private static final String FORM_MODEL_OBJECT_FACTORY_SERVICE_NAME = "FormModelObjectFactory"; //$NON-NLS-1$
 
     /**
      * Public, exported service class that lives in the form bundle. Loading it
      * <em>through the form bundle</em> trips the bundle's lazy activation
-     * ({@code Bundle-ActivationPolicy: lazy}), so {@code FormPlugin.getDefault()}
-     * stops returning {@code null}.
+     * ({@code Bundle-ActivationPolicy: lazy}), so {@code FormPlugin.start()} runs
+     * and registers the form services (including the form-model object factory).
      */
     private static final String FORM_SERVICE_CLASS =
         "com._1c.g5.v8.dt.form.service.FormItemInformationService"; //$NON-NLS-1$
@@ -532,55 +565,46 @@ public class EdtServices
      * seeding the command bar manually — see {@code FormElementWriter.createForm})
      * makes it render.
      * <p>
-     * The factory is a Guice {@code @Singleton} in the form bundle's injector, so it
-     * must be pulled from there (reaching the bundle's internal {@code FormPlugin}
-     * reflectively, exactly like the MD factory above). Returns {@code null} when the
-     * form bundle or its injector is not available.
+     * The factory is resolved as the OSGi {@code IModelObjectFactory} service carrying
+     * {@code service.name=FormModelObjectFactory} (the property {@code FormPlugin.start()}
+     * registers it with) via the filtered {@link #formModelObjectFactoryTracker}. The form
+     * injector binds {@code IModelObjectFactory} <em>only</em> with the
+     * {@code Names.named("FormModelObjectFactory")} annotation — a plain
+     * {@code injector.getInstance(IModelObjectFactory.class)} throws
+     * {@code ConfigurationException}, which is why the previous injector-based lookup always
+     * failed and the manual command-bar fallback was used for every created form. The service
+     * route needs no reflection on the internal {@code FormPlugin} at all. Returns {@code null}
+     * when the tracker is not initialized or the form bundle/service is not available.
      *
      * @return the form-model object factory, or {@code null} if unavailable
      */
     public IModelObjectFactory getFormModelObjectFactory()
     {
-        Bundle formBundle = Platform.getBundle(FORM_BUNDLE_ID);
-        if (formBundle == null)
+        if (formModelObjectFactoryTracker == null)
         {
-            Activator.logError("form bundle '" + FORM_BUNDLE_ID //$NON-NLS-1$
-                + "' not found in the running platform", null); //$NON-NLS-1$
             return null;
         }
-        ensureFormBundleActive(formBundle);
-        try
+        IModelObjectFactory factory = formModelObjectFactoryTracker.getService();
+        if (factory == null)
         {
-            Class<?> formPluginClass = formBundle.loadClass(FORM_PLUGIN_CLASS);
-            // FormPlugin is the non-exported internal class
-            // com._1c.g5.v8.dt.internal.form.FormPlugin. getDefault()/getInjector() are
-            // public methods, but because their DECLARING class is not public to this
-            // bundle, Method.invoke enforces access on the declaring class and throws
-            // IllegalAccessException unless the Method is made accessible first.
-            Method getDefaultMethod = formPluginClass.getMethod("getDefault"); //$NON-NLS-1$
-            getDefaultMethod.setAccessible(true);
-            Object formPlugin = getDefaultMethod.invoke(null);
-            if (formPlugin == null)
+            // The form bundle is lazily activated and registers its services in start();
+            // trip the activation, then re-read the tracker.
+            Bundle formBundle = Platform.getBundle(FORM_BUNDLE_ID);
+            if (formBundle == null)
             {
-                Activator.logError("FormPlugin.getDefault() is null (form bundle not active)", null); //$NON-NLS-1$
+                Activator.logError("form bundle '" + FORM_BUNDLE_ID //$NON-NLS-1$
+                    + "' not found in the running platform", null); //$NON-NLS-1$
                 return null;
             }
-            Method getInjectorMethod = formPluginClass.getMethod("getInjector"); //$NON-NLS-1$
-            getInjectorMethod.setAccessible(true);
-            Object injectorObj = getInjectorMethod.invoke(formPlugin);
-            if (!(injectorObj instanceof Injector))
-            {
-                Activator.logError("FormPlugin.getInjector() did not return a Guice Injector", null); //$NON-NLS-1$
-                return null;
-            }
-            return ((Injector)injectorObj).getInstance(IModelObjectFactory.class);
+            ensureFormBundleActive(formBundle);
+            factory = formModelObjectFactoryTracker.getService();
         }
-        catch (Throwable e)
+        if (factory == null)
         {
-            Activator.logError("Failed to obtain the form IModelObjectFactory from the form bundle injector", //$NON-NLS-1$
-                e instanceof Exception ? (Exception)e : new RuntimeException(e));
-            return null;
+            Activator.logError("Form IModelObjectFactory service (" + ServiceProperties.SERVICE_NAME //$NON-NLS-1$
+                + "=" + FORM_MODEL_OBJECT_FACTORY_SERVICE_NAME + ") is not available", null); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        return factory;
     }
 
     /**

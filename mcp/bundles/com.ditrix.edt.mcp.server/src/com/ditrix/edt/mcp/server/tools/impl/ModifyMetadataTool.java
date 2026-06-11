@@ -745,7 +745,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             persisted = FormElementWriter.writeEditableForm(fctx, "RebindButtonCommand", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
-                    EObject button = FormElementWriter.findFormItem(formModel, buttonName);
+                    // Strict resolution: an AMBIGUOUS button name (several items by that name anywhere
+                    // in the form-item tree) is rejected with a clear error instead of silently
+                    // re-pointing the first match (findUniqueFormItem throws; the tx rolls back).
+                    EObject button = FormElementWriter.findUniqueFormItem(formModel, buttonName);
                     if (button == null)
                     {
                         throw new FormValidationException(ToolResult.error("Form button not found: " //$NON-NLS-1$

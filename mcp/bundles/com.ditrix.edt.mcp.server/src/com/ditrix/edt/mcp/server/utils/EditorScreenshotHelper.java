@@ -54,10 +54,6 @@ public final class EditorScreenshotHelper
     private static final String REPRESENTATION_CONTROLLER_FIELD = "controller"; //$NON-NLS-1$
     private static final String REBUILD_INTERNAL_METHOD = "rebuildInternal"; //$NON-NLS-1$
     private static final String GET_MAPPING_ROOT_METHOD = "getMappingRoot"; //$NON-NLS-1$
-    private static final String COMMAND_INTERFACE_MAPPING_CLASS =
-        "com._1c.g5.v8.dt.form.mapping.model.CommandInterfaceMapping"; //$NON-NLS-1$
-    private static final String NATIVE_RENDER_EVENT_CLASS =
-        "com._1c.g5.v8.dt.form.model.NativeRenderEvent"; //$NON-NLS-1$
     private static final String BUILD_UPDATE_EVENT_METHOD = "buildUpdateEvent"; //$NON-NLS-1$
     private static final String GET_CONTROL_METHOD = "getControl"; //$NON-NLS-1$
     private static final String REFRESH_METHOD = "refresh"; //$NON-NLS-1$
@@ -219,22 +215,8 @@ public final class EditorScreenshotHelper
     }
 
     /**
-     * Opens a form file in the editor and activates the WYSIWYG (main) page.
-     * Must be called on the UI thread.
-     *
-     * @param projectName EDT project name
-     * @param formPath FQN path like "Catalog.Products.Forms.ItemForm" or "CommonForm.MyForm"
-     * @return {@code null} on success, error JSON string on failure
-     */
-    public static String openAndActivateForm(String projectName, String formPath)
-    {
-        OpenFormResult result = openForm(projectName, formPath);
-        return result.isSuccess() ? null : result.getError();
-    }
-
-    /**
      * Opens a form file in the editor, activates its WYSIWYG (main) page and returns the opened
-     * editor part. Unlike {@link #openAndActivateForm(String, String)}, callers get a direct
+     * editor part. Callers get a direct
      * handle on the editor that was opened for the requested {@code formPath}, so they can read
      * the WYSIWYG page from <i>that</i> specific editor instead of the globally active one. This
      * is the fix for the wrong-form-screenshot defect, where {@code get_form_screenshot} captured the previously
@@ -386,58 +368,6 @@ public final class EditorScreenshotHelper
     // ==================== WYSIWYG page detection ====================
 
     /**
-     * Waits for the form editor WYSIWYG page to become available.
-     * Processes UI events while waiting to allow the editor to initialize.
-     * Must be called on the UI thread.
-     *
-     * @return the FormEditorPage, or {@code null} if not available after timeout
-     */
-    public static Object waitForFormEditorPage()
-    {
-        Display display = Display.getCurrent();
-        for (int i = 0; i < WYSIWYG_WAIT_RETRIES; i++)
-        {
-            processEvents(display);
-
-            try
-            {
-                // The WYSIWYG page (FormEditorPage, id "editors.form.pages.main") builds its
-                // controls only once it becomes the active page of the multi-page form editor,
-                // and its wysiwygViewer is then created asynchronously (createPageControls schedules
-                // it via getMappingRootAsync + Display.asyncExec, setting formControlsCreated=true
-                // when done). Re-activate the main page each iteration so its createPartControl runs,
-                // then accept the page only once the viewer actually exists.
-                activateActiveFormMainPage();
-
-                Object page = getActiveFormEditorPage();
-                if (page != null && isWysiwygPageReady(page))
-                {
-                    return page;
-                }
-            }
-            catch (Exception e)
-            {
-                // Editor still initializing, keep waiting
-            }
-
-            sleep(WYSIWYG_WAIT_INTERVAL_MS);
-            processEvents(display);
-        }
-
-        // Final attempt: return the page only if its WYSIWYG viewer is actually available.
-        try
-        {
-            Object page = getActiveFormEditorPage();
-            return (page != null && isWysiwygPageReady(page)) ? page : null;
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Failed to get form editor page after waiting", e); //$NON-NLS-1$
-            return null;
-        }
-    }
-
-    /**
      * Waits for the WYSIWYG (main) page of a <i>specific</i> form editor part to become available,
      * resolving it directly from that editor via {@code findPage("editors.form.pages.main")} rather
      * than via the global {@code FormEditor.getActiveFormEditorPage()} lookup. This guarantees the
@@ -539,24 +469,6 @@ public final class EditorScreenshotHelper
         catch (Exception e)
         {
             return false;
-        }
-    }
-
-    /**
-     * Activates the WYSIWYG (main) page of the currently active form editor, if any.
-     * Triggers lazy creation of the page controls. Must be called on the UI thread.
-     */
-    private static void activateActiveFormMainPage()
-    {
-        IWorkbenchPage page = getWorkbenchPage();
-        if (page == null)
-        {
-            return;
-        }
-        IEditorPart editorPart = page.getActiveEditor();
-        if (editorPart != null)
-        {
-            activateFormMainPage(editorPart);
         }
     }
 
@@ -1123,6 +1035,15 @@ public final class EditorScreenshotHelper
      * {@code createHippoSession} render and reassigns {@code formImageData}/{@code hippoLayForm} for the
      * requested form, so the image read afterwards is provably the requested form's. Must be called on
      * the UI thread.
+     * <p>
+     * <b>Class resolution.</b> The {@code CommandInterfaceMapping} and {@code NativeRenderEvent}
+     * classes are taken from {@code rebuildInternal}'s own parameter types (index 1 and 2 of the
+     * located method), NOT via {@code Class.forName}: this bundle's classloader deliberately does not
+     * import {@code com._1c.g5.v8.dt.form.mapping.model} / {@code com._1c.g5.v8.dt.form.model}, so a
+     * {@code Class.forName} here always threw {@code ClassNotFoundException} and silently disabled the
+     * whole synchronous path (the dead-sync-render defect: refresh=true cleared {@code formImageData},
+     * depended on this path to repopulate it, and timed out instead). The parameter types come from the
+     * form bundle's own classloader and are correct by construction.
      *
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @return {@link RenderOutcome#RENDERED} if the synchronous render ran to completion,
@@ -1146,6 +1067,20 @@ public final class EditorScreenshotHelper
                 // This EDT does not expose the synchronous render hooks; signal the async fallback.
                 return RenderOutcome.UNREACHABLE;
             }
+            // The platform classes come from rebuildInternal's OWN parameter types — resolved by the
+            // form bundle's classloader. rebuildInternal(Form, CommandInterfaceMapping,
+            // NativeRenderEvent, boolean): [1] = CommandInterfaceMapping, [2] = NativeRenderEvent.
+            // Class.forName here used OUR bundle classloader, which does not (and must not) import
+            // those packages, so it always failed and the whole synchronous path was dead.
+            Class<?>[] paramTypes = rebuildInternal.getParameterTypes();
+            if (paramTypes[3] != boolean.class && paramTypes[3] != Boolean.class)
+            {
+                // Not the rebuildInternal(Form, CommandInterfaceMapping, NativeRenderEvent, boolean)
+                // shape this path drives; treat the hooks as absent rather than mis-invoke.
+                return RenderOutcome.UNREACHABLE;
+            }
+            Class<?> cmiMappingClass = paramTypes[1];
+            Class<?> nativeRenderEventClass = paramTypes[2];
             if (form == null)
             {
                 // Hooks exist but the form is not set yet; let the caller retry once it loads.
@@ -1154,7 +1089,6 @@ public final class EditorScreenshotHelper
 
             // Synchronous sibling of getMappingRootAsync: compute the CommandInterfaceMapping root on
             // THIS thread instead of the background thread whose syncExec callback gets dropped.
-            Class<?> cmiMappingClass = Class.forName(COMMAND_INTERFACE_MAPPING_CLASS);
             getMappingRoot.setAccessible(true);
             Object cmiMapping = getMappingRoot.invoke(controller, cmiMappingClass);
             if (cmiMapping == null)
@@ -1164,7 +1098,6 @@ public final class EditorScreenshotHelper
             }
 
             // NativeRenderEvent.buildUpdateEvent() — the same event rebuild(boolean) constructs.
-            Class<?> nativeRenderEventClass = Class.forName(NATIVE_RENDER_EVENT_CLASS);
             Method buildUpdateEvent = nativeRenderEventClass.getMethod(BUILD_UPDATE_EVENT_METHOD);
             Object event = buildUpdateEvent.invoke(null);
 

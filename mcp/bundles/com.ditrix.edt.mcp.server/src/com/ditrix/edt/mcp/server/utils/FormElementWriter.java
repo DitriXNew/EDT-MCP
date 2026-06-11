@@ -92,8 +92,10 @@ public final class FormElementWriter
     private static final String FEATURE_COMMAND_INTERFACE = "commandInterface"; //$NON-NLS-1$
     private static final String FEATURE_NAVIGATION_PANEL = "navigationPanel"; //$NON-NLS-1$
     private static final String FEATURE_COMMAND_BAR = "commandBar"; //$NON-NLS-1$
-    /** {@code FormChildrenGroup.VERTICAL} - the default children grouping of a managed form. */
+    /** {@code FormChildrenGroup.VERTICAL} - the designer default children grouping before 8.5.1. */
     private static final String LITERAL_VERTICAL = "Vertical"; //$NON-NLS-1$
+    /** The {@code Auto} enum literal/name ({@code FormChildrenGroup.AUTO}, {@code ShowTitle851.AUTO}). */
+    private static final String LITERAL_AUTO = "Auto"; //$NON-NLS-1$
 
     // Concrete form-model classifier names (resolved on the form EPackage).
     private static final String ECLASS_FORM_GROUP = "FormGroup"; //$NON-NLS-1$
@@ -704,13 +706,15 @@ public final class FormElementWriter
      * @param mdFactory the MD model-object factory (creates the BasicForm)
      * @param formFactory the FORM model-object factory (creates the content Form), may be {@code null}
      * @param fqnGenerator the top-object FQN generator (computes the content form's canonical FQN)
-     * @param version the platform version
+     * @param version the platform version (drives the designer's version-dependent form defaults)
+     * @param russianAutoNames whether the configuration script variant is Russian (localizes the
+     *     fallback predefined command-bar name, like the designer's default-name provider)
      * @return the content form's own top-object FQN (serialized to {@code Form.form}), for force-export
      */
     public static String createForm(IBmTransaction tx, MdObject owner, String formName,
         String synonymLanguage, String synonym, String comment, boolean setAsDefault,
         IModelObjectFactory mdFactory, IModelObjectFactory formFactory,
-        ITopObjectFqnGenerator fqnGenerator, Version version)
+        ITopObjectFqnGenerator fqnGenerator, Version version, boolean russianAutoNames)
     {
         EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature("forms"); //$NON-NLS-1$
         if (formsFeature == null || !(formsFeature.getEType() instanceof EClass))
@@ -744,7 +748,7 @@ public final class FormElementWriter
         // (2) The content form, built by the FORM factory so it gets EDT's default structure
         // (autoCommandBar, command interface, form flags). Falls back to a manual minimal-but-
         // renderable build if the factory is unavailable.
-        EObject content = createContentForm(formFactory, owner, version);
+        EObject content = createContentForm(formFactory, owner, version, russianAutoNames);
 
         // (3) Link MD-form <-> content form (both directions, by feature - no typed form API).
         mdForm.eSet(MdClassPackage.Literals.BASIC_FORM__FORM, content);
@@ -780,13 +784,15 @@ public final class FormElementWriter
      * "New form" wizard builds (predefined {@code autoCommandBar}, command interface, form flags).
      * Falls back to a bare EFactory create when the factory is absent. In both cases the
      * render-critical {@code autoCommandBar} and the standard form-level defaults are applied
-     * explicitly afterwards, so the form renders whether or not the factory ran.
+     * explicitly afterwards (filling only what the factory left unset), so the form renders whether
+     * or not the factory ran.
      * <p>
      * Fully reflective: the {@code Form} EClass is reached through {@link #contentFormEClass()} (the
      * EMF package registry, by nsURI), so no compile-time dependency on
      * {@code com._1c.g5.v8.dt.form.model} is needed. Package-visible for the headless unit test.
      */
-    static EObject createContentForm(IModelObjectFactory formFactory, MdObject owner, Version version)
+    static EObject createContentForm(IModelObjectFactory formFactory, MdObject owner, Version version,
+        boolean russianAutoNames)
     {
         EClass formEClass = contentFormEClass();
         EObject content = null;
@@ -802,9 +808,10 @@ public final class FormElementWriter
         // change may stop seeding the command bar. Ensure the render-critical element is present.
         if (singleReference(content, FEATURE_AUTO_COMMAND_BAR) == null)
         {
-            setSingleReference(content, FEATURE_AUTO_COMMAND_BAR, createDefaultAutoCommandBar(content));
+            setSingleReference(content, FEATURE_AUTO_COMMAND_BAR,
+                createDefaultAutoCommandBar(content, russianAutoNames));
         }
-        applyFormDefaults(content);
+        applyFormDefaults(content, version);
         return content;
     }
 
@@ -835,35 +842,62 @@ public final class FormElementWriter
     }
 
     /**
-     * Sets the standard default form-level properties a managed form authored in EDT has - the eight
-     * form flags ({@code saveWindowSettings}, {@code autoTitle}, {@code autoUrl}, {@code autoFillCheck},
-     * {@code allowFormCustomize}, {@code enabled}, {@code showTitle}, {@code showCloseButton}) true, the
-     * children grouping {@code FormChildrenGroup.VERTICAL}, and an (empty) {@code FormCommandInterface}
-     * holding an empty navigation panel and command bar - so an MCP-created form matches the reference
-     * regardless of whether {@code FormObjectFactory} resolved and ran. The {@code autoCommandBar} is
-     * created separately (it is render-critical); this method does not touch it. Reflective (by
-     * feature / classifier name), like every other write in this class.
+     * Sets the standard default form-level properties a managed form authored in EDT has, mirroring the
+     * designer's {@code FormObjectFactory.newForm(owner, version)} INCLUDING its version branches:
+     * <ul>
+     * <li>always: {@code autoTitle}, {@code autoUrl}, {@code autoFillCheck}, {@code allowFormCustomize},
+     * {@code enabled}, {@code showCloseButton} true;</li>
+     * <li>version &lt; 8.5.1: {@code group = FormChildrenGroup.VERTICAL} and {@code showTitle = true};
+     * version &gt;= 8.5.1: {@code group = FormChildrenGroup.AUTO} and
+     * {@code showTitle851 = ShowTitle851.AUTO} (the wizard does NOT set the legacy boolean there);</li>
+     * <li>{@code saveWindowSettings = true} only for version &gt; 8.3.22 (the wizard leaves it unset on
+     * older compatibility versions);</li>
+     * <li>an (empty) {@code FormCommandInterface} holding an empty navigation panel and command bar.</li>
+     * </ul>
+     * A {@code null} version is treated as the legacy (pre-8.5.1, post-8.3.22) shape, preserving the
+     * previous behavior of this writer. Every feature is only filled when the factory did not already
+     * set it ({@code eIsSet}), so a form built by the real {@code FormObjectFactory} keeps the factory's
+     * version-correct values and this method is the authoritative writer only on the manual fallback.
+     * The {@code autoCommandBar} is created separately (it is render-critical); this method does not
+     * touch it. Reflective (by feature / classifier name), like every other write in this class.
      */
-    private static void applyFormDefaults(EObject form)
+    private static void applyFormDefaults(EObject form, Version version)
     {
-        setBooleanFeature(form, "saveWindowSettings", true); //$NON-NLS-1$
-        setBooleanFeature(form, "autoTitle", true); //$NON-NLS-1$
-        setBooleanFeature(form, "autoUrl", true); //$NON-NLS-1$
-        setBooleanFeature(form, "autoFillCheck", true); //$NON-NLS-1$
-        setBooleanFeature(form, "allowFormCustomize", true); //$NON-NLS-1$
-        setBooleanFeature(form, FEATURE_ENABLED, true);
-        setBooleanFeature(form, "showTitle", true); //$NON-NLS-1$
-        setBooleanFeature(form, "showCloseButton", true); //$NON-NLS-1$
-        setEnumFeature(form, FEATURE_GROUP, LITERAL_VERTICAL);
-
-        EObject commandInterface = createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE);
-        if (commandInterface != null)
+        setBooleanFeatureIfUnset(form, "autoTitle", true); //$NON-NLS-1$
+        setBooleanFeatureIfUnset(form, "autoUrl", true); //$NON-NLS-1$
+        setBooleanFeatureIfUnset(form, "autoFillCheck", true); //$NON-NLS-1$
+        setBooleanFeatureIfUnset(form, "allowFormCustomize", true); //$NON-NLS-1$
+        setBooleanFeatureIfUnset(form, FEATURE_ENABLED, true);
+        setBooleanFeatureIfUnset(form, "showCloseButton", true); //$NON-NLS-1$
+        boolean before851 = version == null || version.isLessThan(Version.V8_5_1);
+        if (before851)
         {
-            setSingleReference(commandInterface, FEATURE_NAVIGATION_PANEL,
-                createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE_ITEMS));
-            setSingleReference(commandInterface, FEATURE_COMMAND_BAR,
-                createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE_ITEMS));
-            setSingleReference(form, FEATURE_COMMAND_INTERFACE, commandInterface);
+            setEnumFeatureIfUnset(form, FEATURE_GROUP, LITERAL_VERTICAL);
+            setBooleanFeatureIfUnset(form, "showTitle", true); //$NON-NLS-1$
+        }
+        else
+        {
+            setEnumFeatureIfUnset(form, FEATURE_GROUP, LITERAL_AUTO);
+            // NOTE: ShowTitle851's EMF literal string is "auto" while its name is "Auto" - the
+            // if-unset setter resolves both, case-insensitively.
+            setEnumFeatureIfUnset(form, "showTitle851", LITERAL_AUTO); //$NON-NLS-1$
+        }
+        if (version == null || version.isGreaterThan(Version.V8_3_22))
+        {
+            setBooleanFeatureIfUnset(form, "saveWindowSettings", true); //$NON-NLS-1$
+        }
+
+        if (singleReference(form, FEATURE_COMMAND_INTERFACE) == null)
+        {
+            EObject commandInterface = createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE);
+            if (commandInterface != null)
+            {
+                setSingleReference(commandInterface, FEATURE_NAVIGATION_PANEL,
+                    createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE_ITEMS));
+                setSingleReference(commandInterface, FEATURE_COMMAND_BAR,
+                    createFromClassifier(form, ECLASS_FORM_COMMAND_INTERFACE_ITEMS));
+                setSingleReference(form, FEATURE_COMMAND_INTERFACE, commandInterface);
+            }
         }
     }
 
@@ -871,13 +905,16 @@ public final class FormElementWriter
      * Builds the form's predefined automatic command bar, mirroring
      * {@code FormObjectFactory.newAutoCommandBar}: {@code autoFill = true}, {@code horizontalAlign =
      * LEFT}, id {@code -1} (the sentinel EDT persists for a form's own predefined command bar, keeping
-     * it out of the regular element id space). A name is assigned so the element is well-formed; EDT
-     * renames predefined items to their canonical names on the next form sync.
+     * it out of the regular element id space). The name follows the configuration script variant the
+     * way the designer's default-name provider builds it for a predefined item on the form root
+     * ({@code FormObjectDefaultNameProvider.getFormDefaultName + getDefaultName(COMMAND_BAR)}):
+     * {@code FormCommandBar} for English, {@code ФормаКоманднаяПанель} for Russian.
      *
      * @param formModel any object of the form package (resolves the {@code AutoCommandBar} classifier)
+     * @param russianAutoNames whether the configuration script variant is Russian
      * @return the bar, or {@code null} when the classifier does not resolve
      */
-    private static EObject createDefaultAutoCommandBar(EObject formModel)
+    private static EObject createDefaultAutoCommandBar(EObject formModel, boolean russianAutoNames)
     {
         EObject bar = createFromClassifier(formModel, ECLASS_AUTO_COMMAND_BAR);
         if (bar == null)
@@ -887,11 +924,15 @@ public final class FormElementWriter
         setBooleanFeature(bar, "autoFill", true); //$NON-NLS-1$
         setEnumFeature(bar, "horizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
         setIntFeature(bar, FEATURE_ID, -1);
-        setStringFeature(bar, FEATURE_NAME, RU_FORM_COMMAND_BAR);
+        setStringFeature(bar, FEATURE_NAME,
+            russianAutoNames ? RU_FORM_COMMAND_BAR : EN_FORM_COMMAND_BAR);
         return bar;
     }
 
-    /** ru "ФормаКоманднаяПанель" - the canonical predefined-command-bar name (pure-ASCII source). */
+    /** en "FormCommandBar" - the canonical English predefined-command-bar name. */
+    private static final String EN_FORM_COMMAND_BAR = "FormCommandBar"; //$NON-NLS-1$
+
+    /** ru "ФормаКоманднаяПанель" - the canonical Russian predefined-command-bar name (pure-ASCII source). */
     private static final String RU_FORM_COMMAND_BAR = cp(0x0424, 0x043e, 0x0440, 0x043c, 0x0430,
         0x041a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x043d, 0x0430, 0x044f,
         0x041f, 0x0430, 0x043d, 0x0435, 0x043b, 0x044c);
@@ -926,6 +967,26 @@ public final class FormElementWriter
         throw new RuntimeException("Owner type '" + owner.eClass().getName() //$NON-NLS-1$
             + "' has no compatible setDefaultObjectForm(...) method; create the form without " //$NON-NLS-1$
             + "setAsDefault and assign it manually."); //$NON-NLS-1$
+    }
+
+    /**
+     * Finds a form by Name in {@code owner}'s {@code forms} collection (case-insensitive), or
+     * {@code null} when the owner holds no such form (or supports no forms at all). The public
+     * duplicate probe for the form-object create path, so the tool can honor
+     * {@code expectedNotExists} with the same precondition semantics as every other create.
+     *
+     * @param owner the owner metadata object
+     * @param formName the programmatic form Name to look for
+     * @return the owned MD-form, or {@code null}
+     */
+    public static EObject findOwnedForm(MdObject owner, String formName)
+    {
+        EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature("forms"); //$NON-NLS-1$
+        if (formsFeature == null)
+        {
+            return null;
+        }
+        return findOwnedFormByName(owner, formsFeature, formName);
     }
 
     /** Finds a form by Name in the owner's {@code forms} collection (case-insensitive), or null. */
@@ -2291,6 +2352,18 @@ public final class FormElementWriter
         return findItem(formModel, name);
     }
 
+    /**
+     * Finds a form item by name like {@link #findFormItem}, but REJECTS an ambiguous name (more than
+     * one match anywhere in the form-item tree) by throwing a {@code RuntimeException} with a
+     * user-facing message instead of silently returning the first match. The strict resolver for
+     * write paths that mutate the named item (e.g. re-pointing a button's command). Returns the
+     * unique match, or {@code null} when none exists. Call on the tx-bound form model.
+     */
+    public static EObject findUniqueFormItem(EObject formModel, String name)
+    {
+        return findUniqueItem(formModel, name);
+    }
+
     /** Finds a form ATTRIBUTE by programmatic name, or {@code null}. Call on the tx-bound form model. */
     public static EObject findFormAttribute(EObject formModel, String name)
     {
@@ -2658,6 +2731,50 @@ public final class FormElementWriter
         if (enumLiteral != null)
         {
             object.eSet(feature, enumLiteral.getInstance());
+        }
+    }
+
+    /**
+     * Sets a boolean feature only when the factory (or anyone else) has not already set it
+     * ({@code eIsSet}); used by {@link #applyFormDefaults} so the real {@code FormObjectFactory}'s
+     * version-correct values are never clobbered. A no-op when the feature is absent.
+     */
+    private static void setBooleanFeatureIfUnset(EObject object, String featureName, boolean value)
+    {
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
+        if (feature != null && !object.eIsSet(feature))
+        {
+            object.eSet(feature, Boolean.valueOf(value));
+        }
+    }
+
+    /**
+     * Sets an EEnum feature only when it is not already set ({@code eIsSet}), resolving the requested
+     * value against the literal string OR the literal name, case-insensitively. The resilient
+     * resolution matters for form-model enums whose literal differs from the name (e.g.
+     * {@code ShowTitle851.AUTO} has name {@code "Auto"} but literal {@code "auto"}). A no-op when the
+     * feature is absent, not an EEnum, or the value resolves to no literal.
+     */
+    private static void setEnumFeatureIfUnset(EObject object, String featureName, String literalOrName)
+    {
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
+        if (!(feature instanceof EAttribute) || object.eIsSet(feature))
+        {
+            return;
+        }
+        EClassifier type = ((EAttribute)feature).getEAttributeType();
+        if (!(type instanceof EEnum))
+        {
+            return;
+        }
+        for (EEnumLiteral enumLiteral : ((EEnum)type).getELiterals())
+        {
+            if (literalOrName.equalsIgnoreCase(enumLiteral.getLiteral())
+                || literalOrName.equalsIgnoreCase(enumLiteral.getName()))
+            {
+                object.eSet(feature, enumLiteral.getInstance());
+                return;
+            }
         }
     }
 }
