@@ -166,6 +166,28 @@ public class LaunchLifecycleUtilsUpdateTest
     }
 
     @Test
+    public void testUpdateReturnsIncrementalRequiredIsSuccess() throws ApplicationException
+    {
+        // The fix for the extension-bearing case: appManager.update() leaves the app
+        // reporting INCREMENTAL_UPDATE_REQUIRED (the launch delegate's modal is handled
+        // by LaunchUpdateDialogAutoConfirmer). The changes ARE published, so this must
+        // be a success — NOT an error that pushes the caller toward a full update.
+        IApplication app = mock(IApplication.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplication(any(IProject.class), eq(APP_ID)))
+            .thenReturn(Optional.of(app));
+        when(mgr.getUpdateState(app)).thenReturn(ApplicationUpdateState.INCREMENTAL_UPDATE_REQUIRED);
+        when(mgr.update(eq(app), any(), any(), any()))
+            .thenReturn(ApplicationUpdateState.INCREMENTAL_UPDATE_REQUIRED);
+
+        Optional<String> result = LaunchLifecycleUtils.updateApplicationIfNeeded(
+            mockOpenProject(), APP_ID, mgr);
+        assertFalse("INCREMENTAL_UPDATE_REQUIRED post-update is the cosmetic extension " //$NON-NLS-1$
+            + "state and must be success", result.isPresent());
+        verify(mgr, times(1)).update(eq(app), any(), any(), any());
+    }
+
+    @Test
     public void testUpdateReturnsBeingUpdatedThenSettles() throws ApplicationException
     {
         IApplication app = mock(IApplication.class);

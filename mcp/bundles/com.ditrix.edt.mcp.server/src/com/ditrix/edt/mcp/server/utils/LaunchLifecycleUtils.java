@@ -342,29 +342,21 @@ public final class LaunchLifecycleUtils
             ApplicationUpdateState after = appManager.update(application,
                 ApplicationUpdateType.INCREMENTAL, context, new NullProgressMonitor());
             Activator.logInfo("Pre-launch DB update completed: stateAfter=" + after); //$NON-NLS-1$
-            // Post-condition gate: the auto-chain promises the IB will be in
-            // UPDATED state before workingCopy.launch() runs, otherwise the
-            // launch delegate would still see "DB needs update" and pop its
-            // modal dialog — which is exactly what we are trying to avoid.
-            if (after == ApplicationUpdateState.UPDATED)
-            {
-                return Optional.empty();
-            }
+            // Settle an async update before classifying — never launch against a
+            // half-updated IB.
             if (after == ApplicationUpdateState.BEING_UPDATED)
             {
-                // appManager.update() returned but the state machine still
-                // reports an update in progress (async path). Wait for it.
                 long maxMillis = getDefaultTerminateTimeoutSeconds() * 1000L;
                 after = waitForUpdateSettled(appManager, application, maxMillis);
-                if (after == ApplicationUpdateState.UPDATED)
-                {
-                    return Optional.empty();
-                }
             }
-            return Optional.of("Database update finished with state " + after //$NON-NLS-1$
-                + " (expected UPDATED). Inspect the EDT problems view, " //$NON-NLS-1$
-                + "or call `update_database` with `fullUpdate=true` / " //$NON-NLS-1$
-                + "`autoRestructure=true` to handle restructurization, then retry."); //$NON-NLS-1$
+            // Defer the success/failure decision to the single ApplicationUpdatePolicy
+            // so this pre-launch path and update_database agree. INCREMENTAL_UPDATE_REQUIRED
+            // here is the expected cosmetic state for an extension-bearing app (the launch
+            // delegate's modal is auto-confirmed by LaunchUpdateDialogAutoConfirmer), so the
+            // policy treats it as success and we do NOT push the caller toward a needless
+            // full update.
+            ApplicationUpdatePolicy.Result verdict = ApplicationUpdatePolicy.classifyPostUpdate(after);
+            return verdict.isSuccess() ? Optional.empty() : Optional.of(verdict.message());
         }
         catch (ApplicationException e)
         {
@@ -413,6 +405,86 @@ public final class LaunchLifecycleUtils
     }
 
     /**
+     * Terminates every live EDT <b>runtime-client</b> launch on the given
+     * {@code project + applicationId} infobase, politely, waiting up to
+     * {@code terminateTimeoutSeconds} per launch.
+     *
+     * <p>This is the shared "free the infobase before mutating it" primitive used
+     * both by the pre-launch auto-chain ({@link #prepareForFreshLaunch}) and by
+     * {@code update_database}. It prunes the OWNED registry first, refuses to touch
+     * a launch another MCP tool owns (registered via {@link #registerOwnedLaunch})
+     * so concurrent test runs don't sabotage each other, and aborts ({@code ok=false})
+     * if a launch will not stop within the window — leaving the IB locked would
+     * defeat the purpose.
+     *
+     * <p>Only runtime-client launches are swept (they hold the infobase). Attach
+     * debug launches do not hold the lock and are handled separately by
+     * {@link #prepareForFreshLaunch}.
+     *
+     * <p>Acquires {@link #lockFor} for the pair; safe to call from a caller that
+     * already holds it ({@code synchronized} is reentrant).
+     *
+     * @param launchManager           Eclipse launch manager
+     * @param project                 target project
+     * @param applicationId           target {@code ATTR_APPLICATION_ID}
+     * @param terminateTimeoutSeconds polite-wait window per live launch
+     * @return {@code ok=true} + terminated count on success; {@code ok=false} with
+     *         an actionable error when a launch is owned or would not stop in time
+     */
+    public static PreLaunchResult terminateLiveLaunchesForIb(ILaunchManager launchManager,
+            IProject project, String applicationId, int terminateTimeoutSeconds)
+    {
+        if (launchManager == null)
+        {
+            return new PreLaunchResult(false, 0, "Launch manager is not available"); //$NON-NLS-1$
+        }
+        if (project == null)
+        {
+            return new PreLaunchResult(false, 0, "Project is null"); //$NON-NLS-1$
+        }
+        synchronized (lockFor(project.getName(), applicationId))
+        {
+            // Prune terminated entries so a stale registration cannot
+            // permanently block future auto-chains.
+            OWNED_LAUNCHES.removeIf(ILaunch::isTerminated);
+
+            int terminated = 0;
+            for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager,
+                project.getName()))
+            {
+                if (!applicationId.equals(LaunchConfigUtils.getApplicationIdFor(live)))
+                {
+                    continue;
+                }
+                String name = live.getLaunchConfiguration() != null
+                    ? live.getLaunchConfiguration().getName() : "<unknown>"; //$NON-NLS-1$
+                // Identity-equals lookup against the OWNED registry — relies on
+                // the invariant that callers pass the exact ILaunch instance
+                // returned by workingCopy.launch() to registerOwnedLaunch.
+                if (OWNED_LAUNCHES.contains(live))
+                {
+                    return new PreLaunchResult(false, terminated,
+                        "Another test run is already in progress for this IB " //$NON-NLS-1$
+                            + "(launch '" + name + "'). Wait for it to finish " //$NON-NLS-1$ //$NON-NLS-2$
+                            + "(call this tool again later with the same arguments), " //$NON-NLS-1$
+                            + "or call `terminate_launch` to stop it first."); //$NON-NLS-1$
+                }
+                boolean done = terminateAndWait(live, terminateTimeoutSeconds);
+                if (!done)
+                {
+                    return new PreLaunchResult(false, terminated,
+                        "Could not terminate previous launch '" + name //$NON-NLS-1$
+                            + "' within " + terminateTimeoutSeconds //$NON-NLS-1$
+                            + "s. Call `terminate_launch` with `force=true` to kill " //$NON-NLS-1$
+                            + "the stuck process, then retry."); //$NON-NLS-1$
+                }
+                terminated++;
+            }
+            return new PreLaunchResult(true, terminated, null);
+        }
+    }
+
+    /**
      * Auto-chain executed before {@code workingCopy.launch()} when the caller
      * wants to bypass EDT's interactive "Update database?" dialog:
      * <ol>
@@ -452,42 +524,16 @@ public final class LaunchLifecycleUtils
         // their full spawn+register sequence around the auto-chain.
         synchronized (lockFor(project.getName(), applicationId))
         {
-            // Prune terminated entries so a stale registration cannot
-            // permanently block future auto-chains.
-            OWNED_LAUNCHES.removeIf(ILaunch::isTerminated);
-
-            int terminated = 0;
-            for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager,
-                project.getName()))
+            // First pass: terminate live runtime-client launches holding this IB.
+            // Shared with update_database via terminateLiveLaunchesForIb, which prunes
+            // the OWNED registry and enforces the owned-launch protection.
+            PreLaunchResult termination = terminateLiveLaunchesForIb(launchManager, project,
+                applicationId, terminateTimeoutSeconds);
+            if (!termination.isOk())
             {
-                if (!applicationId.equals(LaunchConfigUtils.getApplicationIdFor(live)))
-                {
-                    continue;
-                }
-                String name = live.getLaunchConfiguration() != null
-                    ? live.getLaunchConfiguration().getName() : "<unknown>"; //$NON-NLS-1$
-                // Identity-equals lookup against the OWNED registry — relies on
-                // the invariant that callers pass the exact ILaunch instance
-                // returned by workingCopy.launch() to registerOwnedLaunch.
-                if (OWNED_LAUNCHES.contains(live))
-                {
-                    return new PreLaunchResult(false, terminated,
-                        "Another test run is already in progress for this IB " //$NON-NLS-1$
-                            + "(launch '" + name + "'). Wait for it to finish " //$NON-NLS-1$ //$NON-NLS-2$
-                            + "(call this tool again later with the same arguments), " //$NON-NLS-1$
-                            + "or call `terminate_launch` to stop it first."); //$NON-NLS-1$
-                }
-                boolean done = terminateAndWait(live, terminateTimeoutSeconds);
-                if (!done)
-                {
-                    return new PreLaunchResult(false, terminated,
-                        "Could not terminate previous launch '" + name //$NON-NLS-1$
-                            + "' within " + terminateTimeoutSeconds //$NON-NLS-1$
-                            + "s. Call `terminate_launch` with `force=true` to kill " //$NON-NLS-1$
-                            + "the stuck process, then retry."); //$NON-NLS-1$
-                }
-                terminated++;
+                return termination;
             }
+            int terminated = termination.getTerminatedCount();
 
             // Second pass: stale Attach launches on the same project. Attach
             // configs don't carry a real ATTR_APPLICATION_ID — getApplicationIdFor

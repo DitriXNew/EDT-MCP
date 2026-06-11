@@ -190,3 +190,21 @@ def test_nonexistent_project_is_rejected_without_mutating():
     assert_contains(e, "Project not found",
                     "a non-existent project must hit the value-naming not-found branch")
     assert_no_diff("a rejected update must not touch the project on disk")
+
+
+@e2e_test(tool="update_database", kind="action")
+def test_terminate_flag_does_not_change_resolution_or_mutate():
+    """The transparent session-termination flag (terminateRunningClients) must not alter
+    the resolution chain or mutate anything when the target is invalid. Session termination
+    only runs on confirm=true AFTER the application is resolved; a bogus applicationId is
+    rejected at the application lookup BEFORE any termination, regardless of the flag, and
+    the project tree stays clean. Proves the new param is inert on the rejection path."""
+    r = call("update_database", {
+        "projectName": PROJECT,
+        "applicationId": BOGUS_APP_ID,
+        "terminateRunningClients": False,
+    })
+    e = assert_error(r, "real project + bogus app + terminateRunningClients=false")
+    assert_contains(e, "Application not found",
+                    "must still be rejected at the real application lookup, flag is inert here")
+    assert_no_diff("the terminate flag must not touch the project source on disk")

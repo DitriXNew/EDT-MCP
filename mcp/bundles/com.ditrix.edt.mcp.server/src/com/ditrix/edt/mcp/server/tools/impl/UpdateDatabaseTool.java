@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
 
@@ -22,10 +24,13 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationUpdatePolicy;
+import com.ditrix.edt.mcp.server.utils.EdtDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.UpdateWatchdog;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -40,7 +45,33 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 public class UpdateDatabaseTool implements IMcpTool
 {
     public static final String NAME = "update_database"; //$NON-NLS-1$
-    
+
+    /** Default watchdog window for the synchronous update() call, in seconds. */
+    private static final int DEFAULT_UPDATE_TIMEOUT_SECONDS = 120;
+
+    /** Lower clamp bound for the update watchdog window. */
+    private static final int MIN_UPDATE_TIMEOUT_SECONDS = 5;
+
+    /** Upper clamp bound for the update watchdog window. */
+    private static final int MAX_UPDATE_TIMEOUT_SECONDS = 600;
+
+    /**
+     * Auto-confirms a blocking update/restructurization modal during the
+     * programmatic update only. {@code confirm=true} already authorised the
+     * mutation, so pressing the dialog's default ("proceed") button is what a
+     * careful user would do. Seeded with the known launch-delegate title; add
+     * restructurization titles here once confirmed against a live EDT.
+     */
+    private static final EdtDialogAutoConfirmer UPDATE_DIALOG_CONFIRMER =
+        new EdtDialogAutoConfirmer(new LinkedHashSet<>(Arrays.asList(
+            "Application update"))); //$NON-NLS-1$
+
+    /** Appended when an update may be blocked by a client this EDT did not launch. */
+    private static final String EXTERNAL_SESSION_NOTE =
+        "If a 1C client started OUTSIDE this EDT (Designer, a standalone 1cv8c, another EDT " //$NON-NLS-1$
+            + "instance, or a server session) is holding the infobase, it is invisible to " //$NON-NLS-1$
+            + "terminate_launch and must be closed manually before the update can complete."; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -54,7 +85,8 @@ public class UpdateDatabaseTool implements IMcpTool
             + "incremental. Target by launchConfigurationName (preferred) or projectName + " //$NON-NLS-1$
             + "applicationId. Destructive/irreversible: guarded by a confirm-preview - call without " //$NON-NLS-1$
             + "confirm to preview the exact update (no infobase change), then confirm=true to apply. " //$NON-NLS-1$
-            + "Terminate any running 1C client on the target infobase first (exclusive lock). " //$NON-NLS-1$
+            + "On confirm it transparently terminates EDT-launched 1C clients on the target " //$NON-NLS-1$
+            + "infobase first (external clients must be closed manually). " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('update_database')."; //$NON-NLS-1$
     }
 
@@ -75,6 +107,15 @@ public class UpdateDatabaseTool implements IMcpTool
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = apply the update; default false = preview only (resolves the target and " //$NON-NLS-1$
                 + "reports what would change WITHOUT mutating the infobase).") //$NON-NLS-1$
+            .booleanProperty("terminateRunningClients", //$NON-NLS-1$
+                "Before updating (confirm=true), terminate any 1C client THIS EDT launched against " //$NON-NLS-1$
+                + "the target infobase so the update is not blocked by an exclusive lock and the new " //$NON-NLS-1$
+                + "code is not masked by a cached session (default true). External clients are not " //$NON-NLS-1$
+                + "affected.") //$NON-NLS-1$
+            .integerProperty("updateTimeoutSeconds", //$NON-NLS-1$
+                "Watchdog window for the update call in seconds (default 120, clamped 5..600). If the " //$NON-NLS-1$
+                + "update does not finish in time it keeps running in the background and the tool " //$NON-NLS-1$
+                + "returns stateAfter=BEING_UPDATED so you can poll get_applications.") //$NON-NLS-1$
             .build();
     }
 
@@ -93,6 +134,11 @@ public class UpdateDatabaseTool implements IMcpTool
             .stringProperty("stateBefore", "Application update state before the update.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("stateAfter", "Application update state after the update.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable status message for the update.") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("terminatedClients", //$NON-NLS-1$
+                "Number of EDT-launched 1C clients terminated before the update.") //$NON-NLS-1$
+            .booleanProperty("fullUpdateRequired", //$NON-NLS-1$
+                "Present and true when the incremental update genuinely needs a full update " //$NON-NLS-1$
+                + "(state FULL_UPDATE_REQUIRED); re-call with fullUpdate=true.") //$NON-NLS-1$
             .build();
     }
 
@@ -111,6 +157,10 @@ public class UpdateDatabaseTool implements IMcpTool
         boolean fullUpdate = JsonUtils.extractBooleanArgument(params, "fullUpdate", false); //$NON-NLS-1$
         boolean autoRestructure = JsonUtils.extractBooleanArgument(params, "autoRestructure", true); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+        boolean terminateRunningClients =
+            JsonUtils.extractBooleanArgument(params, "terminateRunningClients", true); //$NON-NLS-1$
+        int updateTimeoutSeconds = clampTimeout(
+            JsonUtils.extractIntArgument(params, "updateTimeoutSeconds", DEFAULT_UPDATE_TIMEOUT_SECONDS)); //$NON-NLS-1$
 
         boolean hasName = configName != null && !configName.isEmpty();
         if (!hasName)
@@ -166,7 +216,8 @@ public class UpdateDatabaseTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        return updateDatabase(projectName, applicationId, fullUpdate, autoRestructure, confirm);
+        return updateDatabase(projectName, applicationId, fullUpdate, autoRestructure, confirm,
+            terminateRunningClients, updateTimeoutSeconds);
     }
     
     /**
@@ -179,7 +230,8 @@ public class UpdateDatabaseTool implements IMcpTool
      * @return JSON string with result
      */
     private String updateDatabase(String projectName, String applicationId,
-            boolean fullUpdate, boolean autoRestructure, boolean confirm)
+            boolean fullUpdate, boolean autoRestructure, boolean confirm,
+            boolean terminateRunningClients, int updateTimeoutSeconds)
     {
         try
         {
@@ -245,51 +297,99 @@ public class UpdateDatabaseTool implements IMcpTool
                     .toJson();
             }
 
-            // Create execution context with the active Shell so EDT can parent
-            // its dialogs. Shared SWT-grab lives in LaunchLifecycleUtils.
-            ExecutionContext context = new ExecutionContext();
-            Shell shell = LaunchLifecycleUtils.grabActiveShell();
-            if (shell != null)
+            // confirm=true: serialise the terminate+update sequence with concurrent
+            // test runs on the same IB via the shared per-IB lock.
+            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
             {
-                context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
-            }
+                // Free the infobase first: terminate any 1C client THIS EDT launched
+                // against it, so the update is not blocked by an exclusive lock and the
+                // new code is not masked by a cached session. External clients are
+                // invisible to us (flagged below if the update stalls).
+                int terminatedClients = 0;
+                if (terminateRunningClients)
+                {
+                    ILaunchManager lm = DebugPlugin.getDefault().getLaunchManager();
+                    if (lm != null)
+                    {
+                        int termTimeout = LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
+                        LaunchLifecycleUtils.PreLaunchResult term =
+                            LaunchLifecycleUtils.terminateLiveLaunchesForIb(lm, project,
+                                applicationId, termTimeout);
+                        if (!term.isOk())
+                        {
+                            return ToolResult.error(term.getError() + " " + EXTERNAL_SESSION_NOTE) //$NON-NLS-1$
+                                .toJson();
+                        }
+                        terminatedClients = term.getTerminatedCount();
+                    }
+                }
 
-            Activator.logInfo("Update database: project=" + projectName +  //$NON-NLS-1$
-                    ", application=" + applicationId +  //$NON-NLS-1$
-                    ", type=" + updateType +  //$NON-NLS-1$
-                    ", autoRestructure=" + autoRestructure); //$NON-NLS-1$
-            
-            // Create progress monitor
-            IProgressMonitor monitor = new NullProgressMonitor();
-            
-            // Perform update
-            ApplicationUpdateState stateAfter = appManager.update(application, updateType, context, monitor);
-            
-            // Build result
-            ToolResult result = ToolResult.success()
-                .put("action", "updated") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("project", projectName) //$NON-NLS-1$
-                .put("applicationId", applicationId) //$NON-NLS-1$
-                .put("applicationName", application.getName()) //$NON-NLS-1$
-                .put("updateType", updateType.name()) //$NON-NLS-1$
-                .put("stateBefore", stateBefore.name()) //$NON-NLS-1$
-                .put("stateAfter", stateAfter.name()); //$NON-NLS-1$
-            
-            // Add status message based on result
-            if (stateAfter == ApplicationUpdateState.UPDATED)
-            {
-                result.put("message", "Database updated successfully"); //$NON-NLS-1$ //$NON-NLS-2$
+                // Create execution context with the active Shell so EDT can parent its
+                // dialogs. Shared SWT-grab lives in LaunchLifecycleUtils.
+                ExecutionContext context = new ExecutionContext();
+                Shell shell = LaunchLifecycleUtils.grabActiveShell();
+                if (shell != null)
+                {
+                    context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
+                }
+
+                Activator.logInfo("Update database: project=" + projectName //$NON-NLS-1$
+                    + ", application=" + applicationId //$NON-NLS-1$
+                    + ", type=" + updateType //$NON-NLS-1$
+                    + ", autoRestructure=" + autoRestructure //$NON-NLS-1$
+                    + ", terminatedClients=" + terminatedClients); //$NON-NLS-1$
+
+                IProgressMonitor monitor = new NullProgressMonitor();
+
+                // Auto-confirm a blocking update/restructurization modal for the ENTIRE life of
+                // the update (an active session can make appManager.update pop one that would
+                // otherwise hang the MCP call). The confirmer stays armed even after the watchdog
+                // times out, so a long full reload that pops a modal minutes later — after we
+                // already returned BEING_UPDATED — is still auto-confirmed in the background. The
+                // watchdog bounds the wait so a stuck update returns BEING_UPDATED, not a hang.
+                ApplicationUpdateState stateAfter = UpdateWatchdog.runWithTimeout(
+                    () -> appManager.update(application, updateType, context, monitor),
+                    updateTimeoutSeconds,
+                    UPDATE_DIALOG_CONFIRMER::arm, UPDATE_DIALOG_CONFIRMER::disarm);
+
+                // Single source of truth for "is this success?": INCREMENTAL_UPDATE_REQUIRED
+                // after an incremental update is the expected cosmetic state for an
+                // extension-bearing config (changes ARE published) and must NOT trigger a
+                // needless full update; only FULL_UPDATE_REQUIRED genuinely needs one.
+                ApplicationUpdatePolicy.Result verdict =
+                    ApplicationUpdatePolicy.classifyExplicitUpdate(updateType, stateAfter);
+                boolean ok = verdict.outcome() == ApplicationUpdatePolicy.Outcome.SUCCESS
+                    || verdict.outcome() == ApplicationUpdatePolicy.Outcome.IN_PROGRESS;
+                String message = verdict.outcome() == ApplicationUpdatePolicy.Outcome.IN_PROGRESS
+                    ? verdict.message() + " " + EXTERNAL_SESSION_NOTE //$NON-NLS-1$
+                    : verdict.message();
+
+                // message is in the structured body on EVERY outcome (the output schema
+                // declares it); ToolResult.error() additionally surfaces it in the error
+                // envelope, so a NEEDS_FULL_UPDATE/FAILED caller still gets the actionable text.
+                ToolResult result = ok ? ToolResult.success() : ToolResult.error(message);
+                result.put("action", "updated") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put("project", projectName) //$NON-NLS-1$
+                    .put("applicationId", applicationId) //$NON-NLS-1$
+                    .put("applicationName", application.getName()) //$NON-NLS-1$
+                    .put("updateType", updateType.name()) //$NON-NLS-1$
+                    .put("stateBefore", stateBefore.name()) //$NON-NLS-1$
+                    .put("stateAfter", stateAfter.name()) //$NON-NLS-1$
+                    .put("terminatedClients", terminatedClients) //$NON-NLS-1$
+                    .put("message", message); //$NON-NLS-1$
+                if (verdict.outcome() == ApplicationUpdatePolicy.Outcome.NEEDS_FULL_UPDATE)
+                {
+                    result.put("fullUpdateRequired", true); //$NON-NLS-1$
+                }
+                return result.toJson();
             }
-            else if (stateAfter == ApplicationUpdateState.BEING_UPDATED)
-            {
-                result.put("message", "Update in progress"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else
-            {
-                result.put("message", "Update completed with state: " + stateAfter.name()); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            
-            return result.toJson();
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return ToolResult.error("Database update was interrupted while waiting for it to " //$NON-NLS-1$
+                + "complete. It may still be running in the background — poll get_applications.") //$NON-NLS-1$
+                .toJson();
         }
         catch (ApplicationException e)
         {
@@ -314,5 +414,19 @@ public class UpdateDatabaseTool implements IMcpTool
             Activator.logError("Unexpected error during database update", e); //$NON-NLS-1$
             return ToolResult.error("Unexpected error: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /** Clamps the watchdog window to a sane range. */
+    private static int clampTimeout(int seconds)
+    {
+        if (seconds < MIN_UPDATE_TIMEOUT_SECONDS)
+        {
+            return MIN_UPDATE_TIMEOUT_SECONDS;
+        }
+        if (seconds > MAX_UPDATE_TIMEOUT_SECONDS)
+        {
+            return MAX_UPDATE_TIMEOUT_SECONDS;
+        }
+        return seconds;
     }
 }

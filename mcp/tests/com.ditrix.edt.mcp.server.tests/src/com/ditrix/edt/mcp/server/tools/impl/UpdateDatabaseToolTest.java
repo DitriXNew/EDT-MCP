@@ -122,6 +122,35 @@ public class UpdateDatabaseToolTest
         assertTrue(guide.contains("autoRestructure")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testSchemaDeclaresSessionTerminationParams()
+    {
+        // The transparent terminate-before-update behaviour is controllable per-call.
+        String schema = new UpdateDatabaseTool().getInputSchema();
+        assertTrue("schema must declare terminateRunningClients", //$NON-NLS-1$
+            schema.contains("\"terminateRunningClients\"")); //$NON-NLS-1$
+        assertTrue("schema must declare updateTimeoutSeconds", //$NON-NLS-1$
+            schema.contains("\"updateTimeoutSeconds\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresTerminatedClientsAndFullUpdateRequired()
+    {
+        String schema = new UpdateDatabaseTool().getOutputSchema();
+        assertTrue("outputSchema must declare terminatedClients", //$NON-NLS-1$
+            schema.contains("\"terminatedClients\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare fullUpdateRequired", //$NON-NLS-1$
+            schema.contains("\"fullUpdateRequired\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsTransparentTermination()
+    {
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertTrue("guide must document the auto-termination of clients", //$NON-NLS-1$
+            guide.contains("terminateRunningClients")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live launch manager needed) ====================
 
     @Test
