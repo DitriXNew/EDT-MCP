@@ -54,6 +54,9 @@ public final class FormStructureReader
     private static final String FEATURE_HANDLER = "handler"; //$NON-NLS-1$
     /** EReference name of the {@code CommandHandlerExtension} list inside an extension container. */
     private static final String FEATURE_HANDLERS = "handlers"; //$NON-NLS-1$
+    /** Singular item-bearing containments outside {@code items} (bar / context menu / tooltip). */
+    private static final String[] SINGULAR_ITEM_CONTAINMENTS =
+        {FEATURE_AUTO_COMMAND_BAR, "contextMenu", "extendedTooltip"}; //$NON-NLS-1$ //$NON-NLS-2$
 
     private FormStructureReader()
     {
@@ -241,8 +244,7 @@ public final class FormStructureReader
         // context menu / extended tooltip). Their names occupy the form-wide namespace, so they must
         // be discoverable - but a designer-default child (no nested items, no title) is noise and is
         // skipped to keep the outline lean.
-        for (String featureName : new String[] {FEATURE_AUTO_COMMAND_BAR, "contextMenu", //$NON-NLS-1$
-            "extendedTooltip"}) //$NON-NLS-1$
+        for (String featureName : SINGULAR_ITEM_CONTAINMENTS)
         {
             EObject child = getSingleReference(item, featureName);
             if (child != null
