@@ -349,3 +349,92 @@ def test_blank_project_name_rejected_by_required_guard():
         assert_no_diff("a rejected call must not touch the project on disk")
     finally:
         shutil.rmtree(out_dir, ignore_errors=True)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DESIGNER-XML CONTENT for form writes (issue #138 acceptance pipeline)
+# ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="export_configuration_to_xml", kind="write-metadata")
+def test_designer_xml_carries_form_command_action_and_bar_button():
+    """The #138 reporter's pipeline end-to-end: create a form command + its Action
+    handler + a button in the AutoCommandBar via create_metadata, export the
+    configuration to Designer XML, then assert the EXPORTED Ext form XML (the
+    platform's model->Designer-XML mapping, which the .form-level e2e cannot see):
+      * <Action>Proc</Action> inside the new <Command> block,
+      * the new <Button> nested INSIDE the <AutoCommandBar> block,
+      * no <Enabled>false</Enabled> anywhere in the form (issue #138 bug 3).
+    API absent -> the documented not-installed sentinel branch (no XML to assert).
+    kind=write-metadata -> the orchestrator resets the model after the test.
+    """
+    from harness import wait_for_project_ready
+    cmd, proc, btn = "XBarCmd", "XBarActProc", "XBarBtn"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r, "seed form command")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Command.%s.Handler.Action" % cmd,
+        "properties": [{"name": "procedure", "value": proc}]})
+    assert_ok(r, "seed the command's Action handler")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + btn,
+        "properties": [{"name": "command", "value": cmd},
+                       {"name": "parent", "value": "AutoCommandBar"}]})
+    assert_ok(r, "seed a button inside the AutoCommandBar")
+    wait_for_project_ready()
+
+    out_dir = tempfile.mkdtemp(prefix="edt_export_e2e_form_")
+    try:
+        args = {"projectName": PROJECT, "outputPath": out_dir}
+        r = call("export_configuration_to_xml", args)
+        for _ in range(8):
+            if not r.is_error or not _is_transient_teardown_race(r.error_text()):
+                break
+            time.sleep(3)
+            r = call("export_configuration_to_xml", args)
+        if r.is_error:
+            assert_contains(r.error_text(), _API_ABSENT_MARKER,
+                            "an error here must be the not-installed API sentinel")
+            return
+        assert_ok(r, "export the configuration with the seeded form content")
+        # Locate the exported Designer XML of the form (DumpConfigToFiles layout:
+        # Catalogs/Catalog/Forms/ItemForm/Ext/Form.xml — found by content, not path,
+        # to stay robust to layout drift).
+        form_xml = None
+        for root_dir, _dirs, files in os.walk(out_dir):
+            for f in files:
+                if not f.lower().endswith(".xml"):
+                    continue
+                p = os.path.join(root_dir, f)
+                with open(p, encoding="utf-8-sig", errors="replace") as fh:
+                    text = fh.read()
+                if btn in text and cmd in text:
+                    form_xml = (p, text)
+                    break
+            if form_xml:
+                break
+        assert form_xml is not None, \
+            "no exported XML file carries the seeded command+button (export incomplete?)"
+        path, text = form_xml
+        # Bug 1: the command's Action binding survives the Designer-XML mapping.
+        assert "<Action>%s</Action>" % proc in text, \
+            "the exported <Command> must carry <Action>%s</Action> (got file %s)" % (proc, path)
+        # Bug 2: the button is nested INSIDE the AutoCommandBar block (the Designer-XML tag carries
+        # name/id attributes, so match the open tag WITHOUT the closing bracket).
+        bar_start = text.find("<AutoCommandBar")
+        bar_end = text.find("</AutoCommandBar>")
+        assert bar_start != -1 and bar_end > bar_start, \
+            "the exported form must have an <AutoCommandBar> block: %s" % path
+        assert bar_start < text.find(btn) < bar_end, \
+            "the new button must serialize INSIDE <AutoCommandBar>, not at the form root"
+        # Bug 3: nothing in this form exports disabled (the fixture form is fully
+        # enabled; the only new items are ours).
+        assert "<Enabled>false</Enabled>" not in text, \
+            "a created item must not export <Enabled>false</Enabled>: %s" % path
+        # NB: no assert_no_diff here - this test deliberately SEEDS form members (the fixture
+        # diff is the seeded content; kind=write-metadata resets it). The export-to-external-dir
+        # non-mutation contract is covered by the read-only export tests above.
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)

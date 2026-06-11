@@ -447,6 +447,59 @@ def test_modify_form_command_title():
     poll_diff_contains("Refresh now", ctx="the command title must land in the .form on disk")
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_move_form_button_into_auto_command_bar():
+    # Reparent an EXISTING button into the form's command bar via the 'parent' property - the move
+    # half of the #138 reporter's manual XML edits (new buttons can be parented at creation; this
+    # covers buttons that already exist at the form root).
+    cmd, btn = "MoveCmd", "MoveBtn"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r, "seed form command")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + btn,
+        "properties": [{"name": "command", "value": cmd}]})
+    assert_ok(r, "seed a root-level button")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + btn,
+        "properties": [{"name": "parent", "value": "AutoCommandBar"}]})
+    assert_ok(r, "move the button into the AutoCommandBar")
+    assert "parent" in (r.structured.get("applied") or []), (
+        "the move must report parent as applied: %r" % (r.structured,))
+    poll_diff_contains(btn, ctx="the moved button must land in the form's .form on disk")
+    # The structure read-back shows the button nested under the bar - the moved containment.
+    rb = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(rb, "read the form structure back")
+    lines = rb.text.splitlines()
+    bar_idx = next((i for i, ln in enumerate(lines) if "AutoCommandBar" in ln), None)
+    btn_idx = next((i for i, ln in enumerate(lines) if btn in ln), None)
+    assert bar_idx is not None and btn_idx is not None and btn_idx > bar_idx, (
+        "the moved button must render nested under the AutoCommandBar: " + rb.text[:800])
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_move_form_button_unknown_parent_is_error():
+    cmd, btn = "MoveErrCmd", "MoveErrBtn"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r, "seed form command")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + btn,
+        "properties": [{"name": "command", "value": cmd}]})
+    assert_ok(r, "seed a root-level button")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + btn,
+        "properties": [{"name": "parent", "value": "NoSuchParent_zz"}]})
+    e = assert_error(r, "move to a missing parent")
+    assert_error_quality(e, names=["NoSuchParent_zz"], suggests=["AutoCommandBar"],
+                         ctx="a missing move target must advertise the AutoCommandBar token")
+
+
 # ── Negative (form members) ─────────────────────────────────────────────────
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

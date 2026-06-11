@@ -63,6 +63,8 @@ public final class FormElementWriter
     private static final String FEATURE_HANDLER = "handler"; //$NON-NLS-1$
     private static final String FEATURE_USE = "use"; //$NON-NLS-1$
     private static final String FEATURE_COMMON = "common"; //$NON-NLS-1$
+    private static final String FEATURE_EXTENDED_TOOLTIP = "extendedTooltip"; //$NON-NLS-1$
+    private static final String FEATURE_CONTEXT_MENU = "contextMenu"; //$NON-NLS-1$
 
     // Concrete form-model classifier names (resolved on the form EPackage).
     private static final String ECLASS_FORM_GROUP = "FormGroup"; //$NON-NLS-1$
@@ -73,6 +75,8 @@ public final class FormElementWriter
     private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
     private static final String ECLASS_AUTO_COMMAND_BAR = "AutoCommandBar"; //$NON-NLS-1$
     private static final String ECLASS_CONTEXT_MENU = "ContextMenu"; //$NON-NLS-1$
+    private static final String ECLASS_TABLE = "Table"; //$NON-NLS-1$
+    private static final String ECLASS_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND_HANDLER_CONTAINER = "FormCommandHandlerContainer"; //$NON-NLS-1$
     private static final String ECLASS_COMMAND_HANDLER = "CommandHandler"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_USUAL_GROUP = "UsualGroup"; //$NON-NLS-1$
@@ -81,6 +85,9 @@ public final class FormElementWriter
     private static final String TYPE_LITERAL_COMMAND_BAR = "CommandBar"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_BUTTON_GROUP = "ButtonGroup"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_POPUP = "Popup"; //$NON-NLS-1$
+    private static final String TYPE_LITERAL_PAGES = "Pages"; //$NON-NLS-1$
+    private static final String TYPE_LITERAL_PAGE = "Page"; //$NON-NLS-1$
+    private static final String TYPE_LITERAL_COLUMN_GROUP = "ColumnGroup"; //$NON-NLS-1$
     /** The single handler "event" of a form command (its FQN leaf: {@code Command.X.Handler.Action}). */
     private static final String COMMAND_ACTION_EVENT = "Action"; //$NON-NLS-1$
     /** The parent token addressing the form's auto command bar (its {@code ChildItems} in Designer XML). */
@@ -228,6 +235,15 @@ public final class FormElementWriter
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
     private static final String RU_ACTION = cp(0x0434, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // dejstvie
+    // Auto-child name suffixes, localized by the configuration SCRIPT VARIANT the way the designer's
+    // FormObjectDefaultNameProvider localizes them (RasshirennayaPodskazka / KontekstnoeMenyu).
+    private static final String RU_SUFFIX_EXTENDED_TOOLTIP = cp(0x0420, 0x0430, 0x0441, 0x0448,
+        0x0438, 0x0440, 0x0435, 0x043d, 0x043d, 0x0430, 0x044f, 0x041f, 0x043e, 0x0434, 0x0441,
+        0x043a, 0x0430, 0x0437, 0x043a, 0x0430);
+    private static final String RU_SUFFIX_CONTEXT_MENU = cp(0x041a, 0x043e, 0x043d, 0x0442, 0x0435,
+        0x043a, 0x0441, 0x0442, 0x043d, 0x043e, 0x0435, 0x041c, 0x0435, 0x043d, 0x044e);
+    private static final String SUFFIX_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
+    private static final String SUFFIX_CONTEXT_MENU = "ContextMenu"; //$NON-NLS-1$
 
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
@@ -316,14 +332,17 @@ public final class FormElementWriter
      * Creates a form member of {@code kind} named {@code name} on the editable {@code formModel}.
      * For a visual item (group / decoration) the optional {@code parentName} nests it under an
      * existing item (form root when {@code null}); {@code title} (with its language CODE) is applied
-     * when given. Runs INSIDE a BM write transaction on the re-fetched content form.
+     * when given. Visual items receive the designer's defaults including the auto-children
+     * (extended tooltip / context menu) whose name suffixes follow the configuration script variant
+     * ({@code russianAutoNames}). Runs INSIDE a BM write transaction on the re-fetched content form.
      *
      * @return {@code null} on success, or a human-readable error message (the caller wraps it in
      *     {@code ToolResult.error}); the created element's concrete EClass name is returned via
      *     {@code createdKind} when non-null.
      */
     public static String createMember(EObject formModel, Kind kind, String name, String parentName,
-        String bindTarget, String titleLanguage, String title, String[] createdKind)
+        String bindTarget, String titleLanguage, String title, boolean russianAutoNames,
+        String[] createdKind)
     {
         switch (kind)
         {
@@ -332,13 +351,17 @@ public final class FormElementWriter
             case COMMAND:
                 return createCommand(formModel, name, titleLanguage, title, createdKind);
             case FIELD:
-                return createField(formModel, name, parentName, bindTarget, titleLanguage, title, createdKind);
+                return createField(formModel, name, parentName, bindTarget, titleLanguage, title,
+                    russianAutoNames, createdKind);
             case BUTTON:
-                return createButton(formModel, name, parentName, bindTarget, titleLanguage, title, createdKind);
+                return createButton(formModel, name, parentName, bindTarget, titleLanguage, title,
+                    russianAutoNames, createdKind);
             case GROUP:
             case DECORATION:
             default:
-                return createItem(formModel, kind, name, parentName, titleLanguage, title, createdKind);
+                // For a GROUP the bind slot carries the optional explicit group type literal.
+                return createItem(formModel, kind, name, parentName, bindTarget, titleLanguage,
+                    title, russianAutoNames, createdKind);
         }
     }
 
@@ -386,7 +409,8 @@ public final class FormElementWriter
     }
 
     private static String createItem(EObject formModel, Kind kind, String name, String parentName,
-        String titleLanguage, String title, String[] createdKind)
+        String groupTypeLiteral, String titleLanguage, String title, boolean russianAutoNames,
+        String[] createdKind)
     {
         if (findItem(formModel, name) != null)
         {
@@ -397,11 +421,28 @@ public final class FormElementWriter
         {
             return parentNotFound(parentName);
         }
+        String invalid = validatePlacement(kind, container, parentName);
+        if (invalid != null)
+        {
+            return invalid;
+        }
         String classifier = kind == Kind.GROUP ? ECLASS_FORM_GROUP : ECLASS_DECORATION;
         EObject item = createFromClassifier(formModel, classifier);
         if (item == null)
         {
             return "Cannot create a form " + classifier + " for this form model."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        // An explicit group type ({name:'type', value:'Popup'}) is validated against the model's
+        // ManagedFormGroupType literals (case-insensitive); the container default applies otherwise.
+        String requestedType = null;
+        if (kind == Kind.GROUP && groupTypeLiteral != null && !groupTypeLiteral.isEmpty())
+        {
+            requestedType = resolveEnumLiteral(item, FEATURE_TYPE, groupTypeLiteral);
+            if (requestedType == null)
+            {
+                return "Unknown group type '" + groupTypeLiteral + "'. Allowed group types: " //$NON-NLS-1$ //$NON-NLS-2$
+                    + enumLiteralsOf(item, FEATURE_TYPE) + "."; //$NON-NLS-1$
+            }
         }
         setStringFeature(item, FEATURE_NAME, name);
         applyVisibleDefaults(item);
@@ -411,17 +452,143 @@ public final class FormElementWriter
             setBooleanFeature(item, "autoMaxWidth", true); //$NON-NLS-1$
             setBooleanFeature(item, "autoMaxHeight", true); //$NON-NLS-1$
         }
-        initManagedItem(formModel, item, kind);
+        initManagedItem(formModel, item, kind, container, requestedType);
         applyTitle(item, titleLanguage, title);
         addToList(container, FEATURE_ITEMS, item);
+        // The designer's auto-children: a decoration carries a context menu + an extended tooltip,
+        // a group only the tooltip (FormObjectFactory.newDecoration / newFormGroup).
+        addAutoChildren(formModel, item, kind == Kind.DECORATION, russianAutoNames);
         recordKind(item, createdKind);
         return null;
+    }
+
+    /**
+     * Moves an EXISTING visual form item under a new parent container (the form root for a blank
+     * {@code parentName}, the auto command bar for the {@code AutoCommandBar} token, a named item
+     * otherwise), with the same placement validation a create applies. A button's type is re-derived
+     * when it crosses a command-bar boundary (CommandBarButton &harr; UsualButton). The designer's
+     * auto-children (tooltips / context menus / command bars) are not movable. Must run inside a BM
+     * write transaction on the tx-bound form model.
+     *
+     * @return {@code null} on success, or a human-readable error message
+     */
+    public static String moveItem(EObject formModel, EObject item, String parentName)
+    {
+        EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
+        if (!(formItem instanceof EClass) || !((EClass)formItem).isInstance(item))
+        {
+            return "Only a visual form item (field / button / group / decoration / table) can be " //$NON-NLS-1$
+                + "moved; '" + item.eClass().getName() //$NON-NLS-1$
+                + "' is not one. Attributes and commands have no visual parent."; //$NON-NLS-1$
+        }
+        if (item.eContainmentFeature() == null
+            || !FEATURE_ITEMS.equals(item.eContainmentFeature().getName()))
+        {
+            return "'" + stringFeature(item, FEATURE_NAME) + "' is a designer auto-child (" //$NON-NLS-1$ //$NON-NLS-2$
+                + item.eClass().getName() + ") and cannot be moved."; //$NON-NLS-1$
+        }
+        EObject container = containerFor(formModel, parentName);
+        if (container == null)
+        {
+            return parentNotFound(parentName);
+        }
+        if (container == item)
+        {
+            return "An item cannot become its own parent."; //$NON-NLS-1$
+        }
+        for (EObject ancestor = container; ancestor != null; ancestor = ancestor.eContainer())
+        {
+            if (ancestor == item)
+            {
+                return "Cannot move '" + stringFeature(item, FEATURE_NAME) //$NON-NLS-1$
+                    + "' into its own contained item '" + parentName + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        Kind kind = kindForEClass(item.eClass().getName());
+        if (kind != null)
+        {
+            String invalid = validatePlacement(kind, container,
+                parentName == null || parentName.isEmpty() ? "the form root" : parentName); //$NON-NLS-1$
+            if (invalid != null)
+            {
+                return invalid;
+            }
+        }
+        EStructuralFeature itemsFeature = container.eClass().getEStructuralFeature(FEATURE_ITEMS);
+        if (!(itemsFeature instanceof EReference) || !itemsFeature.isMany())
+        {
+            return "The parent '" + parentName + "' (" + container.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + ") cannot hold nested items."; //$NON-NLS-1$
+        }
+        // Adding to the new containment list MOVES the EObject in EMF (single-container invariant).
+        addToList(container, FEATURE_ITEMS, item);
+        if ("Button".equals(item.eClass().getName())) //$NON-NLS-1$
+        {
+            setEnumFeature(item, FEATURE_TYPE,
+                isCommandBarContext(container) ? "CommandBarButton" : "UsualButton"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
+    }
+
+    /** The placement-rule {@link Kind} for a concrete item EClass name, or {@code null} when none. */
+    private static Kind kindForEClass(String eClassName)
+    {
+        if ("Button".equals(eClassName)) //$NON-NLS-1$
+        {
+            return Kind.BUTTON;
+        }
+        if (ECLASS_DECORATION.equals(eClassName))
+        {
+            return Kind.DECORATION;
+        }
+        return null;
+    }
+
+    /** Resolves a requested EEnum literal case-insensitively to its canonical form, or {@code null}. */
+    private static String resolveEnumLiteral(EObject owner, String featureName, String requested)
+    {
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (!(feature instanceof EAttribute)
+            || !(((EAttribute)feature).getEAttributeType() instanceof EEnum))
+        {
+            return null;
+        }
+        for (EEnumLiteral literal : ((EEnum)((EAttribute)feature).getEAttributeType()).getELiterals())
+        {
+            if (literal.getLiteral().equalsIgnoreCase(requested))
+            {
+                return literal.getLiteral();
+            }
+        }
+        return null;
+    }
+
+    /** A comma-separated list of an EEnum attribute's literals (for the unknown-literal advisory). */
+    private static String enumLiteralsOf(EObject owner, String featureName)
+    {
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (!(feature instanceof EAttribute)
+            || !(((EAttribute)feature).getEAttributeType() instanceof EEnum))
+        {
+            return ""; //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder();
+        for (EEnumLiteral literal : ((EEnum)((EAttribute)feature).getEAttributeType()).getELiterals())
+        {
+            if (sb.length() > 0)
+            {
+                sb.append(", "); //$NON-NLS-1$
+            }
+            sb.append(literal.getLiteral());
+        }
+        return sb.toString();
     }
 
     /** A FormField bound to a form attribute via its dataPath (a generic InputField the user can refine). */
     @SuppressWarnings("unchecked")
     private static String createField(EObject formModel, String name, String parentName,
-        String attrName, String titleLanguage, String title, String[] createdKind)
+        String attrName, String titleLanguage, String title, boolean russianAutoNames,
+        String[] createdKind)
     {
         if (attrName == null || attrName.isEmpty())
         {
@@ -467,15 +634,36 @@ public final class FormElementWriter
         // own factory does before the value type is known.
         setEnumFeature(item, FEATURE_TYPE, "InputField"); //$NON-NLS-1$
         setExtInfoClassifier(formModel, item, "InputFieldExtInfo"); //$NON-NLS-1$
+        // The designer's new-field defaults (FormObjectFactory.newFormField / newInputFieldExtInfo);
+        // the booleans default to false in the model, so without them a created field renders with
+        // no table header/footer, no wrap and a read-only text box. 'Auto'-valued enums are the
+        // model defaults (literal 0) and stay unset, like the XMI omits them.
+        setBooleanFeature(item, "showInHeader", true); //$NON-NLS-1$
+        setBooleanFeature(item, "showInFooter", true); //$NON-NLS-1$
+        setEnumFeature(item, "headerHorizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, "editMode", "Enter"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject extInfo = singleReference(item, FEATURE_EXT_INFO);
+        if (extInfo != null)
+        {
+            setBooleanFeature(extInfo, "autoMaxWidth", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, "autoMaxHeight", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, "wrap", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, "chooseType", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, "typeDomainEnabled", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, "textEdit", true); //$NON-NLS-1$
+        }
         applyTitle(item, titleLanguage, title);
         addToList(container, FEATURE_ITEMS, item);
+        // A field carries both designer auto-children (context menu + extended tooltip).
+        addAutoChildren(formModel, item, true, russianAutoNames);
         recordKind(item, createdKind);
         return null;
     }
 
     /** A Button bound to a form command (FormCommand is-a mcore Command, so the reference is direct). */
     private static String createButton(EObject formModel, String name, String parentName,
-        String cmdName, String titleLanguage, String title, String[] createdKind)
+        String cmdName, String titleLanguage, String title, boolean russianAutoNames,
+        String[] createdKind)
     {
         if (cmdName == null || cmdName.isEmpty())
         {
@@ -496,6 +684,11 @@ public final class FormElementWriter
         if (container == null)
         {
             return parentNotFound(parentName);
+        }
+        String invalid = validatePlacement(Kind.BUTTON, container, parentName);
+        if (invalid != null)
+        {
+            return invalid;
         }
         EObject item = createFromClassifier(formModel, "Button"); //$NON-NLS-1$
         if (item == null)
@@ -529,8 +722,118 @@ public final class FormElementWriter
         setEnumFeature(item, "placementArea", "UserCmds"); //$NON-NLS-1$ //$NON-NLS-2$
         applyTitle(item, titleLanguage, title);
         addToList(container, FEATURE_ITEMS, item);
+        // A button carries only the extended-tooltip auto-child (FormObjectFactory.newButton).
+        addAutoChildren(formModel, item, false, russianAutoNames);
         recordKind(item, createdKind);
         return null;
+    }
+
+    /**
+     * Rejects an item-kind / parent-container combination the designer forbids, mirroring the
+     * platform's {@code FormItemTypeInformationService} predicates ({@code isNotSupportedButtonContext}
+     * / {@code isContextNotSupportDecoration}). Returns {@code null} when the placement is allowed.
+     */
+    private static String validatePlacement(Kind kind, EObject container, String parentName)
+    {
+        String containerClass = container.eClass().getName();
+        if (kind == Kind.BUTTON
+            && (ECLASS_TABLE.equals(containerClass)
+                || isGroupOfTypeLiteral(container, TYPE_LITERAL_PAGES, TYPE_LITERAL_COLUMN_GROUP)))
+        {
+            return "A button cannot be placed in '" + parentName + "' (" + containerClass //$NON-NLS-1$ //$NON-NLS-2$
+                + "): the platform does not allow buttons in tables, pages groups or column groups. " //$NON-NLS-1$
+                + "Use the form root, a usual/popup group, or 'AutoCommandBar'."; //$NON-NLS-1$
+        }
+        if (kind == Kind.DECORATION
+            && (ECLASS_TABLE.equals(containerClass) || ECLASS_AUTO_COMMAND_BAR.equals(containerClass)
+                || ECLASS_CONTEXT_MENU.equals(containerClass)
+                || isGroupOfTypeLiteral(container, TYPE_LITERAL_COMMAND_BAR, TYPE_LITERAL_POPUP,
+                    TYPE_LITERAL_PAGES, TYPE_LITERAL_BUTTON_GROUP, TYPE_LITERAL_COLUMN_GROUP)))
+        {
+            return "A decoration cannot be placed in '" + parentName + "' (" + containerClass //$NON-NLS-1$ //$NON-NLS-2$
+                + "): tables, command bars, context menus and popup/pages/button/column groups " //$NON-NLS-1$
+                + "cannot hold decorations. Use the form root or a usual group."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** Whether {@code container} is a FormGroup whose {@code type} matches one of the literals. */
+    private static boolean isGroupOfTypeLiteral(EObject container, String... literals)
+    {
+        if (!ECLASS_FORM_GROUP.equals(container.eClass().getName()))
+        {
+            return false;
+        }
+        String groupType = enumLiteralOf(container, FEATURE_TYPE);
+        for (String literal : literals)
+        {
+            if (literal.equals(groupType))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Attaches the designer's auto-children to a freshly created (and already container-attached)
+     * visual item: an {@code ExtendedTooltip} (a Label-typed decoration) and - for fields and
+     * decorations - a {@code ContextMenu}. Their names are the item name + the script-variant
+     * localized suffix (unique-ified against the form-wide namespace) and their ids come from the
+     * same form-wide allocator, the way {@code FormObjectFactory}/{@code FormItemManagementService}
+     * build them. Best-effort: an absent feature/classifier is skipped.
+     */
+    private static void addAutoChildren(EObject formModel, EObject item, boolean withContextMenu,
+        boolean russianAutoNames)
+    {
+        String base = stringFeature(item, FEATURE_NAME);
+        if (base == null)
+        {
+            return;
+        }
+        if (withContextMenu)
+        {
+            EStructuralFeature menuFeat = item.eClass().getEStructuralFeature(FEATURE_CONTEXT_MENU);
+            EObject menu = createFromClassifier(formModel, ECLASS_CONTEXT_MENU);
+            if (menu != null && menuFeat instanceof EReference && !menuFeat.isMany())
+            {
+                setStringFeature(menu, FEATURE_NAME, uniqueChildName(formModel, base,
+                    russianAutoNames ? RU_SUFFIX_CONTEXT_MENU : SUFFIX_CONTEXT_MENU));
+                setBooleanFeature(menu, "autoFill", true); //$NON-NLS-1$
+                item.eSet(menuFeat, menu);
+                setIntFeature(menu, FEATURE_ID, nextItemId(formModel));
+            }
+        }
+        EStructuralFeature tooltipFeat = item.eClass().getEStructuralFeature(FEATURE_EXTENDED_TOOLTIP);
+        EObject tooltip = createFromClassifier(formModel, ECLASS_EXTENDED_TOOLTIP);
+        if (tooltip != null && tooltipFeat instanceof EReference && !tooltipFeat.isMany())
+        {
+            setStringFeature(tooltip, FEATURE_NAME, uniqueChildName(formModel, base,
+                russianAutoNames ? RU_SUFFIX_EXTENDED_TOOLTIP : SUFFIX_EXTENDED_TOOLTIP));
+            setEnumFeature(tooltip, FEATURE_TYPE, TYPE_LITERAL_LABEL);
+            setBooleanFeature(tooltip, "autoMaxWidth", true); //$NON-NLS-1$
+            setBooleanFeature(tooltip, "autoMaxHeight", true); //$NON-NLS-1$
+            setExtInfoClassifier(formModel, tooltip, ECLASS_LABEL_DECORATION_EXT_INFO);
+            EObject tooltipExtInfo = singleReference(tooltip, FEATURE_EXT_INFO);
+            if (tooltipExtInfo != null)
+            {
+                setEnumFeature(tooltipExtInfo, "horizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            item.eSet(tooltipFeat, tooltip);
+            setIntFeature(tooltip, FEATURE_ID, nextItemId(formModel));
+        }
+    }
+
+    /** {@code base + suffix}, unique-ified against the form-wide item namespace with a counter. */
+    private static String uniqueChildName(EObject formModel, String base, String suffix)
+    {
+        String candidate = base + suffix;
+        int counter = 1;
+        while (findItem(formModel, candidate) != null)
+        {
+            candidate = base + suffix + counter++;
+        }
+        return candidate;
     }
 
     /**
@@ -1020,21 +1323,72 @@ public final class FormElementWriter
         attribute.eSet(feature, typeClass.getEPackage().getEFactoryInstance().create(typeClass));
     }
 
-    /** Sets the managed item's type enum + a default extInfo, the way FormObjectFactory does. */
-    private static void initManagedItem(EObject formModel, EObject item, Kind kind)
+    /**
+     * Sets the managed item's type enum + a default extInfo, the way FormObjectFactory does. A
+     * GROUP's type is the validated explicit {@code requestedGroupType} when given, otherwise it is
+     * derived from the container (the platform's {@code getDefaultGroupType}): a Popup submenu
+     * inside command bars / popups / button groups, a Page inside a Pages group, a ColumnGroup
+     * inside tables and column groups, a UsualGroup elsewhere.
+     */
+    private static void initManagedItem(EObject formModel, EObject item, Kind kind, EObject container,
+        String requestedGroupType)
     {
-        String typeLiteral = kind == Kind.GROUP ? TYPE_LITERAL_USUAL_GROUP : TYPE_LITERAL_LABEL;
-        String extInfoClassifier =
-            kind == Kind.GROUP ? ECLASS_USUAL_GROUP_EXT_INFO : ECLASS_LABEL_DECORATION_EXT_INFO;
+        String typeLiteral = kind == Kind.GROUP
+            ? (requestedGroupType != null ? requestedGroupType : defaultGroupTypeFor(container))
+            : TYPE_LITERAL_LABEL;
+        String extInfoClassifier = kind == Kind.GROUP
+            ? groupExtInfoClassifierFor(typeLiteral) : ECLASS_LABEL_DECORATION_EXT_INFO;
         setEnumFeature(item, FEATURE_TYPE, typeLiteral);
-        EStructuralFeature feature = item.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
-        if (feature instanceof EReference)
+        setExtInfoClassifier(formModel, item, extInfoClassifier);
+        if (kind == Kind.DECORATION)
         {
-            EClass extInfoClass = formEClass(formModel, extInfoClassifier);
-            if (extInfoClass != null && extInfoClass.getEPackage() != null)
+            // The factory's label decoration default (newLabelDecorationExtInfo).
+            EObject extInfo = singleReference(item, FEATURE_EXT_INFO);
+            if (extInfo != null)
             {
-                item.eSet(feature, extInfoClass.getEPackage().getEFactoryInstance().create(extInfoClass));
+                setEnumFeature(extInfo, "horizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
             }
+        }
+    }
+
+    /** The platform's default group type literal for a container ({@code getDefaultGroupType}). */
+    private static String defaultGroupTypeFor(EObject container)
+    {
+        if (isCommandBarContext(container))
+        {
+            return TYPE_LITERAL_POPUP;
+        }
+        if (isGroupOfTypeLiteral(container, TYPE_LITERAL_PAGES))
+        {
+            return TYPE_LITERAL_PAGE;
+        }
+        if (ECLASS_TABLE.equals(container.eClass().getName())
+            || isGroupOfTypeLiteral(container, TYPE_LITERAL_COLUMN_GROUP))
+        {
+            return TYPE_LITERAL_COLUMN_GROUP;
+        }
+        return TYPE_LITERAL_USUAL_GROUP;
+    }
+
+    /** The concrete extInfo EClass name matching a group type literal (FormObjectFactory's pairs). */
+    private static String groupExtInfoClassifierFor(String groupTypeLiteral)
+    {
+        switch (groupTypeLiteral)
+        {
+            case TYPE_LITERAL_POPUP:
+                return "PopupGroupExtInfo"; //$NON-NLS-1$
+            case TYPE_LITERAL_PAGE:
+                return "PageGroupExtInfo"; //$NON-NLS-1$
+            case TYPE_LITERAL_PAGES:
+                return "PagesGroupExtInfo"; //$NON-NLS-1$
+            case TYPE_LITERAL_COLUMN_GROUP:
+                return "ColumnGroupExtInfo"; //$NON-NLS-1$
+            case TYPE_LITERAL_COMMAND_BAR:
+                return "CommandBarExtInfo"; //$NON-NLS-1$
+            case TYPE_LITERAL_BUTTON_GROUP:
+                return "ButtonGroupExtInfo"; //$NON-NLS-1$
+            default:
+                return ECLASS_USUAL_GROUP_EXT_INFO;
         }
     }
 

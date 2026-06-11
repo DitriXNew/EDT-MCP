@@ -500,6 +500,16 @@ def test_create_form_field_bound_to_attribute():
     assert "FormField" in (r2.structured.get("kind") or ""), "kind must be FormField: %r" % (r2.structured,)
     poll_diff_contains("<segments>%s</segments>" % attr,
                        ctx="the field's dataPath must bind to the attribute on disk")
+    # Designer parity: a created field must serialize the same designer defaults a
+    # UI-created field carries (the booleans default to false in the model).
+    poll_diff_contains("<showInHeader>true</showInHeader>",
+                       ctx="a created field must show in the table header like a designer one")
+    poll_diff_contains("<wrap>true</wrap>",
+                       ctx="the input-field extInfo must carry the designer defaults")
+    poll_diff_contains(fld + "ExtendedTooltip",
+                       ctx="the designer's extended-tooltip auto-child must be created")
+    poll_diff_contains(fld + "ContextMenu",
+                       ctx="the designer's context-menu auto-child must be created")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -658,6 +668,57 @@ def test_create_form_unknown_parent_suggests_auto_command_bar():
     e = assert_error(r2, "button under a missing parent")
     assert_error_quality(e, names=["NoSuchParent_zz"], suggests=["AutoCommandBar"],
                          ctx="a missing parent error must advertise the AutoCommandBar token")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_popup_group_with_button():
+    # A print-style submenu: a Group with an explicit type=Popup in the command bar, holding a
+    # button. Inside the popup the platform requires command-bar buttons.
+    cmd, grp, btn = "PopCmd", "PopMenu", "PopBtn"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r, "seed form command")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group." + grp,
+        "properties": [{"name": "parent", "value": "AutoCommandBar"},
+                       {"name": "type", "value": "Popup"}]})
+    assert_ok(r, "create a Popup group in the command bar")
+    poll_diff_contains("<type>Popup</type>",
+                       ctx="the explicit group type must serialize to the .form on disk")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + btn,
+        "properties": [{"name": "command", "value": cmd}, {"name": "parent", "value": grp}]})
+    assert_ok(r, "create a button inside the popup submenu")
+    poll_diff_contains(btn, ctx="the popup's button must land on disk")
+    # CommandBarButton is the model-default literal (omitted by XMI); the wrong outcome would be an
+    # explicit UsualButton inside the popup.
+    assert "UsualButton" not in diff(), \
+        "a button inside a popup submenu must not serialize the UsualButton type"
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_group_unknown_type_lists_allowed():
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group.BadTypeGrp",
+        "properties": [{"name": "type", "value": "Bogus_zz"}]})
+    e = assert_error(r, "unknown group type")
+    assert_error_quality(e, names=["Bogus_zz"], suggests=["Allowed group types", "Popup"],
+                         ctx="an unknown group type must list the allowed literals")
+    assert_no_diff("a rejected group type must not change the form")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_decoration_in_command_bar_is_rejected():
+    # The designer forbids decorations in command bars (FormItemTypeInformationService) - placing
+    # one would build a model the UI could never produce.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Decoration.BarDeco_zz",
+        "properties": [{"name": "parent", "value": "AutoCommandBar"}]})
+    e = assert_error(r, "decoration into the command bar")
+    assert_error_quality(e, names=["AutoCommandBar"], suggests=["cannot hold decorations"],
+                         ctx="the placement error must name the parent and the rule")
+    assert_no_diff("a rejected placement must not change the form on disk")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

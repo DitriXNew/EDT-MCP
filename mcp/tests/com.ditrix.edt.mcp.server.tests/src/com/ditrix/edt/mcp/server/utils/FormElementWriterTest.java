@@ -236,7 +236,7 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         EObject command = FormElementWriter.findFormCommand(form, "Print"); //$NON-NLS-1$
         assertNotNull(command);
         // The platform factory's defaults: use=AdjustableBoolean(common=true), currentRowUse=Auto.
@@ -251,10 +251,10 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         String[] createdKind = new String[1];
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "PrintButton", null, "Print", //$NON-NLS-1$ //$NON-NLS-2$
-            null, null, createdKind));
+            null, null, false, createdKind));
         assertEquals("Button", createdKind[0]); //$NON-NLS-1$
         EObject button = FormElementWriter.findFormItem(form, "PrintButton"); //$NON-NLS-1$
         assertNotNull(button);
@@ -276,11 +276,11 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         // Issue #138 bug 2: 'AutoCommandBar' addresses the form's command bar (a containment OUTSIDE
         // the items tree).
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "PrintButton", //$NON-NLS-1$
-            "AutoCommandBar", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+            "AutoCommandBar", "Print", null, null, false, null)); //$NON-NLS-1$ //$NON-NLS-2$
         EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
         List<?> barItems = (List<?>)bar.eGet(feature(bar, "items")); //$NON-NLS-1$
         assertEquals(1, barItems.size());
@@ -293,7 +293,7 @@ public class FormElementWriterTest
         // duplicate name is rejected.
         assertNotNull(FormElementWriter.findFormItem(form, "PrintButton")); //$NON-NLS-1$
         String dup = FormElementWriter.createMember(form, Kind.BUTTON, "PrintButton", null, "Print", //$NON-NLS-1$ //$NON-NLS-2$
-            null, null, null);
+            null, null, false, null);
         assertNotNull(dup);
         assertTrue(dup.contains("already exists")); //$NON-NLS-1$
     }
@@ -303,12 +303,12 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         // The reported parent shapes: 'Form.X.AutoCommandBar' and '...AutoCommandBar.ChildItems'.
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "B1", //$NON-NLS-1$
-            "Form.MyForm.AutoCommandBar", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+            "Form.MyForm.AutoCommandBar", "Print", null, null, false, null)); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "B2", //$NON-NLS-1$
-            "Form.MyForm.AutoCommandBar.ChildItems", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+            "Form.MyForm.AutoCommandBar.ChildItems", "Print", null, null, false, null)); //$NON-NLS-1$ //$NON-NLS-2$
         EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
         assertEquals(2, ((List<?>)bar.eGet(feature(bar, "items"))).size()); //$NON-NLS-1$
     }
@@ -321,7 +321,7 @@ public class FormElementWriterTest
         // name, which legitimately may coincide with an item name.
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         EObject table = newObject(MODEL.table);
         table.eSet(feature(table, "name"), "MyForm"); //$NON-NLS-1$ //$NON-NLS-2$
         EObject tableBar = newObject(MODEL.autoCommandBar);
@@ -329,13 +329,13 @@ public class FormElementWriterTest
         table.eSet(feature(table, "autoCommandBar"), tableBar); //$NON-NLS-1$
         addTo(form, "items", table); //$NON-NLS-1$
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "B1", //$NON-NLS-1$
-            "Form.MyForm.AutoCommandBar", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+            "Form.MyForm.AutoCommandBar", "Print", null, null, false, null)); //$NON-NLS-1$ //$NON-NLS-2$
         EObject formBar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
         assertEquals(1, ((List<?>)formBar.eGet(feature(formBar, "items"))).size()); //$NON-NLS-1$
         assertEquals(0, ((List<?>)tableBar.eGet(feature(tableBar, "items"))).size()); //$NON-NLS-1$
         // Without the form token the owner probe targets the named item's OWN bar.
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "B2", //$NON-NLS-1$
-            "MyForm.AutoCommandBar", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+            "MyForm.AutoCommandBar", "Print", null, null, false, null)); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(1, ((List<?>)tableBar.eGet(feature(tableBar, "items"))).size()); //$NON-NLS-1$
     }
 
@@ -346,12 +346,12 @@ public class FormElementWriterTest
         // rather than failing.
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         EObject group = newObject(MODEL.formGroup);
         group.eSet(feature(group, "name"), "SomeGroup"); //$NON-NLS-1$ //$NON-NLS-2$
         addTo(form, "items", group); //$NON-NLS-1$
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "B1", //$NON-NLS-1$
-            "SomeGroup.AutoCommandBar", "Print", null, null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+            "SomeGroup.AutoCommandBar", "Print", null, null, false, null)); //$NON-NLS-1$ //$NON-NLS-2$
         EObject formBar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
         assertEquals(1, ((List<?>)formBar.eGet(feature(formBar, "items"))).size()); //$NON-NLS-1$
     }
@@ -361,14 +361,14 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         // A group typed Popup hosts command-bar buttons (the platform's isCommandBarButtonSupport).
         EObject group = newObject(MODEL.formGroup);
         group.eSet(feature(group, "name"), "Menu"); //$NON-NLS-1$ //$NON-NLS-2$
         setLiteral(group, "type", "Popup"); //$NON-NLS-1$ //$NON-NLS-2$
         addTo(form, "items", group); //$NON-NLS-1$
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "MenuButton", "Menu", "Print", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            null, null, null));
+            null, null, false, null));
         EObject button = FormElementWriter.findFormItem(form, "MenuButton"); //$NON-NLS-1$
         assertEquals("CommandBarButton", literalOf(button, "type")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -378,9 +378,9 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         String err = FormElementWriter.createMember(form, Kind.BUTTON, "B", "NoSuchParent", "Print", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            null, null, null);
+            null, null, false, null);
         assertNotNull(err);
         assertTrue(err.contains("NoSuchParent")); //$NON-NLS-1$
         assertTrue(err.contains("AutoCommandBar")); // the error advertises the bar token //$NON-NLS-1$
@@ -391,7 +391,7 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         EObject command = FormElementWriter.findFormCommand(form, "Print"); //$NON-NLS-1$
         // Issue #138 bug 1: ...Command.Print.Handler.Action binds the command's action; the BSL
         // procedure name defaults to the COMMAND name (the EDT UI suggestion).
@@ -416,7 +416,7 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         EObject command = FormElementWriter.findFormCommand(form, "Print"); //$NON-NLS-1$
         // Russian leaf 'Действие' (Dejstvie) + an explicit 'procedure' property value.
         String ruAction = fromCp(0x0414, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435);
@@ -431,7 +431,7 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         EObject command = FormElementWriter.findFormCommand(form, "Print"); //$NON-NLS-1$
         String err = FormElementWriter.createHandler(command, "OnChange", null, null, "en", null); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull(err);
@@ -444,9 +444,9 @@ public class FormElementWriterTest
     {
         EObject form = newForm();
         assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
-            null, null, null));
+            null, null, false, null));
         assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "PrintButton", null, "Print", //$NON-NLS-1$ //$NON-NLS-2$
-            null, null, null));
+            null, null, false, null));
         // ...Command.Print.Handler.Action resolves the COMMAND (not an items-tree lookup).
         FormMemberRef commandRef =
             FormElementWriter.parse("CommonForm.F.Command.Print.Handler.Action"); //$NON-NLS-1$
@@ -464,6 +464,229 @@ public class FormElementWriterTest
         FormMemberRef missingRef =
             FormElementWriter.parse("CommonForm.F.Command.NoSuch.Handler.Action"); //$NON-NLS-1$
         assertNull(FormElementWriter.resolveHandlerContainer(form, missingRef));
+    }
+
+    @Test
+    public void testCreateFieldDesignerDefaults()
+    {
+        EObject form = newForm();
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceField", null, "Price", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        EObject field = FormElementWriter.findFormItem(form, "PriceField"); //$NON-NLS-1$
+        assertNotNull(field);
+        // The designer's new-field defaults (false in the model -> visible divergence when missing).
+        assertEquals(Boolean.TRUE, field.eGet(feature(field, "enabled"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, field.eGet(feature(field, "showInHeader"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, field.eGet(feature(field, "showInFooter"))); //$NON-NLS-1$
+        assertEquals("Enter", literalOf(field, "editMode")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Left", literalOf(field, "headerHorizontalAlign")); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject extInfo = (EObject)field.eGet(feature(field, "extInfo")); //$NON-NLS-1$
+        assertNotNull(extInfo);
+        assertEquals("InputFieldExtInfo", extInfo.eClass().getName()); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, extInfo.eGet(feature(extInfo, "wrap"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, extInfo.eGet(feature(extInfo, "textEdit"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, extInfo.eGet(feature(extInfo, "chooseType"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, extInfo.eGet(feature(extInfo, "typeDomainEnabled"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, extInfo.eGet(feature(extInfo, "autoMaxWidth"))); //$NON-NLS-1$
+        // The designer auto-children: a context menu + an extended tooltip with allocated ids.
+        EObject menu = (EObject)field.eGet(feature(field, "contextMenu")); //$NON-NLS-1$
+        assertNotNull(menu);
+        assertEquals("PriceFieldContextMenu", menu.eGet(feature(menu, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.TRUE, menu.eGet(feature(menu, "autoFill"))); //$NON-NLS-1$
+        assertTrue(((Integer)menu.eGet(feature(menu, "id"))).intValue() > 0); //$NON-NLS-1$
+        EObject tooltip = (EObject)field.eGet(feature(field, "extendedTooltip")); //$NON-NLS-1$
+        assertNotNull(tooltip);
+        assertEquals("PriceFieldExtendedTooltip", tooltip.eGet(feature(tooltip, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Label", literalOf(tooltip, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject tooltipExtInfo = (EObject)tooltip.eGet(feature(tooltip, "extInfo")); //$NON-NLS-1$
+        assertNotNull(tooltipExtInfo);
+        assertEquals("Left", literalOf(tooltipExtInfo, "horizontalAlign")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The auto-children ids are distinct from the field's and from each other.
+        assertTrue(!menu.eGet(feature(menu, "id")).equals(tooltip.eGet(feature(tooltip, "id")))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAutoChildrenRussianSuffixes()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        // russianAutoNames=true -> the suffixes follow the RUSSIAN script variant.
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "Btn", null, "Print", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, true, null));
+        EObject button = FormElementWriter.findFormItem(form, "Btn"); //$NON-NLS-1$
+        EObject tooltip = (EObject)button.eGet(feature(button, "extendedTooltip")); //$NON-NLS-1$
+        assertNotNull(tooltip);
+        // RasshirennayaPodskazka (built independently from code points).
+        String ruSuffix = fromCp(0x0420, 0x0430, 0x0441, 0x0448, 0x0438, 0x0440, 0x0435, 0x043d,
+            0x043d, 0x0430, 0x044f, 0x041f, 0x043e, 0x0434, 0x0441, 0x043a, 0x0430, 0x0437, 0x043a,
+            0x0430);
+        assertEquals("Btn" + ruSuffix, tooltip.eGet(feature(tooltip, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAutoChildNameCollisionGetsCounter()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        // Occupy the would-be tooltip name with a real item.
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "BtnExtendedTooltip"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", group); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "Btn", null, "Print", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        EObject button = FormElementWriter.findFormItem(form, "Btn"); //$NON-NLS-1$
+        EObject tooltip = (EObject)button.eGet(feature(button, "extendedTooltip")); //$NON-NLS-1$
+        assertEquals("BtnExtendedTooltip1", tooltip.eGet(feature(tooltip, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testButtonIntoTableIsRejected()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "List"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", table); //$NON-NLS-1$
+        String err = FormElementWriter.createMember(form, Kind.BUTTON, "B", "List", "Print", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            null, null, false, null);
+        assertNotNull("the platform forbids buttons directly in tables", err); //$NON-NLS-1$
+        assertTrue(err.contains("List")); //$NON-NLS-1$
+        assertTrue(err.contains("AutoCommandBar")); // the error advertises the valid alternative //$NON-NLS-1$
+        assertEquals(0, ((List<?>)table.eGet(feature(table, "items"))).size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDecorationIntoCommandBarIsRejected()
+    {
+        EObject form = newForm();
+        String err = FormElementWriter.createMember(form, Kind.DECORATION, "D", "AutoCommandBar", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, null, false, null);
+        assertNotNull("the platform forbids decorations in command bars", err); //$NON-NLS-1$
+        assertTrue(err.contains("AutoCommandBar")); //$NON-NLS-1$
+        EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        assertEquals(0, ((List<?>)bar.eGet(feature(bar, "items"))).size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGroupInCommandBarBecomesPopup()
+    {
+        // The platform's getDefaultGroupType: a group inside a command bar is a Popup (a submenu),
+        // with the matching ext-info - never a UsualGroup.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Menu", "AutoCommandBar", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, null, false, null));
+        EObject group = FormElementWriter.findFormItem(form, "Menu"); //$NON-NLS-1$
+        assertNotNull(group);
+        assertEquals("Popup", literalOf(group, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject extInfo = (EObject)group.eGet(feature(group, "extInfo")); //$NON-NLS-1$
+        assertNotNull(extInfo);
+        assertEquals("PopupGroupExtInfo", extInfo.eClass().getName()); //$NON-NLS-1$
+        // A group at the form root stays a UsualGroup.
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Main", null, //$NON-NLS-1$
+            null, null, null, false, null));
+        assertEquals("UsualGroup", //$NON-NLS-1$
+            literalOf(FormElementWriter.findFormItem(form, "Main"), "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        // And a button INSIDE the popup submenu is a command-bar button.
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "MenuBtn", "Menu", "Print", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            null, null, false, null));
+        assertEquals("CommandBarButton", //$NON-NLS-1$
+            literalOf(FormElementWriter.findFormItem(form, "MenuBtn"), "type")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCreateGroupWithExplicitType()
+    {
+        EObject form = newForm();
+        // The 'type' property is case-insensitive and maps the matching extInfo class.
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Tabs", null, "pages", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        EObject group = FormElementWriter.findFormItem(form, "Tabs"); //$NON-NLS-1$
+        assertEquals("Pages", literalOf(group, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("PagesGroupExtInfo", //$NON-NLS-1$
+            ((EObject)group.eGet(feature(group, "extInfo"))).eClass().getName()); //$NON-NLS-1$
+        // A page nested in the Pages group defaults to Page (container-derived).
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Tab1", "Tabs", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        assertEquals("Page", literalOf(FormElementWriter.findFormItem(form, "Tab1"), "type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCreateGroupUnknownTypeListsAllowed()
+    {
+        EObject form = newForm();
+        String err = FormElementWriter.createMember(form, Kind.GROUP, "G", null, "Bogus", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null);
+        assertNotNull(err);
+        assertTrue(err.contains("Bogus")); //$NON-NLS-1$
+        assertTrue(err.contains("Allowed group types:")); //$NON-NLS-1$
+        assertTrue(err.contains("Popup")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMoveButtonIntoBarRetypesIt()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "Btn", null, "Print", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        EObject button = FormElementWriter.findFormItem(form, "Btn"); //$NON-NLS-1$
+        assertEquals("UsualButton", literalOf(button, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Root -> bar: the containment moves and the type re-derives to CommandBarButton.
+        assertNull(FormElementWriter.moveItem(form, button, "AutoCommandBar")); //$NON-NLS-1$
+        EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        assertEquals(1, ((List<?>)bar.eGet(feature(bar, "items"))).size()); //$NON-NLS-1$
+        assertEquals(0, ((List<?>)form.eGet(feature(form, "items"))).size()); //$NON-NLS-1$
+        assertEquals("CommandBarButton", literalOf(button, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Bar -> root (blank parent): back to UsualButton.
+        assertNull(FormElementWriter.moveItem(form, button, null));
+        assertEquals(0, ((List<?>)bar.eGet(feature(bar, "items"))).size()); //$NON-NLS-1$
+        assertEquals("UsualButton", literalOf(button, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMoveRejectsCycleAutoChildAndBadPlacement()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Outer", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Inner", "Outer", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        EObject outer = FormElementWriter.findFormItem(form, "Outer"); //$NON-NLS-1$
+        // A group cannot move into its own contained item.
+        String cycle = FormElementWriter.moveItem(form, outer, "Inner"); //$NON-NLS-1$
+        assertNotNull(cycle);
+        assertTrue(cycle.contains("its own contained item")); //$NON-NLS-1$
+        // A designer auto-child (the group's extended tooltip) is not movable.
+        EObject tooltip = (EObject)outer.eGet(feature(outer, "extendedTooltip")); //$NON-NLS-1$
+        assertNotNull(tooltip);
+        String autoChild = FormElementWriter.moveItem(form, tooltip, null);
+        assertNotNull(autoChild);
+        assertTrue(autoChild.contains("cannot be moved")); //$NON-NLS-1$
+        // A decoration cannot move into the command bar (same placement rule as create).
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "Deco", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject deco = FormElementWriter.findFormItem(form, "Deco"); //$NON-NLS-1$
+        String placement = FormElementWriter.moveItem(form, deco, "AutoCommandBar"); //$NON-NLS-1$
+        assertNotNull(placement);
+        assertTrue(placement.contains("cannot hold decorations")); //$NON-NLS-1$
+        // A form COMMAND has no visual parent at all.
+        EObject command = FormElementWriter.findFormCommand(form, "NoSuch"); //$NON-NLS-1$
+        assertNull(command);
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Cmd", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        String notItem = FormElementWriter.moveItem(form,
+            FormElementWriter.findFormCommand(form, "Cmd"), null); //$NON-NLS-1$
+        assertNotNull(notItem);
+        assertTrue(notItem.contains("Attributes and commands have no visual parent")); //$NON-NLS-1$
     }
 
     // ==================== dynamic form-like EMF metamodel ====================
@@ -528,6 +751,8 @@ public class FormElementWriterTest
         final EClass formGroup;
         final EClass autoCommandBar;
         final EClass table;
+        final EClass decoration;
+        final EClass formAttribute;
 
         FormLikeModel()
         {
@@ -542,18 +767,59 @@ public class FormElementWriterTest
             EEnum placementArea = newEnum(f, "MenuElementPlacementArea", //$NON-NLS-1$
                 "MainCmdsLeft", "AutoCmds", "UserCmds"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             EEnum groupType = newEnum(f, "ManagedFormGroupType", //$NON-NLS-1$
-                "ButtonGroup", "ColumnGroup", "CommandBar", "UsualGroup", "Popup"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "ButtonGroup", "ColumnGroup", "CommandBar", "UsualGroup", "Popup", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "Page", "Pages"); //$NON-NLS-1$ //$NON-NLS-2$
             EEnum currentRowUse = newEnum(f, "CurrentRowUse", "DontUse", "Use", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            EEnum decorationType = newEnum(f, "ManagedFormDecorationType", "Label", "Picture"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            EEnum fieldType = newEnum(f, "ManagedFormFieldType", "InputField", "LabelField"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            EEnum horizontalAlign = newEnum(f, "ItemHorizontalAlignment", "Auto", "Left"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            EEnum editMode = newEnum(f, "TableFieldEditMode", "Directly", "Enter"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
             EClass adjustableBoolean = f.createEClass();
             adjustableBoolean.setName("AdjustableBoolean"); //$NON-NLS-1$
             addBoolean(f, adjustableBoolean, "common"); //$NON-NLS-1$
+
+            // The extInfo family: an abstract base plus the concrete classes the writer resolves by
+            // name (group ext-infos, the input-field ext-info and the tooltip's label ext-info).
+            EClass extInfoBase = f.createEClass();
+            extInfoBase.setName("FormItemExtInfo"); //$NON-NLS-1$
+            extInfoBase.setAbstract(true);
+            EClass usualGroupExtInfo = subExtInfo(f, extInfoBase, "UsualGroupExtInfo"); //$NON-NLS-1$
+            EClass popupGroupExtInfo = subExtInfo(f, extInfoBase, "PopupGroupExtInfo"); //$NON-NLS-1$
+            EClass pageGroupExtInfo = subExtInfo(f, extInfoBase, "PageGroupExtInfo"); //$NON-NLS-1$
+            EClass pagesGroupExtInfo = subExtInfo(f, extInfoBase, "PagesGroupExtInfo"); //$NON-NLS-1$
+            EClass columnGroupExtInfo = subExtInfo(f, extInfoBase, "ColumnGroupExtInfo"); //$NON-NLS-1$
+            EClass commandBarExtInfo = subExtInfo(f, extInfoBase, "CommandBarExtInfo"); //$NON-NLS-1$
+            EClass buttonGroupExtInfo = subExtInfo(f, extInfoBase, "ButtonGroupExtInfo"); //$NON-NLS-1$
+            EClass labelDecorationExtInfo = subExtInfo(f, extInfoBase, "LabelDecorationExtInfo"); //$NON-NLS-1$
+            addEnum(f, labelDecorationExtInfo, "horizontalAlign", horizontalAlign); //$NON-NLS-1$
+            EClass inputFieldExtInfo = subExtInfo(f, extInfoBase, "InputFieldExtInfo"); //$NON-NLS-1$
+            addBoolean(f, inputFieldExtInfo, "autoMaxWidth"); //$NON-NLS-1$
+            addBoolean(f, inputFieldExtInfo, "autoMaxHeight"); //$NON-NLS-1$
+            addBoolean(f, inputFieldExtInfo, "wrap"); //$NON-NLS-1$
+            addBoolean(f, inputFieldExtInfo, "chooseType"); //$NON-NLS-1$
+            addBoolean(f, inputFieldExtInfo, "typeDomainEnabled"); //$NON-NLS-1$
+            addBoolean(f, inputFieldExtInfo, "textEdit"); //$NON-NLS-1$
 
             EClass formItem = f.createEClass();
             formItem.setName("FormItem"); //$NON-NLS-1$
             formItem.setAbstract(true);
             addString(f, formItem, "name"); //$NON-NLS-1$
             addInt(f, formItem, "id"); //$NON-NLS-1$
+
+            // The designer's auto-children (both are FormItems: named, id-bearing).
+            EClass contextMenu = f.createEClass();
+            contextMenu.setName("ContextMenu"); //$NON-NLS-1$
+            contextMenu.getESuperTypes().add(formItem);
+            addBoolean(f, contextMenu, "autoFill"); //$NON-NLS-1$
+            EClass extendedTooltip = f.createEClass();
+            extendedTooltip.setName("ExtendedTooltip"); //$NON-NLS-1$
+            extendedTooltip.getESuperTypes().add(formItem);
+            addEnum(f, extendedTooltip, "type", decorationType); //$NON-NLS-1$
+            addBoolean(f, extendedTooltip, "autoMaxWidth"); //$NON-NLS-1$
+            addBoolean(f, extendedTooltip, "autoMaxHeight"); //$NON-NLS-1$
+            extendedTooltip.getEStructuralFeatures().add(
+                containment(f, "extInfo", extInfoBase, false)); //$NON-NLS-1$
 
             EClass commandHandler = f.createEClass();
             commandHandler.setName("CommandHandler"); //$NON-NLS-1$
@@ -594,12 +860,66 @@ public class FormElementWriterTest
             button.getEStructuralFeatures().add(commandName);
             button.getEStructuralFeatures().add(
                 containment(f, "userVisible", adjustableBoolean, false)); //$NON-NLS-1$
+            button.getEStructuralFeatures().add(
+                containment(f, "extendedTooltip", extendedTooltip, false)); //$NON-NLS-1$
 
             formGroup = f.createEClass();
             formGroup.setName("FormGroup"); //$NON-NLS-1$
             formGroup.getESuperTypes().add(formItem);
             addEnum(f, formGroup, "type", groupType); //$NON-NLS-1$
             formGroup.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
+            formGroup.getEStructuralFeatures().add(
+                containment(f, "extInfo", extInfoBase, false)); //$NON-NLS-1$
+            formGroup.getEStructuralFeatures().add(
+                containment(f, "extendedTooltip", extendedTooltip, false)); //$NON-NLS-1$
+
+            decoration = f.createEClass();
+            decoration.setName("Decoration"); //$NON-NLS-1$
+            decoration.getESuperTypes().add(formItem);
+            addEnum(f, decoration, "type", decorationType); //$NON-NLS-1$
+            addBoolean(f, decoration, "visible"); //$NON-NLS-1$
+            addBoolean(f, decoration, "enabled"); //$NON-NLS-1$
+            addBoolean(f, decoration, "autoMaxWidth"); //$NON-NLS-1$
+            addBoolean(f, decoration, "autoMaxHeight"); //$NON-NLS-1$
+            decoration.getEStructuralFeatures().add(
+                containment(f, "userVisible", adjustableBoolean, false)); //$NON-NLS-1$
+            decoration.getEStructuralFeatures().add(
+                containment(f, "extInfo", extInfoBase, false)); //$NON-NLS-1$
+            decoration.getEStructuralFeatures().add(
+                containment(f, "contextMenu", contextMenu, false)); //$NON-NLS-1$
+            decoration.getEStructuralFeatures().add(
+                containment(f, "extendedTooltip", extendedTooltip, false)); //$NON-NLS-1$
+
+            EClass dataPath = f.createEClass();
+            dataPath.setName("DataPath"); //$NON-NLS-1$
+            EAttribute segments = f.createEAttribute();
+            segments.setName("segments"); //$NON-NLS-1$
+            segments.setEType(EcorePackage.Literals.ESTRING);
+            segments.setUpperBound(-1);
+            dataPath.getEStructuralFeatures().add(segments);
+
+            EClass formField = f.createEClass();
+            formField.setName("FormField"); //$NON-NLS-1$
+            formField.getESuperTypes().add(formItem);
+            addEnum(f, formField, "type", fieldType); //$NON-NLS-1$
+            addBoolean(f, formField, "visible"); //$NON-NLS-1$
+            addBoolean(f, formField, "enabled"); //$NON-NLS-1$
+            addBoolean(f, formField, "showInHeader"); //$NON-NLS-1$
+            addBoolean(f, formField, "showInFooter"); //$NON-NLS-1$
+            addEnum(f, formField, "headerHorizontalAlign", horizontalAlign); //$NON-NLS-1$
+            addEnum(f, formField, "editMode", editMode); //$NON-NLS-1$
+            formField.getEStructuralFeatures().add(
+                containment(f, "userVisible", adjustableBoolean, false)); //$NON-NLS-1$
+            formField.getEStructuralFeatures().add(containment(f, "dataPath", dataPath, false)); //$NON-NLS-1$
+            formField.getEStructuralFeatures().add(containment(f, "extInfo", extInfoBase, false)); //$NON-NLS-1$
+            formField.getEStructuralFeatures().add(
+                containment(f, "contextMenu", contextMenu, false)); //$NON-NLS-1$
+            formField.getEStructuralFeatures().add(
+                containment(f, "extendedTooltip", extendedTooltip, false)); //$NON-NLS-1$
+
+            formAttribute = f.createEClass();
+            formAttribute.setName("FormAttribute"); //$NON-NLS-1$
+            addString(f, formAttribute, "name"); //$NON-NLS-1$
 
             autoCommandBar = f.createEClass();
             autoCommandBar.setName("AutoCommandBar"); //$NON-NLS-1$
@@ -618,6 +938,8 @@ public class FormElementWriterTest
             form.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(containment(f, "formCommands", formCommand, true)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(
+                containment(f, "attributes", formAttribute, true)); //$NON-NLS-1$
+            form.getEStructuralFeatures().add(
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
 
             pkg.getEClassifiers().add(form);
@@ -626,7 +948,23 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(placementArea);
             pkg.getEClassifiers().add(groupType);
             pkg.getEClassifiers().add(currentRowUse);
+            pkg.getEClassifiers().add(decorationType);
+            pkg.getEClassifiers().add(fieldType);
+            pkg.getEClassifiers().add(horizontalAlign);
+            pkg.getEClassifiers().add(editMode);
             pkg.getEClassifiers().add(adjustableBoolean);
+            pkg.getEClassifiers().add(extInfoBase);
+            pkg.getEClassifiers().add(usualGroupExtInfo);
+            pkg.getEClassifiers().add(popupGroupExtInfo);
+            pkg.getEClassifiers().add(pageGroupExtInfo);
+            pkg.getEClassifiers().add(pagesGroupExtInfo);
+            pkg.getEClassifiers().add(columnGroupExtInfo);
+            pkg.getEClassifiers().add(commandBarExtInfo);
+            pkg.getEClassifiers().add(buttonGroupExtInfo);
+            pkg.getEClassifiers().add(labelDecorationExtInfo);
+            pkg.getEClassifiers().add(inputFieldExtInfo);
+            pkg.getEClassifiers().add(contextMenu);
+            pkg.getEClassifiers().add(extendedTooltip);
             pkg.getEClassifiers().add(formItem);
             pkg.getEClassifiers().add(commandHandler);
             pkg.getEClassifiers().add(handlerContainer);
@@ -634,7 +972,19 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(formCommand);
             pkg.getEClassifiers().add(button);
             pkg.getEClassifiers().add(formGroup);
+            pkg.getEClassifiers().add(decoration);
+            pkg.getEClassifiers().add(dataPath);
+            pkg.getEClassifiers().add(formField);
+            pkg.getEClassifiers().add(formAttribute);
             pkg.getEClassifiers().add(autoCommandBar);
+        }
+
+        private static EClass subExtInfo(EcoreFactory f, EClass base, String name)
+        {
+            EClass extInfo = f.createEClass();
+            extInfo.setName(name);
+            extInfo.getESuperTypes().add(base);
+            return extInfo;
         }
 
         private static EEnum newEnum(EcoreFactory f, String name, String... literals)

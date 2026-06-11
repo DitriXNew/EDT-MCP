@@ -347,12 +347,22 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
                 }
                 List<PreparedChange> changes = new ArrayList<>();
+                String moveParent = null;
+                boolean moveRequested = false;
                 for (JsonObject prop : properties)
                 {
                     String guard = guardFormProperty(prop);
                     if (guard != null)
                     {
                         throw new FormValidationException(guard);
+                    }
+                    // 'parent' on a form ITEM is a MOVE (reparent), not an eSet: the containment
+                    // change is performed by FormElementWriter.moveItem after the scalar changes.
+                    if ("parent".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+                    {
+                        moveRequested = true;
+                        moveParent = asString(prop.get("value")); //$NON-NLS-1$
+                        continue;
                     }
                     String pErr =
                         prepare(config, version, member, normalizeFormProperty(member, prop), changes);
@@ -365,6 +375,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     change.applyTo(member, tx);
                     applied.add(change.featureName());
+                }
+                if (moveRequested)
+                {
+                    // A failed move throws -> the whole transaction (including any scalar changes
+                    // above) rolls back, preserving the no-partial-mutation contract.
+                    String moveErr = FormElementWriter.moveItem(formModel, member, moveParent);
+                    if (moveErr != null)
+                    {
+                        throw new FormValidationException(ToolResult.error(moveErr).toJson());
+                    }
+                    applied.add("parent"); //$NON-NLS-1$
                 }
                 return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
             });

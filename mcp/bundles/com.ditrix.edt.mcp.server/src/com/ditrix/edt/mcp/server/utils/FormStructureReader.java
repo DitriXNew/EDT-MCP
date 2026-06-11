@@ -237,6 +237,21 @@ public final class FormStructureReader
         {
             appendItem(sb, child, depth + 1, language);
         }
+        // Singular item-bearing containments OUTSIDE 'items' (a table's command bar, an item's
+        // context menu / extended tooltip). Their names occupy the form-wide namespace, so they must
+        // be discoverable - but a designer-default child (no nested items, no title) is noise and is
+        // skipped to keep the outline lean.
+        for (String featureName : new String[] {FEATURE_AUTO_COMMAND_BAR, "contextMenu", //$NON-NLS-1$
+            "extendedTooltip"}) //$NON-NLS-1$
+        {
+            EObject child = getSingleReference(item, featureName);
+            if (child != null
+                && (!getReferenceList(child, FEATURE_ITEMS).isEmpty()
+                    || !titleOf(child, language).isEmpty()))
+            {
+                appendItem(sb, child, depth + 1, language);
+            }
+        }
     }
 
     // ==================== EMF reflection helpers ====================

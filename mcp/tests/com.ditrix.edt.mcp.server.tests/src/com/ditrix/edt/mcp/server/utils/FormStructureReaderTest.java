@@ -197,6 +197,28 @@ public class FormStructureReaderTest
     }
 
     @Test
+    public void testRenderTableBarNestedAndEmptyBarSkipped()
+    {
+        // A table's OWN command bar (a containment outside 'items') renders nested under the table
+        // when it has content; a designer-default EMPTY bar is skipped to keep the outline lean.
+        EObject form = newForm();
+        EObject withContent = newItem(MODEL.table, "List", 5); //$NON-NLS-1$
+        EObject bar = newItem(MODEL.autoCommandBar, "ListCommandBar", 6); //$NON-NLS-1$
+        addItem(bar, newItem(MODEL.formField, "ListButton", 7)); //$NON-NLS-1$
+        withContent.eSet(withContent.eClass().getEStructuralFeature("autoCommandBar"), bar); //$NON-NLS-1$
+        addItem(form, withContent);
+        EObject withEmptyBar = newItem(MODEL.table, "Other", 8); //$NON-NLS-1$
+        withEmptyBar.eSet(withEmptyBar.eClass().getEStructuralFeature("autoCommandBar"), //$NON-NLS-1$
+            newItem(MODEL.autoCommandBar, "OtherCommandBar", 9)); //$NON-NLS-1$
+        addItem(form, withEmptyBar);
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md.contains("  - ListCommandBar (type: AutoCommandBar, id: 6)")); //$NON-NLS-1$
+        assertTrue(md.contains("    - ListButton (type: FormField, id: 7)")); //$NON-NLS-1$
+        assertFalse(md.contains("OtherCommandBar")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRenderCommandActionHandlerColumn()
     {
         EObject form = newForm();
@@ -309,6 +331,7 @@ public class FormStructureReaderTest
         final EClass commandHandler;
         final EClass handlerContainer;
         final EClass autoCommandBar;
+        final EClass table;
 
         final EAttribute itemName;
         final EAttribute itemId;
@@ -397,6 +420,17 @@ public class FormStructureReaderTest
             autoCommandBar.getESuperTypes().add(formItem);
             autoCommandBar.getEStructuralFeatures().add(itemsReference(factory, formItem));
 
+            // Table-like: a FormItem container with its OWN auto command bar containment.
+            table = factory.createEClass();
+            table.setName("Table"); //$NON-NLS-1$
+            table.getESuperTypes().add(formItem);
+            table.getEStructuralFeatures().add(itemsReference(factory, formItem));
+            EReference tableBar = factory.createEReference();
+            tableBar.setName("autoCommandBar"); //$NON-NLS-1$
+            tableBar.setEType(autoCommandBar);
+            tableBar.setContainment(true);
+            table.getEStructuralFeatures().add(tableBar);
+
             // Form: items + attributes + formCommands + autoCommandBar.
             form = factory.createEClass();
             form.setName("Form"); //$NON-NLS-1$
@@ -420,6 +454,7 @@ public class FormStructureReaderTest
             pkg.getEClassifiers().add(commandHandler);
             pkg.getEClassifiers().add(handlerContainer);
             pkg.getEClassifiers().add(autoCommandBar);
+            pkg.getEClassifiers().add(table);
         }
 
         private static EReference itemsReference(EcoreFactory factory, EClass itemType)

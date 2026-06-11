@@ -27,6 +27,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
@@ -418,8 +419,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
 
-        // Form-member properties: title (+ language), parent (nest a visual item), and the binding
-        // target for a Field (dataPath/attribute -> the form attribute) or a Button (command).
+        // Form-member properties: title (+ language), parent (nest a visual item), the binding
+        // target for a Field (dataPath/attribute -> the form attribute) or a Button (command), and
+        // a Group's explicit type (Popup/Pages/Page/CommandBar/ButtonGroup/ColumnGroup/UsualGroup).
         String titleVal = null;
         String titleLang = null;
         String parentName = null;
@@ -440,6 +442,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 case "parent": //$NON-NLS-1$
                     parentName = asString(prop.get("value")); //$NON-NLS-1$
                     break;
+                case "type": //$NON-NLS-1$
+                    if (kind != FormElementWriter.Kind.GROUP)
+                    {
+                        return ToolResult.error("Property 'type' is supported at creation only for " //$NON-NLS-1$
+                            + "a form Group (the group kind, e.g. Popup or Pages). Set other " //$NON-NLS-1$
+                            + "elements' types via modify_metadata.").toJson(); //$NON-NLS-1$
+                    }
+                    bindTarget = asString(prop.get("value")); //$NON-NLS-1$
+                    break;
                 case "datapath": //$NON-NLS-1$
                 case "attribute": //$NON-NLS-1$
                 case "command": //$NON-NLS-1$
@@ -449,8 +460,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     return ToolResult.error("Property '" + pName + "' is not supported for a form " //$NON-NLS-1$ //$NON-NLS-2$
                         + "element. This version applies: title (with optional language), parent " //$NON-NLS-1$
                         + "(nest a visual item), dataPath/attribute (a Field's bound attribute), " //$NON-NLS-1$
-                        + "command (a Button's bound command). Set other properties via " //$NON-NLS-1$
-                        + "modify_metadata.").toJson(); //$NON-NLS-1$
+                        + "command (a Button's bound command), type (a Group's kind). Set other " //$NON-NLS-1$
+                        + "properties via modify_metadata.").toJson(); //$NON-NLS-1$
             }
         }
 
@@ -506,6 +517,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String parent = parentName;
         final String bind = bindTarget;
         final String titleText = titleVal;
+        // The designer's auto-children (extended tooltip / context menu) get script-variant
+        // localized name suffixes, like FormObjectDefaultNameProvider.
+        final boolean russianAutoNames = config.getScriptVariant() == ScriptVariant.RUSSIAN;
         final String[] createdKind = new String[1];
 
         final String contentFormFqn;
@@ -525,7 +539,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         + "empty, an ordinary/legacy form, or not yet built)"); //$NON-NLS-1$
                 }
                 String err = FormElementWriter.createMember(formModel, fKind, name, parent, bind,
-                    titleLanguage, titleText, createdKind);
+                    titleLanguage, titleText, russianAutoNames, createdKind);
                 if (err != null)
                 {
                     throw new RuntimeException(err);

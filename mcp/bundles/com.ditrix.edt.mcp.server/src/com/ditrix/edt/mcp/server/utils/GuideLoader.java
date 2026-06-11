@@ -112,11 +112,13 @@ public final class GuideLoader
     }
 
     /**
-     * Reads an input stream as UTF-8 and returns it with trailing whitespace
-     * trimmed (the renderer adds its own surrounding layout).
+     * Reads an input stream as UTF-8 and returns it with line endings normalized
+     * to LF and trailing whitespace trimmed (the renderer adds its own surrounding
+     * layout). Normalizing at the source keeps CR characters out of every wire
+     * payload and generated doc, regardless of how the guide file was committed.
      *
      * @param in the stream to read (closed by the caller)
-     * @return the file content, trailing-trimmed
+     * @return the file content, LF-normalized and trailing-trimmed
      * @throws IOException on a read error
      */
     private static String read(InputStream in) throws IOException
@@ -138,6 +140,6 @@ public final class GuideLoader
         {
             end--;
         }
-        return sb.substring(0, end);
+        return sb.substring(0, end).replace("\r\n", "\n").replace("\r", "\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 }
