@@ -6,8 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.util.Arrays;
-import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
 
@@ -28,6 +26,7 @@ import com.ditrix.edt.mcp.server.utils.ApplicationUpdatePolicy;
 import com.ditrix.edt.mcp.server.utils.EdtDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.UpdateWatchdog;
@@ -59,12 +58,12 @@ public class UpdateDatabaseTool implements IMcpTool
      * Auto-confirms a blocking update/restructurization modal during the
      * programmatic update only. {@code confirm=true} already authorised the
      * mutation, so pressing the dialog's default ("proceed") button is what a
-     * careful user would do. Seeded with the known launch-delegate title; add
-     * restructurization titles here once confirmed against a live EDT.
+     * careful user would do. Reuses the launch modal's localized titles; the EDT
+     * restructurization dialog title (for the FULL path) is still to be confirmed
+     * live and added to the shared set.
      */
     private static final EdtDialogAutoConfirmer UPDATE_DIALOG_CONFIRMER =
-        new EdtDialogAutoConfirmer(new LinkedHashSet<>(Arrays.asList(
-            "Application update"))); //$NON-NLS-1$
+        new EdtDialogAutoConfirmer(LaunchUpdateDialogAutoConfirmer.APPLICATION_UPDATE_TITLES);
 
     /** Appended when an update may be blocked by a client this EDT did not launch. */
     private static final String EXTERNAL_SESSION_NOTE =
@@ -324,6 +323,19 @@ public class UpdateDatabaseTool implements IMcpTool
                     }
                 }
 
+                // Re-check the state UNDER the lock: a concurrent confirm=true call or a
+                // pre-launch update on this IB could have started between the early stateBefore
+                // read and here (and the watchdog releases this lock on timeout while an update
+                // still runs in the background). Don't fire a second appManager.update against an
+                // IB that is already updating. This fresh value is also what we report.
+                ApplicationUpdateState stateBeforeLocked = appManager.getUpdateState(application);
+                if (stateBeforeLocked == ApplicationUpdateState.BEING_UPDATED)
+                {
+                    return ToolResult.error("Application is already being updated (a concurrent " //$NON-NLS-1$
+                        + "update is in progress). Poll get_applications until it settles, then " //$NON-NLS-1$
+                        + "retry.").toJson(); //$NON-NLS-1$
+                }
+
                 // Create execution context with the active Shell so EDT can parent its
                 // dialogs. Shared SWT-grab lives in LaunchLifecycleUtils.
                 ExecutionContext context = new ExecutionContext();
@@ -373,7 +385,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     .put("applicationId", applicationId) //$NON-NLS-1$
                     .put("applicationName", application.getName()) //$NON-NLS-1$
                     .put("updateType", updateType.name()) //$NON-NLS-1$
-                    .put("stateBefore", stateBefore.name()) //$NON-NLS-1$
+                    .put("stateBefore", stateBeforeLocked.name()) //$NON-NLS-1$
                     .put("stateAfter", stateAfter.name()) //$NON-NLS-1$
                     .put("terminatedClients", terminatedClients) //$NON-NLS-1$
                     .put("message", message); //$NON-NLS-1$

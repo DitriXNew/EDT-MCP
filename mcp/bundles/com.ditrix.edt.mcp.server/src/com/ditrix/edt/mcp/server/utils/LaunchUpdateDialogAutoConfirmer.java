@@ -6,17 +6,20 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Auto-confirms EDT's blocking <em>"Application update"</em> launch modal while
  * a YAXUnit tool is spawning a launch via {@code workingCopy.launch()}.
  *
  * <p>This is a thin static facade over a shared {@link EdtDialogAutoConfirmer}
- * configured for the single {@link #APPLICATION_UPDATE_TITLE} dialog, kept for
- * the existing launch call sites. {@code update_database} uses its own
- * {@link EdtDialogAutoConfirmer} instance (it may face additional dialog
- * titles), so the two never share arm/disarm state.
+ * configured for the launch update modal's {@linkplain #APPLICATION_UPDATE_TITLES
+ * localized titles}, kept for the existing launch call sites. {@code update_database}
+ * reuses the same titles for its own {@link EdtDialogAutoConfirmer} instance, so
+ * the two never share arm/disarm state.
  *
  * <p>For YAXUnit runs the modal is structural: the dependent test extension
  * reports {@code INCREMENTAL_UPDATE_REQUIRED}, which
@@ -28,16 +31,29 @@ import java.util.Collections;
  */
 public final class LaunchUpdateDialogAutoConfirmer
 {
+    /** English EDT build title of the launch-delegate "update before launch?" modal. */
+    static final String APPLICATION_UPDATE_TITLE_EN = "Application update"; //$NON-NLS-1$
+
     /**
-     * Exact title of EDT's launch-delegate "update infobase before launch?"
-     * modal ({@code ApplicationUiSupport_Application_update}). The EDT-MCP
-     * surface is English-only and so is the target EDT build, so an exact-title
-     * match is sufficient and keeps the filter from touching other dialogs.
+     * The same modal in a Russian EDT build. The title is localized to the EDT
+     * UI language, so an exact-title match must enumerate each locale: a Russian
+     * EDT shows this title, which the English one never matched — the launch
+     * then hung on the modal. Justified Cyrillic per CLAUDE.md #7 (a real EDT UI
+     * string the code matches, not a regex; the Tycho build is UTF-8).
      */
-    static final String APPLICATION_UPDATE_TITLE = "Application update"; //$NON-NLS-1$
+    static final String APPLICATION_UPDATE_TITLE_RU = "Обновление приложения"; //$NON-NLS-1$
+
+    /**
+     * Known localized titles of the launch "update before launch?" modal. Add
+     * more here as other EDT UI locales are confirmed live. Shared with
+     * {@code update_database}'s confirmer so both honour the same locale set.
+     */
+    public static final Set<String> APPLICATION_UPDATE_TITLES =
+        Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(
+            APPLICATION_UPDATE_TITLE_EN, APPLICATION_UPDATE_TITLE_RU)));
 
     private static final EdtDialogAutoConfirmer CONFIRMER =
-        new EdtDialogAutoConfirmer(Collections.singleton(APPLICATION_UPDATE_TITLE));
+        new EdtDialogAutoConfirmer(APPLICATION_UPDATE_TITLES);
 
     private LaunchUpdateDialogAutoConfirmer()
     {

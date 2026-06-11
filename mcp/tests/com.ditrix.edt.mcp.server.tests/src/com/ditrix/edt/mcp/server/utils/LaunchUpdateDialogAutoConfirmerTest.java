@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -64,5 +65,26 @@ public class LaunchUpdateDialogAutoConfirmerTest
         // with no filter installed it returns before any UI access.
         LaunchUpdateDialogAutoConfirmer.disarm();
         LaunchUpdateDialogAutoConfirmer.disarm();
+    }
+
+    @Test
+    public void testRussianTitleMatches()
+    {
+        // A Russian EDT build shows this localized title; the English-only match used
+        // to miss it, so the launch hung on the modal (a root cause of YAXUnit "dancing").
+        assertTrue("the Russian EDT modal title must match",
+            LaunchUpdateDialogAutoConfirmer.isTargetTitle(
+                LaunchUpdateDialogAutoConfirmer.APPLICATION_UPDATE_TITLE_RU));
+    }
+
+    @Test
+    public void testRussianTitleEncoding()
+    {
+        // Guard the exact codepoints so a re-encode can't silently break the match
+        // against the live "Обновление приложения" dialog (О=U+041E … я=U+044F, 21 chars).
+        String ru = LaunchUpdateDialogAutoConfirmer.APPLICATION_UPDATE_TITLE_RU;
+        assertEquals(21, ru.length());
+        assertEquals(0x041E, ru.charAt(0));
+        assertEquals(0x044F, ru.charAt(ru.length() - 1));
     }
 }
