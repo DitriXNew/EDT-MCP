@@ -83,6 +83,42 @@ public final class MetadataLanguageUtils
     }
 
     /**
+     * Resolves the language code for an OPTIONAL localized value (a synonym / form title /
+     * localized property), or fails with the shared actionable message.
+     * <ul>
+     * <li>{@code value} absent/empty &rarr; {@code null} (nothing to localize, no error);</li>
+     * <li>otherwise the {@link #resolveLanguageCode} result when determinable;</li>
+     * <li>otherwise throws {@link IllegalArgumentException} whose message is ready for
+     * {@code ToolResult.error} (the caller wraps it).</li>
+     * </ul>
+     * Extracted because the identical resolve-or-error block existed at four call sites
+     * (create_metadata synonym x2, the create form-member title, modify_metadata's
+     * localized-string branch) and their error texts had started to drift.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param value the localized value being set (may be {@code null}/empty)
+     * @param explicitLanguage an explicitly requested language code, or {@code null}/empty
+     * @param subject what is being localized, for the error message (e.g. {@code "the synonym"})
+     * @return the resolved language code, or {@code null} when {@code value} is absent
+     * @throws IllegalArgumentException when a code is needed but cannot be determined
+     */
+    public static String resolveSynonymLanguage(Configuration config, String value,
+        String explicitLanguage, String subject)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return null;
+        }
+        String code = resolveLanguageCode(config, explicitLanguage);
+        if (code == null)
+        {
+            throw new IllegalArgumentException("Cannot determine a language code for " + subject //$NON-NLS-1$
+                + " in this configuration. Specify a 'language' code (e.g. 'en' or 'ru')."); //$NON-NLS-1$
+        }
+        return code;
+    }
+
+    /**
      * Reads a synonym value from a language-code-keyed synonym map.
      * <p>
      * Lookup order (mirrors the previously-triplicated helper bodies):

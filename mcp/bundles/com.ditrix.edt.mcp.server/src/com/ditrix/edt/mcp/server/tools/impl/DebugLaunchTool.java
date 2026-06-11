@@ -129,7 +129,7 @@ public class DebugLaunchTool implements IMcpTool
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, "updateBeforeLaunch", true); //$NON-NLS-1$
-        boolean restartIfRunning = JsonUtils.extractBooleanArgument(params, "restartIfRunning", false); //$NON-NLS-1$
+        boolean restartIfRunning = extractRestartIfRunning(params);
 
         // Mode 1: explicit config name — no project/application required.
         if (configName != null && !configName.isEmpty())
@@ -158,6 +158,18 @@ public class DebugLaunchTool implements IMcpTool
         }
 
         return launchDebug(projectName, applicationId, updateBeforeLaunch, restartIfRunning);
+    }
+
+    /**
+     * Extracts the {@code restartIfRunning} flag with its documented default:
+     * {@code false} — an already-running session short-circuits with
+     * {@code alreadyRunning:true} rather than being terminated. Package-private
+     * seam so the default is unit-assertable headlessly; the launch path that
+     * consumes the flag needs a live workbench.
+     */
+    static boolean extractRestartIfRunning(Map<String, String> params)
+    {
+        return JsonUtils.extractBooleanArgument(params, "restartIfRunning", false); //$NON-NLS-1$
     }
 
     /**

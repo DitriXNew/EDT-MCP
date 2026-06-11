@@ -19,8 +19,15 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /**
- * Tests for {@link MdNameNormalizer}: the "ё"->"е" / "Ё"->"Е" transformation
- * and the {@link MdNameNormalizer.Report} accumulator.
+ * Tests for {@link MdNameNormalizer}: the Russian yo->ye normalization
+ * (U+0451 -> U+0435, U+0401 -> U+0415) and the {@link MdNameNormalizer.Report}
+ * accumulator.
+ * <p>
+ * The four load-bearing code points are written as Unicode escapes in the
+ * string literals below (same homoglyph hardening as the constants in
+ * {@link MdNameNormalizer} itself): a Latin lookalike or a source-encoding
+ * mishap in a raw literal would silently turn a real assertion into a no-op.
+ * Other Cyrillic letters are not confusable and stay raw for readability.
  */
 public class MdNameNormalizerTest
 {
@@ -42,23 +49,23 @@ public class MdNameNormalizerTest
     public void testLowercaseYoReplaced()
     {
         // "ёлка" -> "елка"
-        assertEquals("елка", //$NON-NLS-1$
-            MdNameNormalizer.normalizeYo("ёлка")); //$NON-NLS-1$
+        assertEquals("\u0435лка", //$NON-NLS-1$
+            MdNameNormalizer.normalizeYo("\u0451лка")); //$NON-NLS-1$
     }
 
     @Test
     public void testUppercaseYoReplaced()
     {
         // "Ёж" -> "Еж"
-        assertEquals("Еж", MdNameNormalizer.normalizeYo("Ёж")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("\u0415ж", MdNameNormalizer.normalizeYo("\u0401ж")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testMixedYoReplaced()
     {
         // "ТёщаЁ" -> "ТещаЕ"
-        String input = "ТёщаЁ"; //$NON-NLS-1$
-        String expected = "ТещаЕ"; //$NON-NLS-1$
+        String input = "Т\u0451ща\u0401"; //$NON-NLS-1$
+        String expected = "Т\u0435ща\u0415"; //$NON-NLS-1$
         assertEquals(expected, MdNameNormalizer.normalizeYo(input));
     }
 
@@ -66,8 +73,8 @@ public class MdNameNormalizerTest
     public void testRealWorldSynonym()
     {
         // "Тест отчёт" -> "Тест отчет".
-        String input = "Тест отчёт"; //$NON-NLS-1$
-        String expected = "Тест отчет"; //$NON-NLS-1$
+        String input = "Т\u0435ст отч\u0451т"; //$NON-NLS-1$
+        String expected = "Т\u0435ст отч\u0435т"; //$NON-NLS-1$
         assertEquals(expected, MdNameNormalizer.normalizeYo(input));
     }
 
@@ -83,8 +90,8 @@ public class MdNameNormalizerTest
     public void testOtherCharactersPreserved()
     {
         // Only the two yo code points change; everything else is preserved.
-        String input = "a1_-ё Ё.X"; //$NON-NLS-1$
-        String expected = "a1_-е Е.X"; //$NON-NLS-1$
+        String input = "a1_-\u0451 \u0401.X"; //$NON-NLS-1$
+        String expected = "a1_-\u0435 \u0415.X"; //$NON-NLS-1$
         assertEquals(expected, MdNameNormalizer.normalizeYo(input));
     }
 
@@ -100,9 +107,9 @@ public class MdNameNormalizerTest
     @Test
     public void testContainsYo()
     {
-        assertTrue(MdNameNormalizer.containsYo("ё")); //$NON-NLS-1$
-        assertTrue(MdNameNormalizer.containsYo("Ё")); //$NON-NLS-1$
-        assertFalse(MdNameNormalizer.containsYo("еЕ")); //$NON-NLS-1$
+        assertTrue(MdNameNormalizer.containsYo("\u0451")); //$NON-NLS-1$
+        assertTrue(MdNameNormalizer.containsYo("\u0401")); //$NON-NLS-1$
+        assertFalse(MdNameNormalizer.containsYo("\u0435\u0415")); //$NON-NLS-1$
         assertFalse(MdNameNormalizer.containsYo(null));
         assertFalse(MdNameNormalizer.containsYo("")); //$NON-NLS-1$
     }
@@ -115,8 +122,8 @@ public class MdNameNormalizerTest
         MdNameNormalizer.Report report = new MdNameNormalizer.Report(true);
         // name has no yo, synonym has yo.
         assertEquals("Report", report.apply("name", "Report")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        String synonym = report.apply("synonym", "Отчёт"); // "Отчёт" //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("Отчет", synonym); // "Отчет" //$NON-NLS-1$
+        String synonym = report.apply("synonym", "Отч\u0451т"); // "Отчёт" //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Отч\u0435т", synonym); // "Отчет" //$NON-NLS-1$
 
         assertTrue(report.hasChanges());
         List<String> fields = report.normalizedFields();
@@ -135,7 +142,7 @@ public class MdNameNormalizerTest
     public void testReportDisabledLeavesTextAndRecordsNothing()
     {
         MdNameNormalizer.Report report = new MdNameNormalizer.Report(false);
-        String input = "Отчёт"; // "Отчёт" //$NON-NLS-1$
+        String input = "Отч\u0451т"; // "Отчёт" //$NON-NLS-1$
         // Disabled: value is returned untouched, nothing recorded.
         assertSame(input, report.apply("synonym", input)); //$NON-NLS-1$
         assertFalse(report.hasChanges());
@@ -169,8 +176,8 @@ public class MdNameNormalizerTest
     public void testReportOrderPreserved()
     {
         MdNameNormalizer.Report report = new MdNameNormalizer.Report(true);
-        report.apply("name", "Имёна"); // has yo //$NON-NLS-1$ //$NON-NLS-2$
-        report.apply("synonym", "Сёмга"); // has yo //$NON-NLS-1$ //$NON-NLS-2$
+        report.apply("name", "Им\u0451на"); // has yo //$NON-NLS-1$ //$NON-NLS-2$
+        report.apply("synonym", "С\u0451мга"); // has yo //$NON-NLS-1$ //$NON-NLS-2$
         List<String> fields = report.normalizedFields();
         assertEquals(2, fields.size());
         assertEquals("name", fields.get(0)); //$NON-NLS-1$

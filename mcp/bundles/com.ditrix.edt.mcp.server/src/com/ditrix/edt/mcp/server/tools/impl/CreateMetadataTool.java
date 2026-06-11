@@ -259,18 +259,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         // Resolve the synonym language now (needs the configuration); only when a synonym was given.
         final String synonymLanguage;
-        if (props.synonym != null && !props.synonym.isEmpty())
+        try
         {
-            synonymLanguage = MetadataLanguageUtils.resolveLanguageCode(config, props.language);
-            if (synonymLanguage == null)
-            {
-                return ToolResult.error("Cannot determine a language code for the synonym in this " //$NON-NLS-1$
-                    + "configuration. Specify a 'language' code (e.g. 'en' or 'ru').").toJson(); //$NON-NLS-1$
-            }
+            synonymLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, props.synonym,
+                props.language, "the synonym"); //$NON-NLS-1$
         }
-        else
+        catch (IllegalArgumentException e)
         {
-            synonymLanguage = null;
+            return ToolResult.error(e.getMessage()).toJson();
         }
 
         // Uniform duplicate / stale-intent check for both top-level and members.
@@ -586,18 +582,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "get_metadata_objects and get_metadata_details."); //$NON-NLS-1$
 
             final String titleLanguage;
-            if (titleVal != null && !titleVal.isEmpty())
+            try
             {
-                titleLanguage = MetadataLanguageUtils.resolveLanguageCode(config, titleLang);
-                if (titleLanguage == null)
-                {
-                    return ToolResult.error("Cannot determine a language code for the title in this " //$NON-NLS-1$
-                        + "configuration. Specify a 'language' code (e.g. 'en' or 'ru').").toJson(); //$NON-NLS-1$
-                }
+                titleLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, titleVal,
+                    titleLang, "the title"); //$NON-NLS-1$
             }
-            else
+            catch (IllegalArgumentException e)
             {
-                titleLanguage = null;
+                return ToolResult.error(e.getMessage()).toJson();
             }
 
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormMember", //$NON-NLS-1$
@@ -698,18 +690,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         // Resolve the synonym language now (needs the configuration); only when a synonym was given.
         final String synonymLanguage;
-        if (props.synonym != null && !props.synonym.isEmpty())
+        try
         {
-            synonymLanguage = MetadataLanguageUtils.resolveLanguageCode(config, props.language);
-            if (synonymLanguage == null)
-            {
-                return ToolResult.error("Cannot determine a language code for the synonym in this " //$NON-NLS-1$
-                    + "configuration. Specify a 'language' code (e.g. 'en' or 'ru').").toJson(); //$NON-NLS-1$
-            }
+            synonymLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, props.synonym,
+                props.language, "the synonym"); //$NON-NLS-1$
         }
-        else
+        catch (IllegalArgumentException e)
         {
-            synonymLanguage = null;
+            return ToolResult.error(e.getMessage()).toJson();
         }
 
         IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
@@ -1329,13 +1317,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
             if (serverCall && !serverSideKind)
             {
+                // Covers every non-server kind, including 'Global' (a global module is a
+                // client module here and can never be a server-call target); the message
+                // names the offending kind, with an extra hint for the Global case.
                 throw new IllegalArgumentException("serverCall requires a server kind " //$NON-NLS-1$
                     + "('Server', 'ServerCall' or 'ClientServer'); it is not valid for kind '" //$NON-NLS-1$
-                    + kind.token() + "'."); //$NON-NLS-1$
-            }
-            if (serverCall && kind == CommonModuleKind.GLOBAL)
-            {
-                throw new IllegalArgumentException("serverCall is incompatible with the 'Global' kind."); //$NON-NLS-1$
+                    + kind.token() + "'." //$NON-NLS-1$
+                    + (kind == CommonModuleKind.GLOBAL
+                        ? " A 'Global' module is a client module and cannot be a server-call target." //$NON-NLS-1$
+                        : "")); //$NON-NLS-1$
             }
             if (privileged && kind != CommonModuleKind.SERVER)
             {

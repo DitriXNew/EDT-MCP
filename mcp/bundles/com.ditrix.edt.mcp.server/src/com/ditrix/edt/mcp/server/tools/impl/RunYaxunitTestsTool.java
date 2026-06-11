@@ -277,6 +277,29 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return ToolResult.error("Launch manager is not available").toJson(); //$NON-NLS-1$
             }
 
+            // updateScope is ARGUMENT-validated as early as possible: when the caller
+            // named the project directly, a typo'd extension name fails fast with the
+            // available names BEFORE launch-config resolution — so the validation is
+            // reachable (and e2e-testable) without a launch configuration or a live
+            // infobase. The same validation inside prepareForFreshLaunch stays as the
+            // backstop for the by-name call style, where the project is only known
+            // after the config resolves. Gated on updateBeforeLaunch because
+            // updateScope only applies to the auto-chain; gated on the project
+            // existing so an unknown project keeps its established no-config sentinel.
+            if (updateBeforeLaunch && projectName != null && !projectName.isEmpty())
+            {
+                ProjectContext scopeCtx = ProjectContext.of(projectName);
+                if (scopeCtx.exists())
+                {
+                    String scopeError =
+                        LaunchLifecycleUtils.validateUpdateScope(scopeCtx.project(), updateScope);
+                    if (scopeError != null)
+                    {
+                        return ToolResult.error(scopeError).toJson();
+                    }
+                }
+            }
+
             ILaunchConfiguration matchingConfig = LaunchConfigUtils.resolveLaunchConfig(
                     launchManager, configName, projectName, applicationId);
             if (matchingConfig == null)

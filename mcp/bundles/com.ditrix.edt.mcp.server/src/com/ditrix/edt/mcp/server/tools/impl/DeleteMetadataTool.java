@@ -161,7 +161,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return deleteFormObject(ctx, normFqn, formObjectRef, confirm);
         }
 
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
+        // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
+        // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
+        // would miss the stored name — the resolver retries the normalized FQN.
+        MetadataNodeResolver.ResolvedNode resolved =
+            MetadataNodeResolver.resolveExistingWithYoFallback(config, normFqn);
+        MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null)
         {
             return ToolResult.error("Node not found: " + fqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
@@ -169,7 +174,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "'Type.Name.Kind.Name' for a member (e.g. 'Document.Order.Attribute.Amount'). " //$NON-NLS-1$
                 + "Any node create_metadata can address can be deleted; see " //$NON-NLS-1$
                 + "get_tool_guide('create_metadata') for the kinds. " //$NON-NLS-1$
-                + "Use get_metadata_objects to find an object's FQN.").toJson(); //$NON-NLS-1$
+                + "Use get_metadata_objects to find an object's FQN." //$NON-NLS-1$
+                + MetadataNodeResolver.yoNotFoundHint(normFqn)).toJson();
+        }
+        if (resolved.yoFallback)
+        {
+            Activator.logInfo("delete_metadata: '" + normFqn //$NON-NLS-1$
+                + "' did not resolve exactly; proceeding with its yo-normalized form '" //$NON-NLS-1$
+                + resolved.fqn + "'"); //$NON-NLS-1$
+            normFqn = resolved.fqn;
         }
 
         IRefactoring refactoring = refactoringService.createMdObjectDeleteRefactoring(
@@ -564,8 +577,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         Configuration config = ctx.config;
 
         // Reuse create_metadata's owner + owned-form resolution so create/delete address the SAME object. The
-        // resolver expects the 'forms' shape: Type.Object.forms.FormName.
-        String formPath = ref.ownerType + "." + ref.ownerName + ".forms." + ref.formName; //$NON-NLS-1$ //$NON-NLS-2$
+        // resolver expects the 'forms' shape: Type.Object.forms.FormName (FormElementWriter owns it).
+        String formPath = FormElementWriter.formPathOf(ref.ownerType, ref.ownerName, ref.formName);
         MdObject mdForm = FormStructureReader.resolveMdForm(config, formPath);
         if (mdForm == null)
         {
@@ -586,6 +599,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         if (!confirm)
         {
+            // blocking is hardcoded false: an owned form is removed by cascade (not through the
+            // md-refactoring service), so unlike top-object previews NO incoming-reference scan
+            // runs here — the message says so to keep the preview honest (deep scan is follow-up).
             return ToolResult.success()
                 .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("fqn", normFqn) //$NON-NLS-1$
@@ -596,7 +612,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .put("blockingReferencesCount", 0) //$NON-NLS-1$
                 .put("message", "Preview: deleting form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
                     + " would remove the form and its content Form.form. Cross-references to it " //$NON-NLS-1$
-                    + "(a default-form setting) are cleared on the owner. Call confirm=true to apply.") //$NON-NLS-1$
+                    + "(a default-form setting) are cleared on the owner. Note: incoming references " //$NON-NLS-1$
+                    + "from OTHER top objects (e.g. BSL code opening this form by name) are NOT " //$NON-NLS-1$
+                    + "checked for owned forms — verify with find_references if unsure. " //$NON-NLS-1$
+                    + "Call confirm=true to apply.") //$NON-NLS-1$
                 .toJson();
         }
 
@@ -760,7 +779,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String resolvedFormName)
     {
         return MetadataPathResolver.resolveFormFolderPath(
-            ownerType + "." + resolvedOwnerName + ".forms." + resolvedFormName); //$NON-NLS-1$ //$NON-NLS-2$
+            FormElementWriter.formPathOf(ownerType, resolvedOwnerName, resolvedFormName));
     }
 
     /** A {name, type} preview entry for the form object being removed. */

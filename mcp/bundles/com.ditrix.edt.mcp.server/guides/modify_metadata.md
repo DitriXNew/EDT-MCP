@@ -8,7 +8,7 @@ Sets one or more properties of a metadata node addressed by a 1C full-name FQN (
 - `projectName` (required) - EDT project name.
 - `fqn` (required) - full-name FQN of the node.
 - `properties` (required) - array of `{name, value, language?}`. `name` is the property name; `value` the new value; `language` the CODE for a synonym (default: config default).
-- `normalizeYo` (optional, default true) - normalize the Russian letter `ё`->`е` / `Ё`->`Е` in any synonym / comment / title and other localized-string or free-text value being set (matches the 1C standard `mdo-ru-name-unallowed-letter`); set `false` to keep `ё` exactly as supplied. The result lists the rewritten properties under `normalized`.
+- `normalizeYo` (optional, default true) - normalize the Russian letter `ё`->`е` / `Ё`->`Е` in localized-string values (synonym / title) and in the `comment` property (matches the 1C standard `mdo-ru-name-unallowed-letter`). Other free-text strings can be identifier-like (e.g. `XDTOPackage.namespace` is a URI) and always keep the supplied value. Set `false` to keep `ё` exactly as supplied everywhere. The result lists the rewritten properties under `normalized`.
 
 ## Not supported here
 - `name` (rename): refused - use rename_metadata_object, which cascades the rename across BSL code, forms and metadata.

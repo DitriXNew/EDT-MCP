@@ -28,17 +28,22 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  */
 public final class MdNameNormalizer
 {
-    /** Lowercase Russian "yo" (U+0451). */
-    private static final char YO_LOWER = 'ё';
+    // The four Cyrillic code points are spelled as Unicode escapes on purpose:
+    // raw Cyrillic literals are homoglyph-prone (a Latin 'e' or a mis-encoded
+    // source file would silently change the mapping), while the escapes are
+    // ASCII-only and survive any source-encoding mishap byte-identically.
 
-    /** Uppercase Russian "yo" (U+0401). */
-    private static final char YO_UPPER = 'Ё';
+    /** Lowercase Russian "yo", CYRILLIC SMALL LETTER IO (U+0451). */
+    private static final char YO_LOWER = '\u0451';
 
-    /** Lowercase Russian "ye" (U+0435). */
-    private static final char YE_LOWER = 'е';
+    /** Uppercase Russian "yo", CYRILLIC CAPITAL LETTER IO (U+0401). */
+    private static final char YO_UPPER = '\u0401';
 
-    /** Uppercase Russian "ye" (U+0415). */
-    private static final char YE_UPPER = 'Е';
+    /** Lowercase Russian "ye", CYRILLIC SMALL LETTER IE (U+0435). */
+    private static final char YE_LOWER = '\u0435';
+
+    /** Uppercase Russian "ye", CYRILLIC CAPITAL LETTER IE (U+0415). */
+    private static final char YE_UPPER = '\u0415';
 
     private MdNameNormalizer()
     {

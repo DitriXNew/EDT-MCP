@@ -35,6 +35,12 @@ mutation-sensitive against the SPECIFIC message, not just is_error):
             get_applications or list_configurations."
 
   runTests() — only reached once the above guards pass:
+    * updateScope naming an unknown extension (projectName call style,
+      updateBeforeLaunch default true) -> validated FIRST, before launch-config
+      resolution (LaunchLifecycleUtils.validateUpdateScope) — so it is reachable
+      headlessly, with no launch config and no infobase:
+        "updateScope requests unknown extension project name: <Name>. Available
+         extension projects for this configuration: <names>. ..."
     * launchConfigurationName given but not found (resolveLaunchConfig -> null)
         -> "Launch configuration not found: '<name>'. Use list_configurations to
             see what's available."
@@ -74,6 +80,7 @@ from harness import (
     assert_no_diff,
     e2e_test,
     PROJECT,
+    TESTS_PROJECT,
 )
 
 
@@ -195,6 +202,39 @@ def test_empty_projectname_treated_as_missing():
         ctx="empty projectName hits the required-arg guard, not a silent default",
     )
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_unknown_updatescope_extension_fails_fast_with_available_names():
+    """updateScope negative: an unknown 'extension:<Name>' is a HARD pre-launch error.
+
+    Pinned control flow: runTests() validates updateScope
+    (LaunchLifecycleUtils.validateUpdateScope) BEFORE launch-config resolution when
+    the caller named the project directly, so this negative is reachable headlessly —
+    no launch configuration and no infobase needed; nothing is launched, terminated,
+    or updated. A typo'd name must NOT be silently dropped (a narrowed recompute
+    scope would produce the exact stale-green run updateScope was built to prevent).
+    The error must name the unknown extension AND list the available extension
+    project names (the fixture extension TESTS_PROJECT), so the caller can fix the
+    typo without another discovery round-trip.
+
+    Mutation sense: a tool that silently ignored the bad scope would proceed to the
+    no-config sentinel (which lacks the 'unknown extension' wording) and fail the
+    quality check; one that dropped the available-names list fails the suggests."""
+    bad = "NoSuchExtension_ZZZ_e2e"
+    r = call("run_yaxunit_tests", {
+        "projectName": PROJECT,
+        "applicationId": "any_app_id_e2e",  # irrelevant: the scope check fires first
+        "updateScope": "extension:" + bad,
+    })
+    err = assert_error(r, "unknown updateScope extension name")
+    assert_error_quality(
+        err,
+        names=[bad, "unknown extension"],
+        suggests=["Available extension projects", TESTS_PROJECT],
+        ctx="unknown updateScope extension is named AND the available names are listed",
+    )
+    assert_no_diff("a rejected updateScope must not touch the project on disk")
 
 
 @e2e_test(tool="run_yaxunit_tests", kind="read")

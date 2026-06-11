@@ -105,7 +105,7 @@ def test_set_style_item_font_and_read_back():
 # Discovery — the value property appears in the assignable schema as STYLE_VALUE
 # ──────────────────────────────────────────────────────────────────────────────
 
-@e2e_test(tool="modify_metadata", kind="read")
+@e2e_test(tool="modify_metadata", kind="write-metadata")  # seeds a StyleItem -> needs the model reset
 def test_style_item_value_is_assignable_style_value():
     name = "E2EStyleAssign"
     _seed_style_item(name)

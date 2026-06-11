@@ -203,6 +203,26 @@ public class CreateMetadataToolTest
     }
 
     @Test
+    public void testResolveServerCallOnGlobalKindIsRejectedNamingGlobal()
+    {
+        // The former dedicated Global+serverCall branch was dead code (the non-server-kind
+        // check above it throws first); its specificity is folded INTO that first check:
+        // for kind 'Global' the message must name Global explicitly and explain why.
+        try
+        {
+            CommonModuleFlags.resolve(params("commonModuleKind", "Global", "serverCall", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            fail("serverCall on the Global kind must be rejected"); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue("message must name serverCall", e.getMessage().contains("serverCall")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("message must name the Global kind", e.getMessage().contains("'Global'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("message must explain the Global incompatibility", //$NON-NLS-1$
+                e.getMessage().contains("cannot be a server-call target")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testResolvePrivilegedOnNonServerKindIsRejected()
     {
         try

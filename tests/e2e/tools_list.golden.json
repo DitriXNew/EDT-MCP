@@ -2167,7 +2167,7 @@
           "type": "string"
         },
         "normalizeYo": {
-          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in synonym / comment / title and any other localized-string or free-text value being set (default true). Matches the 1C standard mdo-ru-name-unallowed-letter. Set false to keep 'ё' exactly as supplied.",
+          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / title) and in the 'comment' property (default true). Matches the 1C standard mdo-ru-name-unallowed-letter. Other free-text strings can be identifier-like (e.g. XDTOPackage.namespace is a URI) and always keep the supplied value. Set false to keep 'ё' exactly as supplied everywhere.",
           "type": "boolean"
         },
         "projectName": {

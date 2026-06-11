@@ -165,4 +165,41 @@ public class MetadataLanguageUtilsTest
     {
         assertEquals("", MetadataLanguageUtils.getSynonymForLanguage(new LinkedHashMap<String, String>(), "ru"));
     }
+
+    // --- resolveSynonymLanguage (the shared resolve-or-error block, used at 4 sites) ---
+
+    @Test
+    public void resolveSynonymLanguageReturnsNullForAbsentValue()
+    {
+        // No localized value -> nothing to localize, no error (even with no resolvable code).
+        assertNull(MetadataLanguageUtils.resolveSynonymLanguage(null, null, null, "the synonym"));
+        assertNull(MetadataLanguageUtils.resolveSynonymLanguage(null, "", null, "the synonym"));
+    }
+
+    @Test
+    public void resolveSynonymLanguageResolvesCodeForPresentValue()
+    {
+        assertEquals("en",
+            MetadataLanguageUtils.resolveSynonymLanguage(config(language("ru")), "Goods", "en", "the synonym"));
+        assertEquals("ru",
+            MetadataLanguageUtils.resolveSynonymLanguage(config(language("ru")), "Goods", null, "the synonym"));
+    }
+
+    @Test
+    public void resolveSynonymLanguageThrowsActionableErrorWhenUndeterminable()
+    {
+        try
+        {
+            MetadataLanguageUtils.resolveSynonymLanguage(null, "Goods", null, "the title");
+            org.junit.Assert.fail("an undeterminable language code must throw");
+        }
+        catch (IllegalArgumentException e)
+        {
+            // The message is ToolResult-ready: it names the subject and the fix.
+            org.junit.Assert.assertTrue("message must name the subject",
+                e.getMessage().contains("the title"));
+            org.junit.Assert.assertTrue("message must suggest the 'language' parameter",
+                e.getMessage().contains("'language'"));
+        }
+    }
 }

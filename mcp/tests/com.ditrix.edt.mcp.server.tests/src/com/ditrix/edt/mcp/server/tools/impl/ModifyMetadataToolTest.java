@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
@@ -18,6 +19,7 @@ import java.util.Collections;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.google.gson.JsonObject;
 
 /**
@@ -174,5 +176,44 @@ public class ModifyMetadataToolTest
             Arrays.asList(prop("procedure", "MyProc"), prop("title", "T")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         assertEquals("visible", ModifyMetadataTool.firstNonHandlerRebindProperty( //$NON-NLS-1$
             Arrays.asList(prop("visible", "false"), prop("handler", "MyProc")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    // ===== normalizeStringPropertyValue (scoped yo->ye normalization for free STRINGs) =====
+
+    @Test
+    public void testNormalizeStringPropertyValueLeavesNamespaceVerbatim()
+    {
+        // An identifier-like free STRING property (XDTOPackage.namespace is a URI) must keep
+        // the caller's text VERBATIM even when it contains a yo (U+0451): a silent yo->ye
+        // rewrite would corrupt the identifier, and 'namespace' is not presentation text
+        // checked by the std474 validator (names / synonyms / comments are).
+        MdNameNormalizer.Report report = new MdNameNormalizer.Report(true);
+        String uri = "http://v8.1c.ru/packages/pak\u0451t"; //$NON-NLS-1$
+        assertSame("namespace-like value must be returned verbatim", uri, //$NON-NLS-1$ //$NON-NLS-2$
+            ModifyMetadataTool.normalizeStringPropertyValue("namespace", uri, report)); //$NON-NLS-1$
+        assertFalse("a verbatim value must not be reported as normalized", report.hasChanges()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeStringPropertyValueNormalizesComment()
+    {
+        // 'comment' IS presentation text checked by std474: its yo (U+0451) is normalized
+        // to ye (U+0435) and the rewrite is reported under the property name.
+        MdNameNormalizer.Report report = new MdNameNormalizer.Report(true);
+        String result = ModifyMetadataTool.normalizeStringPropertyValue("comment", //$NON-NLS-1$
+            "ozhidani\u0451", report); //$NON-NLS-1$
+        assertEquals("ozhidani\u0435", result); //$NON-NLS-1$
+        assertTrue("the comment normalization must be reported", report.hasChanges()); //$NON-NLS-1$
+        assertEquals("comment", report.normalizedFields().get(0)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNormalizeStringPropertyValueHonorsDisabledToggle()
+    {
+        // normalizeYo=false: even the comment keeps the caller's text verbatim.
+        MdNameNormalizer.Report report = new MdNameNormalizer.Report(false);
+        String raw = "comment with \u0451"; //$NON-NLS-1$
+        assertSame(raw, ModifyMetadataTool.normalizeStringPropertyValue("comment", raw, report)); //$NON-NLS-1$
+        assertFalse(report.hasChanges());
     }
 }

@@ -344,7 +344,7 @@ def test_set_single_reference_accounting_register_chart_of_accounts():
     poll_diff_contains(coa, ctx="the referenced chart of accounts must land in the register .mdo")
 
 
-@e2e_test(tool="modify_metadata", kind="read")
+@e2e_test(tool="modify_metadata", kind="write-metadata")  # seeds a Subsystem -> needs the model reset
 def test_assignable_lists_reference_property_with_target_type():
     # The Subsystem's `content` reference must appear in the assignable schema as a (MANY_)REFERENCE
     # with its allowed target type, so a client can discover it.

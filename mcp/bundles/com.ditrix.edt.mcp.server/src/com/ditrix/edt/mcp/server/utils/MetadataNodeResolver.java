@@ -316,6 +316,99 @@ public final class MetadataNodeResolver
     }
 
     /**
+     * Result of {@link #resolveExistingWithYoFallback}: the resolved node (or {@code null}),
+     * the FQN that actually resolved, and whether the yo-normalized retry was the form that hit.
+     */
+    public static final class ResolvedNode
+    {
+        /** The resolved node; {@code null} when neither the exact nor the normalized FQN resolves. */
+        public final MetadataNode node;
+        /** The FQN that resolved (the yo-normalized form when the fallback hit); the input otherwise. */
+        public final String fqn;
+        /** {@code true} when the exact FQN missed and the yo-to-ye-normalized FQN resolved instead. */
+        public final boolean yoFallback;
+
+        private ResolvedNode(MetadataNode node, String fqn, boolean yoFallback)
+        {
+            this.node = node;
+            this.fqn = fqn;
+            this.yoFallback = yoFallback;
+        }
+    }
+
+    /**
+     * Resolves an existing node like {@link #resolveExisting}, with a yo-addressing fallback:
+     * addressing here is EXACT, but {@code create_metadata} normalizes the Russian letter yo
+     * (U+0451/U+0401) to ye (U+0435/U+0415) in names by default — so a caller who re-types the
+     * original yo spelling would miss the stored, normalized name. When the exact FQN does not
+     * resolve and it differs from its yo-normalized form, the normalized FQN is retried; the
+     * result says which form hit so the caller can log/report it.
+     *
+     * <p>Deliberately a SEPARATE entry point (used by the modify/delete "node not found" sites)
+     * rather than a change to {@link #resolveExisting} itself: the exact resolver also backs
+     * create_metadata's duplicate check (where a {@code normalizeYo=false} creation of a yo
+     * name must NOT be misread as a duplicate of its ye twin) and reference-target resolution.
+     *
+     * @param config the configuration to resolve in
+     * @param fqn the full-name FQN (already {@code normalizeFqn}-ed by callers; may be {@code null})
+     * @return the resolution result, never {@code null}
+     */
+    public static ResolvedNode resolveExistingWithYoFallback(Configuration config, String fqn)
+    {
+        MetadataNode node = resolveExisting(config, fqn);
+        if (node != null)
+        {
+            return new ResolvedNode(node, fqn, false);
+        }
+        String retry = yoRetryFqn(fqn);
+        if (retry != null)
+        {
+            MetadataNode normalized = resolveExisting(config, retry);
+            if (normalized != null)
+            {
+                return new ResolvedNode(normalized, retry, true);
+            }
+        }
+        return new ResolvedNode(null, fqn, false);
+    }
+
+    /**
+     * Returns the yo-to-ye-normalized retry FQN for a failed exact resolve, or {@code null}
+     * when the input contains no yo (no distinct retry form exists).
+     *
+     * @param fqn the requested FQN (may be {@code null})
+     * @return the normalized FQN when it differs from the input; {@code null} otherwise
+     */
+    public static String yoRetryFqn(String fqn)
+    {
+        String norm = MdNameNormalizer.normalizeYo(fqn);
+        return norm != null && !norm.equals(fqn) ? norm : null;
+    }
+
+    /**
+     * One-sentence hint to append to a "Node not found" error when the requested FQN contains
+     * the Russian letter yo: names are stored normalized ({@code create_metadata} rewrites
+     * yo to ye by default) and even the normalized form did not resolve. Empty (never
+     * {@code null}) for a yo-less FQN, so callers can append it unconditionally.
+     *
+     * @param fqn the requested FQN (may be {@code null})
+     * @return the hint sentence (with a leading space), or an empty string
+     */
+    public static String yoNotFoundHint(String fqn)
+    {
+        String retry = yoRetryFqn(fqn);
+        if (retry == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        // The Cyrillic letters are written as Unicode escapes - this source stays pure ASCII
+        // (same non-UTF-8-build guard as the cp(...) token construction above).
+        return " Note: names are stored with '\u0435' (create_metadata normalizes " //$NON-NLS-1$
+            + "'\u0451'->'\u0435' by default), but the normalized form '" + retry //$NON-NLS-1$
+            + "' was not found either."; //$NON-NLS-1$
+    }
+
+    /**
      * Resolves the target for creating a new node addressed by {@code fqn}. The parent (everything
      * before the last {@code .Kind.Name} pair) must already exist; the leaf is the node to create.
      *

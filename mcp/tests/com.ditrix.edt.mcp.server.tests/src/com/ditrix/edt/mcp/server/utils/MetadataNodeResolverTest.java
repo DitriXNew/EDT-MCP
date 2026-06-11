@@ -234,4 +234,45 @@ public class MetadataNodeResolverTest
         assertNull(MetadataNodeResolver.featureNameForKind("nonsense")); //$NON-NLS-1$
         assertNull(MetadataNodeResolver.featureNameForKind(null));
     }
+
+    // ===== yo-addressing fallback (the pure resolver seams; the model retry path is e2e) =====
+
+    @Test
+    public void testYoRetryFqnReturnsNormalizedFormOnlyWhenDistinct()
+    {
+        // "Otchyot" with the Russian yo (U+0451) -> the ye-normalized (U+0435) retry form.
+        String yoFqn = "Catalog." + fromCp(0x041e, 0x0442, 0x0447, 0x0451, 0x0442); //$NON-NLS-1$
+        String expected = "Catalog." + fromCp(0x041e, 0x0442, 0x0447, 0x0435, 0x0442); //$NON-NLS-1$
+        assertEquals(expected, MetadataNodeResolver.yoRetryFqn(yoFqn));
+        // Already normalized / no yo anywhere / null -> no distinct retry form.
+        assertNull(MetadataNodeResolver.yoRetryFqn(expected));
+        assertNull(MetadataNodeResolver.yoRetryFqn("Catalog.Products")); //$NON-NLS-1$
+        assertNull(MetadataNodeResolver.yoRetryFqn(null));
+    }
+
+    @Test
+    public void testYoNotFoundHintNamesTheNormalizedForm()
+    {
+        String yoFqn = "Catalog." + fromCp(0x041e, 0x0442, 0x0447, 0x0451, 0x0442); //$NON-NLS-1$
+        String norm = "Catalog." + fromCp(0x041e, 0x0442, 0x0447, 0x0435, 0x0442); //$NON-NLS-1$
+        String hint = MetadataNodeResolver.yoNotFoundHint(yoFqn);
+        assertTrue("hint must name the normalized form", hint.contains(norm)); //$NON-NLS-1$
+        assertTrue("hint must explain create's default normalization", //$NON-NLS-1$
+            hint.contains("create_metadata")); //$NON-NLS-1$
+        // A yo-less FQN appends nothing (callers append the hint unconditionally).
+        assertEquals("", MetadataNodeResolver.yoNotFoundHint("Catalog.Products")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("", MetadataNodeResolver.yoNotFoundHint(null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveWithYoFallbackIsNullSafeAndEchoesInput()
+    {
+        // No configuration: neither form resolves; the result echoes the requested FQN and is
+        // NOT flagged as a fallback hit (the not-found message / log contract relies on that).
+        MetadataNodeResolver.ResolvedNode r =
+            MetadataNodeResolver.resolveExistingWithYoFallback(null, "Catalog.X"); //$NON-NLS-1$
+        assertNull(r.node);
+        assertEquals("Catalog.X", r.fqn); //$NON-NLS-1$
+        assertFalse(r.yoFallback);
+    }
 }

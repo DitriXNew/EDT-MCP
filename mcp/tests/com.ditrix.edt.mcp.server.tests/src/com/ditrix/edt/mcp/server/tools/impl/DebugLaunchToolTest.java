@@ -59,7 +59,13 @@ import com.google.gson.JsonParser;
  * {@code ProjectStateChecker}/launch-manager access. NOTE: these checks are
  * only reachable when {@code launchConfigurationName} is absent — supplying it
  * enters the by-name launch mode whose first statement touches the live launch
- * manager. Actual launching is covered by the E2E suite.
+ * manager. The headless E2E suite (test_debug_launch.py) covers only the
+ * sentinel/negative matrix; an ACTUAL launch needs a live workbench plus a
+ * running infobase and is not automated. The launch-path decision logic is
+ * therefore unit-covered through seams instead: handleExistingClientSession
+ * (restartIfRunning/alreadyRunning), runLaunchJobBody (background-Job body),
+ * runPreLaunchUpdateStep and performLaunch here, and the session
+ * detect/terminate helpers in LaunchLifecycleUtilsSessionTest.
  */
 public class DebugLaunchToolTest
 {
@@ -116,15 +122,18 @@ public class DebugLaunchToolTest
     @Test
     public void testRestartIfRunningDefaultsToFalse()
     {
-        // Default-false contract is reachable headlessly only through the
-        // project+application validation that runs BEFORE any launch-manager touch:
-        // omitting restartIfRunning must NOT change the required-arg behavior. The
-        // launch path itself (where false => alreadyRunning short-circuit) needs a
-        // live workbench and is covered E2E.
+        // Pin the ACTUAL default through the same extraction execute() uses
+        // (the extractRestartIfRunning seam): absent -> false, and an explicit
+        // "true" flips it — so this cannot pass against a hardcoded false. The
+        // downstream effect of false vs true (alreadyRunning short-circuit vs
+        // terminate+relaunch) is unit-covered by the handleExistingClientSession
+        // tests below.
+        assertFalse("absent restartIfRunning must default to false",
+            DebugLaunchTool.extractRestartIfRunning(new HashMap<>()));
         Map<String, String> params = new HashMap<>();
-        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
-        String result = new DebugLaunchTool().execute(params);
-        assertTrue(result.contains("applicationId is required")); //$NON-NLS-1$
+        params.put("restartIfRunning", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("explicit restartIfRunning=true must override the default",
+            DebugLaunchTool.extractRestartIfRunning(params));
     }
 
     @Test
@@ -149,8 +158,10 @@ public class DebugLaunchToolTest
     {
         // The launch is async: a fresh launch emits status:"launching" so the caller
         // knows to poll debug_status. This test only asserts the SCHEMA half of that
-        // contract — that the output schema advertises the field; it cannot verify the
-        // emitted result here (a real launch needs a live workbench, covered by E2E).
+        // contract — that the output schema advertises the field; the emitted result
+        // needs a real launch (live workbench + infobase) and is not automated. The
+        // closest headless coverage of the emission path is the runLaunchJobBody /
+        // performLaunch seam tests below (the dispatch that precedes the emission).
         // The coherence check below ties the metadata (schema + guide) together so the
         // promise can't silently drift in one place only.
         String schema = new DebugLaunchTool().getOutputSchema();
@@ -164,8 +175,9 @@ public class DebugLaunchToolTest
     {
         // Runtime-free coherence check: the async "launching" contract must be
         // declared consistently in BOTH the output schema and the guide, so neither
-        // can advertise it while the other forgets to. The actual result emission is
-        // verified by the E2E suite (needs a live workbench).
+        // can advertise it while the other forgets to. The actual result emission
+        // needs a real launch (live workbench + infobase) and is not automated; the
+        // dispatch it sits on is unit-covered by the runLaunchJobBody seam tests.
         DebugLaunchTool tool = new DebugLaunchTool();
         String schema = tool.getOutputSchema();
         String guide = tool.getGuide();
@@ -294,7 +306,8 @@ public class DebugLaunchToolTest
     // non-debug→debug restart) ON the SWT UI thread and froze the workbench. It now
     // schedules a background Job (mirroring EDT's DebugUIPlugin.launchInBackground) whose
     // body is the package-private seam runLaunchJobBody. Scheduling a real Job needs a
-    // live workbench (covered E2E); these headless tests exercise the seam directly:
+    // live workbench and is not automated (the headless E2E never reaches a real
+    // launch); the seam IS the coverage — these tests exercise it directly:
     // success → OK_STATUS, CoreException → its own status (logged, not thrown), any other
     // Throwable → an ERROR status (logged, not thrown — the Job must never die silently),
     // and in EVERY outcome the confirmer disarm in finally runs without breaking the chain

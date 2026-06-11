@@ -194,7 +194,7 @@ public final class FormElementWriter
         int rem; // index where the kind/name remainder begins
         if (p.length >= 6 && isFormToken(p[2]))
         {
-            formPath = p[0] + "." + p[1] + ".forms." + p[3]; //$NON-NLS-1$ //$NON-NLS-2$
+            formPath = formPathOf(p[0], p[1], p[3]);
             rem = 4;
         }
         else if (p.length >= 4 && "CommonForm".equalsIgnoreCase(MetadataTypeUtils.toEnglishSingular(p[0]))) //$NON-NLS-1$
@@ -218,6 +218,22 @@ public final class FormElementWriter
             return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1]);
         }
         return null;
+    }
+
+    /**
+     * Builds the canonical owned-form path {@code Type.Object.forms.FormName} — THE shape
+     * {@code FormStructureReader.resolveMdForm} / {@code MetadataPathResolver} expect. Single
+     * owner of the literal so the parse helpers here and external callers (e.g. the delete
+     * tool's form-object branch) cannot drift apart on the {@code .forms.} segment.
+     *
+     * @param ownerType the owner's TYPE token (e.g. {@code Catalog})
+     * @param ownerName the owner object's name
+     * @param formName the owned form's name
+     * @return the {@code Type.Object.forms.FormName} path
+     */
+    public static String formPathOf(String ownerType, String ownerName, String formName)
+    {
+        return ownerType + "." + ownerName + ".forms." + formName; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -254,7 +270,7 @@ public final class FormElementWriter
         String[] p = normFqn.split("\\."); //$NON-NLS-1$
         if (p.length == 4 && isFormToken(p[2]))
         {
-            return p[0] + "." + p[1] + ".forms." + p[3]; //$NON-NLS-1$ //$NON-NLS-2$
+            return formPathOf(p[0], p[1], p[3]);
         }
         if (p.length == 2 && "CommonForm".equalsIgnoreCase(MetadataTypeUtils.toEnglishSingular(p[0]))) //$NON-NLS-1$
         {

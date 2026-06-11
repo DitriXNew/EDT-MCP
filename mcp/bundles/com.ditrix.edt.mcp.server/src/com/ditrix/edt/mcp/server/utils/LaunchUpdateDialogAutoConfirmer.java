@@ -87,6 +87,21 @@ import com.ditrix.edt.mcp.server.Activator;
  *       a display (see {@link #safeDisplay()}).</li>
  * </ul>
  *
+ * <h2>Residual risk (documented, accepted)</h2>
+ * The armed window is not instantaneous: the launch runs as a background Job, so
+ * a matcher can stay armed for the MINUTES a slow launch (e.g. a standalone-server
+ * mode-switch restart) takes. If a user MANUALLY starts another launch during that
+ * window and it raises the same "Application update" (or code-1003) modal, the
+ * filter auto-presses it too — a title-only match carries no information about
+ * WHICH launch opened the shell, so the user's dialog is indistinguishable from
+ * ours. Title matching is still the best available discriminator: the modal is
+ * raised deep inside EDT's launch delegate ({@code IApplicationUiSupport}) with no
+ * public hook, the shell carries no launch-identifying data (no custom widget id,
+ * no owner-launch reference), and matching any wider (e.g. every modal of the
+ * owning plug-in) would auto-press unrelated dialogs. The pressed buttons are the
+ * conservative choices ("Update then run" / "Keep existing and start new"), so a
+ * mis-attributed press performs a safe action, never a destructive one.
+ *
  * <h2>Locale</h2>
  * The modal title is the localized {@code ApplicationUiSupport_Application_update}
  * string. EDT ships exactly two NL variants of the {@code com.e1c.g5.dt.applications.ui}

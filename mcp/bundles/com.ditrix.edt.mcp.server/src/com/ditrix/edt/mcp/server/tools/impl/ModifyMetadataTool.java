@@ -103,9 +103,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new " //$NON-NLS-1$
                 + "value; 'language' is the code for a synonym (default: config default).", true) //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
-                "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in synonym / comment / title and any " //$NON-NLS-1$
-                + "other localized-string or free-text value being set (default true). Matches the 1C " //$NON-NLS-1$
-                + "standard mdo-ru-name-unallowed-letter. Set false to keep 'ё' exactly as supplied.") //$NON-NLS-1$
+                "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
+                + "title) and in the 'comment' property (default true). Matches the 1C standard " //$NON-NLS-1$
+                + "mdo-ru-name-unallowed-letter. Other free-text strings can be identifier-like (e.g. " //$NON-NLS-1$
+                + "XDTOPackage.namespace is a URI) and always keep the supplied value. Set false to " //$NON-NLS-1$
+                + "keep 'ё' exactly as supplied everywhere.") //$NON-NLS-1$
             .build();
     }
 
@@ -168,11 +170,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return modifyFormMember(ctx, normFqn, formRef, properties, normReport);
         }
 
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
+        // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
+        // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
+        // would miss the stored name — the resolver retries the normalized FQN.
+        MetadataNodeResolver.ResolvedNode resolved =
+            MetadataNodeResolver.resolveExistingWithYoFallback(config, normFqn);
+        MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null || node.object == null)
         {
             return ToolResult.error("Node not found: " + fqn + ". Use 'Type.Name' for a top object or " //$NON-NLS-1$ //$NON-NLS-2$
-                + "'Type.Name.Kind.Name' for a member. Use get_metadata_objects to find an FQN.").toJson(); //$NON-NLS-1$
+                + "'Type.Name.Kind.Name' for a member. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
+                + MetadataNodeResolver.yoNotFoundHint(normFqn)).toJson();
+        }
+        if (resolved.yoFallback)
+        {
+            Activator.logInfo("modify_metadata: '" + normFqn //$NON-NLS-1$
+                + "' did not resolve exactly; proceeding with its yo-normalized form '" //$NON-NLS-1$
+                + resolved.fqn + "'"); //$NON-NLS-1$
+            normFqn = resolved.fqn;
         }
         MdObject target = node.object;
 
@@ -861,12 +876,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     return requireValueError(name);
                 }
-                String language = asString(prop.get("language")); //$NON-NLS-1$
-                String code = MetadataLanguageUtils.resolveLanguageCode(config, language);
-                if (code == null)
+                String code;
+                try
                 {
-                    return ToolResult.error("Cannot determine a language code for '" + name //$NON-NLS-1$
-                        + "'. Specify a 'language' code (e.g. 'en' or 'ru').").toJson(); //$NON-NLS-1$
+                    code = MetadataLanguageUtils.resolveSynonymLanguage(config, value,
+                        asString(prop.get("language")), "'" + name + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                }
+                catch (IllegalArgumentException e)
+                {
+                    return ToolResult.error(e.getMessage()).toJson();
                 }
                 out.add(PreparedChange.localized(info.feature, code, normReport.apply(name, value)));
                 return null;
@@ -982,9 +1000,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     return requireValueError(name);
                 }
-                out.add(PreparedChange.scalar(info.feature, normReport.apply(name, value)));
+                out.add(PreparedChange.scalar(info.feature,
+                    normalizeStringPropertyValue(name, value, normReport)));
                 return null;
         }
+    }
+
+    /**
+     * Applies the yo-to-ye normalization to a free STRING property value with a deliberately
+     * NARROW scope: only the {@code comment} property is normalized (it is presentation text
+     * checked by the same EDT validator, 1C standard #std474, as names and synonyms). Every
+     * other free STRING feature can be identifier-like — e.g. {@code XDTOPackage.namespace}
+     * is a URI — where a silent yo-to-ye rewrite would corrupt the value, so the caller's
+     * text is kept verbatim. LOCALIZED_STRING values are normalized separately (see the
+     * LOCALIZED_STRING branch of {@code prepare}).
+     *
+     * @param name the property name as supplied by the caller
+     * @param value the non-empty property value
+     * @param normReport the normalization report (honors the {@code normalizeYo} toggle)
+     * @return the value to assign — normalized for {@code comment}, verbatim otherwise
+     */
+    static String normalizeStringPropertyValue(String name, String value,
+        MdNameNormalizer.Report normReport)
+    {
+        return "comment".equalsIgnoreCase(name) ? normReport.apply(name, value) : value; //$NON-NLS-1$
     }
 
     /** Resolves a reference-target FQN to its metadata object (a top object), or {@code null}. */
