@@ -108,7 +108,8 @@ public final class DebugSessionRegistry
         Activator.logInfo("DebugSessionRegistry: event listener registered"); //$NON-NLS-1$
     }
 
-    private void handleEvent(DebugEvent ev)
+    /** Package-visible for headless unit testing (a {@link DebugEvent} is a plain DTO). */
+    void handleEvent(DebugEvent ev)
     {
         Object source = ev.getSource();
         switch (ev.getKind())
@@ -123,6 +124,17 @@ public final class DebugSessionRegistry
                 if (source instanceof IThread)
                 {
                     onResumeOrTerminate(findApplicationIdFor((IThread) source));
+                    // Launch-attribute lookup above can NEVER produce a minted
+                    // ServerApplication.<app> key, so snapshots injected under such
+                    // keys survived their own resume — purge them by
+                    // reverse thread lookup. Evaluation resumes are skipped: the
+                    // thread returns to the very same suspend location, and for a
+                    // minted key no follow-up SUSPEND event would re-create the
+                    // snapshot it would destroy.
+                    if (!ev.isEvaluation())
+                    {
+                        purgeByEventSource(source, true);
+                    }
                 }
                 break;
             case DebugEvent.TERMINATE:
@@ -138,10 +150,101 @@ public final class DebugSessionRegistry
                 {
                     onResumeOrTerminate(findApplicationIdFor((ILaunch) source));
                 }
+                // Same minted-key blind spot as RESUME — purge whatever
+                // the terminated thread/target/launch still owns, unconditionally.
+                purgeByEventSource(source, false);
                 break;
             default:
                 break;
         }
+    }
+
+    /**
+     * Purges every cached application whose REGISTERED thread matches the given
+     * debug-event source — reverse lookup through the {@code threadAppId}/
+     * {@code threadsById} maps (every snapshot's thread is registered there, both by
+     * {@link #onSuspend} and {@link #injectSuspend}). This is the only event-driven
+     * cleanup path for snapshots keyed by ids the launch-attribute lookup cannot
+     * produce — i.e. minted {@code ServerApplication.<app>} keys.
+     *
+     * <p>A thread matches when it IS the source, or its debug target / launch is the
+     * source (TERMINATE events may carry any of the three).
+     *
+     * <p>{@code onlyIfNotSuspended} guards RESUME events against asynchronous event
+     * dispatch: a LATE resume event — dispatched after a poll-based tool (step /
+     * wait_for_break) already observed the NEXT suspend and injected a fresh
+     * snapshot for the same thread — must not destroy that fresh snapshot. If the
+     * source thread still reports suspended, the resume is stale news; skip.
+     *
+     * <p>Package-visible for headless unit testing.
+     *
+     * @param source the debug-event source ({@link IThread}, {@link IDebugTarget}
+     *     or {@link ILaunch}; anything else is ignored)
+     * @param onlyIfNotSuspended when {@code true} and the source is a thread that
+     *     still reports suspended, the purge is skipped (RESUME semantics)
+     */
+    synchronized void purgeByEventSource(Object source, boolean onlyIfNotSuspended)
+    {
+        if (source == null)
+        {
+            return;
+        }
+        if (onlyIfNotSuspended && source instanceof IThread)
+        {
+            try
+            {
+                if (((IThread) source).isSuspended())
+                {
+                    return; // late event — the thread is already suspended again
+                }
+            }
+            catch (Exception ex)
+            {
+                // state unknown — fall through and purge (resume was reported)
+            }
+        }
+        List<String> stale = new ArrayList<>();
+        for (Map.Entry<Long, String> entry : threadAppId.entrySet())
+        {
+            IThread thread = threadsById.get(entry.getKey());
+            if (thread != null && matchesEventSource(thread, source) && !stale.contains(entry.getValue()))
+            {
+                stale.add(entry.getValue());
+            }
+        }
+        for (String appId : stale)
+        {
+            forgetApplication(appId);
+        }
+    }
+
+    /**
+     * @return {@code true} when the registered thread belongs to the debug-event
+     *     source: it IS the source thread, or its debug target / launch is the
+     *     source. Identity comparison only; best-effort, never throws.
+     */
+    private static boolean matchesEventSource(IThread thread, Object source)
+    {
+        if (thread == source)
+        {
+            return true;
+        }
+        try
+        {
+            if (source instanceof IDebugTarget)
+            {
+                return thread.getDebugTarget() == source;
+            }
+            if (source instanceof ILaunch)
+            {
+                return thread.getLaunch() == source;
+            }
+        }
+        catch (Exception ex)
+        {
+            // best-effort
+        }
+        return false;
     }
 
     private synchronized void onSuspend(IThread thread)
@@ -161,6 +264,23 @@ public final class DebugSessionRegistry
     }
 
     private synchronized void onResumeOrTerminate(String appId)
+    {
+        forgetApplication(appId);
+    }
+
+    /**
+     * Purges every cached entry the registry holds for the given applicationId —
+     * the suspend snapshot plus all thread/frame references owned by that app —
+     * and wakes any waiters. This is exactly the cleanup a RESUME/TERMINATE debug
+     * event performs, exposed so {@code terminate_launch} can clear the registry
+     * for a launch it removes from {@link ILaunchManager} even when no TERMINATE
+     * event ever fired (the stale/orphaned-launch case).
+     *
+     * <p>No-op for a {@code null} appId or an appId with no cached state.
+     *
+     * @param appId the applicationId (real or synthetic) to forget
+     */
+    public synchronized void forgetApplication(String appId)
     {
         if (appId == null)
         {
@@ -281,6 +401,22 @@ public final class DebugSessionRegistry
     public IThread getThread(long threadId)
     {
         return threadsById.get(threadId);
+    }
+
+    /**
+     * Returns the applicationId under which the given stable threadId was
+     * registered (by {@link #injectSuspend} or the SUSPEND event listener) —
+     * i.e. the canonical key the thread's suspend snapshot lives under. This is
+     * the authoritative key for tools that operate by {@code threadId} (step,
+     * resume): re-deriving the key from the launch/server views could mint a
+     * DIFFERENT id form for the same session and clear/inject the wrong snapshot.
+     *
+     * @param threadId stable thread id from a snapshot response
+     * @return the owning applicationId, or {@code null} if unknown/stale
+     */
+    public String getThreadApplicationId(long threadId)
+    {
+        return threadAppId.get(threadId);
     }
 
     public IStackFrame getFrame(long frameRef)

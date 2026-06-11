@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 
@@ -47,9 +48,11 @@ public class DebugStatusTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Report active debug launches: applicationId (real or synthetic 'attach:<name>'), " //$NON-NLS-1$
-            + "launch configuration name/type, mode (debug/run), whether the target is currently " //$NON-NLS-1$
-            + "suspended, thread count, and the line of the top suspended frame. " //$NON-NLS-1$
+        return "Report active debug sessions: applicationId (real or synthetic 'attach:<name>' / " //$NON-NLS-1$
+            + "'launch:<name>'), launch configuration name/type, mode (debug/run), whether the " //$NON-NLS-1$
+            + "target is currently suspended, thread count, and the line of the top suspended frame. " //$NON-NLS-1$
+            + "Also reports debugServerTargets: 1C debug-server sessions (server-side suspends, " //$NON-NLS-1$
+            + "EDT-UI-started 'Debug As') addressable as 'ServerApplication.<app>'. " //$NON-NLS-1$
             + "Optionally filter by applicationId."; //$NON-NLS-1$
     }
 
@@ -69,6 +72,9 @@ public class DebugStatusTool implements IMcpTool
             .objectArrayProperty("launches", "Active debug launches with state and frame info") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("count", "Number of active debug launches returned") //$NON-NLS-1$ //$NON-NLS-2$
             .objectProperty("registry", "Debug session registry snapshot counters") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("debugServerTargets", //$NON-NLS-1$
+                "1C debug-server targets (server-side / EDT-UI sessions) with real suspend state") //$NON-NLS-1$
+            .integerProperty("debugServerTargetCount", "Number of debug-server targets returned") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -189,11 +195,14 @@ public class DebugStatusTool implements IMcpTool
             }
 
             Map<String, Object> registryInfo = DebugSessionRegistry.get().snapshotInfo();
+            List<Map<String, Object>> serverTargets = listDebugServerTargets(filterAppId);
 
             return ToolResult.success()
                 .put("launches", launches) //$NON-NLS-1$
                 .put("count", launches.size()) //$NON-NLS-1$
                 .put("registry", registryInfo) //$NON-NLS-1$
+                .put("debugServerTargets", serverTargets) //$NON-NLS-1$
+                .put("debugServerTargetCount", serverTargets.size()) //$NON-NLS-1$
                 .toJson();
         }
         catch (Exception e)
@@ -201,5 +210,41 @@ public class DebugStatusTool implements IMcpTool
             Activator.logError("Error in debug_status", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Enumerates the debug-server targets EDT tracks via
+     * {@code IRuntimeDebugClientTargetManager.listDebugTargets()} and enriches each
+     * with its REAL suspend state (walking the target's threads through the Eclipse
+     * {@link IThread} interface — the 1C target implements
+     * {@code org.eclipse.debug.core.model.IDebugTarget}). Surfaces server-side
+     * suspends from {@code debug_yaxunit_tests} and EDT-UI-started "Debug As"
+     * sessions that the Eclipse {@code ILaunchManager} view misses, and exposes a
+     * stable, addressable {@code applicationId} so the other debug tools can resolve
+     * them. Fully guarded — never throws (empty when the manager service is absent).
+     *
+     * @param filterAppId optional applicationId filter (matches the minted
+     *     {@code ServerApplication.<app>} id or the bare application name)
+     * @return list of server-target descriptors (possibly empty)
+     */
+    private static List<Map<String, Object>> listDebugServerTargets(String filterAppId)
+    {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (DebugServerTargetSupport.ServerTarget st : DebugServerTargetSupport.listServerTargets())
+        {
+            if (filterAppId != null && !filterAppId.isEmpty())
+            {
+                boolean matches = filterAppId.equals(st.applicationId)
+                    || filterAppId.equals(st.application)
+                    || (st.applicationId != null
+                        && st.applicationId.equals(DebugServerTargetSupport.SERVER_APP_ID_PREFIX + filterAppId));
+                if (!matches)
+                {
+                    continue;
+                }
+            }
+            out.add(DebugServerTargetSupport.describe(st));
+        }
+        return out;
     }
 }

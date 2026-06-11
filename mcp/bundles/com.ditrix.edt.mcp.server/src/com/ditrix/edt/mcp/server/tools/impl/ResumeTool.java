@@ -17,6 +17,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.DebugTargetResolver;
 
 /**
  * Resumes a suspended debug thread (or, if {@code applicationId} is given,
@@ -41,8 +42,12 @@ public class ResumeTool implements IMcpTool
     public String getDescription()
     {
         return "Resume a suspended debug thread or all threads of a debug target. " //$NON-NLS-1$
-            + "Pass threadId (from wait_for_break) or applicationId. " //$NON-NLS-1$
-            + "With no arguments, resumes the single active debug launch if exactly one exists."; //$NON-NLS-1$
+            + "Pass threadId (from wait_for_break) or applicationId. applicationId accepts ANY id " //$NON-NLS-1$
+            + "form for the session: the real id, 'attach:<name>', 'launch:<name>', or " //$NON-NLS-1$
+            + "'ServerApplication.<app>'. For a server-side suspend, resume targets the suspended " //$NON-NLS-1$
+            + "thread directly. With no arguments, resumes the single active debug session (launch " //$NON-NLS-1$
+            + "or server target) if exactly one exists. NOTE: if resume of a server-side suspend " //$NON-NLS-1$
+            + "does not take effect, the breakpoint can also be released from the EDT UI."; //$NON-NLS-1$
     }
 
     @Override
@@ -51,7 +56,9 @@ public class ResumeTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .integerProperty("threadId", "Thread id from wait_for_break") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", //$NON-NLS-1$
-                "Application id (real or 'attach:<configName>' — resumes all threads of this target)") //$NON-NLS-1$
+                "Application id (real, 'attach:<configName>', 'launch:<configName>', or " //$NON-NLS-1$
+                    + "'ServerApplication.<app>'). Resumes this session's target/suspended thread. " //$NON-NLS-1$
+                    + "Optional if exactly one debug session is active.") //$NON-NLS-1$
             .build();
     }
 
@@ -63,7 +70,8 @@ public class ResumeTool implements IMcpTool
             .booleanProperty("resumed", "Whether the thread or target was resumed") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("scope", "Resume scope: 'thread' or 'target'") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", "Application id of the resumed debug target") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("autoResolved", "Whether the lone active launch was auto-resolved") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("autoResolved", "Whether the lone active session was auto-resolved") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("serverTarget", "True if resolved via the 1C debug-server target bridge") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -96,59 +104,98 @@ public class ResumeTool implements IMcpTool
                     return ToolResult.error("thread cannot resume (state: " //$NON-NLS-1$
                             + (thread.isSuspended() ? "suspended" : "running") + ")").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 }
+                // Canonical snapshot key for this thread's session: the registry's
+                // thread→appId mapping (set when the snapshot was created), falling
+                // back to the launch-attribute id. Computed BEFORE resuming — the
+                // async RESUME event may purge the mapping.
+                String threadAppId = registry.getThreadApplicationId(threadId);
+                if (threadAppId == null)
+                {
+                    threadAppId = DebugSessionRegistry.findApplicationIdFor(thread);
+                }
                 thread.resume();
+                // Drop the now-stale pre-resume snapshot (this branch
+                // previously resumed WITHOUT any clearSnapshot, so the snapshot
+                // outlived its suspend and the next wait_for_break returned it as a
+                // fresh hit). clearSnapshot(null) is a safe no-op.
+                registry.clearSnapshot(threadAppId);
                 return ToolResult.success().put("resumed", true).put("scope", "thread").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
 
-            String effectiveAppId = (applicationId != null && !applicationId.isEmpty())
-                ? applicationId
-                : DebugSessionRegistry.findLoneActiveApplicationId();
-
-            if (effectiveAppId == null)
+            // Unified resolution: accept ANY id form for the same session —
+            // real ATTR_APPLICATION_ID, attach:<name>, launch:<name>,
+            // ServerApplication.<app>, the bare app name, the debug server URL.
+            // A blank id auto-resolves the single active session (launch or server).
+            DebugTargetResolver.Resolution res = DebugTargetResolver.resolve(applicationId);
+            if (res == null)
             {
+                if (applicationId != null && !applicationId.isEmpty())
+                {
+                    return ToolResult.error("no active debug target for applicationId: " + applicationId).toJson(); //$NON-NLS-1$
+                }
                 return ToolResult.error("Provide threadId or applicationId — no single active debug " //$NON-NLS-1$
-                    + "launch available for auto-resolution. Use debug_status to list active launches.").toJson(); //$NON-NLS-1$
+                    + "session available for auto-resolution. Use debug_status to list active sessions.").toJson(); //$NON-NLS-1$
             }
 
-            IDebugTarget target = DebugSessionRegistry.findActiveTarget(effectiveAppId);
-            if (target == null)
-            {
-                return ToolResult.error("no active debug target for applicationId: " + effectiveAppId).toJson(); //$NON-NLS-1$
-            }
-            if (target.canResume())
+            IDebugTarget target = res.target;
+            String effectiveAppId = res.canonicalId;
+
+            // Prefer resuming at the TARGET level when it accepts it (thin-client and
+            // launch targets do). A 1C debug-server target, however, reports
+            // canResume()==false at the target level even while a thread is genuinely
+            // suspended on the breakpoint — so fall back to resuming each suspended
+            // thread (IRuntimeDebugTargetThread implements ISuspendResume), which is the
+            // SAME thread wait_for_break suspends on.
+            boolean resumed = false;
+            String scope = null;
+            if (!target.isTerminated() && target.canResume())
             {
                 target.resume();
+                resumed = true;
+                scope = "target"; //$NON-NLS-1$
             }
             else
             {
-                // 1C debug targets resume at the THREAD granularity: the target itself
-                // can report canResume()==false while one of its threads is suspended at
-                // a breakpoint. Fall back to resuming each suspended thread so the
-                // documented no-argument / applicationId convenience actually releases a
-                // 1C session instead of dead-ending at "debug target cannot resume".
-                int resumed = 0;
+                int count = 0;
                 for (IThread t : target.getThreads())
                 {
-                    if (t.canResume())
+                    if (t != null && t.isSuspended() && t.canResume())
                     {
                         t.resume();
-                        resumed++;
+                        count++;
                     }
                 }
-                if (resumed == 0)
+                if (count > 0)
                 {
-                    return ToolResult.error("debug target cannot resume (no suspended thread to resume)").toJson(); //$NON-NLS-1$
+                    resumed = true;
+                    scope = "thread"; //$NON-NLS-1$
                 }
             }
-            ToolResult res = ToolResult.success()
-                .put("resumed", true) //$NON-NLS-1$
-                .put("scope", "target") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("applicationId", effectiveAppId); //$NON-NLS-1$
-            if (applicationId == null || applicationId.isEmpty())
+
+            if (!resumed)
             {
-                res.put("autoResolved", true); //$NON-NLS-1$
+                return ToolResult.error(res.isServerTarget()
+                    ? "server debug target cannot resume (no suspended thread to resume). " //$NON-NLS-1$
+                        + "If a breakpoint is still held, it can also be released from the EDT UI."
+                    : "debug target cannot resume (no suspended thread to resume)").toJson(); //$NON-NLS-1$
             }
-            return res.toJson();
+
+            // Drop the cached snapshot so a subsequent wait_for_break does not return
+            // the now-stale pre-resume frame.
+            registry.clearSnapshot(effectiveAppId);
+            ToolResult out = ToolResult.success()
+                .put("resumed", true) //$NON-NLS-1$
+                .put("scope", scope) //$NON-NLS-1$
+                .put("applicationId", effectiveAppId); //$NON-NLS-1$
+            if (res.isServerTarget())
+            {
+                out.put("serverTarget", true); //$NON-NLS-1$
+            }
+            if (res.autoResolved)
+            {
+                out.put("autoResolved", true); //$NON-NLS-1$
+            }
+            return out.toJson();
         }
         catch (Exception e)
         {

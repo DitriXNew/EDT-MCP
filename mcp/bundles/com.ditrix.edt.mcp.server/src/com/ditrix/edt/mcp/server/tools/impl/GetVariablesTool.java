@@ -18,7 +18,9 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.DebugTargetResolver;
 import com.ditrix.edt.mcp.server.utils.VariableSerializer;
 
 /**
@@ -119,8 +121,21 @@ public class GetVariablesTool implements IMcpTool
                 DebugSessionRegistry.SuspendSnapshot snap = appId != null ? registry.getSnapshot(appId) : null;
                 if (snap == null)
                 {
+                    // Also try the lone debug-server target (debug_yaxunit_tests / EDT-UI
+                    // server-side suspend), whose snapshot wait_for_break injected — under
+                    // the CANONICAL key (owning-launch id when one exists, minted
+                    // ServerApplication.<app> id else), not the raw minted id.
+                    DebugServerTargetSupport.ServerTarget lone =
+                        DebugServerTargetSupport.findLoneServerTarget();
+                    if (lone != null)
+                    {
+                        snap = registry.getSnapshot(DebugTargetResolver.canonicalIdFor(lone.target, lone));
+                    }
+                }
+                if (snap == null)
+                {
                     return ToolResult.error("Provide frameRef or threadId — no single suspended debug " //$NON-NLS-1$
-                        + "launch available for auto-resolution. Call wait_for_break first.").toJson(); //$NON-NLS-1$
+                        + "session available for auto-resolution. Call wait_for_break first.").toJson(); //$NON-NLS-1$
                 }
                 IStackFrame[] frames = snap.thread.getStackFrames();
                 if (frames.length == 0)

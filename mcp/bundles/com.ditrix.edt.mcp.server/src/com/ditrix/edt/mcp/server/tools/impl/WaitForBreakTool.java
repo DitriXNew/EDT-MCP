@@ -23,7 +23,10 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.DebugTargetResolver;
+import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 
 /**
  * Blocks until a SUSPEND event is observed for the given application id, then
@@ -57,8 +60,10 @@ public class WaitForBreakTool implements IMcpTool
     {
         return "Wait for a debug suspend event (e.g. breakpoint hit) on the given application. " //$NON-NLS-1$
             + "Returns the suspended thread/frame snapshot, or {hit:false} on timeout. " //$NON-NLS-1$
-            + "applicationId may be real or synthetic 'attach:<configName>'. " //$NON-NLS-1$
-            + "If omitted and exactly one EDT debug launch is active, that launch is used. " //$NON-NLS-1$
+            + "applicationId accepts ANY id form for the session: the real id, 'attach:<name>', " //$NON-NLS-1$
+            + "'launch:<name>' (EDT-UI-started session), or 'ServerApplication.<app>' (server-side " //$NON-NLS-1$
+            + "suspend from debug_yaxunit_tests). " //$NON-NLS-1$
+            + "If omitted and exactly one EDT debug session is active, that session is used. " //$NON-NLS-1$
             + "Does NOT terminate the launch on timeout — call again to keep waiting."; //$NON-NLS-1$
     }
 
@@ -67,8 +72,9 @@ public class WaitForBreakTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("applicationId", //$NON-NLS-1$
-                "Application id of the running debug session (real or 'attach:<configName>'). " //$NON-NLS-1$
-                    + "Optional if exactly one debug launch is active.") //$NON-NLS-1$
+                "Application id of the running debug session (real, 'attach:<configName>', " //$NON-NLS-1$
+                    + "'launch:<configName>', or 'ServerApplication.<app>'). " //$NON-NLS-1$
+                    + "Optional if exactly one debug session is active.") //$NON-NLS-1$
             .integerProperty("timeout", "Wait window in seconds (default: 60)") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -82,6 +88,7 @@ public class WaitForBreakTool implements IMcpTool
             .stringProperty("reason", "Reason when no suspend occurred (e.g. 'timeout')") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", "Application id of the debug session waited on") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("autoResolved", "True if applicationId was auto-resolved") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("serverTarget", "True if resolved via the 1C debug-server target bridge") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("threadId", "Id of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("threadName", "Name of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("frames", "Stack frames of the suspended thread (frameIndex, frameRef, name, line, modulePath, project)") //$NON-NLS-1$ //$NON-NLS-2$
@@ -104,16 +111,37 @@ public class WaitForBreakTool implements IMcpTool
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         registry.ensureListenerRegistered();
 
+        // Unified resolution: accept ANY id form for the session (real,
+        // attach:<name>, launch:<name>, ServerApplication.<app>, the bare app name,
+        // the debug server URL); a blank id auto-resolves the single active session.
         boolean autoResolved = false;
-        if (applicationId == null || applicationId.isEmpty())
+        DebugServerTargetSupport.ServerTarget serverTarget = null;
+        DebugTargetResolver.Resolution res = DebugTargetResolver.resolve(applicationId);
+        if (res != null)
         {
-            applicationId = DebugSessionRegistry.findLoneActiveApplicationId();
-            if (applicationId == null)
-            {
-                return ToolResult.error("applicationId is required — no single active debug launch " //$NON-NLS-1$
-                    + "available for auto-resolution. Use debug_status to list active launches.").toJson(); //$NON-NLS-1$
-            }
-            autoResolved = true;
+            // Use the canonical id so every follow-up tool addresses the same session.
+            applicationId = res.canonicalId;
+            autoResolved = res.autoResolved;
+            serverTarget = res.serverTarget;
+        }
+        else if (applicationId == null || applicationId.isEmpty())
+        {
+            return ToolResult.error("applicationId is required — no single active debug session " //$NON-NLS-1$
+                + "available for auto-resolution. Use debug_status to list active sessions.").toJson(); //$NON-NLS-1$
+        }
+        // If res is null but an explicit id was given, fall through with that id: the
+        // session may have suspended pre-listener; the launch-based wait below still
+        // tries (findActiveTarget) and reports a clean timeout otherwise.
+
+        // SERVER-TARGET PATH: a breakpoint hit in code that runs on the 1C server
+        // (the common debug_yaxunit_tests case, or an EDT-UI-started session) suspends
+        // a 1C-native debug-server target, NOT an Eclipse ILaunch thread. This path
+        // polls the live target (its SUSPEND events do not reliably key into the
+        // launch-based registry) and injects the suspended thread so the rest of the
+        // snapshot machinery (frames/variables/eval/step) works unchanged.
+        if (serverTarget != null && !registry.hasSnapshot(applicationId))
+        {
+            return waitOnServerTarget(registry, serverTarget, applicationId, timeout, autoResolved);
         }
 
         // Proactively scan live targets for threads already suspended before the
@@ -199,6 +227,54 @@ public class WaitForBreakTool implements IMcpTool
         catch (Exception ex)
         {
             // best effort — fall through to normal wait
+        }
+    }
+
+    /**
+     * Waits for a suspend on a 1C debug-server target by polling its live threads
+     * (via the Eclipse {@link IThread} interface — the 1C target implements the
+     * standard debug model). On a suspend, injects the suspended thread into the
+     * registry under {@code applicationId} so the shared snapshot response — and
+     * every follow-up tool — addresses it exactly like a thin-client thread.
+     */
+    private static String waitOnServerTarget(DebugSessionRegistry registry,
+        DebugServerTargetSupport.ServerTarget serverTarget, String applicationId, int timeout,
+        boolean autoResolved)
+    {
+        try
+        {
+            IThread suspended = DebugServerTargetSupport.pollForSuspendedThread(
+                serverTarget.target, timeout * 1000L, LaunchConfigUtils.LAUNCH_POLL_INTERVAL_MS);
+            if (suspended == null)
+            {
+                ToolResult r = ToolResult.success()
+                    .put("hit", false) //$NON-NLS-1$
+                    .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put("applicationId", applicationId) //$NON-NLS-1$
+                    .put("serverTarget", true); //$NON-NLS-1$
+                if (autoResolved)
+                {
+                    r.put("autoResolved", true); //$NON-NLS-1$
+                }
+                return r.toJson();
+            }
+            registry.injectSuspend(applicationId, suspended);
+            DebugSessionRegistry.SuspendSnapshot snapshot = registry.getSnapshot(applicationId);
+            if (snapshot == null)
+            {
+                return ToolResult.error("server target suspended but snapshot registration failed").toJson(); //$NON-NLS-1$
+            }
+            return buildSnapshotResponse(snapshot, registry, applicationId, autoResolved);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return ToolResult.error("Interrupted while waiting for break").toJson(); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error in wait_for_break (server target)", e); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
 
