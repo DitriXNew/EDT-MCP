@@ -145,18 +145,14 @@ public final class MetadataNodeResolver
     /**
      * Builds a string from Unicode code points. Used for the Russian kind tokens so the source
      * stays pure ASCII (encoding-independent) rather than carrying raw Cyrillic literals.
+     * Delegates to the shared {@link MetadataLanguageUtils#cp}.
      *
      * @param codePoints the BMP code points of the token characters
      * @return the assembled token string
      */
     private static String cp(int... codePoints)
     {
-        StringBuilder sb = new StringBuilder(codePoints.length);
-        for (int c : codePoints)
-        {
-            sb.append((char)c);
-        }
-        return sb.toString();
+        return MetadataLanguageUtils.cp(codePoints);
     }
 
     private MetadataNodeResolver()

@@ -123,4 +123,24 @@ public final class MetadataLanguageUtils
         }
         return ""; //$NON-NLS-1$
     }
+
+    /**
+     * Builds a string from BMP code points. The canonical home of the helper used for the Russian
+     * (bilingual) tokens across the resolvers / writers ({@code MetadataNodeResolver},
+     * {@code FormElementWriter}, {@code ModifyMetadataTool}), so those sources stay pure ASCII
+     * (encoding-independent under the non-UTF-8 Tycho build) instead of carrying raw Cyrillic
+     * literals.
+     *
+     * @param codePoints the BMP code points of the token characters
+     * @return the assembled token string
+     */
+    public static String cp(int... codePoints)
+    {
+        StringBuilder sb = new StringBuilder(codePoints.length);
+        for (int c : codePoints)
+        {
+            sb.append((char)c);
+        }
+        return sb.toString();
+    }
 }

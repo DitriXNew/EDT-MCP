@@ -70,6 +70,41 @@ public class MetadataPathResolverTest
             MetadataPathResolver.resolveFormFilePath("Catalog.Products.FORMS.ItemForm")); //$NON-NLS-1$
     }
 
+    // ==================== form-token parity (shared FormElementWriter.isFormToken) ====================
+
+    @Test
+    public void testSingularFormTokenResolvesSamePathAsPlural()
+    {
+        // create_metadata accepts 'Catalog.X.Form.Y' (singular) - the screenshot / layout-snapshot
+        // resolver must accept the SAME token set, so a just-created form is addressable by the same
+        // formPath. Singular and plural resolve to the identical on-disk path.
+        assertEquals(MetadataPathResolver.resolveFormFilePath("Catalog.Products.Forms.ItemForm"), //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFilePath("Catalog.Products.Form.ItemForm")); //$NON-NLS-1$
+        assertEquals("src/Catalogs/Products/Forms/ItemForm/Form.form", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFilePath("Catalog.Products.Form.ItemForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRussianFormTokensResolveSamePath()
+    {
+        // Форма (singular) / Формы (plural) as the form segment resolve to the same path the English
+        // tokens do - one shared predicate, no divergence between create and read tooling.
+        assertEquals("src/Catalogs/Products/Forms/ItemForm/Form.form", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFilePath(
+                "Catalog.Products.\u0424\u043E\u0440\u043C\u0430.ItemForm")); // Catalog.Products.Форма.ItemForm
+        assertEquals("src/Catalogs/Products/Forms/ItemForm/Form.form", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFilePath(
+                "Catalog.Products.\u0424\u043E\u0440\u043C\u044B.ItemForm")); // Catalog.Products.Формы.ItemForm
+    }
+
+    @Test
+    public void testFormFolderResolvesForSingularFormToken()
+    {
+        // The folder variant (used by the orphan-folder cleanup) inherits the same token set.
+        assertEquals("src/Catalogs/Products/Forms/ItemForm", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFolderPath("Catalog.Products.Form.ItemForm")); //$NON-NLS-1$
+    }
+
     // ==================== resolveFormFilePath -- null/unresolvable ====================
 
     @Test
@@ -114,6 +149,62 @@ public class MetadataPathResolverTest
     {
         // 2 parts whose type token resolves to a directory other than CommonForms.
         assertNull(MetadataPathResolver.resolveFormFilePath("Catalog.Products")); //$NON-NLS-1$
+    }
+
+    // ==================== resolveFormFolderPath (orphan form-folder removal) ====================
+
+    @Test
+    public void testFormFolderEnglishCatalog()
+    {
+        // The folder the form-object delete must physically remove: the Form.form file's parent
+        // directory (src/<TypeDir>/<Owner>/Forms/<FormName>), Catalog -> Catalogs.
+        assertEquals("src/Catalogs/Products/Forms/ItemForm", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFolderPath("Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormFolderDocumentType()
+    {
+        // A non-Catalog owner type maps to its own type directory (Document -> Documents): the orphan
+        // removal must follow the same per-type mapping, not assume Catalogs.
+        assertEquals("src/Documents/SalesOrder/Forms/DocumentForm", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFolderPath("Document.SalesOrder.Forms.DocumentForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormFolderInformationRegisterType()
+    {
+        // InformationRegister -> InformationRegisters: a multi-word type directory must resolve correctly.
+        assertEquals("src/InformationRegisters/Prices/Forms/ListForm", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFolderPath("InformationRegister.Prices.Forms.ListForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormFolderIsFilePathWithoutFormDotForm()
+    {
+        // The folder is exactly the file path minus the trailing "/Form.form": delete the folder, not
+        // just the file, so any Module.bsl / sub-files under it go too.
+        String file = MetadataPathResolver.resolveFormFilePath("Catalog.Products.Forms.ItemForm"); //$NON-NLS-1$
+        String folder = MetadataPathResolver.resolveFormFolderPath("Catalog.Products.Forms.ItemForm"); //$NON-NLS-1$
+        assertEquals(folder + "/Form.form", file); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormFolderCommonForm()
+    {
+        // A CommonForm maps to its own layout (src/CommonForms/<Name>) - never routed through the
+        // owned-form branch, but the resolver still maps it safely if ever asked.
+        assertEquals("src/CommonForms/MyForm", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormFolderPath("CommonForm.MyForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormFolderNullAndUnresolvableReturnNull()
+    {
+        assertNull(MetadataPathResolver.resolveFormFolderPath(null));
+        assertNull(MetadataPathResolver.resolveFormFolderPath("")); //$NON-NLS-1$
+        assertNull(MetadataPathResolver.resolveFormFolderPath("Bogus.X.Forms.Y")); //$NON-NLS-1$
+        assertNull(MetadataPathResolver.resolveFormFolderPath("Catalog.Products")); //$NON-NLS-1$
     }
 
     // ==================== resolveMetadataDir ====================

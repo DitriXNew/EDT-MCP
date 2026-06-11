@@ -29,7 +29,10 @@ public final class MetadataPathResolver
      *       {@code "src/CommonForms/MyForm/Form.form"}</li>
      * </ul>
      *
-     * <p>Russian type names are also supported (e.g. "Справочник.Товары.Forms.ФормаЭлемента").
+     * <p>The form segment accepts the same token set as
+     * {@link FormElementWriter#isFormToken(String)} - {@code Form} / {@code Forms} and their Russian
+     * equivalents, case-insensitive - so a form FQN accepted by create_metadata resolves here too.
+     * Russian type names are also supported (e.g. "Справочник.Товары.Forms.ФормаЭлемента").
      *
      * @param formPath FQN path
      * @return file path relative to project root, or {@code null} if cannot resolve
@@ -61,7 +64,9 @@ public final class MetadataPathResolver
             String formsKeyword = parts[2];
             String formName = parts[3];
 
-            if (!"forms".equalsIgnoreCase(formsKeyword)) //$NON-NLS-1$
+            // ONE shared predicate with the FQN parsers (Form/Forms + Russian, case-insensitive), so
+            // every form path create_metadata accepts is addressable by screenshot/snapshot too.
+            if (!FormElementWriter.isFormToken(formsKeyword))
             {
                 return null;
             }
@@ -76,6 +81,33 @@ public final class MetadataPathResolver
         }
 
         return null;
+    }
+
+    /**
+     * Resolves the FOLDER that holds a form's resource files (e.g. {@code Form.form} and its
+     * {@code Module.bsl}), relative to the project root - the directory portion of
+     * {@link #resolveFormFilePath(String)} without the trailing {@code /Form.form}.
+     *
+     * <p>Supported formats (same as {@link #resolveFormFilePath(String)}):
+     * <ul>
+     *   <li>{@code "Catalog.Products.Forms.ItemForm"} &rarr;
+     *       {@code "src/Catalogs/Products/Forms/ItemForm"}</li>
+     *   <li>{@code "CommonForm.MyForm"} &rarr; {@code "src/CommonForms/MyForm"}</li>
+     * </ul>
+     *
+     * @param formPath FQN path
+     * @return the form-folder path relative to the project root, or {@code null} if cannot resolve
+     */
+    public static String resolveFormFolderPath(String formPath)
+    {
+        String filePath = resolveFormFilePath(formPath);
+        if (filePath == null)
+        {
+            return null;
+        }
+        int slash = filePath.lastIndexOf('/');
+        // resolveFormFilePath always ends in "/Form.form", so a slash is guaranteed; defensive anyway.
+        return slash > 0 ? filePath.substring(0, slash) : null;
     }
 
     /**

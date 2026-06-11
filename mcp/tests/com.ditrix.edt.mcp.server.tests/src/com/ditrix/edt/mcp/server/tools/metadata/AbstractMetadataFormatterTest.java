@@ -99,6 +99,78 @@ public class AbstractMetadataFormatterTest
         assertTrue(ru.toString().contains("| Synonym | Tovary |")); //$NON-NLS-1$
     }
 
+    // ==================== StyleItem value rendering ====================
+
+    @Test
+    public void testFormatStyleItemRendersExplicitColorValue()
+    {
+        // A StyleItem with a ColorValue must render a "Value" section showing the Style Type and the
+        // RGB color (the value is a single-valued containment ref, so only this explicit branch shows it).
+        com._1c.g5.v8.dt.metadata.mdclass.StyleItem item =
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createStyleItem();
+        item.setName("MyColor"); //$NON-NLS-1$
+        item.setType(com._1c.g5.v8.dt.metadata.mdclass.StyleElementType.COLOR);
+        com._1c.g5.v8.dt.mcore.ColorValue cv =
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createColorValue();
+        com._1c.g5.v8.dt.mcore.ColorDef def =
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createColorDef();
+        def.setRed(255);
+        def.setGreen(0);
+        def.setBlue(0);
+        cv.setValue(def);
+        item.setValue(cv);
+
+        String out = f.format(item, false, "en"); //$NON-NLS-1$
+        assertTrue("a StyleItem render must have a Value section", out.contains("### Value")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the Style Type row must show Color", out.contains("| Style Type | Color |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the Color row must show the RGB value, got:\n" + out, //$NON-NLS-1$
+            out.contains("| Color | RGB(255, 0, 0) |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatStyleItemRendersAutoColorNotRgb()
+    {
+        // The AutoColor-first ordering through the formatter: an automatic color renders as "Auto",
+        // never as "RGB(0, 0, 0)" (AutoColor extends ColorDef).
+        com._1c.g5.v8.dt.metadata.mdclass.StyleItem item =
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createStyleItem();
+        item.setName("AutoColor"); //$NON-NLS-1$
+        item.setType(com._1c.g5.v8.dt.metadata.mdclass.StyleElementType.COLOR);
+        com._1c.g5.v8.dt.mcore.ColorValue cv =
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createColorValue();
+        cv.setValue(com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createAutoColor());
+        item.setValue(cv);
+
+        String out = f.format(item, false, "en"); //$NON-NLS-1$
+        assertTrue("an automatic color must render as Auto, got:\n" + out, //$NON-NLS-1$
+            out.contains("| Color | Auto |")); //$NON-NLS-1$
+        assertFalse("an automatic color must NOT render as RGB(0, 0, 0)", //$NON-NLS-1$
+            out.contains("RGB(0, 0, 0)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatStyleItemRendersFontValue()
+    {
+        com._1c.g5.v8.dt.metadata.mdclass.StyleItem item =
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createStyleItem();
+        item.setName("MyFont"); //$NON-NLS-1$
+        item.setType(com._1c.g5.v8.dt.metadata.mdclass.StyleElementType.FONT);
+        com._1c.g5.v8.dt.mcore.FontValue fv =
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createFontValue();
+        com._1c.g5.v8.dt.mcore.FontDef def =
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createFontDef();
+        def.setFaceName("Arial"); //$NON-NLS-1$
+        def.setHeight(12f);
+        def.setBold(true);
+        fv.setValue(def);
+        item.setValue(fv);
+
+        String out = f.format(item, false, "en"); //$NON-NLS-1$
+        assertTrue("the Style Type row must show Font", out.contains("| Style Type | Font |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the Font row must show face / height / bold, got:\n" + out, //$NON-NLS-1$
+            out.contains("face='Arial'") && out.contains("height=12") && out.contains("bold")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
     // ==================== pure markdown/cell helpers ====================
 
     @Test

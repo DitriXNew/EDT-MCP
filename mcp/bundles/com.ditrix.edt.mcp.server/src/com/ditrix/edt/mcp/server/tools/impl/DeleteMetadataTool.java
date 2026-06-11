@@ -12,14 +12,16 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.bm.integration.IBmModel;
-import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -36,7 +38,9 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
+import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -58,10 +62,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Delete a metadata node (object or member, including a FORM member - item / attribute / " //$NON-NLS-1$
+        return "Delete a metadata node (object or member, including a FORM object " //$NON-NLS-1$
+            + "'Type.Object.Form.Name' or a FORM member - item / attribute / " //$NON-NLS-1$
             + "command / handler) addressed by a 1C full-name FQN, cascading the cleanup of all " //$NON-NLS-1$
             + "references in BSL code, forms and other metadata. Two-phase: call without confirm to " //$NON-NLS-1$
             + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$
+            + "If the node is still referenced by metadata the refactoring cannot auto-clean, a " //$NON-NLS-1$
+            + "confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true " //$NON-NLS-1$
+            + "to delete anyway (those references are left dangling). " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
 
@@ -77,6 +85,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "Russian; the Name parts are the programmatic Name, not the synonym).", true) //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = execute the deletion; default false = preview only.") //$NON-NLS-1$
+            .booleanProperty("force", //$NON-NLS-1$
+                "true = delete even when the node is still referenced by other metadata that the " //$NON-NLS-1$
+                + "refactoring cannot auto-clean (those incoming references are left dangling). " //$NON-NLS-1$
+                + "Default false = on confirm=true the deletion is BLOCKED and the referencing " //$NON-NLS-1$
+                + "objects are listed (independent of 'confirm', which is the preview gate).") //$NON-NLS-1$
             .build();
     }
 
@@ -85,12 +98,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the request succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "Either 'preview' or 'executed'") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("action", "Either 'preview', 'executed' or 'blocked'") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("fqn", "FQN of the node targeted for deletion") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("refactoringTitle", "Title of the delete refactoring (preview)") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("items", "Metadata items the deletion would remove (preview)") //$NON-NLS-1$ //$NON-NLS-2$
-            .objectArrayProperty("affectedReferences", "References that would be affected (preview)") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("affectedReferencesCount", "Count of affected references (preview)") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("blocking", "Whether the listed blockingReferences BLOCK the delete (the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "refactoring cannot auto-clean them; a confirm=true delete is refused unless force=true)") //$NON-NLS-1$
+            .objectArrayProperty("blockingReferences", "Incoming references the refactoring cannot " //$NON-NLS-1$ //$NON-NLS-2$
+                + "auto-clean: listed in the preview, the reason a delete is refused " //$NON-NLS-1$
+                + "(action='blocked'), or left dangling when force=true (action='executed')") //$NON-NLS-1$
+            .integerProperty("blockingReferencesCount", "Count of blocking references") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("forced", "Whether the delete was forced past blocking references") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable description of the result") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -106,6 +124,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+        boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -131,6 +150,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return deleteFormMember(ctx, normFqn, formRef, confirm);
         }
 
+        // A 4-part form FQN (Type.Object.Form.FormName) addresses the FORM OBJECT itself. create_metadata
+        // accepts this FQN to CREATE an owned form; to stay symmetric, delete it the same way: an
+        // owned BasicForm is removed by cascade through its owner's 'forms' collection, not by the
+        // md-refactoring service (it is not a top object, so resolveExisting / the delete refactoring see
+        // nothing here). A CommonForm (2 parts) is NOT matched - it is a real top object handled below.
+        FormElementWriter.FormObjectRef formObjectRef = FormElementWriter.parseFormObjectCreate(normFqn);
+        if (formObjectRef != null)
+        {
+            return deleteFormObject(ctx, normFqn, formObjectRef, confirm);
+        }
+
         MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
         if (node == null)
         {
@@ -149,13 +179,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create delete refactoring for: " + normFqn).toJson(); //$NON-NLS-1$
         }
 
-        return confirm ? performDelete(normFqn, refactoring) : buildPreview(normFqn, refactoring);
+        return confirm ? performDelete(normFqn, refactoring, force) : buildPreview(normFqn, refactoring);
     }
 
     private String buildPreview(String fqn, IRefactoring refactoring)
     {
         List<Map<String, Object>> allItems = new ArrayList<>();
-        List<Map<String, Object>> allProblems = new ArrayList<>();
 
         String title = refactoring.getTitle();
 
@@ -172,69 +201,198 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
         }
 
-        RefactoringStatus status = refactoring.getStatus();
-        if (status != null)
-        {
-            Collection<IRefactoringProblem> problems = status.getProblems();
-            if (problems != null)
-            {
-                for (IRefactoringProblem problem : problems)
-                {
-                    Map<String, Object> problemMap = new java.util.LinkedHashMap<>();
-                    if (problem instanceof CleanReferenceProblem crp)
-                    {
-                        EObject refObj = crp.getReferencingObject();
-                        if (refObj instanceof IBmObject bmObj)
-                        {
-                            problemMap.put("referencingObject", bmObj.bmGetFqn()); //$NON-NLS-1$
-                        }
-                        EStructuralFeature feat = crp.getReference();
-                        if (feat != null)
-                        {
-                            problemMap.put("reference", feat.getName()); //$NON-NLS-1$
-                        }
-                    }
-                    EObject obj = problem.getObject();
-                    if (obj instanceof IBmObject bmObj)
-                    {
-                        problemMap.put("targetObject", bmObj.bmGetFqn()); //$NON-NLS-1$
-                    }
-                    if (!problemMap.isEmpty())
-                    {
-                        allProblems.add(problemMap);
-                    }
-                }
-            }
-        }
+        // Incoming references EDT could not clean automatically — these BLOCK a confirm=true delete
+        // unless force=true is also passed (mirrors the EDT/Configurator UI's pre-delete check).
+        List<Map<String, Object>> blocking = collectBlockingProblems(refactoring);
+        boolean hasBlocking = !blocking.isEmpty();
 
+        String message = hasBlocking
+            ? "Preview of delete refactoring. This node is referenced by " + blocking.size() //$NON-NLS-1$
+                + " object(s) the refactoring CANNOT auto-clean: a confirm=true delete will be BLOCKED " //$NON-NLS-1$
+                + "unless force=true is also passed (force leaves these references dangling)." //$NON-NLS-1$
+            : "Preview of delete refactoring. References listed above will be cleaned up. " //$NON-NLS-1$
+                + "Call with confirm=true to apply."; //$NON-NLS-1$
+
+        // The preview's "affected" references ARE exactly the blocking set, so the list is
+        // serialized ONCE under the blocking* fields shared with action='blocked' / 'executed'.
         return ToolResult.success()
             .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
             .put("fqn", fqn) //$NON-NLS-1$
             .put("refactoringTitle", title) //$NON-NLS-1$
             .put("items", allItems) //$NON-NLS-1$
-            .put("affectedReferences", allProblems) //$NON-NLS-1$
-            .put("affectedReferencesCount", allProblems.size()) //$NON-NLS-1$
-            .put("message", "Preview of delete refactoring. References listed above will be cleaned " //$NON-NLS-1$ //$NON-NLS-2$
-                + "up. Call with confirm=true to apply.") //$NON-NLS-1$
+            .put("blocking", hasBlocking) //$NON-NLS-1$
+            .put("blockingReferences", blocking) //$NON-NLS-1$
+            .put("blockingReferencesCount", blocking.size()) //$NON-NLS-1$
+            .put("message", message) //$NON-NLS-1$
             .toJson();
     }
 
-    private String performDelete(String fqn, IRefactoring refactoring)
+    private String performDelete(String fqn, IRefactoring refactoring, boolean force)
     {
+        // EDT's own reference check: if the node is still referenced by metadata the refactoring
+        // cannot auto-clean and the caller did not force, refuse the delete and report the
+        // referencing objects (mirrors the UI). 'confirm' is the preview gate; 'force' overrides
+        // this reference block — the two are intentionally distinct.
+        List<Map<String, Object>> blocking = collectBlockingProblems(refactoring);
+        if (!blocking.isEmpty() && !force)
+        {
+            return ToolResult.error("Cannot delete '" + fqn + "': it is still referenced by " //$NON-NLS-1$ //$NON-NLS-2$
+                    + blocking.size() + " object(s) that the refactoring cannot auto-clean. Remove the " //$NON-NLS-1$
+                    + "references first, or call again with force=true to delete anyway (the references " //$NON-NLS-1$
+                    + "will be left dangling).") //$NON-NLS-1$
+                .put("action", "blocked") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("fqn", fqn) //$NON-NLS-1$
+                .put("blocking", true) //$NON-NLS-1$
+                .put("blockingReferences", blocking) //$NON-NLS-1$
+                .put("blockingReferencesCount", blocking.size()) //$NON-NLS-1$
+                .toJson();
+        }
+
         try
         {
             refactoring.perform();
-            return ToolResult.success()
+            ToolResult result = ToolResult.success()
                 .put("action", "executed") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("fqn", fqn) //$NON-NLS-1$
-                .put("message", "Delete refactoring completed successfully.") //$NON-NLS-1$ //$NON-NLS-2$
-                .toJson();
+                .put("forced", force); //$NON-NLS-1$
+            if (!blocking.isEmpty())
+            {
+                result.put("blockingReferences", blocking) //$NON-NLS-1$
+                    .put("blockingReferencesCount", blocking.size()) //$NON-NLS-1$
+                    .put("message", "Delete refactoring completed (forced). " + blocking.size() //$NON-NLS-1$ //$NON-NLS-2$
+                        + " incoming reference(s) were left dangling."); //$NON-NLS-1$
+            }
+            else
+            {
+                result.put("message", "Delete refactoring completed successfully."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return result.toJson();
         }
         catch (Exception e)
         {
             Activator.logError("Error performing delete refactoring", e); //$NON-NLS-1$
             return ToolResult.error("Delete failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Collects the refactoring's BLOCKING problems — the incoming references EDT could not resolve
+     * automatically. This is the same set the EDT/Configurator UI renders before a delete. A
+     * {@link CleanReferenceProblem} carries the referencing object and the feature through which it
+     * points at the node being deleted; other problem kinds only carry the target object. A non-empty
+     * result means the deletion is unsafe without force. Never throws on a single odd problem.
+     */
+    private static List<Map<String, Object>> collectBlockingProblems(IRefactoring refactoring)
+    {
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        RefactoringStatus status = refactoring.getStatus();
+        if (status == null)
+        {
+            return result;
+        }
+        Collection<IRefactoringProblem> problems = status.getProblems();
+        if (problems == null)
+        {
+            return result;
+        }
+
+        for (IRefactoringProblem problem : problems)
+        {
+            Map<String, Object> problemMap = new java.util.LinkedHashMap<>();
+            problemMap.put("problemType", problem.getClass().getSimpleName()); //$NON-NLS-1$
+            // Best-effort description; never let a single odd problem abort the whole check.
+            try
+            {
+                if (problem instanceof CleanReferenceProblem crp)
+                {
+                    EObject refObj = crp.getReferencingObject();
+                    if (refObj instanceof IBmObject bmObj)
+                    {
+                        String refFqn = bmFqnSafe(bmObj);
+                        if (refFqn != null)
+                        {
+                            problemMap.put("referencingObject", refFqn); //$NON-NLS-1$
+                        }
+                    }
+                    EStructuralFeature feat = crp.getReference();
+                    if (feat != null)
+                    {
+                        problemMap.put("reference", feat.getName()); //$NON-NLS-1$
+                    }
+                }
+                EObject obj = problem.getObject();
+                if (obj instanceof IBmObject bmObj)
+                {
+                    String tgtFqn = bmFqnSafe(bmObj);
+                    if (tgtFqn != null)
+                    {
+                        problemMap.put("targetObject", tgtFqn); //$NON-NLS-1$
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Activator.logError("Error describing refactoring problem", e); //$NON-NLS-1$
+            }
+            result.add(problemMap);
+        }
+        return result;
+    }
+
+    /**
+     * Returns a human-readable FQN for a BM object. {@code bmGetFqn()} is only legal on top objects,
+     * so for a nested object (e.g. a register dimension or a type item that holds the reference) we
+     * climb to the owning top object and append the nested element's name when one is available.
+     * Never throws.
+     */
+    private static String bmFqnSafe(IBmObject obj)
+    {
+        if (obj == null)
+        {
+            return null;
+        }
+        try
+        {
+            if (obj.bmIsTop())
+            {
+                return obj.bmGetFqn();
+            }
+        }
+        catch (Exception e)
+        {
+            // fall through to top-object resolution
+        }
+
+        String localName = null;
+        if (obj instanceof MdObject mdo)
+        {
+            localName = mdo.getName();
+        }
+        else if (obj instanceof org.eclipse.emf.ecore.ENamedElement ene)
+        {
+            localName = ene.getName();
+        }
+
+        try
+        {
+            IBmObject top = obj.bmGetTopObject();
+            if (top != null && top != obj)
+            {
+                String topFqn = top.bmGetFqn();
+                if (topFqn != null)
+                {
+                    return (localName != null && !localName.isEmpty())
+                        ? topFqn + " (" + localName + ")" //$NON-NLS-1$ //$NON-NLS-2$
+                        : topFqn;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            // ignore — fall back to the local name (or null)
+        }
+        return localName;
     }
 
     // ==================== FORM members (cross-model hop) ====================
@@ -252,39 +410,29 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private String deleteFormMember(ProjectContext ctx, String normFqn,
         FormElementWriter.FormMemberRef ref, boolean confirm)
     {
-        IProject project = ctx.project;
-        Configuration config = ctx.config;
-
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
-        {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
-        }
-        IBmModel bmModel = bmModelManager.getModel(project);
-        if (bmModel == null)
-        {
-            return ToolResult.error("BM model not available").toJson(); //$NON-NLS-1$
-        }
-
-        MdObject mdForm = FormStructureReader.resolveMdForm(config, ref.formPath);
-        if (mdForm == null)
-        {
-            return ToolResult.error("Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
-                + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
-                + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
-                + "Handler).").toJson(); //$NON-NLS-1$
-        }
-        if (!(mdForm instanceof IBmObject))
-        {
-            return ToolResult.error("Form is not a BM object").toJson(); //$NON-NLS-1$
-        }
-
-        final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
         final boolean handler = FormElementWriter.isHandlerToken(ref.kindToken);
-
-        return confirm
-            ? performFormDelete(project, bmModel, mdFormBmId, normFqn, ref, handler)
-            : buildFormDeletePreview(bmModel, mdFormBmId, normFqn, ref, handler);
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
+                ctx.config, ref.formPath,
+                "Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
+                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
+                    + "Handler)."); //$NON-NLS-1$
+            return confirm
+                ? performFormDelete(fctx, normFqn, ref, handler)
+                : buildFormDeletePreview(fctx, normFqn, ref, handler);
+        }
+        catch (Exception e)
+        {
+            String ready = FormValidationException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
+            Activator.logError("Error deleting form member", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to delete form member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
     }
 
     /** Resolves the delete target: a handler (form/item container) or a member (attribute/command/item). */
@@ -314,41 +462,27 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** Preview inside a READ transaction (no mutation): capture the target type + item descendants. */
-    private String buildFormDeletePreview(IBmModel bmModel, long mdFormBmId, String normFqn,
+    private String buildFormDeletePreview(FormElementWriter.FormEditContext fctx, String normFqn,
         FormElementWriter.FormMemberRef ref, boolean handler)
     {
-        FormDeletePreview data = BmTransactions.read(bmModel, "DeleteFormMemberPreview", (tx, pm) -> //$NON-NLS-1$
-        {
-            EObject txMdForm = tx.getObjectById(mdFormBmId);
-            if (txMdForm == null)
+        FormDeletePreview data = FormElementWriter.readEditableForm(fctx, "DeleteFormMemberPreview", //$NON-NLS-1$
+            (formModel, tx) ->
             {
-                return FormDeletePreview.notManaged();
-            }
-            EObject formModel = FormElementWriter.getEditableForm(txMdForm);
-            if (formModel == null)
-            {
-                return FormDeletePreview.notManaged();
-            }
-            EObject target = resolveFormTarget(formModel, ref, handler);
-            if (target == null)
-            {
-                return new FormDeletePreview(); // found stays false
-            }
-            FormDeletePreview d = new FormDeletePreview();
-            d.found = true;
-            d.type = target.eClass().getName();
-            if (!handler)
-            {
-                collectItemDescendants(target, d.descendants);
-            }
-            return d;
-        });
+                EObject target = resolveFormTarget(formModel, ref, handler);
+                if (target == null)
+                {
+                    return new FormDeletePreview(); // found stays false
+                }
+                FormDeletePreview d = new FormDeletePreview();
+                d.found = true;
+                d.type = target.eClass().getName();
+                if (!handler)
+                {
+                    collectItemDescendants(target, d.descendants);
+                }
+                return d;
+            });
 
-        if (data == null || data.notManaged)
-        {
-            return ToolResult.error("the form has no editable content model (it may be empty, an " //$NON-NLS-1$
-                + "ordinary/legacy form, or not yet built): " + ref.formPath).toJson(); //$NON-NLS-1$
-        }
         if (!data.found)
         {
             return formMemberNotFound(ref, handler);
@@ -366,8 +500,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .put("fqn", normFqn) //$NON-NLS-1$
             .put("refactoringTitle", "Delete form " + (handler ? "handler" : "member") + " " + ref.name) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .put("items", removed) //$NON-NLS-1$
-            .put("affectedReferences", Collections.emptyList()) //$NON-NLS-1$
-            .put("affectedReferencesCount", 0) //$NON-NLS-1$
+            .put("blocking", false) //$NON-NLS-1$
+            .put("blockingReferences", Collections.emptyList()) //$NON-NLS-1$
+            .put("blockingReferencesCount", 0) //$NON-NLS-1$
             .put("message", "Preview: deleting '" + ref.name + "' (" + data.type + ") from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ref.formPath + " would remove " //$NON-NLS-1$
                 + (data.descendants.isEmpty()
@@ -380,50 +515,23 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** Delete inside a WRITE transaction: EcoreUtil.remove the target, then export the content form. */
-    private String performFormDelete(IProject project, IBmModel bmModel, long mdFormBmId, String normFqn,
+    private String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
         FormElementWriter.FormMemberRef ref, boolean handler)
     {
         final String[] capturedType = new String[1];
-        final boolean[] missing = new boolean[1];
-        String formFqn;
-        try
-        {
-            formFqn = BmTransactions.<String>write(bmModel, "DeleteFormMember", (tx, pm) -> //$NON-NLS-1$
+        boolean persisted = FormElementWriter.writeEditableForm(fctx, "DeleteFormMember", //$NON-NLS-1$
+            (formModel, tx) ->
             {
-                EObject txMdForm = tx.getObjectById(mdFormBmId);
-                if (txMdForm == null)
-                {
-                    throw new RuntimeException("Form object not found in transaction"); //$NON-NLS-1$
-                }
-                EObject formModel = FormElementWriter.getEditableForm(txMdForm);
-                if (formModel == null)
-                {
-                    throw new RuntimeException("the form has no editable content model"); //$NON-NLS-1$
-                }
                 EObject target = resolveFormTarget(formModel, ref, handler);
                 if (target == null)
                 {
-                    missing[0] = true;
-                    return null;
+                    // Thrown (not flagged): rolls the unchanged tx back and skips the export.
+                    throw new FormValidationException(formMemberNotFound(ref, handler));
                 }
                 capturedType[0] = target.eClass().getName();
                 // items is containment, so removing a Group/Table cascades its contained subtree.
                 EcoreUtil.remove(target);
-                return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
             });
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Error deleting form member", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to delete form member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
-        }
-        if (missing[0])
-        {
-            return formMemberNotFound(ref, handler);
-        }
-
-        boolean persisted = formFqn != null && !formFqn.isEmpty()
-            && BmTransactions.forceExportToDisk(project, formFqn);
 
         return ToolResult.success()
             .put("action", "executed") //$NON-NLS-1$ //$NON-NLS-2$
@@ -434,6 +542,257 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
                         + "it).")) //$NON-NLS-1$
             .toJson();
+    }
+
+    // ==================== FORM object (owned BasicForm, symmetric with create) ====================
+
+    /**
+     * Deletes an OWNED form OBJECT addressed by a 4-part form FQN ({@code Type.Object.Form.FormName}) -
+     * the symmetric counterpart of {@code create_metadata}'s {@link FormElementWriter#createForm}. An
+     * owned form is not a top object (it lives on its owner's {@code forms} collection), so the
+     * md-refactoring service cannot see it; it is removed directly by re-fetching the owner inside a
+     * write transaction, detaching the content {@code Form} top object (the store created at attach), and
+     * removing the {@code BasicForm} from the {@code forms} collection while clearing any default-form
+     * reference the owner held to it (so no dangling {@code defaultObjectForm} / {@code defaultListForm}
+     * ref is left behind). Two-phase like the rest of the tool: {@code confirm=false} previews (no
+     * mutation), {@code confirm=true} removes it and force-exports the owner {@code .mdo}.
+     */
+    private String deleteFormObject(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormObjectRef ref, boolean confirm)
+    {
+        IProject project = ctx.project;
+        Configuration config = ctx.config;
+
+        // Reuse create_metadata's owner + owned-form resolution so create/delete address the SAME object. The
+        // resolver expects the 'forms' shape: Type.Object.forms.FormName.
+        String formPath = ref.ownerType + "." + ref.ownerName + ".forms." + ref.formName; //$NON-NLS-1$ //$NON-NLS-2$
+        MdObject mdForm = FormStructureReader.resolveMdForm(config, formPath);
+        if (mdForm == null)
+        {
+            // Distinguish a missing owner from a missing form for a sharper message.
+            MdObject owner = MetadataTypeUtils.findObject(config, ref.ownerType, ref.ownerName);
+            if (owner == null)
+            {
+                return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Use get_metadata_objects to list available objects.").toJson(); //$NON-NLS-1$
+            }
+            return ToolResult.error("Form '" + ref.formName + "' not found on " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Use get_metadata_details to list the object's forms.").toJson(); //$NON-NLS-1$
+        }
+        if (!(mdForm instanceof IBmObject))
+        {
+            return ToolResult.error("Form is not a BM object").toJson(); //$NON-NLS-1$
+        }
+
+        if (!confirm)
+        {
+            return ToolResult.success()
+                .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("fqn", normFqn) //$NON-NLS-1$
+                .put("refactoringTitle", "Delete form " + ref.formName) //$NON-NLS-1$ //$NON-NLS-2$
+                .put("items", Collections.singletonList(formItem(ref.formName, mdForm.eClass().getName()))) //$NON-NLS-1$
+                .put("blocking", false) //$NON-NLS-1$
+                .put("blockingReferences", Collections.emptyList()) //$NON-NLS-1$
+                .put("blockingReferencesCount", 0) //$NON-NLS-1$
+                .put("message", "Preview: deleting form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
+                    + " would remove the form and its content Form.form. Cross-references to it " //$NON-NLS-1$
+                    + "(a default-form setting) are cleared on the owner. Call confirm=true to apply.") //$NON-NLS-1$
+                .toJson();
+        }
+
+        // The owner is a top object whose .mdo registers the form; force-export it after the removal so
+        // the <forms> entry (and any cleared default-form ref) lands on disk. eContainer() is the owner.
+        EObject ownerObj = mdForm.eContainer();
+        final String ownerFqn = (ownerObj instanceof IBmObject) ? ((IBmObject)ownerObj).bmGetFqn()
+            : ref.ownerFqn();
+        // Capture the RESOLVED names BEFORE the delete: the model lookup is case-INsensitive while the
+        // workspace folder path is case-sensitive, so the folder cleanup must address the names the
+        // model actually carries, not the user-typed FQN segments (which may differ in case).
+        String resolvedFormName = mdForm.getName();
+        final String formNameOnDisk =
+            (resolvedFormName == null || resolvedFormName.isEmpty()) ? ref.formName : resolvedFormName;
+        String resolvedOwnerName = (ownerObj instanceof MdObject) ? ((MdObject)ownerObj).getName() : null;
+        final String ownerNameOnDisk =
+            (resolvedOwnerName == null || resolvedOwnerName.isEmpty()) ? ref.ownerName : resolvedOwnerName;
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.editContextFor(project, mdForm);
+            FormElementWriter.writeMdForm(fctx, "DeleteFormObject", (txMdForm, tx) -> //$NON-NLS-1$
+            {
+                EObject owner = txMdForm.eContainer();
+                // Detach the content Form top object (the BM store the attach created) before removing the
+                // MD-form, so no store-less top object is left orphaned in the namespace.
+                EObject content = FormElementWriter.getEditableForm(txMdForm);
+                if (content instanceof IBmObject)
+                {
+                    tx.detachTopObject((IBmObject)content);
+                }
+                // Clear any single-valued default-form reference on the owner that points at this form
+                // (defaultObjectForm / defaultListForm / ...), so removing the form leaves no dangling ref.
+                if (owner != null)
+                {
+                    clearReferencesTo(owner, txMdForm);
+                }
+                // Remove the MD-form from the owner's 'forms' containment list.
+                EcoreUtil.remove(txMdForm);
+            });
+        }
+        catch (Exception e)
+        {
+            String ready = FormValidationException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
+            Activator.logError("Error deleting form object", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to delete form: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        boolean persisted = ownerFqn != null && !ownerFqn.isEmpty()
+            && BmTransactions.forceExportToDisk(project, ownerFqn);
+
+        // The BM-model delete + owner force-export drop the <forms> entry from the owner .mdo, but the
+        // form's own resource folder on disk (src/<TypeDir>/<Owner>/Forms/<FormName>/, holding Form.form
+        // and any sub-files) is NOT touched by the export - it would survive as an orphan that still
+        // resolves the form FQN ("no editable content model") and clutters a fresh checkout / XML import.
+        // Remove it physically through the workspace API (best-effort: never fail the delete the model
+        // already committed). Only this EXACT form folder is removed, never the parent Forms/ (siblings)
+        // or the owner folder. The path is built from the RESOLVED names captured above.
+        FolderCleanup folderCleanup =
+            deleteFormResourceFolder(project, ref.ownerType, ownerNameOnDisk, formNameOnDisk);
+
+        return ToolResult.success()
+            .put("action", "executed") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("message", "Deleted form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
+                + (persisted ? " and persisted to disk." //$NON-NLS-1$
+                    : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
+                        + "it).") //$NON-NLS-1$
+                + folderCleanupMessage(folderCleanup))
+            .toJson();
+    }
+
+    /** Outcome of the orphan form-folder cleanup - never conflate "not found" with "removed". */
+    private enum FolderCleanup
+    {
+        /** The folder existed and was deleted. */
+        REMOVED,
+        /** No folder at the resolved path (nothing was removed). */
+        NOT_FOUND,
+        /** The path could not be resolved or the delete attempt failed. */
+        FAILED
+    }
+
+    /** The message fragment describing the folder-cleanup outcome (leading space included). */
+    private static String folderCleanupMessage(FolderCleanup cleanup)
+    {
+        switch (cleanup)
+        {
+        case REMOVED:
+            return " The form resource folder was removed from disk."; //$NON-NLS-1$
+        case NOT_FOUND:
+            return " The form resource folder was not found on disk (nothing was removed)."; //$NON-NLS-1$
+        case FAILED:
+        default:
+            return " (the form resource folder could not be removed - check it manually)."; //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Physically removes an owned form's resource folder
+     * ({@code src/<TypeDir>/<Owner>/Forms/<FormName>/}, containing {@code Form.form} and any sub-files)
+     * through the Eclipse workspace API so the workspace stays in sync. The path is built from the
+     * RESOLVED owner / form names (the names the model actually carries), NOT the user-typed FQN
+     * segments: the model lookup is case-insensitive while the workspace path is case-sensitive, so a
+     * case-variant FQN would otherwise miss the real folder and leave the orphan behind. Best-effort: a
+     * delete failure is logged but never propagated - the BM-model delete already committed, so the
+     * orphan-folder cleanup must not turn a successful delete into an error. A folder that does not
+     * exist is reported as {@link FolderCleanup#NOT_FOUND}, never claimed as removed. Only the EXACT
+     * {@code Forms/<FormName>} folder is targeted, never the parent {@code Forms/} directory (which may
+     * hold sibling forms) or the owner folder.
+     *
+     * @param project the owning workspace project
+     * @param ownerType the owner metadata TYPE token (English or Russian, as supplied)
+     * @param resolvedOwnerName the owner object Name AS RESOLVED on the model
+     * @param resolvedFormName the form Name AS RESOLVED on the model
+     * @return the cleanup outcome (removed / not found on disk / failed)
+     */
+    private static FolderCleanup deleteFormResourceFolder(IProject project, String ownerType,
+        String resolvedOwnerName, String resolvedFormName)
+    {
+        String folderRel = formResourceFolderPath(ownerType, resolvedOwnerName, resolvedFormName);
+        if (folderRel == null)
+        {
+            Activator.logError("Could not resolve the form resource folder for " + ownerType + "." //$NON-NLS-1$ //$NON-NLS-2$
+                + resolvedOwnerName + ".Form." + resolvedFormName + "; leaving any on-disk Forms/" //$NON-NLS-1$ //$NON-NLS-2$
+                + resolvedFormName + " folder in place.", null); //$NON-NLS-1$
+            return FolderCleanup.FAILED;
+        }
+        try
+        {
+            IFolder folder = project.getFolder(new Path(folderRel));
+            if (!folder.exists())
+            {
+                // Nothing on disk at the resolved path (e.g. the form had no rendered content yet).
+                // Reported as NOT_FOUND - never claimed as a removal.
+                return FolderCleanup.NOT_FOUND;
+            }
+            // delete(true, monitor): force-delete the folder and its contents, keeping the workspace
+            // resource tree in sync with disk. DEPTH is implicitly infinite for a container.
+            folder.delete(true, new NullProgressMonitor());
+            return FolderCleanup.REMOVED;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Failed to remove the form resource folder " + folderRel //$NON-NLS-1$
+                + " (the model delete already succeeded; remove it manually if it persists).", e); //$NON-NLS-1$
+            return FolderCleanup.FAILED;
+        }
+    }
+
+    /**
+     * The project-relative resource folder of an owned form
+     * ({@code src/<TypeDir>/<Owner>/Forms/<FormName>}), built from the RESOLVED owner / form names via
+     * the shared {@link MetadataPathResolver} mapping (same disk layout create_metadata writes), or
+     * {@code null} when the type token is unknown. Pure; package-visible for tests.
+     */
+    static String formResourceFolderPath(String ownerType, String resolvedOwnerName,
+        String resolvedFormName)
+    {
+        return MetadataPathResolver.resolveFormFolderPath(
+            ownerType + "." + resolvedOwnerName + ".forms." + resolvedFormName); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A {name, type} preview entry for the form object being removed. */
+    private static Map<String, Object> formItem(String name, String type)
+    {
+        Map<String, Object> entry = new java.util.LinkedHashMap<>();
+        entry.put("name", name); //$NON-NLS-1$
+        entry.put("type", type); //$NON-NLS-1$
+        return entry;
+    }
+
+    /**
+     * Nulls out every single-valued (non-containment) reference on {@code holder} whose value is
+     * {@code target}. For a form owner these are the {@code defaultObjectForm} / {@code defaultListForm}
+     * / {@code defaultChoiceForm} / ... settings - all declared on the direct owner pointing at one of
+     * its own {@code BasicForm}s - so checking the owner's own features is sufficient to avoid a dangling
+     * reference once the form is removed. Containment / many-valued references (the {@code forms} list
+     * itself) are left to {@link EcoreUtil#remove}.
+     */
+    private static void clearReferencesTo(EObject holder, EObject target)
+    {
+        for (EReference reference : holder.eClass().getEAllReferences())
+        {
+            if (reference.isContainment() || reference.isMany() || !reference.isChangeable())
+            {
+                continue;
+            }
+            if (holder.eGet(reference) == target)
+            {
+                holder.eUnset(reference);
+            }
+        }
     }
 
     /**
@@ -457,15 +816,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private static final class FormDeletePreview
     {
         boolean found;
-        boolean notManaged;
         String type;
         final List<Map<String, Object>> descendants = new ArrayList<>();
-
-        static FormDeletePreview notManaged()
-        {
-            FormDeletePreview d = new FormDeletePreview();
-            d.notManaged = true;
-            return d;
-        }
     }
 }
