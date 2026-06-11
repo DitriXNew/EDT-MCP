@@ -165,7 +165,8 @@ public class WaitForBreakTool implements IMcpTool
                 }
                 return r.toJson();
             }
-            return buildSnapshotResponse(snapshot, registry, applicationId, autoResolved);
+            return buildSnapshotResponse(snapshot, registry, applicationId, autoResolved,
+                serverTarget != null);
         }
         catch (InterruptedException e)
         {
@@ -264,7 +265,7 @@ public class WaitForBreakTool implements IMcpTool
             {
                 return ToolResult.error("server target suspended but snapshot registration failed").toJson(); //$NON-NLS-1$
             }
-            return buildSnapshotResponse(snapshot, registry, applicationId, autoResolved);
+            return buildSnapshotResponse(snapshot, registry, applicationId, autoResolved, true);
         }
         catch (InterruptedException e)
         {
@@ -282,9 +283,13 @@ public class WaitForBreakTool implements IMcpTool
      * Builds the JSON response for a suspend snapshot. Walks the thread stack
      * and registers each frame with a stable id so that follow-up tools
      * (get_variables, evaluate_expression, step) can refer back to it.
+     * {@code serverTarget} marks a suspend resolved via the 1C debug-server
+     * target bridge; as on the timeout path, the flag is emitted only when
+     * {@code true} and omitted for ordinary launch threads.
      */
     static String buildSnapshotResponse(DebugSessionRegistry.SuspendSnapshot snapshot,
-            DebugSessionRegistry registry, String applicationId, boolean autoResolved) throws Exception
+            DebugSessionRegistry registry, String applicationId, boolean autoResolved,
+            boolean serverTarget) throws Exception
     {
         IThread thread = snapshot.thread;
         List<Map<String, Object>> frames = new ArrayList<>();
@@ -317,6 +322,10 @@ public class WaitForBreakTool implements IMcpTool
         if (autoResolved)
         {
             result.put("autoResolved", true); //$NON-NLS-1$
+        }
+        if (serverTarget)
+        {
+            result.put("serverTarget", true); //$NON-NLS-1$
         }
         if (!frames.isEmpty())
         {

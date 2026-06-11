@@ -9,13 +9,20 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 import java.util.HashMap;
 import java.util.Map;
 
+import org.eclipse.debug.core.model.IStep;
+import org.eclipse.debug.core.model.IThread;
+import org.junit.After;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 
 /**
  * Tests for {@link StepTool}.
@@ -124,5 +131,42 @@ public class StepToolTest
     {
         assertEquals(1, StepTool.clampTimeout(0));
         assertEquals(1, StepTool.clampTimeout(-5));
+    }
+
+    // ==================== Timeout response shape (mocked suspended thread) ====================
+
+    /** Keep the shared singleton registry clean between cases that mutate it. */
+    @After
+    public void clearRegistry()
+    {
+        DebugSessionRegistry.get().clear();
+    }
+
+    @Test
+    public void testTimeoutResponseCarriesApplicationIdAndThreadId()
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        registry.clear();
+        // A steppable suspended thread registered in the in-memory registry. The
+        // stubbed stepOver() is a no-op, so no new SUSPEND ever arrives and the
+        // 1-second wait times out — headlessly exercising the timeout response.
+        IThread thread = mock(IThread.class, withSettings().extraInterfaces(IStep.class));
+        when(((IStep) thread).canStepOver()).thenReturn(true);
+        String appId = "launch:StepCfg"; //$NON-NLS-1$
+        registry.injectSuspend(appId, thread);
+        long threadId = registry.getSnapshot(appId).threadId;
+
+        Map<String, String> params = new HashMap<>();
+        params.put("threadId", Long.toString(threadId)); //$NON-NLS-1$
+        params.put("kind", "over"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("timeout", "1"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new StepTool().execute(params);
+
+        assertTrue(result.contains("\"hit\":false")); //$NON-NLS-1$
+        assertTrue(result.contains("\"reason\":\"timeout\"")); //$NON-NLS-1$
+        // Both fields are declared in the output schema and are how callers
+        // correlate the timeout with the session/thread they stepped.
+        assertTrue(result.contains("\"applicationId\":\"launch:StepCfg\"")); //$NON-NLS-1$
+        assertTrue(result.contains("\"threadId\":" + threadId)); //$NON-NLS-1$
     }
 }

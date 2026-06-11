@@ -7,12 +7,19 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import org.eclipse.debug.core.model.IStackFrame;
+import org.eclipse.debug.core.model.IThread;
+import org.junit.After;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 
 /**
  * Tests for {@link WaitForBreakTool}.
@@ -87,5 +94,57 @@ public class WaitForBreakToolTest
     {
         assertEquals(1, WaitForBreakTool.clampTimeout(0));
         assertEquals(1, WaitForBreakTool.clampTimeout(-5));
+    }
+
+    // ==================== Snapshot (hit) response: serverTarget flag ====================
+    // buildSnapshotResponse is exercised headlessly: injectSuspend registers a
+    // mocked thread in the in-memory registry, no live DebugPlugin involved.
+
+    /** Keep the shared singleton registry clean between cases that mutate it. */
+    @After
+    public void clearRegistry()
+    {
+        DebugSessionRegistry.get().clear();
+    }
+
+    @Test
+    public void testHitResponseCarriesServerTargetWhenResolvedViaServerPath() throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        registry.clear();
+        IThread thread = mock(IThread.class);
+        when(thread.getName()).thenReturn("server thread"); //$NON-NLS-1$
+        when(thread.getStackFrames()).thenReturn(new IStackFrame[0]);
+        String appId = "ServerApplication.TestApp"; //$NON-NLS-1$
+        registry.injectSuspend(appId, thread);
+        DebugSessionRegistry.SuspendSnapshot snapshot = registry.getSnapshot(appId);
+        assertNotNull(snapshot);
+
+        String json = WaitForBreakTool.buildSnapshotResponse(snapshot, registry, appId, false, true);
+
+        assertTrue(json.contains("\"hit\":true")); //$NON-NLS-1$
+        // serverTarget is declared in the output schema; a hit resolved via the
+        // server-target path must report it, just like the timeout response does.
+        assertTrue(json.contains("\"serverTarget\":true")); //$NON-NLS-1$
+        assertTrue(json.contains("\"applicationId\":\"ServerApplication.TestApp\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHitResponseOmitsServerTargetForLaunchThread() throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        registry.clear();
+        IThread thread = mock(IThread.class);
+        when(thread.getName()).thenReturn("client thread"); //$NON-NLS-1$
+        when(thread.getStackFrames()).thenReturn(new IStackFrame[0]);
+        String appId = "launch:TestCfg"; //$NON-NLS-1$
+        registry.injectSuspend(appId, thread);
+
+        String json = WaitForBreakTool.buildSnapshotResponse(registry.getSnapshot(appId), registry,
+            appId, false, false);
+
+        assertTrue(json.contains("\"hit\":true")); //$NON-NLS-1$
+        // Same emit-only-when-true convention as the timeout path.
+        assertFalse(json.contains("serverTarget")); //$NON-NLS-1$
     }
 }

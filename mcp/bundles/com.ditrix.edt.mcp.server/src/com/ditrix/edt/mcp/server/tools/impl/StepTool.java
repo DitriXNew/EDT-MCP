@@ -192,6 +192,8 @@ public class StepTool implements IMcpTool
                     return ToolResult.success()
                         .put("hit", false) //$NON-NLS-1$
                         .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
+                        .put("applicationId", appId) //$NON-NLS-1$
+                        .put("threadId", threadId) //$NON-NLS-1$
                         .put("serverTarget", true) //$NON-NLS-1$
                         .toJson();
                 }
@@ -207,9 +209,12 @@ public class StepTool implements IMcpTool
                 return ToolResult.success()
                     .put("hit", false) //$NON-NLS-1$
                     .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put("applicationId", appId) //$NON-NLS-1$
+                    .put("threadId", threadId) //$NON-NLS-1$
                     .toJson();
             }
-            return WaitForBreakTool.buildSnapshotResponse(snapshot, registry, appId, false);
+            return WaitForBreakTool.buildSnapshotResponse(snapshot, registry, appId, false,
+                serverTarget != null);
         }
         catch (InterruptedException e)
         {
