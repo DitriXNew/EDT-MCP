@@ -79,6 +79,14 @@ public final class LaunchConfigUtils
     /** Synthetic applicationId prefix for Attach launches that don't carry ATTR_APPLICATION_ID. */
     public static final String ATTACH_APP_ID_PREFIX = "attach:"; //$NON-NLS-1$
 
+    /**
+     * Synthetic applicationId prefix for any other EDT/1C debug launch that carries
+     * no real {@code ATTR_APPLICATION_ID} and is not an Attach config — typically a
+     * session a user started from the EDT UI ("Debug As"), a file-mode standalone
+     * server, or a runtime-client config whose application id was never persisted.
+     */
+    public static final String LAUNCH_APP_ID_PREFIX = "launch:"; //$NON-NLS-1$
+
     private LaunchConfigUtils()
     {
         // utility class
@@ -119,9 +127,14 @@ public final class LaunchConfigUtils
      * For Attach launches, {@code ATTR_APPLICATION_ID} may be absent; in that case
      * we fall back to {@code attach:<configName>} — stable across calls for the
      * same EDT launch configuration, and addressable via {@code debug_status}.
+     * For any other EDT/1C debug launch (e.g. one a user started from the EDT UI —
+     * a file-mode standalone server, or a runtime client that carries no
+     * {@code ATTR_APPLICATION_ID}) we fall back to {@code launch:<configName>}. All
+     * three forms are stable across calls for the same EDT launch configuration and
+     * addressable via {@code debug_status}.
      *
-     * @return applicationId (real or synthetic), or {@code null} if the launch
-     *         is not an EDT debug launch at all.
+     * @return applicationId (real or synthetic), or {@code null} only if the config
+     *         is not in the 1C/EDT namespace at all.
      */
     public static String getApplicationIdFor(ILaunchConfiguration config)
     {
@@ -138,7 +151,38 @@ public final class LaunchConfigUtils
         {
             return ATTACH_APP_ID_PREFIX + config.getName();
         }
+        // Any other EDT/1C debug launch (incl. UI-started "Debug As" sessions) still
+        // gets a stable, addressable id so the suspend registry and debug tools can
+        // track it. Non-1C launches (Java apps, Ant tasks, …) still return null.
+        if (isEdtConfig(config))
+        {
+            return LAUNCH_APP_ID_PREFIX + config.getName();
+        }
         return null;
+    }
+
+    /**
+     * Returns {@code true} if the given applicationId is a synthetic id this plugin
+     * minted rather than a real 1C {@code ATTR_APPLICATION_ID}: {@code attach:…} /
+     * {@code launch:…} (minted by {@link #getApplicationIdFor(ILaunchConfiguration)})
+     * or {@code ServerApplication.…} (minted by {@link DebugServerTargetSupport} for
+     * 1C debug-server targets). Synthetic ids are addressable for debug tracking but
+     * cannot be resolved through {@link com.e1c.g5.dt.applications.IApplicationManager}.
+     * <p>
+     * This is THE single authority for the synthetic-prefix classification — every
+     * minted prefix must be known here, or a preflight that feeds an id into
+     * {@code IApplicationManager} fails with "Application not found" for a perfectly
+     * trackable session.
+     *
+     * @param applicationId the id to test (may be {@code null})
+     * @return {@code true} if the id starts with a synthetic prefix
+     */
+    public static boolean isSyntheticApplicationId(String applicationId)
+    {
+        return applicationId != null
+            && (applicationId.startsWith(ATTACH_APP_ID_PREFIX)
+                || applicationId.startsWith(LAUNCH_APP_ID_PREFIX)
+                || applicationId.startsWith(DebugServerTargetSupport.SERVER_APP_ID_PREFIX));
     }
 
     /**

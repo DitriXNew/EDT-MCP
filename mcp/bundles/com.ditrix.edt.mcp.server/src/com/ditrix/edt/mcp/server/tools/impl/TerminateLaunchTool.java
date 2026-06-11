@@ -25,6 +25,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 
@@ -41,6 +42,12 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
  *   <li>{@code all=true} (requires {@code confirm=true}) — every live EDT launch,
  *       optionally narrowed by {@code projectName}.</li>
  * </ul>
+ *
+ * <p>In every mode the selection additionally includes already-terminated EDT
+ * launches that still linger in {@link ILaunchManager} (a missed TERMINATE
+ * event — the stale entry that blocks later runs). Those are reported as
+ * {@code already_terminated} and evicted from the manager; see
+ * {@link #selectStaleTerminated}.
  *
  * <p>Attach launches ({@code RemoteRuntime} / {@code LocalRuntime}) are
  * disconnected, not killed — the 1C cluster keeps running. Set
@@ -207,6 +214,16 @@ public class TerminateLaunchTool implements IMcpTool
             List<ILaunch> targets = selectTargets(launchManager, configName, projectName,
                 applicationId, all, hasName, hasProject, hasAppId);
 
+            // Second pass: the live-selection helpers skip
+            // terminated launches by design, so an ALREADY-terminated launch
+            // lingering in ILaunchManager — the very stale entry the
+            // eviction below targets — was never selected and could never be cleaned.
+            // Re-scan the manager with the same criteria but WITHOUT the
+            // isTerminated filter; matches flow through the already_terminated →
+            // removeFromManager path below and get evicted and reported.
+            targets.addAll(selectStaleTerminated(launchManager.getLaunches(), targets,
+                configName, projectName, applicationId, all, hasName, hasProject, hasAppId));
+
             if (!includeAttach)
             {
                 Iterator<ILaunch> it = targets.iterator();
@@ -230,7 +247,7 @@ public class TerminateLaunchTool implements IMcpTool
             List<TerminationResult> results = new ArrayList<>();
             for (ILaunch launch : targets)
             {
-                results.add(terminateOne(launch, timeoutSeconds, force));
+                results.add(terminateOne(launchManager, launch, timeoutSeconds, force));
             }
 
             return renderResults(results, configName, projectName, applicationId, all,
@@ -340,17 +357,131 @@ public class TerminateLaunchTool implements IMcpTool
     }
 
     /**
+     * Second-chance selection for the stale-entry eviction: returns
+     * already-terminated EDT launches still present in the launch manager that
+     * match the same selection criteria as the live lookup (config name /
+     * project + applicationId / all, with the optional project narrowing).
+     *
+     * <p>The live-selection helpers ({@code findLiveLaunchByName} /
+     * {@code getAllLiveLaunches}) skip {@code isTerminated()} launches by
+     * design — correct for termination, but it made the
+     * {@code already_terminated} eviction unreachable for its target scenario:
+     * a launch whose TERMINATE event was missed lingers in
+     * {@link ILaunchManager}, blocks later runs, yet was never selected.
+     * Matches found here are routed through the {@code already_terminated} →
+     * {@code removeFromManager} path by the caller.
+     *
+     * <p>Restricted to EDT/1C configs ({@link LaunchConfigUtils#isEdtConfig})
+     * so unrelated Eclipse launches (Java apps, Ant tasks, …) are never
+     * evicted. Launches already picked by the live selection are skipped via
+     * an identity check, so the rare terminate-between-scans race cannot
+     * produce duplicate entries. Package-private for unit testing.
+     *
+     * @param launches        snapshot of {@link ILaunchManager#getLaunches()}
+     *                        (may be {@code null})
+     * @param alreadySelected launches the live selection already picked
+     *                        (never modified here)
+     * @return matching already-terminated launches (possibly empty)
+     */
+    static List<ILaunch> selectStaleTerminated(ILaunch[] launches, List<ILaunch> alreadySelected,
+            String configName, String projectName, String applicationId, boolean all,
+            boolean hasName, boolean hasProject, boolean hasAppId)
+    {
+        List<ILaunch> stale = new ArrayList<>();
+        if (launches == null)
+        {
+            return stale;
+        }
+        for (ILaunch launch : launches)
+        {
+            // Live launches are the primary selection's job; the identity skip
+            // covers a launch that terminated between the two scans.
+            if (launch == null || !launch.isTerminated()
+                || containsIdentity(alreadySelected, launch))
+            {
+                continue;
+            }
+            ILaunchConfiguration config = launch.getLaunchConfiguration();
+            if (config == null || !LaunchConfigUtils.isEdtConfig(config))
+            {
+                continue;
+            }
+            if (hasName)
+            {
+                if (configName.equals(config.getName()))
+                {
+                    stale.add(launch);
+                }
+                continue;
+            }
+            if (hasProject && hasAppId)
+            {
+                String project = LaunchConfigUtils.readAttribute(config,
+                    LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+                if (projectName.equals(project)
+                    && applicationId.equals(LaunchConfigUtils.getApplicationIdFor(launch)))
+                {
+                    stale.add(launch);
+                }
+                continue;
+            }
+            if (all)
+            {
+                if (hasProject)
+                {
+                    String project = LaunchConfigUtils.readAttribute(config,
+                        LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+                    if (!projectName.equals(project))
+                    {
+                        continue;
+                    }
+                }
+                stale.add(launch);
+            }
+        }
+        return stale;
+    }
+
+    /** Identity-based contains — {@link ILaunch} has no value equality. */
+    private static boolean containsIdentity(List<ILaunch> list, ILaunch launch)
+    {
+        if (list == null)
+        {
+            return false;
+        }
+        for (ILaunch candidate : list)
+        {
+            if (candidate == launch)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Terminates a single launch and reports the outcome. Attach launches are
      * disconnected via {@link IDisconnect}; runtime-client launches go through
      * {@link ILaunch#terminate()} with optional {@link IProcess#terminate()}
      * escalation on timeout.
      */
-    private static TerminationResult terminateOne(ILaunch launch, int timeoutSeconds, boolean force)
+    private static TerminationResult terminateOne(ILaunchManager launchManager, ILaunch launch,
+            int timeoutSeconds, boolean force)
     {
         TerminationResult result = new TerminationResult(launch);
         if (launch.isTerminated())
         {
             result.code = R_ALREADY_TERMINATED;
+            // Stale/orphaned case: a launch that is already
+            // terminated but still lingers in ILaunchManager would block a later
+            // run (e.g. run_yaxunit_tests sees it as a stale session). A plain
+            // terminate() is a no-op here, so removing it from the manager is the
+            // only way to clear it. We do this unconditionally for an
+            // already-terminated launch (no live process is at risk), and also
+            // clear any registry entry the missed TERMINATE event left behind.
+            // Reached both via the terminate-between-scans race and — the main
+            // route — via the selectStaleTerminated second pass.
+            removeFromManager(launchManager, launch, result);
             return result;
         }
 
@@ -410,8 +541,54 @@ public class TerminateLaunchTool implements IMcpTool
             result.code = R_ERROR;
             result.note = e.getMessage();
         }
+        // Once the launch is finished (terminated, force-terminated, or — for an
+        // Attach — detached), evict it from ILaunchManager so no stale entry
+        // lingers for a later run to trip over. On R_TIMEOUT /
+        // R_ERROR the launch may still be live, so we leave it in place. Removal
+        // also clears this app's DebugSessionRegistry entry.
+        if (R_TERMINATED.equals(result.code) || R_FORCE_TERMINATED.equals(result.code)
+            || R_DETACHED.equals(result.code))
+        {
+            removeFromManager(launchManager, launch, result);
+        }
         result.durationMs = System.currentTimeMillis() - start;
         return result;
+    }
+
+    /**
+     * Evicts the given launch from {@link ILaunchManager} (so a terminated-but-not-
+     * removed launch cannot linger and block a later run) and clears any cached
+     * {@link DebugSessionRegistry} state for its applicationId. Strictly targeted:
+     * it removes only the one resolved launch, never an unrelated one. Best-effort —
+     * a failure to remove is logged and recorded as a note, not thrown.
+     */
+    private static void removeFromManager(ILaunchManager launchManager, ILaunch launch,
+            TerminationResult result)
+    {
+        // Clear registry state first — even if removeLaunch were to fail, a missed
+        // TERMINATE event should not leave a stale suspend snapshot behind.
+        if (result.applicationId != null && !result.applicationId.isEmpty())
+        {
+            DebugSessionRegistry.get().forgetApplication(result.applicationId);
+        }
+        if (launchManager == null)
+        {
+            return;
+        }
+        try
+        {
+            launchManager.removeLaunch(launch);
+            result.removed = true;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Error removing launch " + result.configName //$NON-NLS-1$
+                + " from the launch manager", e); //$NON-NLS-1$
+            String detail = "Launch ended but could not be removed from the registry: " //$NON-NLS-1$
+                + e.getMessage();
+            result.note = result.note == null || result.note.isEmpty()
+                ? detail : result.note + " " + detail; //$NON-NLS-1$
+        }
     }
 
     private static void disconnectAll(ILaunch launch) throws DebugException
@@ -538,8 +715,13 @@ public class TerminateLaunchTool implements IMcpTool
             sb.append("**includeAttach:** false\n"); //$NON-NLS-1$
         }
         sb.append('\n');
-        sb.append("No live EDT launch matched the request. Use `list_configurations` to see " //$NON-NLS-1$
-            + "what is currently running (look for entries with `running: true`)."); //$NON-NLS-1$
+        // Keep the canonical sentinel "No live EDT launch matched the request" CONTIGUOUS —
+        // callers (and the upstream e2e suite) match it as a substring; the stale-entry
+        // clarification lives in the trailing parenthetical instead of splitting the phrase.
+        sb.append("No live EDT launch matched the request " //$NON-NLS-1$
+            + "(no lingering already-terminated entries matched either). " //$NON-NLS-1$
+            + "Use `list_configurations` to see what is currently running " //$NON-NLS-1$
+            + "(look for entries with `running: true`)."); //$NON-NLS-1$
         return sb.toString();
     }
 
@@ -551,8 +733,14 @@ public class TerminateLaunchTool implements IMcpTool
         int timedOut = 0;
         int errors = 0;
         int alreadyTerminated = 0;
+        int removed = 0;
+        int staleCleaned = 0;
         for (TerminationResult r : results)
         {
+            if (r.removed)
+            {
+                removed++;
+            }
             switch (r.code)
             {
                 case R_TERMINATED:
@@ -570,6 +758,13 @@ public class TerminateLaunchTool implements IMcpTool
                     break;
                 case R_ALREADY_TERMINATED:
                     alreadyTerminated++;
+                    // Stale entry (was already terminated, only lingered in the
+                    // manager) that this call actually evicted — report these
+                    // distinctly from real terminations.
+                    if (r.removed)
+                    {
+                        staleCleaned++;
+                    }
                     break;
                 default:
                     break;
@@ -596,6 +791,12 @@ public class TerminateLaunchTool implements IMcpTool
                 .append(", timeout: ").append(timedOut) //$NON-NLS-1$
                 .append(", already_terminated: ").append(alreadyTerminated) //$NON-NLS-1$
                 .append(", errors: ").append(errors).append(")\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append("**Removed from registry:** ").append(removed).append('\n'); //$NON-NLS-1$
+            if (alreadyTerminated > 0)
+            {
+                sb.append("**Stale already-terminated launches cleaned:** ") //$NON-NLS-1$
+                    .append(staleCleaned).append('\n');
+            }
             sb.append("**Scope:** ").append(formatScope(configName, projectName, applicationId, all)) //$NON-NLS-1$
                 .append('\n');
             if (!includeAttach)
@@ -663,6 +864,7 @@ public class TerminateLaunchTool implements IMcpTool
             sb.append("**Mode:** ").append(r.mode).append('\n'); //$NON-NLS-1$
         }
         sb.append("**Attach:** ").append(r.attach ? "Yes" : "No").append('\n'); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append("**Removed from registry:** ").append(r.removed ? "Yes" : "No").append('\n'); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         sb.append("**Duration:** ").append(r.durationMs).append(" ms\n"); //$NON-NLS-1$ //$NON-NLS-2$
         if (r.note != null && !r.note.isEmpty())
         {
@@ -800,6 +1002,8 @@ public class TerminateLaunchTool implements IMcpTool
         String code;
         String note;
         long durationMs;
+        /** True once the launch has been evicted from {@link ILaunchManager}. */
+        boolean removed;
 
         TerminationResult(ILaunch launch)
         {

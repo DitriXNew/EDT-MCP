@@ -65,6 +65,11 @@ public class DebugYaxunitTestsToolTest
         assertTrue(schema.contains("\"tests\""));
         assertTrue("schema must include updateBeforeLaunch (auto-chain switch)",
             schema.contains("\"updateBeforeLaunch\""));
+        // Parity with run_yaxunit_tests: the deprecated alias declares (and forwards)
+        // updateScope so callers can narrow the pre-launch recompute to a specific
+        // extension. The production code already declares+forwards it; pin it here.
+        assertTrue("schema must include updateScope (parity with run_yaxunit_tests)",
+            schema.contains("\"updateScope\""));
     }
 
     @Test

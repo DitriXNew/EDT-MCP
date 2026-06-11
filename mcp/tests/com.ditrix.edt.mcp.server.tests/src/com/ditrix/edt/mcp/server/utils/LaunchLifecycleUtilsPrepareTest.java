@@ -13,6 +13,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -28,6 +29,8 @@ import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchManager;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
@@ -37,6 +40,8 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
  * Mock-driven tests for {@link LaunchLifecycleUtils#prepareForFreshLaunch}.
+ * A {@code null} updateScope means the full "all" scope (the configuration plus
+ * its dependent extensions) — the same default the production call sites use.
  *
  * <p>Covers the auto-chain's behaviour against live launches whose
  * {@code applicationId} does not match the one being prepared — specifically
@@ -49,6 +54,21 @@ public class LaunchLifecycleUtilsPrepareTest
 {
     private static final String PROJECT_NAME = "MyProject";
     private static final String RUNTIME_APP_ID = "real-app-uuid";
+
+    @Before
+    public void shrinkTimings()
+    {
+        // The up-to-date app manager reads UPDATED; without shrinking, the new
+        // settle-before-decide window (default 5s) would make each terminate test
+        // sleep needlessly. 20ms settle keeps these terminate-phase tests fast.
+        LaunchLifecycleUtils.setSyncTimingsForTest(20L, 200L, 5L);
+    }
+
+    @After
+    public void restoreTimings()
+    {
+        LaunchLifecycleUtils.resetSyncTimingsForTest();
+    }
 
     private static IProject mockOpenProject()
     {
@@ -141,7 +161,7 @@ public class LaunchLifecycleUtilsPrepareTest
         when(launchManager.getLaunches()).thenReturn(new ILaunch[] { attachLaunch });
 
         PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
-            launchManager, mockOpenProject(), RUNTIME_APP_ID, mockUpToDateAppManager(), 2);
+            launchManager, mockOpenProject(), RUNTIME_APP_ID, mockUpToDateAppManager(), 2, null);
 
         assertTrue("auto-chain must succeed: " + result.getError(), result.isOk());
         assertEquals("stale attach must be counted as swept",
@@ -176,7 +196,7 @@ public class LaunchLifecycleUtilsPrepareTest
 
             PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
                 launchManager, mockOpenProject(), RUNTIME_APP_ID,
-                mockUpToDateAppManager(), 2);
+                mockUpToDateAppManager(), 2, null);
 
             assertFalse("owned attach must block the chain", result.isOk());
             assertTrue("error must mention the owning launch by name",
@@ -206,11 +226,62 @@ public class LaunchLifecycleUtilsPrepareTest
         when(launchManager.getLaunches()).thenReturn(new ILaunch[] { runtimeLaunch });
 
         PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
-            launchManager, mockOpenProject(), RUNTIME_APP_ID, mockUpToDateAppManager(), 2);
+            launchManager, mockOpenProject(), RUNTIME_APP_ID, mockUpToDateAppManager(), 2, null);
 
         assertTrue("auto-chain must succeed: " + result.getError(), result.isOk());
         assertEquals(1, result.getTerminatedCount());
         verify(runtimeLaunch, atLeastOnce()).terminate();
+    }
+
+    @Test
+    public void testUnknownUpdateScopeFailsFastBeforeTerminating() throws Exception
+    {
+        // A typo'd extension name in updateScope must be a HARD
+        // ERROR raised BEFORE any live launch is terminated — a stale-green guard
+        // must not cost the user a running client. Headless, no extension
+        // projects are discoverable, so the requested name is guaranteed unknown.
+        ILaunchConfiguration runtimeCfg = mockRuntimeConfig(
+            "MyApp.RuntimeClient", PROJECT_NAME, RUNTIME_APP_ID);
+        ILaunch runtimeLaunch = mock(ILaunch.class);
+        when(runtimeLaunch.getLaunchConfiguration()).thenReturn(runtimeCfg);
+        wireSelfTerminating(runtimeLaunch);
+
+        ILaunchManager launchManager = mock(ILaunchManager.class);
+        when(launchManager.getLaunches()).thenReturn(new ILaunch[] { runtimeLaunch });
+
+        PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
+            launchManager, mockOpenProject(), RUNTIME_APP_ID, mockUpToDateAppManager(), 2,
+            "extension:NoSuchExtension");
+
+        assertFalse("an unknown extension name must fail the chain", result.isOk());
+        assertTrue("error must name the unknown extension",
+            result.getError() != null && result.getError().contains("NoSuchExtension"));
+        verify(runtimeLaunch, never()).terminate();
+    }
+
+    @Test
+    public void testSettleWindowAlwaysKeptAfterRecompute() throws Exception
+    {
+        // The post-recompute settle window is UNCONDITIONAL: the lagging
+        // UPDATE_STATE_CHANGED push it exists for is emitted by the
+        // applications-layer infobase-sync checker AFTER the recompute drain, so
+        // no during-drain observation can prove it will not come. Even with no
+        // update event delivered at all, the state must be re-polled beyond the
+        // single cheap entry read before "no update needed" is trusted.
+        ILaunchManager launchManager = mock(ILaunchManager.class);
+        when(launchManager.getLaunches()).thenReturn(new ILaunch[0]);
+
+        IApplication app = mock(IApplication.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplication(any(IProject.class), eq(RUNTIME_APP_ID)))
+            .thenReturn(Optional.of(app));
+        when(mgr.getUpdateState(app)).thenReturn(ApplicationUpdateState.UPDATED);
+
+        PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
+            launchManager, mockOpenProject(), RUNTIME_APP_ID, mgr, 2, null);
+
+        assertTrue("auto-chain must succeed: " + result.getError(), result.isOk());
+        verify(mgr, atLeast(2)).getUpdateState(app);
     }
 
     @Test
@@ -236,12 +307,67 @@ public class LaunchLifecycleUtilsPrepareTest
             .thenReturn(new ILaunch[] { runtimeLaunch, attachLaunch });
 
         PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
-            launchManager, mockOpenProject(), RUNTIME_APP_ID, mockUpToDateAppManager(), 2);
+            launchManager, mockOpenProject(), RUNTIME_APP_ID, mockUpToDateAppManager(), 2, null);
 
         assertTrue("auto-chain must succeed: " + result.getError(), result.isOk());
         assertEquals("both runtime and attach must be counted",
             2, result.getTerminatedCount());
         verify(runtimeLaunch, atLeastOnce()).terminate();
         verify(attachLaunch, atLeastOnce()).terminate();
+    }
+
+    // ============ server-application update deferred to the launch delegate ============
+
+    /** A standalone-server application id — the literal {@code ServerApplication.} prefix. */
+    private static final String SERVER_APP_ID = "ServerApplication.MyServer";
+
+    @Test
+    public void testServerApplicationSkipsProgrammaticUpdate() throws Exception
+    {
+        // For a ServerApplication.* id the auto-chain must NOT run
+        // the programmatic DB update — IApplicationManager.update on a standalone-server
+        // application starts the server in RUN mode and caches a designer-agent
+        // connection whose teardown wedges the launch delegate's debug restart. The
+        // chain still succeeds (ok=true) so the caller proceeds to workingCopy.launch,
+        // where the armed update confirmer covers the delegate's coordinated update
+        // dialog — but the application manager must never be touched.
+        ILaunchManager launchManager = mock(ILaunchManager.class);
+        when(launchManager.getLaunches()).thenReturn(new ILaunch[0]);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+
+        PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
+            launchManager, mockOpenProject(), SERVER_APP_ID, mgr, 2, null);
+
+        assertTrue("auto-chain must succeed for a server application: " + result.getError(),
+            result.isOk());
+        verify(mgr, never()).update(any(), any(), any(), any());
+        verify(mgr, never()).getUpdateState(any());
+        verify(mgr, never()).getApplication(any(IProject.class), anyString());
+    }
+
+    @Test
+    public void testServerApplicationStillSweepsStaleLaunches() throws Exception
+    {
+        // The server-application gate skips ONLY the update step: the terminate-stale pass (which does
+        // not open infobase connections) must still sweep a live launch carrying the
+        // same ServerApplication.* id, and the counter must reflect it — while the
+        // update itself stays deferred to the launch delegate.
+        ILaunchConfiguration runtimeCfg = mockRuntimeConfig(
+            "MyServer.ThinClient", PROJECT_NAME, SERVER_APP_ID);
+        ILaunch runtimeLaunch = mock(ILaunch.class);
+        when(runtimeLaunch.getLaunchConfiguration()).thenReturn(runtimeCfg);
+        wireSelfTerminating(runtimeLaunch);
+
+        ILaunchManager launchManager = mock(ILaunchManager.class);
+        when(launchManager.getLaunches()).thenReturn(new ILaunch[] { runtimeLaunch });
+        IApplicationManager mgr = mock(IApplicationManager.class);
+
+        PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
+            launchManager, mockOpenProject(), SERVER_APP_ID, mgr, 2, null);
+
+        assertTrue("auto-chain must succeed: " + result.getError(), result.isOk());
+        assertEquals("the stale launch must still be swept", 1, result.getTerminatedCount());
+        verify(runtimeLaunch, atLeastOnce()).terminate();
+        verify(mgr, never()).update(any(), any(), any(), any());
     }
 }

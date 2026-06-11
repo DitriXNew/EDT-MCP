@@ -11,8 +11,11 @@ import java.util.Optional;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugPlugin;
-import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchManager;
@@ -24,9 +27,11 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
-import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
+import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -81,7 +86,15 @@ public class DebugLaunchTool implements IMcpTool
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
                 "Exact name of an EDT debug launch config (runtime client or Attach); skips projectName/applicationId.") //$NON-NLS-1$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
-                "Update the database before launching. Default true; ignored for Attach.") //$NON-NLS-1$
+                "Default true: silently apply the configuration->DB update before launching so no " //$NON-NLS-1$
+                    + "'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog " //$NON-NLS-1$
+                    + "is auto-confirmed); false skips the update and the platform may then show that " //$NON-NLS-1$
+                    + "modal. Ignored for Attach.") //$NON-NLS-1$
+            .booleanProperty("restartIfRunning", //$NON-NLS-1$
+                "Default false: if a matching session is already running, short-circuit with " //$NON-NLS-1$
+                    + "alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). " //$NON-NLS-1$
+                    + "true: non-interactively terminate the existing session, then relaunch — no " //$NON-NLS-1$
+                    + "'Debug session already exists' modal blocks the call.") //$NON-NLS-1$
             .build();
     }
 
@@ -97,6 +110,8 @@ public class DebugLaunchTool implements IMcpTool
             .stringProperty("applicationId", "Application id of the launched configuration") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("alreadyRunning", "True if a matching session was already alive; re-launch skipped") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("mode", "Launch mode of the session (e.g. debug, run)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("status", "\"launching\" when the launch was dispatched asynchronously and is " //$NON-NLS-1$ //$NON-NLS-2$
+                + "still starting; absent on the alreadyRunning short-circuit. Poll debug_status for readiness.") //$NON-NLS-1$
             .stringProperty("message", "Human-readable status message") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -114,11 +129,12 @@ public class DebugLaunchTool implements IMcpTool
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, "updateBeforeLaunch", true); //$NON-NLS-1$
+        boolean restartIfRunning = JsonUtils.extractBooleanArgument(params, "restartIfRunning", false); //$NON-NLS-1$
 
         // Mode 1: explicit config name — no project/application required.
         if (configName != null && !configName.isEmpty())
         {
-            return launchByConfigName(configName, updateBeforeLaunch);
+            return launchByConfigName(configName, updateBeforeLaunch, restartIfRunning);
         }
 
         // Mode 2: project + application (runtime-client only).
@@ -141,14 +157,15 @@ public class DebugLaunchTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        return launchDebug(projectName, applicationId, updateBeforeLaunch);
+        return launchDebug(projectName, applicationId, updateBeforeLaunch, restartIfRunning);
     }
 
     /**
      * Launches a specific EDT debug configuration by name.
      * Works for both runtime-client and Attach configuration types.
      */
-    private String launchByConfigName(String configName, boolean updateBeforeLaunch)
+    private String launchByConfigName(String configName, boolean updateBeforeLaunch,
+        boolean restartIfRunning)
     {
         try
         {
@@ -173,23 +190,53 @@ public class DebugLaunchTool implements IMcpTool
                 LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
             String effectiveAppId = LaunchConfigUtils.getApplicationIdFor(config);
 
-            // If the config is already running in debug mode, don't re-launch.
-            if (effectiveAppId != null
-                && DebugSessionRegistry.findActiveTarget(effectiveAppId) != null)
+            // Unified existing-session decision. One
+            // (project, app-id) → at most one live CLIENT session, with the
+            // CLIENT-typed-thread discriminator applied so a standalone-SERVER /
+            // profiling session sharing this app id — including a debug-mode server
+            // whose live thread is typed SERVER — NEVER short-circuits the client.
+            // Covers both a live DEBUG target and a debug-target-less RUN-mode launch
+            // (the legacy already-running guard). restartIfRunning is honored here exactly as in
+            // the target-manager path: false → alreadyRunning, true → non-interactive
+            // terminate + relaunch.
+            ExistingClientSession existingByName =
+                LaunchLifecycleUtils.resolveExistingClientSession(effectiveAppId);
+            if (existingByName != null)
             {
-                ToolResult already = ToolResult.success()
-                    .put("launchConfiguration", config.getName()) //$NON-NLS-1$
-                    .put("configurationType", typeId) //$NON-NLS-1$
-                    .put("attach", isAttach) //$NON-NLS-1$
-                    .put("applicationId", effectiveAppId) //$NON-NLS-1$
-                    .put("alreadyRunning", true) //$NON-NLS-1$
-                    .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put("message", "Launch configuration is already running — skipped re-launch."); //$NON-NLS-1$ //$NON-NLS-2$
-                if (configProject != null && !configProject.isEmpty())
+                AlreadyRunningContext ctx = new AlreadyRunningContext(ALREADY_RUNNING_MESSAGE);
+                ctx.launchConfiguration = config.getName();
+                ctx.configurationType = typeId;
+                ctx.attach = Boolean.valueOf(isAttach);
+                ctx.project = configProject;
+                String shortCircuit = handleExistingClientSession(existingByName, effectiveAppId,
+                    restartIfRunning, ctx);
+                if (shortCircuit != null)
                 {
-                    already.put("project", configProject); //$NON-NLS-1$
+                    return shortCircuit;
                 }
-                return already.toJson();
+                // restartIfRunning=true: the old client was terminated — fall through
+                // and relaunch.
+            }
+
+            // Delegate-criterion duplicate guard. Runtime-client DEBUG
+            // path only: the "Debug session already exists" code-1003 modal is raised
+            // by RuntimeClientLaunchDelegate, which scans
+            // IRuntimeDebugClientTargetManager.listDebugTargets() (NOT ILaunchManager)
+            // and keys on ATTR_PROJECT_NAME + (ATTR_APPLICATION_ID else default app).
+            // Our findActiveTarget/findActiveLaunch guards above scan ILaunchManager
+            // and key on getApplicationIdFor() — so a UI-started ("Debug As") session,
+            // or a config without a persisted ATTR_APPLICATION_ID (we mint a synthetic
+            // launch:<name> the delegate never uses), slips past them and the unattended
+            // call then hangs on the human modal. This supplements them with the
+            // delegate's own set + key.
+            if (!isAttach && configProject != null && !configProject.isEmpty())
+            {
+                String dupResult = handleDelegateDuplicateSession(config, configProject,
+                    isAttach, typeId, restartIfRunning);
+                if (dupResult != null)
+                {
+                    return dupResult;
+                }
             }
 
             // For runtime-client configs, run the usual DB-update preflight.
@@ -207,7 +254,7 @@ public class DebugLaunchTool implements IMcpTool
                 }
             }
 
-            String launchError = performLaunch(config);
+            String launchError = performLaunch(config, updateBeforeLaunch);
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch debug session: " + launchError).toJson(); //$NON-NLS-1$
@@ -218,10 +265,14 @@ public class DebugLaunchTool implements IMcpTool
                 .put("configurationType", typeId) //$NON-NLS-1$
                 .put("attach", isAttach) //$NON-NLS-1$
                 .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("status", "launching") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("message", isAttach //$NON-NLS-1$
-                    ? "Attach debug session started — use debug_status to inspect, " //$NON-NLS-1$
-                        + "wait_for_break to block until a breakpoint is hit." //$NON-NLS-1$
-                    : "Debug session started successfully"); //$NON-NLS-1$
+                    ? "Attach debug session is connecting — poll debug_status to confirm it is " //$NON-NLS-1$
+                        + "running, then wait_for_break to block until a breakpoint is hit." //$NON-NLS-1$
+                    : "Debug session is starting asynchronously. The 1C client may show startup " //$NON-NLS-1$
+                        + "dialogs (login / database update); this call does NOT wait for it. " //$NON-NLS-1$
+                        + "Poll debug_status until the session appears running, then use " //$NON-NLS-1$
+                        + "wait_for_break."); //$NON-NLS-1$
             if (configProject != null && !configProject.isEmpty())
             {
                 result.put("project", configProject); //$NON-NLS-1$
@@ -242,7 +293,8 @@ public class DebugLaunchTool implements IMcpTool
     /**
      * Legacy path: launch a runtime-client config matched by project+application.
      */
-    private String launchDebug(String projectName, String applicationId, boolean updateBeforeLaunch)
+    private String launchDebug(String projectName, String applicationId, boolean updateBeforeLaunch,
+        boolean restartIfRunning)
     {
         try
         {
@@ -285,68 +337,48 @@ public class DebugLaunchTool implements IMcpTool
                 }
             }
 
-            // If this application already has a live debug session, short-circuit
-            // — mirrors the launchConfigurationName path so both call styles behave
-            // the same. To force a fresh launch, terminate_launch first.
-            IDebugTarget activeTarget = DebugSessionRegistry.findActiveTarget(applicationId);
-            if (activeTarget != null)
+            // Unified existing-session decision — the SAME
+            // CLIENT-typed-thread-discriminated detector + restartIfRunning handling
+            // the by-name path uses, so both call styles behave identically. A live
+            // DEBUG client target OR a debug-target-less RUN-mode launch
+            // short-circuits (the legacy already-running guard); a standalone-SERVER session
+            // sharing this app id — even a debug-mode one with a live SERVER-typed
+            // thread — does NOT (the client proceeds and attaches). To force a fresh
+            // launch when restartIfRunning is false, terminate_launch first.
+            ExistingClientSession existingByApp =
+                LaunchLifecycleUtils.resolveExistingClientSession(applicationId);
+            if (existingByApp != null)
             {
-                String activeConfigName = activeTarget.getLaunch() != null
-                    && activeTarget.getLaunch().getLaunchConfiguration() != null
-                        ? activeTarget.getLaunch().getLaunchConfiguration().getName()
-                        : null;
-                Activator.logInfo("debug_launch short-circuit (alreadyRunning): project=" //$NON-NLS-1$
-                    + projectName + ", applicationId=" + applicationId //$NON-NLS-1$
-                    + ", activeConfig=" + activeConfigName); //$NON-NLS-1$
-                ToolResult already = ToolResult.success()
-                    .put("project", projectName) //$NON-NLS-1$
-                    .put("applicationId", applicationId) //$NON-NLS-1$
-                    .put("attach", false) //$NON-NLS-1$
-                    .put("alreadyRunning", true) //$NON-NLS-1$
-                    .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put("message", "Launch configuration is already running — skipped re-launch. " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "Call terminate_launch first to force a fresh session.");
-                if (activeConfigName != null)
-                {
-                    already.put("launchConfiguration", activeConfigName); //$NON-NLS-1$
-                }
-                return already.toJson();
-            }
-
-            // A non-terminated launch may exist for this application WITHOUT a debug
-            // target - e.g. it was started in RUN mode. findActiveTarget() (debug
-            // targets only) misses it, so without this guard debug_launch would start
-            // a SECOND client over the running one. (audit A12)
-            ILaunch activeLaunch = DebugSessionRegistry.findActiveLaunch(applicationId);
-            if (activeLaunch != null)
-            {
-                String runningMode = activeLaunch.getLaunchMode();
-                ILaunchConfiguration activeConfig = activeLaunch.getLaunchConfiguration();
-                ToolResult already = ToolResult.success()
-                    .put("project", projectName) //$NON-NLS-1$
-                    .put("applicationId", applicationId) //$NON-NLS-1$
-                    .put("attach", false) //$NON-NLS-1$
-                    .put("alreadyRunning", true) //$NON-NLS-1$
-                    .put("mode", runningMode) //$NON-NLS-1$
-                    .put("message", "Application is already running (mode: " + runningMode //$NON-NLS-1$ //$NON-NLS-2$
-                        + ") - skipped launch to avoid a second client over the running session. " //$NON-NLS-1$
-                        + "Call terminate_launch first to force a fresh session."); //$NON-NLS-1$
+                ILaunchConfiguration activeConfig = existingByApp.launch != null
+                    ? existingByApp.launch.getLaunchConfiguration() : null;
+                AlreadyRunningContext runningCtx = new AlreadyRunningContext(ALREADY_RUNNING_MESSAGE);
+                runningCtx.project = projectName;
+                runningCtx.attach = Boolean.FALSE;
                 if (activeConfig != null)
                 {
-                    already.put("launchConfiguration", activeConfig.getName()); //$NON-NLS-1$
+                    runningCtx.launchConfiguration = activeConfig.getName();
                 }
-                return already.toJson();
+                String shortCircuit = handleExistingClientSession(existingByApp, applicationId,
+                    restartIfRunning, runningCtx);
+                if (shortCircuit != null)
+                {
+                    return shortCircuit;
+                }
+                // restartIfRunning=true: the old client was terminated — fall through
+                // and relaunch.
             }
 
             // Update database before launch if requested. Routes through the
             // shared LaunchLifecycleUtils.updateApplicationIfNeeded so debug_launch
             // analyses "does the IB need updating?" the same way the YAXUnit tools
             // do: skip on UPDATED, wait on BEING_UPDATED, incremental-update otherwise.
-            if (updateBeforeLaunch && appManager != null && application != null)
+            // For a STANDALONE-SERVER application the programmatic update is SKIPPED
+            // and deferred to the launch delegate's coordinated path instead — see
+            // runPreLaunchUpdateStep.
+            if (appManager != null && application != null)
             {
-                String updateError = LaunchLifecycleUtils
-                    .updateApplicationIfNeeded(project, applicationId, appManager)
-                    .orElse(null);
+                String updateError = runPreLaunchUpdateStep(project, applicationId,
+                    appManager, updateBeforeLaunch);
                 if (updateError != null)
                 {
                     return ToolResult.error(updateError).toJson();
@@ -388,7 +420,19 @@ public class DebugLaunchTool implements IMcpTool
                 + ", project=" + projectName //$NON-NLS-1$
                 + ", application=" + applicationId); //$NON-NLS-1$
 
-            String launchError = performLaunch(matchingConfig);
+            // Delegate-criterion duplicate guard — same supplement as
+            // the by-name path: catch a UI-started / target-manager-only DEBUG session
+            // the ILaunchManager guards above cannot see, BEFORE config.launch raises
+            // the human "Debug session already exists" modal. See
+            // handleDelegateDuplicateSession.
+            String dupResult = handleDelegateDuplicateSession(matchingConfig, projectName,
+                false, LaunchConfigUtils.getConfigTypeId(matchingConfig), restartIfRunning);
+            if (dupResult != null)
+            {
+                return dupResult;
+            }
+
+            String launchError = performLaunch(matchingConfig, updateBeforeLaunch);
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch debug session: " + launchError).toJson(); //$NON-NLS-1$
@@ -401,7 +445,10 @@ public class DebugLaunchTool implements IMcpTool
                 .put("configurationType", LaunchConfigUtils.getConfigTypeId(matchingConfig)) //$NON-NLS-1$
                 .put("attach", false) //$NON-NLS-1$
                 .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("message", "Debug session started successfully") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("status", "launching") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("message", "Debug session is starting asynchronously. The 1C client may show " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "startup dialogs (login / database update); this call does NOT wait for it. " //$NON-NLS-1$
+                    + "Poll debug_status until the session appears running, then use wait_for_break.") //$NON-NLS-1$
                 .toJson();
         }
         catch (Exception e)
@@ -414,11 +461,40 @@ public class DebugLaunchTool implements IMcpTool
     /**
      * Runs the EDT "update database before launch" step for a runtime-client launch.
      * Returns {@code null} on success, or an error message describing the failure.
+     *
+     * <p>Synthetic application ids — {@code attach:<configName>},
+     * {@code launch:<configName>} and {@code ServerApplication.<app>}, see
+     * {@link LaunchConfigUtils#isSyntheticApplicationId} — skip the preflight.
+     * They are minted by
+     * {@link LaunchConfigUtils#getApplicationIdFor(ILaunchConfiguration)} (or, for
+     * the {@code ServerApplication.} form, by
+     * {@code DebugServerTargetSupport}) for sessions WITHOUT a persisted
+     * {@code ATTR_APPLICATION_ID} and cannot be
+     * resolved through {@link IApplicationManager}: feeding one into
+     * {@code updateApplicationIfNeeded} fails with "Application not found:
+     * launch:&lt;name&gt;" and would refuse a perfectly launchable configuration.
+     * (The original guard knew only the {@code attach:} prefix, so introducing the
+     * {@code launch:} fallback for UI-started-session tracking silently turned
+     * such by-name launches into errors.) Skipping is safe:
+     * if the launch delegate still detects an out-of-date IB it shows its update
+     * modal, which the armed {@link LaunchUpdateDialogAutoConfirmer} presses.
+     *
+     * <p>For the {@code ServerApplication.*} form the skip is not merely an
+     * "unresolvable id" technicality — it is the INTENDED behavior: a
+     * standalone-server application must never be DB-updated out-of-band,
+     * because {@code IApplicationManager.update} on it starts the standalone server
+     * in RUN mode and holds a cached designer-agent connection that wedges the
+     * subsequent debug restart. The update is deferred to the launch delegate's
+     * coordinated path (server prepared in debug mode FIRST, then updated), whose
+     * dialog the armed confirmer auto-presses — see
+     * {@link DebugServerTargetSupport#isServerApplicationId} and
+     * {@link #runPreLaunchUpdateStep}, the same gate on the
+     * project+applicationId path.
      */
     private String updateDatabaseIfNeeded(String projectName, String applicationId)
     {
         if (applicationId == null || applicationId.isEmpty()
-            || applicationId.startsWith(LaunchConfigUtils.ATTACH_APP_ID_PREFIX))
+            || LaunchConfigUtils.isSyntheticApplicationId(applicationId))
         {
             return null;
         }
@@ -440,50 +516,398 @@ public class DebugLaunchTool implements IMcpTool
     }
 
     /**
-     * Launches the given configuration in debug mode.
+     * The pre-launch DB-update step of the project+applicationId path, with the
+     * server-application gate. Returns {@code null} to proceed with
+     * the launch, or an error message that aborts the call.
      *
-     * <p>Uses a direct {@code config.launch(DEBUG_MODE, null)} — not
+     * <ul>
+     *   <li>{@code updateBeforeLaunch=false} — documented opt-out: no programmatic
+     *       update is run (and {@link #performLaunch} leaves the update confirmer
+     *       unarmed, so the platform's update modal — if any — is a human's).</li>
+     *   <li>{@code ServerApplication.*} id ({@link
+     *       DebugServerTargetSupport#isServerApplicationId}) — the programmatic
+     *       update is SKIPPED and deferred to the launch delegate's coordinated
+     *       path. Updating a standalone-server application out-of-band starts the
+     *       server in RUN mode and caches a live designer-agent connection
+     *       (DesignerSessionPool); the launch delegate then restarts the server in
+     *       DEBUG mode and the connection teardown wedges the launch. EDT's native
+     *       order (prepare the server in debug mode FIRST, then update) has no such
+     *       restart; its "Application update" dialog — shown only when the IB is
+     *       stale — is auto-pressed by the confirmer {@link #performLaunch} arms
+     *       exactly when {@code updateBeforeLaunch=true}. Trade-off: the synchronous
+     *       "stale IB" refusal disappears for server apps (the update happens
+     *       asynchronously inside the launch); failures surface via
+     *       {@code debug_status} / the EDT log — matching EDT-native UX.</li>
+     *   <li>Any other (file / client-server infobase) application — the programmatic
+     *       pre-update runs exactly as before through
+     *       {@link LaunchLifecycleUtils#updateApplicationIfNeeded}: skip on UPDATED,
+     *       wait on BEING_UPDATED, incremental-update otherwise; a stale IB still
+     *       refuses synchronously.</li>
+     * </ul>
+     *
+     * <p>Package-private (static, mock-friendly) so the headless unit tests can
+     * assert the gate decision without a live workbench.
+     */
+    static String runPreLaunchUpdateStep(IProject project, String applicationId,
+        IApplicationManager appManager, boolean updateBeforeLaunch)
+    {
+        if (!updateBeforeLaunch)
+        {
+            return null;
+        }
+        if (DebugServerTargetSupport.isServerApplicationId(applicationId))
+        {
+            Activator.logInfo("debug_launch: server application: deferring DB update to the " //$NON-NLS-1$
+                + "launch delegate's coordinated path (auto-confirmed): applicationId=" //$NON-NLS-1$
+                + applicationId);
+            return null;
+        }
+        return LaunchLifecycleUtils.updateApplicationIfNeeded(project, applicationId, appManager)
+            .orElse(null);
+    }
+
+    /**
+     * The single existing-CLIENT-session handler all {@code ILaunchManager}-sourced
+     * call sites funnel through, so {@code restartIfRunning} is honored identically
+     * everywhere:
+     * <ul>
+     *   <li>{@code restartIfRunning=false} (default) → returns the
+     *       {@code alreadyRunning:true} short-circuit JSON (no launch), carrying the
+     *       identity fields the caller supplied.</li>
+     *   <li>{@code restartIfRunning=true} → non-interactively terminates the existing
+     *       client session (its live DEBUG target, or — for a RUN-mode launch — the
+     *       launch) via the shared
+     *       {@link LaunchLifecycleUtils#terminateExistingSessionAndWait} /
+     *       {@link LaunchLifecycleUtils#terminateExistingLaunchAndWait} helpers
+     *       (terminate + {@code forgetApplication} + ≤3s wait), then returns
+     *       {@code null} so the caller relaunches — exactly what the target-manager
+     *       path ({@link #handleDelegateDuplicateSession}) already does.</li>
+     * </ul>
+     *
+     * @param session the resolved live client session (never {@code null})
+     * @param applicationId the application id under which the session was found
+     * @param restartIfRunning the flag from the request
+     * @param ctx identity fields to echo into the {@code alreadyRunning} payload
+     * @return the short-circuit JSON, or {@code null} to proceed with the launch
+     */
+    String handleExistingClientSession(ExistingClientSession session, String applicationId,
+        boolean restartIfRunning, AlreadyRunningContext ctx)
+    {
+        if (!restartIfRunning)
+        {
+            Activator.logInfo("debug_launch short-circuit (alreadyRunning): applicationId=" //$NON-NLS-1$
+                + applicationId + ", mode=" + session.mode //$NON-NLS-1$
+                + ", config=" + ctx.launchConfiguration); //$NON-NLS-1$
+            return ctx.buildAlreadyRunning(session.mode, applicationId).toJson();
+        }
+
+        // restartIfRunning: stop the existing client session non-interactively, then
+        // proceed. resolveExistingClientSession only ever returns a real client (a
+        // DEBUG target with a live CLIENT-typed thread, or a RUN-mode launch), NEVER
+        // a server/profiling target — a debug-mode standalone server's live thread is
+        // typed SERVER and is filtered out — so this terminate can never kill a debug
+        // server.
+        if (session.liveTarget != null)
+        {
+            Activator.logInfo("debug_launch restartIfRunning: terminating existing client debug " //$NON-NLS-1$
+                + "target: applicationId=" + applicationId); //$NON-NLS-1$
+            LaunchLifecycleUtils.terminateExistingSessionAndWait(session.liveTarget, applicationId);
+        }
+        else
+        {
+            Activator.logInfo("debug_launch restartIfRunning: terminating existing client launch " //$NON-NLS-1$
+                + "(mode=" + session.mode + "): applicationId=" + applicationId); //$NON-NLS-1$ //$NON-NLS-2$
+            LaunchLifecycleUtils.terminateExistingLaunchAndWait(session.launch, applicationId);
+        }
+        return null;
+    }
+
+    /**
+     * Identity fields echoed into an {@code alreadyRunning:true} short-circuit so the
+     * unified {@link #handleExistingClientSession} can build a per-call-site payload
+     * that matches what each legacy guard emitted (output-schema parity). Optional
+     * fields ({@code null}/empty) are omitted.
+     */
+    static final class AlreadyRunningContext
+    {
+        String launchConfiguration;
+        String configurationType;
+        Boolean attach;
+        String project;
+        final String message;
+
+        AlreadyRunningContext(String message)
+        {
+            this.message = message;
+        }
+
+        ToolResult buildAlreadyRunning(String mode, String applicationId)
+        {
+            ToolResult already = ToolResult.success()
+                .put("alreadyRunning", true) //$NON-NLS-1$
+                .put("mode", mode) //$NON-NLS-1$
+                .put("message", message); //$NON-NLS-1$
+            if (launchConfiguration != null && !launchConfiguration.isEmpty())
+            {
+                already.put("launchConfiguration", launchConfiguration); //$NON-NLS-1$
+            }
+            if (configurationType != null && !configurationType.isEmpty())
+            {
+                already.put("configurationType", configurationType); //$NON-NLS-1$
+            }
+            if (attach != null)
+            {
+                already.put("attach", attach.booleanValue()); //$NON-NLS-1$
+            }
+            if (project != null && !project.isEmpty())
+            {
+                already.put("project", project); //$NON-NLS-1$
+            }
+            if (applicationId != null && !applicationId.isEmpty())
+            {
+                already.put("applicationId", applicationId); //$NON-NLS-1$
+            }
+            return already;
+        }
+    }
+
+    /** Default short-circuit message for a still-running client session. */
+    private static final String ALREADY_RUNNING_MESSAGE =
+        "Launch configuration is already running — skipped re-launch. " //$NON-NLS-1$
+            + "Call terminate_launch first, or pass restartIfRunning=true, to start a fresh session."; //$NON-NLS-1$
+
+    /**
+     * Detects a live runtime-client DEBUG session for {@code config}'s
+     * {@code (project, delegate-app-id)} the EXACT way EDT's
+     * {@code RuntimeClientLaunchDelegate.checkExistingDebugSessions} does — via
+     * {@link DebugServerTargetSupport#findRuntimeClientDebugTarget} over the target
+     * manager's {@code listDebugTargets()} set, keyed on the delegate's app id
+     * ({@code ATTR_APPLICATION_ID} else {@code getDefaultApplication(project)}, see
+     * {@link LaunchLifecycleUtils#resolveDelegateApplicationId}). This is the primary
+     * duplicate-session guard: it fires BEFORE {@code config.launch} can raise the human
+     * "Debug session already exists" code-1003 modal that hangs an unattended call.
+     *
+     * <ul>
+     *   <li>No live duplicate → returns {@code null}; the caller proceeds to launch.</li>
+     *   <li>Duplicate found, {@code restartIfRunning=false} (default) → returns the
+     *       {@code alreadyRunning:true} short-circuit JSON (no dialog, no launch),
+     *       consistent with the documented contract.</li>
+     *   <li>Duplicate found, {@code restartIfRunning=true} → terminates the existing
+     *       session NON-interactively, {@code forgetApplication}s it, waits up to
+     *       ~3s for process death, then returns {@code null} so the caller relaunches.</li>
+     * </ul>
+     *
+     * @return the short-circuit JSON, or {@code null} to proceed with the launch
+     */
+    private String handleDelegateDuplicateSession(ILaunchConfiguration config, String projectName,
+        boolean isAttach, String typeId, boolean restartIfRunning)
+    {
+        String delegateAppId = LaunchLifecycleUtils.resolveDelegateApplicationId(config, projectName);
+        IDebugTarget existing =
+            DebugServerTargetSupport.findRuntimeClientDebugTarget(projectName, delegateAppId);
+        if (existing == null)
+        {
+            return null;
+        }
+
+        // Defensive re-assert: findRuntimeClientDebugTarget already
+        // required a live CLIENT-typed thread, but if the matched target lost its last
+        // live client thread between detection and now it is no longer a client — do
+        // NOT short-circuit or terminate; just proceed to launch.
+        if (DebugServerTargetSupport.findFirstLiveClientThread(existing) == null)
+        {
+            Activator.logInfo("debug_launch: target-manager match has no live CLIENT-typed thread " //$NON-NLS-1$
+                + "(server/profiling target) — not short-circuiting; proceeding: project=" //$NON-NLS-1$
+                + projectName + ", applicationId=" + delegateAppId); //$NON-NLS-1$
+            return null;
+        }
+
+        // Funnel through the SAME restartIfRunning-aware handler the ILaunchManager
+        // guards use, so the flag is honored identically across every path. The
+        // matched target carries a live CLIENT-typed thread, so the handler's terminate
+        // path stops a real client, never a debug server.
+        ExistingClientSession session = new ExistingClientSession(existing.getLaunch(), existing,
+            ILaunchManager.DEBUG_MODE);
+        AlreadyRunningContext ctx = new AlreadyRunningContext(
+            "Debug session is already running (detected via EDT's debug target manager — e.g. a " //$NON-NLS-1$
+                + "UI-started 'Debug As' session) — skipped re-launch to avoid the 'Debug session " //$NON-NLS-1$
+                + "already exists' modal. Call terminate_launch first, or pass " //$NON-NLS-1$
+                + "restartIfRunning=true, to start a fresh session."); //$NON-NLS-1$
+        ctx.launchConfiguration = config.getName();
+        ctx.configurationType = typeId;
+        ctx.attach = Boolean.valueOf(isAttach);
+        ctx.project = projectName;
+        // Force mode "debug" in the short-circuit payload (this path is the runtime-
+        // client DEBUG delegate) regardless of the synthetic launch's reported mode.
+        return handleExistingClientSession(session, delegateAppId, restartIfRunning, ctx);
+    }
+
+    /**
+     * Launches the given configuration in debug mode, asynchronously.
+     *
+     * <p>Uses a direct {@code config.launch(DEBUG_MODE, monitor)} — not
      * {@code DebugUITools.launch} — because the latter may open modal dialogs
      * (save-prompt, perspective-switch, already-running-confirmation) that
      * block the MCP worker thread indefinitely and eventually close the HTTP
      * socket. {@code debug_yaxunit_tests} uses the same direct path.
      *
-     * @return {@code null} on success, or an error message on failure.
+     * <p>The launch runs in a BACKGROUND {@link Job} — never
+     * on the SWT UI thread — and this method returns immediately: it does NOT
+     * wait for the 1C client to finish starting. The previous {@code asyncExec}
+     * dispatch ran the ENTIRE {@code RuntimeClientLaunchDelegate.doLaunch} —
+     * including the standalone-server non-debug→debug stop+restart, which takes
+     * minutes — ON the UI thread, freezing the whole workbench ("not responding",
+     * pale window) for that whole time. A manual EDT launch never freezes because
+     * {@code DebugUIPlugin.launchInBackground} runs the launch in a background Job;
+     * this Job mirrors that exact shape: {@link Job#INTERACTIVE} priority, no
+     * scheduling rule, neither {@code setUser} nor {@code setSystem} — so it shows
+     * in the Progress view like EDT's own launches. The delegate's modals
+     * self-marshal to the UI thread ({@code syncCall}), so they still appear there
+     * and the armed auto-confirmer (whose {@link Display} filter fires on the UI
+     * thread regardless of which thread ran {@code launch()}) still presses them.
+     * Callers therefore report {@code status: "launching"}; readiness is observed
+     * separately via {@code debug_status} / {@code wait_for_break}.
+     *
+     * <p>Because the launch now runs after this method returns, any failure can no
+     * longer be surfaced synchronously to the caller — it is logged from inside the
+     * Job body ({@link #runLaunchJobBody}) and reflected in the Job's result
+     * {@link IStatus}. Only the synchronous (headless, no workbench) path can
+     * still return an error message.
+     *
+     * <p>The {@code config.launch(...)} call is always wrapped in
+     * {@link LaunchUpdateDialogAutoConfirmer#arm(boolean, boolean)}/{@link LaunchUpdateDialogAutoConfirmer#disarm(boolean, boolean)}.
+     * Two independently-gated matchers share one {@link Display} filter:
+     * <ul>
+     *   <li>the "Application update" matcher is armed only when
+     *       {@code autoConfirmUpdateDialog} is {@code true}. Even though the
+     *       pre-launch update ({@code updateApplicationIfNeeded}) normally leaves the
+     *       IB {@code UPDATED} so the EDT launch delegate skips its modal, an IB whose
+     *       DB config is genuinely behind (e.g. a restructure the delegate re-detects)
+     *       can still pop the "Update then run / Run without update" dialog; while
+     *       armed the filter auto-presses its default ("Update then run") button.</li>
+     *   <li>the code-1003 "debug session already exists" matcher is armed
+     *       <em>unconditionally</em> on this debug path (independent of
+     *       {@code autoConfirmUpdateDialog}). With {@code restartIfRunning=true} and a
+     *       {@code terminate()} that times out, the relaunch can still race a residual
+     *       1003 modal; auto-pressing its default ("stop existing and start new")
+     *       keeps an unattended call from hanging. Pressing it performs NO DB update,
+     *       so it does not undo the {@code updateBeforeLaunch=false} opt-out.</li>
+     * </ul>
+     * The arm/disarm runs INSIDE the Job body's try/finally — both are thread-safe
+     * from any thread (counters under a lock + a {@code syncExec} reconcile), and
+     * the dialog shells are always created on the UI thread, so the filter fires
+     * there no matter which thread ran the launch. The MCP worker has already
+     * returned, so the server is never hung.
+     *
+     * <p>Callers pass {@code updateBeforeLaunch} for {@code autoConfirmUpdateDialog}:
+     * with {@code updateBeforeLaunch=false} the documented contract is that the
+     * platform "may then show that modal" — auto-pressing the UPDATE dialog's default
+     * button would silently perform the very DB update the caller disabled, so the
+     * UPDATE matcher is NOT armed and that dialog is left for a human. The 1003
+     * matcher, which performs no update, stays armed regardless.
+     *
+     * <p>Package-private (not {@code private}) so the headless unit tests can
+     * exercise the synchronous fallback directly.
+     *
+     * @return {@code null} when the launch was scheduled (or, in a headless test
+     *         with no UI thread, completed) successfully; otherwise an error message.
      */
-    private String performLaunch(ILaunchConfiguration config)
+    String performLaunch(ILaunchConfiguration config, boolean autoConfirmUpdateDialog)
     {
-        final String[] launchError = {null};
-        final boolean[] launchSuccess = {false};
-        Display display = Display.getDefault();
+        // Workbench-aware probe: never creates a display. It
+        // decides Job-vs-headless ONLY: with a live workbench the launch is
+        // dispatched as a background Job; a truly headless runtime takes the
+        // synchronous fallback below instead of scheduling work nothing observes.
+        Display display = LaunchLifecycleUtils.workbenchDisplayOrNull();
         if (display != null && !display.isDisposed())
         {
-            display.syncExec(() -> {
-                try
+            // Fire-and-forget in a background Job (mirroring EDT's own
+            // DebugUIPlugin.launchInBackground): returns control to the MCP worker
+            // immediately, keeps the EDT UI thread free — a minutes-long delegate
+            // (e.g. the standalone-server mode-switch restart) no longer freezes
+            // the workbench. The launch outcome can no longer be returned to the
+            // caller, so the Job body logs it and reports it as its result status.
+            Job job = new Job("Launching " + config.getName()) //$NON-NLS-1$
+            {
+                @Override
+                protected IStatus run(IProgressMonitor monitor)
                 {
-                    config.launch(ILaunchManager.DEBUG_MODE, null);
-                    launchSuccess[0] = true;
+                    return runLaunchJobBody(config, autoConfirmUpdateDialog, monitor);
                 }
-                catch (Exception e)
-                {
-                    Activator.logError("Error launching debug session", e); //$NON-NLS-1$
-                    launchError[0] = e.getMessage();
-                }
-            });
+            };
+            job.setPriority(Job.INTERACTIVE);
+            job.schedule();
+            return null;
         }
-        else
+        // No workbench (headless tests): launch synchronously and surface errors.
+        LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true);
+        try
         {
-            try
-            {
-                config.launch(ILaunchManager.DEBUG_MODE, null);
-                launchSuccess[0] = true;
-            }
-            catch (CoreException e)
-            {
-                Activator.logError("Error launching debug session", e); //$NON-NLS-1$
-                launchError[0] = e.getMessage();
-            }
+            config.launch(ILaunchManager.DEBUG_MODE, null);
+            return null;
         }
-        return launchSuccess[0] ? null : (launchError[0] != null ? launchError[0] : "unknown error"); //$NON-NLS-1$
+        catch (CoreException e)
+        {
+            Activator.logError("Error launching debug session", e); //$NON-NLS-1$
+            return e.getMessage();
+        }
+        finally
+        {
+            LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true);
+        }
+    }
+
+    /**
+     * The body of the background launch {@link Job} — the
+     * seam {@link #performLaunch} schedules and the headless unit tests exercise
+     * directly. Arms the {@link LaunchUpdateDialogAutoConfirmer} (update matcher
+     * gated on {@code autoConfirmUpdateDialog}, code-1003 matcher unconditional —
+     * the same flags the asyncExec dispatch used), runs the launch, and ALWAYS
+     * disarms in {@code finally} — both calls are thread-safe from a Job thread.
+     *
+     * <p>Never throws: a Job that dies on an uncaught exception fails silently for
+     * the MCP caller, so EVERY failure — {@link CoreException} or any other
+     * {@link Throwable} — is logged to the EDT error log and returned as an error
+     * {@link IStatus} (visible as the Job's result in the Progress view).
+     *
+     * @param config the launch configuration to start in debug mode
+     * @param autoConfirmUpdateDialog arm the "Application update" matcher
+     * @param monitor the Job's progress monitor, passed through to
+     *        {@code config.launch} so the Progress view shows the delegate's steps
+     * @return {@link Status#OK_STATUS} on success, else an error status
+     */
+    static IStatus runLaunchJobBody(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
+        IProgressMonitor monitor)
+    {
+        // Auto-confirm EDT's blocking launch modals for the duration of this
+        // single launch only. The "Application update" modal is pressed
+        // only when the caller did NOT opt out of the DB update; the
+        // code-1003 "debug session already exists" modal is ALWAYS
+        // auto-confirmed on this debug path (it is independent of the update
+        // opt-out). Manual EDT launches outside this window still prompt.
+        LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true);
+        try
+        {
+            config.launch(ILaunchManager.DEBUG_MODE, monitor);
+            return Status.OK_STATUS;
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("debug_launch failed asynchronously: " + e.getMessage(), e); //$NON-NLS-1$
+            return e.getStatus();
+        }
+        catch (Throwable t)
+        {
+            // Never let the Job die on an uncaught exception — it would vanish
+            // without a trace for the MCP caller. Log + report an error status.
+            Activator.logError("debug_launch failed asynchronously: " + t.getMessage(), t); //$NON-NLS-1$
+            return new Status(IStatus.ERROR, Activator.PLUGIN_ID,
+                "debug_launch failed asynchronously: " + t.getMessage(), t); //$NON-NLS-1$
+        }
+        finally
+        {
+            LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true);
+        }
     }
 
     /**

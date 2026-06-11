@@ -69,6 +69,18 @@ public class TerminateLaunchToolTest
             guide.toLowerCase().contains("force"));
         assertTrue("guide should document the mutually-exclusive selection modes",
             guide.contains("mutually exclusive"));
+        // The guide must explain that a terminated/stale launch is removed
+        // from the launch registry so it cannot linger and block a later run.
+        assertTrue("guide should document launch-registry removal",
+            guide.toLowerCase().contains("removelaunch")
+                || guide.toLowerCase().contains("removes it from edt's launch registry")
+                || guide.toLowerCase().contains("launch registry"));
+        assertTrue("guide should mention clearing the stale already_terminated entry",
+            guide.contains("already_terminated"));
+        // Selection now also matches already-terminated launches lingering in
+        // the registry, and batch responses report the distinct cleaned count.
+        assertTrue("guide should document stale already-terminated selection",
+            guide.contains("Stale already-terminated launches cleaned"));
     }
 
     // === Schema ===

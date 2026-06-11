@@ -124,12 +124,28 @@ public class RunYaxunitTestsTool implements IMcpTool
             .stringArrayProperty("tests", "Test names in Module.Method format (array; a comma-separated string is also accepted).") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("timeout", "Polling window in seconds (default: 60); on expiry returns Pending.") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
-                "Auto-chain (default: true): terminate a live client and run a silent DB update first.") //$NON-NLS-1$
+                "Auto-chain (default: true): force-recompute the project + its extensions, terminate a " //$NON-NLS-1$
+                    + "live client and run a silent DB update first, so a freshly edited extension runs " //$NON-NLS-1$
+                    + "fresh (not stale). Results are never served from a cache — a completed run is " //$NON-NLS-1$
+                    + "re-executed on the next identical call regardless of this flag.") //$NON-NLS-1$
+            .stringProperty("updateScope", UPDATE_SCOPE_DESCRIPTION) //$NON-NLS-1$
             .booleanProperty("debug", //$NON-NLS-1$
                 "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints " //$NON-NLS-1$
                     + "fire, return immediately and call wait_for_break next (ignores timeout).") //$NON-NLS-1$
             .build();
     }
+
+    /**
+     * Shared schema doc for the {@code updateScope} parameter (also forwarded by
+     * the {@code debug_yaxunit_tests} alias).
+     */
+    static final String UPDATE_SCOPE_DESCRIPTION =
+        "Which projects to rebuild+update before the run: 'all' (configuration + dependent " //$NON-NLS-1$
+            + "extensions, default), 'configuration', or 'extension:<ProjectName>' " //$NON-NLS-1$
+            + "(comma-separate several). Forces a derived-data recompute so a freshly edited " //$NON-NLS-1$
+            + "extension's .cfe is regenerated and loaded into the infobase before the run. " //$NON-NLS-1$
+            + "Unknown extension names fail the call (the error lists the available names). " //$NON-NLS-1$
+            + "Only applies when updateBeforeLaunch=true."; //$NON-NLS-1$
 
     @Override
     public ResponseType getResponseType()
@@ -157,6 +173,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         }
         boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, //$NON-NLS-1$
             "updateBeforeLaunch", true); //$NON-NLS-1$
+        String updateScope = JsonUtils.extractStringArgument(params, "updateScope"); //$NON-NLS-1$
         boolean debug = JsonUtils.extractBooleanArgument(params, "debug", false); //$NON-NLS-1$ //$NON-NLS-2$
 
         boolean hasName = configName != null && !configName.isEmpty();
@@ -177,7 +194,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         purgeTerminatedLaunches();
 
         return runTests(configName, projectName, applicationId, extensions, modules, tests,
-            timeout, updateBeforeLaunch, debug);
+            timeout, updateBeforeLaunch, updateScope, debug);
     }
 
     /**
@@ -196,12 +213,16 @@ public class RunYaxunitTestsTool implements IMcpTool
      * completed run always re-executes the tests. A completed report is reused only to
      * satisfy a re-call fetching a previously reported {@code Pending} run, and only once.
      *
+     * {@code debug=true} skips this polling lifecycle entirely and returns a launch handle at
+     * once (see {@link #launchDebugMode}); {@code updateScope} narrows the pre-launch
+     * auto-chain recompute+update (see {@link #UPDATE_SCOPE_DESCRIPTION}).
+     *
      * The temp directory is NEVER deleted in finally — a Pending re-call can fetch the result. Old
      * runs are cleaned up automatically before starting a new launch.
      */
     private String runTests(String configName, String projectName, String applicationId,
             String extensions, String modules, String tests, int timeout, boolean updateBeforeLaunch,
-            boolean debug)
+            String updateScope, boolean debug)
     {
         try
         {
@@ -303,7 +324,8 @@ public class RunYaxunitTestsTool implements IMcpTool
             if (debug)
             {
                 return launchDebugMode(matchingConfig, project, projectName, applicationId,
-                    appManager, launchManager, extensions, modules, tests, updateBeforeLaunch);
+                    appManager, launchManager, extensions, modules, tests, updateBeforeLaunch,
+                    updateScope);
             }
 
             // Use the launch config name as the run-key root — stable across
@@ -411,7 +433,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                     {
                         int terminateTimeout = LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
                         preLaunch = LaunchLifecycleUtils.prepareForFreshLaunch(launchManager,
-                            project, applicationId, appManager, terminateTimeout);
+                            project, applicationId, appManager, terminateTimeout, updateScope);
                         if (!preLaunch.isOk())
                         {
                             return ToolResult.error("Pre-launch preparation failed: " //$NON-NLS-1$
@@ -527,7 +549,7 @@ public class RunYaxunitTestsTool implements IMcpTool
     private String launchDebugMode(ILaunchConfiguration matchingConfig, IProject project,
             String projectName, String applicationId, IApplicationManager appManager,
             ILaunchManager launchManager, String extensions, String modules, String tests,
-            boolean updateBeforeLaunch) throws IOException, CoreException
+            boolean updateBeforeLaunch, String updateScope) throws IOException, CoreException
     {
         // Native path separators: YAXUnit builds file:// URIs and breaks on forward slashes on Windows.
         Path reportDir = Paths.get(System.getProperty("java.io.tmpdir"), //$NON-NLS-1$
@@ -549,7 +571,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 int terminateTimeout = LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
                 preLaunch = LaunchLifecycleUtils.prepareForFreshLaunch(launchManager, project,
-                    applicationId, appManager, terminateTimeout);
+                    applicationId, appManager, terminateTimeout, updateScope);
                 if (!preLaunch.isOk())
                 {
                     return ToolResult.error("Pre-launch preparation failed: " + preLaunch.getError() //$NON-NLS-1$
@@ -557,6 +579,29 @@ public class RunYaxunitTestsTool implements IMcpTool
                         + "and retry. As a last resort, pass `updateBeforeLaunch=false` — but the EDT launch " //$NON-NLS-1$
                         + "delegate may then pop a modal dialog that blocks the MCP call.").toJson(); //$NON-NLS-1$
                 }
+            }
+
+            // Fresh-run guarantee: a YAXUnit debug run is ALWAYS a
+            // new session — detect and non-interactively terminate any existing live
+            // CLIENT session of this application BEFORE workingCopy.launch, so EDT's
+            // launch delegate never raises its blocking code-1003 "Debug session
+            // already exists" modal. This covers BOTH the ILaunchManager view and
+            // EDT's debug target manager (a UI-started "Debug As" session lives ONLY
+            // there: prepareForFreshLaunch's sweep keys on getApplicationIdFor and
+            // never matches it). The detect is CLIENT-typed-thread-discriminated, so
+            // a debug-mode standalone server session is never matched and never
+            // terminated. A launch OWNED by another MCP tool (e.g. a
+            // concurrent run_yaxunit_tests RUN launch of the same app) is exempt from
+            // the sweep — it is managed by its own tool; this matters on the
+            // updateBeforeLaunch=false path, where prepareForFreshLaunch's hard-fail
+            // on owned launches did not run. applicationId here is already the
+            // delegate-resolved id (ATTR_APPLICATION_ID else project default — see
+            // resolveDefaultApplicationId above) and is stamped onto the working copy
+            // below, so it is exactly the key the delegate's 1003 check uses.
+            if (LaunchLifecycleUtils.ensureNoExistingClientSession(project, applicationId))
+            {
+                Activator.logInfo("YAXUnit debug: terminated an existing client session before " //$NON-NLS-1$
+                    + "the fresh debug launch: applicationId=" + applicationId); //$NON-NLS-1$
             }
 
             ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
@@ -571,8 +616,14 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
             Activator.logInfo("Launching YAXUnit tests in DEBUG mode: config=" + matchingConfig.getName() //$NON-NLS-1$
                 + ", startup=" + startupOption); //$NON-NLS-1$
-            // Auto-confirm EDT's blocking "Application update" modal for the launch window only.
-            LaunchUpdateDialogAutoConfirmer.arm();
+            // Auto-confirm EDT's blocking launch modals for the launch window only:
+            // the "Application update" matcher (as before, unconditional on this
+            // path), PLUS the code-1003 "Debug session already exists" matcher as the
+            // race net behind ensureNoExistingClientSession — if a session slips in
+            // (or a terminate times out) between the sweep above and the delegate's
+            // check, the armed confirmer presses "Keep existing and start new" so an
+            // unattended call never hangs on the modal.
+            LaunchUpdateDialogAutoConfirmer.arm(true, true);
             try
             {
                 ILaunch spawned = workingCopy.launch(ILaunchManager.DEBUG_MODE, new NullProgressMonitor());
@@ -585,7 +636,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
             finally
             {
-                LaunchUpdateDialogAutoConfirmer.disarm();
+                LaunchUpdateDialogAutoConfirmer.disarm(true, true);
             }
         }
         return buildDebugLaunchMarkdown(matchingConfig.getName(), projectName, applicationId,

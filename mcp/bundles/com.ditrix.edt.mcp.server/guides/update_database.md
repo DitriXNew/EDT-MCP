@@ -44,3 +44,4 @@ JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCR
 - Most failures are the exclusive lock above — terminate the running launch first.
 - `launchConfigurationName` must reference a runtime-client config; an Attach config is rejected.
 - The project must exist and be open; a closed project returns an error.
+- Running this on a **standalone-server** application (`applicationId` starting with `ServerApplication.`) STARTS the standalone server in RUN mode as a side effect — that is EDT-native behaviour of the server-application update (the configurator agent publishes the modules into the running server). A subsequent `debug_launch` will then have to restart that server in DEBUG mode. Prefer letting the launch do the update: `debug_launch` / `run_yaxunit_tests` with `updateBeforeLaunch=true` defer the server-app update to EDT's coordinated launch flow.

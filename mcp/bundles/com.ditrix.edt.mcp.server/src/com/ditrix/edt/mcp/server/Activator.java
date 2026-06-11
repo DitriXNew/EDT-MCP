@@ -11,6 +11,7 @@ import org.osgi.framework.BundleContext;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
+import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
@@ -280,6 +281,31 @@ public class Activator extends AbstractUIPlugin
     }
 
     /**
+     * Returns the IModelObjectFactory that creates form-model objects (the content
+     * {@code Form}, {@code AutoCommandBar}, …) with EDT default content — the same
+     * factory the "New form" wizard uses. Distinct from
+     * {@link #getModelObjectFactory()} (which only knows the mdclass EPackage).
+     *
+     * @return form-model object factory or null if not available
+     */
+    public IModelObjectFactory getFormModelObjectFactory()
+    {
+        return services.getFormModelObjectFactory();
+    }
+
+    /**
+     * Returns the {@link ITopObjectFqnGenerator} used to compute the canonical BM
+     * top-object FQN for external-property objects (e.g. a {@code BasicForm}'s
+     * content {@code Form}).
+     *
+     * @return the top-object FQN generator, or null if not available
+     */
+    public ITopObjectFqnGenerator getTopObjectFqnGenerator()
+    {
+        return services.getTopObjectFqnGenerator();
+    }
+
+    /**
      * Returns the com._1c.g5.v8.dt.cli.api.workspace.IExportConfigurationFilesApi
      * (EDT "Export → Configuration to XML Files" action) — typed as
      * {@code Object}, callers invoke via reflection. Returns null when
@@ -346,6 +372,21 @@ public class Activator extends AbstractUIPlugin
     public Object getProjectInformationApi()
     {
         return services.getProjectInformationApi();
+    }
+
+    /**
+     * Returns the EDT {@code IRuntimeDebugClientTargetManager} — typed as
+     * {@code Object}, callers invoke {@code listDebugTargets()} via reflection.
+     * Used by {@code DebugServerTargetSupport} to surface 1C debug-server targets
+     * (including EDT-UI-started "Debug As" sessions) that the generic
+     * {@link org.eclipse.debug.core.ILaunchManager} view does not expose. Returns
+     * {@code null} when the service is not registered.
+     *
+     * @return the manager instance (as Object), or {@code null} if not available
+     */
+    public Object getRuntimeDebugClientTargetManager()
+    {
+        return services.getRuntimeDebugClientTargetManager();
     }
 
     /**

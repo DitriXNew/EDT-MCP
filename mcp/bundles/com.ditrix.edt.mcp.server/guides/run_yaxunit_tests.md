@@ -21,6 +21,7 @@ Control:
 
 - `timeout` — polling window in seconds (default 60). See ## Polling and Pending.
 - `updateBeforeLaunch` — auto-chain, default `true`. See ## Auto-chain.
+- `updateScope` — which projects to force-recompute + update before the run when `updateBeforeLaunch=true`: `all` (configuration + dependent extensions, default), `configuration`, or `extension:<ProjectName>` (comma-separate several). See ## Auto-chain.
 
 ## Polling and Pending
 
@@ -28,7 +29,11 @@ The tool polls for up to `timeout` seconds. If the launch finishes in that windo
 
 ## Auto-chain (updateBeforeLaunch)
 
-Default `true`: before spawning a new test launch, the tool politely terminates any live 1C client running this configuration and runs a silent database update — so EDT's launch delegate does not pop its modal 'Update database?' dialog that would otherwise block the MCP call. Set `false` to keep legacy behaviour (the delegate decides; the dialog may appear and block). If pre-launch preparation fails because a previous launch is stuck, call `terminate_launch` with `force=true` and retry.
+Default `true`: before spawning a new test launch, the tool FORCES a derived-data recompute (`recomputeAll`) of the project AND its dependent EXTENSION (`.cfe`) projects, waits for the workspace build and derived data to settle, politely terminates any live 1C client running this configuration, then runs a silent database update — so a test you just edited inside an extension is force-rebuilt and its regenerated `.cfe` is loaded into the infobase before the run (not executed stale), and EDT's launch delegate does not pop its modal 'Update database?' dialog that would otherwise block the MCP call. It then waits until the infobase actually reports UPDATED (via EDT's own update-state event) before starting; if the IB cannot be brought in sync in time it REFUSES to run with a clear out-of-sync error rather than producing a stale-green result. Set `false` to keep legacy behaviour (the delegate decides; the dialog may appear and block; no extension-rebuild, so a freshly edited extension may run stale). If pre-launch preparation fails because a previous launch is stuck, call `terminate_launch` with `force=true` and retry.
+
+On a **standalone-server** application (`applicationId` starting with `ServerApplication.`) the silent-database-update step of the auto-chain is skipped and the DB update is performed by EDT's coordinated launch flow instead (its 'Application update' dialog is auto-confirmed around the launch; no dialog at all when the IB is already in sync). This plugin does NOT pre-update such applications out-of-band: doing so started the standalone server in RUN mode and held a designer-agent connection that wedged the subsequent debug restart. The recompute and terminate-stale steps still run. Consequence: for server apps there is no synchronous 'stale IB' refusal — an update failure surfaces in the run / the EDT log instead.
+
+`updateScope` narrows the recompute+update: `all` (default) covers the configuration plus its dependent extensions; `configuration` covers just the launch project; `extension:<ProjectName>` (comma-separate several) covers the configuration plus only the named extension project(s) — the fast path when only one extension changed. The configuration project is always included, since an extension cannot reach the infobase without its parent configuration. An unknown extension project name is a HARD ERROR: the call fails fast (before terminating any live client) with a message listing the requested-but-unknown names and the available extension projects — a typo'd name silently skipping the recompute would produce exactly the stale run this parameter prevents. Names are case-sensitive.
 
 ## Debug mode (debug=true)
 
@@ -39,6 +44,8 @@ set_breakpoint -> run_yaxunit_tests(debug=true) -> wait_for_break
   -> get_variables / evaluate_expression / step -> resume
 ```
 Pin to ONE test (`tests`) so exactly one breakpoint trips. The deprecated `debug_yaxunit_tests` tool is a thin alias for this.
+
+A debug run is always a FRESH run: before launching, the tool detects and non-interactively terminates an existing client session of the application — a debug session or a RUN-mode client (including one started from the EDT UI via 'Debug As', which only EDT's debug target manager tracks) — so the launch delegate's blocking 'Debug session already exists' modal is never raised and the call does not hang unattended. Launches owned by other MCP tools (e.g. a concurrent `run_yaxunit_tests` launch of the same application) are exempt from this sweep — each is managed by the tool that spawned it; wait for it or stop it via `terminate_launch` explicitly. The detection is thread-TYPE-aware: it terminates only a live CLIENT session, never the standalone server — a debug-mode standalone server's live thread is typed SERVER and is left running untouched. As a race net, the same 'Keep existing and start new' auto-confirmer that guards `debug_launch` is armed around the launch, so even a 1003 modal that still slips through is pressed automatically.
 
 ## Examples
 

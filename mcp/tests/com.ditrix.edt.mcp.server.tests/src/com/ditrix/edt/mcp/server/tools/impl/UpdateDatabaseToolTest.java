@@ -122,6 +122,24 @@ public class UpdateDatabaseToolTest
         assertTrue(guide.contains("autoRestructure")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideDocumentsServerApplicationRunModeSideEffect()
+    {
+        // Ratchet: updating a standalone-server application through
+        // this tool STARTS the standalone server in RUN mode (EDT-native behaviour of
+        // the server-application update); a subsequent debug launch will then restart
+        // it. The guide must warn about this side effect and point at the launch tools'
+        // deferred (coordinated) update as the preferred path.
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertNotNull(guide);
+        assertTrue("guide must name the ServerApplication. id prefix",
+            guide.contains("ServerApplication.")); //$NON-NLS-1$
+        assertTrue("guide must warn the update starts the standalone server in RUN mode",
+            guide.contains("STARTS the standalone server in RUN mode")); //$NON-NLS-1$
+        assertTrue("guide must say a subsequent debug launch restarts the server",
+            guide.contains("restart that server in DEBUG mode")); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live launch manager needed) ====================
 
     @Test
