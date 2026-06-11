@@ -14,6 +14,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
@@ -136,9 +137,17 @@ public class McpServer
         //      the queue before executor rejection can occur.
         // SSE (the only infinite-duration request type) is handled by the dedicated
         // sseExecutor and never enters this pool.
+        // Daemon threads: a worker still handling a request at EDT shutdown
+        // must not keep the JVM alive after the workbench has closed (#135).
+        AtomicInteger mainThreadCounter = new AtomicInteger();
         mainExecutor = new ThreadPoolExecutor(
             8, 8, 60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(200));
+            new LinkedBlockingQueue<>(200),
+            r -> {
+                Thread t = new Thread(r, "MCP-Main-" + mainThreadCounter.incrementAndGet()); //$NON-NLS-1$
+                t.setDaemon(true);
+                return t;
+            });
         mainExecutor.allowCoreThreadTimeOut(true);
         server.setExecutor(mainExecutor);
 
