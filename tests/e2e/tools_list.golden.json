@@ -2831,7 +2831,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + applicationId. Destructive/irreversible: guarded by a confirm-preview - call without confirm to preview the exact update (no infobase change), then confirm=true to apply. Terminate any running 1C client on the target infobase first (exclusive lock). Full parameters and examples: call get_tool_guide('update_database').",
+    "description": "Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + applicationId. Destructive/irreversible: guarded by a confirm-preview - call without confirm to preview the exact update (no infobase change), then confirm=true to apply. On confirm it transparently terminates EDT-launched 1C clients on the target infobase first (external clients must be closed manually). Full parameters and examples: call get_tool_guide('update_database').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -2857,6 +2857,14 @@
         "projectName": {
           "description": "EDT project name; required if launchConfigurationName is omitted.",
           "type": "string"
+        },
+        "terminateRunningClients": {
+          "description": "Before updating (confirm=true), terminate any 1C client THIS EDT launched against the target infobase so the update is not blocked by an exclusive lock and the new code is not masked by a cached session (default true). External clients are not affected.",
+          "type": "boolean"
+        },
+        "updateTimeoutSeconds": {
+          "description": "Watchdog window for the update call in seconds (default 120, clamped 5..600). If the update does not finish in time it keeps running in the background and the tool returns stateAfter=BEING_UPDATED so you can poll get_applications.",
+          "type": "integer"
         }
       },
       "required": [],
@@ -2881,6 +2889,10 @@
           "description": "true on a preview (no infobase change made); absent/false once updated.",
           "type": "boolean"
         },
+        "fullUpdateRequired": {
+          "description": "Present and true when the incremental update genuinely needs a full update (state FULL_UPDATE_REQUIRED); re-call with fullUpdate=true.",
+          "type": "boolean"
+        },
         "message": {
           "description": "Human-readable status message for the update.",
           "type": "string"
@@ -2900,6 +2912,10 @@
         "success": {
           "description": "Whether the operation succeeded",
           "type": "boolean"
+        },
+        "terminatedClients": {
+          "description": "Number of EDT-launched 1C clients terminated before the update.",
+          "type": "integer"
         },
         "updateType": {
           "description": "Update mode applied: FULL or INCREMENTAL.",
