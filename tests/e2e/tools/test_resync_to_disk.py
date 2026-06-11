@@ -60,6 +60,7 @@ from harness import (
     assert_error_quality,
     assert_no_diff,
     e2e_test,
+    wait_for_project_ready,
     PROJECT,
 )
 
@@ -94,6 +95,7 @@ def test_resync_in_sync_fixture_is_idempotent_and_does_not_mutate():
     danglingFound>0 and (worse) rewrite Configuration.mdo, failing assert_no_diff; a
     no-op that exported nothing would report objectsExported==0. The in-sync envelope
     plus a clean working tree pins all three."""
+    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
     r = call("resync_to_disk", {"projectName": PROJECT})
     assert_ok(r, "resync_to_disk on the in-sync fixture")
 
@@ -137,6 +139,7 @@ def test_report_only_mode_does_not_mutate():
 
     Mutation thinking: a tool that ignored the flag and removed entries anyway would
     report danglingRemovedCount>0 or fail assert_no_diff."""
+    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
     r = call("resync_to_disk", {"projectName": PROJECT, "cleanDanglingReferences": False})
     assert_ok(r, "resync_to_disk report-only mode")
 
