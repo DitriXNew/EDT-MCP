@@ -13,6 +13,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IPath;
@@ -38,7 +39,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
-import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 
 /**
  * Bulk re-synchronizes the in-memory BM model to the on-disk {@code src/}
@@ -58,22 +59,28 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
  * ({@link IBmTransaction#getTopObjectIterator()}, which catches all kinds, not
  * just the collections an enumeration would special-case) and keeps only the
  * real metadata objects ({@link MdObject} - the ones that map to a {@code .mdo}
- * file), then collects their FQNs and calls
+ * file), then computes which of them have no {@code .mdo} on disk and calls
  * {@link IBmModelManager#forceExport(com._1c.g5.v8.dt.core.platform.IDtProject, List)}
- * (via {@link BmTransactions#forceExportToDisk}) so each object's {@code .mdo} is
- * (re)written under {@code src/}. Internal BM top objects that are not
- * {@link MdObject} and therefore have no {@code .mdo} - content forms
- * ({@code com._1c.g5.v8.dt.form.model.Form}, persisted as {@code .form}) and BSL
- * module reference/context index objects ({@code Module.bsl.mRIdx} /
- * {@code Module.bsl.mCtxIdx}) - are excluded so they are not mis-reported as a
- * missing-{@code .mdo} desync.
+ * (via {@link BmTransactions#forceExportToDisk}) for that MISSING SUBSET only, so
+ * the absent {@code .mdo} files are (re)written under {@code src/}. The export
+ * runs on the SWT UI thread, so re-serializing every object of a large
+ * configuration there just to restore a handful of files would freeze the
+ * workbench for no benefit; {@code fullExport=true} opts in to the
+ * export-everything refresh when a full rewrite is actually wanted. Internal BM
+ * top objects that are not {@link MdObject} and therefore have no {@code .mdo} -
+ * content forms ({@code com._1c.g5.v8.dt.form.model.Form}, persisted as
+ * {@code .form}) and BSL module reference/context index objects
+ * ({@code Module.bsl.mRIdx} / {@code Module.bsl.mCtxIdx}) - are excluded so they
+ * are not mis-reported as a missing-{@code .mdo} desync.
  * <p>
  * <b>Integrity report.</b> Before exporting, the tool computes the expected
- * {@code .mdo} path for each top object ({@code src/<TypeDir>/<Name>/<Name>.mdo})
- * and records the ones that are missing on disk - that set is the actual desync.
- * After the export it re-checks and reports anything still missing (normally
- * none). The operation is read-safe and idempotent: when everything is already
- * in sync it simply re-exports (no model change) and reports {@code 0} missing.
+ * {@code .mdo} path for each top object ({@code src/<TypeDir>/<Name>/<Name>.mdo},
+ * via {@link MetadataPathResolver#resolveTopObjectMdoPath(String)}) and records
+ * the ones that are missing on disk - that set is the actual desync. After the
+ * export it re-checks and reports anything still missing (normally none). With
+ * default parameters the run is idempotent and writes nothing on an in-sync
+ * project (the missing set is empty, so there is nothing to export and no model
+ * change); a second run reports {@code 0} missing again.
  * <p>
  * <b>Dangling-reference cleanup.</b> Independently of the missing-{@code .mdo}
  * desync above, a {@code Configuration.mdo} can still <em>register</em> objects
@@ -91,14 +98,17 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
  * combined, for a BM proxy URI, with
  * {@link BmUriUtil#extractTopObjectFqn(URI)} +
  * {@link IBmTransaction#getTopObjectByFqn(String)} returning {@code null} - so
- * only genuinely unresolvable entries are touched, never a valid reference. When
- * {@code cleanDanglingReferences} is {@code true} (the default) it removes the
- * proxy elements from their collections inside a BM transaction and re-exports
- * the {@code Configuration} top object so {@code Configuration.mdo} no longer
+ * only genuinely unresolvable entries are touched, never a valid reference. By
+ * default the scan is REPORT-ONLY ({@code danglingFound} + {@code danglingDetails},
+ * no model change). Removal is an explicit, destructive opt-in: when
+ * {@code cleanDanglingReferences} is {@code true} the proxy elements are removed
+ * from their collections inside a BM transaction and the {@code Configuration}
+ * top object is re-exported, REWRITING {@code Configuration.mdo} so it no longer
  * registers them; the project then validates clean and {@code update_database}
- * unblocks. The cleanup is reported as {@code danglingFound} +
- * {@code danglingRemovedCount} and is idempotent (a clean project reports
- * {@code danglingFound 0}).
+ * unblocks. The removal is reported as {@code danglingRemovedCount} /
+ * {@code danglingRemoved} ONLY after the transaction has committed - a failed
+ * write task surfaces as {@code danglingWarning} with no removal claim. The scan
+ * is idempotent (a clean project reports {@code danglingFound 0}).
  */
 public class ResyncToDiskTool extends AbstractMetadataWriteTool
 {
@@ -132,15 +142,16 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     {
         return "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files " //$NON-NLS-1$
             + "and report BM-to-disk desync. Walks EVERY top metadata object of the " //$NON-NLS-1$
-            + "configuration (all kinds) and force-exports each object's .mdo, so objects " //$NON-NLS-1$
-            + "that exist in the model / Configuration.mdo but have no .mdo on disk are " //$NON-NLS-1$
-            + "written out. Fixes 'object file does not exist' failures from update_database " //$NON-NLS-1$
-            + "/ XML import caused by an accumulated desync. Read-safe and idempotent: when " //$NON-NLS-1$
-            + "already in sync it re-exports harmlessly and reports 0 missing. Also CLEANS " //$NON-NLS-1$
-            + "dangling/orphaned references in Configuration.mdo (unresolved proxies shown by " //$NON-NLS-1$
-            + "get_project_errors as md-reference-intergrity 'lost reference' warnings that " //$NON-NLS-1$
-            + "block update_database / XML import), reporting danglingFound + " //$NON-NLS-1$
-            + "danglingRemovedCount (cleanDanglingReferences, default true; idempotent). " //$NON-NLS-1$
+            + "configuration (all kinds), reports the objects whose .mdo is missing on disk " //$NON-NLS-1$
+            + "(missingBefore), and force-exports that missing subset so the files are " //$NON-NLS-1$
+            + "restored (fullExport=true re-exports every object instead). Fixes 'object " //$NON-NLS-1$
+            + "file does not exist' failures from update_database / XML import caused by an " //$NON-NLS-1$
+            + "accumulated desync. Dangling/orphaned references in Configuration.mdo " //$NON-NLS-1$
+            + "(unresolved proxies shown by get_project_errors as md-reference-intergrity " //$NON-NLS-1$
+            + "'lost reference' warnings that block update_database / XML import) are " //$NON-NLS-1$
+            + "REPORTED by default (danglingFound + danglingDetails); set " //$NON-NLS-1$
+            + "cleanDanglingReferences=true to REMOVE them - destructive: rewrites " //$NON-NLS-1$
+            + "Configuration.mdo. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
     }
 
@@ -151,11 +162,16 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name (required).", true) //$NON-NLS-1$
             .booleanProperty("cleanDanglingReferences", //$NON-NLS-1$
-                "When true (default), remove dangling/orphaned references from Configuration.mdo " //$NON-NLS-1$
-                    + "- entries that register an object with no .mdo and no BM body (unresolved " //$NON-NLS-1$
-                    + "proxies), the source of md-reference-intergrity 'lost reference' warnings " //$NON-NLS-1$
-                    + "that block update_database / XML import. Set false to only report " //$NON-NLS-1$
-                    + "danglingFound without removing anything.") //$NON-NLS-1$
+                "When true, REMOVE dangling/orphaned references from Configuration.mdo - entries " //$NON-NLS-1$
+                    + "that register an object with no .mdo and no BM body (unresolved proxies), " //$NON-NLS-1$
+                    + "the source of md-reference-intergrity 'lost reference' warnings that block " //$NON-NLS-1$
+                    + "update_database / XML import. Destructive: rewrites Configuration.mdo. " //$NON-NLS-1$
+                    + "Default: false - only report danglingFound + danglingDetails without " //$NON-NLS-1$
+                    + "changing anything.") //$NON-NLS-1$
+            .booleanProperty("fullExport", //$NON-NLS-1$
+                "When true, force-export EVERY metadata top object's .mdo (a full disk refresh; " //$NON-NLS-1$
+                    + "slow on a large configuration - the export runs on the UI thread). " //$NON-NLS-1$
+                    + "Default: false - export only the objects whose .mdo is missing on disk.") //$NON-NLS-1$
             .booleanProperty("revalidate", //$NON-NLS-1$
                 "When true, schedule a full project revalidation (clean build) after the export so " //$NON-NLS-1$
                     + "stale markers refresh. Default: false (export only).") //$NON-NLS-1$
@@ -168,8 +184,11 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the export succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("projectName", "The project that was re-synchronized") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("objectsExported", "Number of top objects whose .mdo was (re)written") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("objectsExported", //$NON-NLS-1$
+                "Number of top objects whose .mdo was (re)written - the missing subset by default, " //$NON-NLS-1$
+                    + "every object when fullExport=true") //$NON-NLS-1$
             .integerProperty("totalTopObjects", "Total metadata top objects walked in the BM model") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("fullExport", "Whether a full export of every top object was requested") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("missingBeforeCount", "Top objects that had no .mdo on disk before the export") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty("missingBefore", "FQNs that were missing on disk before the export") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("stillMissingCount", "Top objects still missing on disk after the export") //$NON-NLS-1$ //$NON-NLS-2$
@@ -180,6 +199,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .objectArrayProperty("danglingRemoved", "Removed dangling entries: [{field, lostFqn, position}]") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("danglingDetails", "All dangling entries found: [{field, lostFqn, position}]") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("danglingWarning", "Set when the dangling scan/cleanup could not complete cleanly") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("revalidate", "Whether a post-export revalidation was requested") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("revalidateWarning", "Set when the optional post-export revalidation failed") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable summary of the outcome") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -194,9 +214,13 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
         boolean revalidate = JsonUtils.extractBooleanArgument(params, "revalidate", false); //$NON-NLS-1$
-        // Default true: dangling entries are already-broken zombie registrations with no
-        // body anywhere, so removing them loses nothing and is what makes the project valid.
-        boolean cleanDangling = JsonUtils.extractBooleanArgument(params, "cleanDanglingReferences", true); //$NON-NLS-1$
+        // Default FALSE (report-only): removing the dangling entries rewrites
+        // Configuration.mdo, so the destructive step must be an explicit opt-in, never
+        // a side effect of a diagnostic run.
+        boolean cleanDangling = JsonUtils.extractBooleanArgument(params, "cleanDanglingReferences", false); //$NON-NLS-1$
+        // Default FALSE: only the objects whose .mdo is actually missing are exported;
+        // true re-exports everything (a full disk refresh, slow on the UI thread).
+        boolean fullExport = JsonUtils.extractBooleanArgument(params, "fullExport", false); //$NON-NLS-1$
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -227,10 +251,18 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // no .mdo on disk. This pre-export set is the real desync we are catching up.
         List<String> missingBefore = findMissingMdoFiles(ctx.project, allFqns);
 
-        // Step 3: bulk flush every top object's .mdo to disk (same path the
-        // per-object persist uses, just over the full list). forceExportToDisk
-        // accepts the whole list, so a large configuration is handled in one call.
-        boolean exported = BmTransactions.forceExportToDisk(ctx.project, allFqns);
+        // Step 3: restore the missing .mdo files (same path the per-object persist
+        // uses). By default ONLY the missingBefore subset is force-exported: the export
+        // runs on the SWT UI thread, so re-serializing EVERY object of a large
+        // configuration there just to restore a handful of files would freeze the
+        // workbench while rewriting identical bytes. fullExport=true opts in to the
+        // export-everything refresh. When the dangling cleanup (step 5) removes
+        // entries it re-exports the Configuration top object itself, so that case
+        // does not need a full export either.
+        List<String> exportFqns = selectExportFqns(fullExport, allFqns, missingBefore);
+        // An empty export list (already in sync, no full export requested) is a genuine
+        // no-op: nothing to write, trivially successful.
+        boolean exported = exportFqns.isEmpty() || BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
         // Step 4: re-check on disk. After a successful export the missing-before set
         // should be empty; anything still missing is surfaced so the caller knows
@@ -273,18 +305,20 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         }
 
         // The force-export swallows failures and returns false (unresolved
-        // services/project, or the export threw). Report success:false when an export
-        // was expected (FQNs were collected) but did not run/succeed, so the caller is
-        // not misled by a success envelope. With nothing to export (0 FQNs) it is a
-        // genuine in-sync no-op and stays success:true.
-        boolean exportFailed = !exported && !allFqns.isEmpty();
+        // services/project, or the export threw). `exported` is true when the export
+        // list was empty (a genuine in-sync no-op), so false here always means an
+        // export was expected but did not run/succeed - report success:false so the
+        // caller is not misled by a success envelope.
+        boolean exportFailed = !exported;
         ToolResult result = exportFailed
             ? ToolResult.error("Force-export to disk did not run or failed (services/project/FQN " //$NON-NLS-1$
                 + "unresolved or export threw); see message/objectsExported") //$NON-NLS-1$
             : ToolResult.success();
         result.put("projectName", projectName) //$NON-NLS-1$
-            .put("objectsExported", exported ? allFqns.size() : 0) //$NON-NLS-1$
+            .put("objectsExported", exported ? exportFqns.size() : 0) //$NON-NLS-1$
             .put("totalTopObjects", allFqns.size()) //$NON-NLS-1$
+            .put("fullExport", fullExport) //$NON-NLS-1$
+            .put("revalidate", revalidate) //$NON-NLS-1$
             .put("missingBeforeCount", missingBefore.size()) //$NON-NLS-1$
             .put("missingBefore", limit(missingBefore)) //$NON-NLS-1$
             .put("stillMissingCount", stillMissing.size()) //$NON-NLS-1$
@@ -306,9 +340,32 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         {
             result.put("revalidateWarning", revalidateWarning); //$NON-NLS-1$
         }
-        result.put("message", buildMessage(exported, allFqns.size(), missingBefore.size(), //$NON-NLS-1$
-            stillMissing.size(), dangling, cleanDangling));
+        result.put("message", buildMessage(exported, exported ? exportFqns.size() : 0, fullExport, //$NON-NLS-1$
+            missingBefore.size(), stillMissing.size(), dangling, cleanDangling));
         return result.toJson();
+    }
+
+    /**
+     * Decides WHICH top objects step 3 force-exports. By default only the
+     * {@code missingBefore} subset - the objects whose {@code .mdo} is actually absent
+     * on disk - is exported: the export runs on the SWT UI thread, and re-serializing
+     * every object of a large configuration there just to restore a handful of missing
+     * files would freeze the workbench while rewriting identical bytes.
+     * {@code fullExport=true} opts in to the export-everything refresh.
+     * <p>
+     * The {@code Configuration} top object is NOT part of this decision: when dangling
+     * references are removed, {@link #cleanDanglingReferences} re-exports the
+     * {@code Configuration} itself.
+     *
+     * @param fullExport {@code true} to export every top object
+     * @param allFqns every metadata top-object FQN of the project
+     * @param missingBefore the FQNs whose {@code .mdo} is missing on disk
+     * @return the FQNs to force-export (never {@code null})
+     */
+    static List<String> selectExportFqns(boolean fullExport, List<String> allFqns,
+        List<String> missingBefore)
+    {
+        return fullExport ? allFqns : missingBefore;
     }
 
     /**
@@ -365,12 +422,18 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      * Outcome of the dangling-reference scan/cleanup: how many dangling entries
      * were found, the per-entry detail of the ones removed, and an optional
      * best-effort warning when the BM task or Configuration re-export failed.
+     * Package-private so the commit-honest reporting can be unit-tested.
      */
-    private static final class DanglingResult
+    static final class DanglingResult
     {
         /** Total dangling (unresolved-proxy) entries detected across all collections. */
         int found;
-        /** {@code true} when the detected entries were actually removed from the model. */
+        /**
+         * {@code true} when the detected entries were removed from the model AND the
+         * BM write transaction committed. Set only by {@link #runRemovalWriteTask}
+         * AFTER {@link BmTransactions#write} returned - never inside the task body,
+         * where the commit has not happened yet.
+         */
         boolean removedFromModel;
         /** Detail of each dangling entry: {@code field}, {@code lostFqn}, {@code position}. */
         final List<Map<String, Object>> details = new ArrayList<>();
@@ -411,10 +474,13 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      * <b>Removal.</b> When {@code remove} is {@code true} the proxy elements are
      * removed from their {@link EList}s inside the same BM write transaction; the
      * change is then flushed by re-exporting the {@code Configuration} top object
-     * so {@code Configuration.mdo} no longer registers them. When {@code remove} is
-     * {@code false} the method only reports what is dangling (no model change, no
-     * re-export). The operation is idempotent: a clean Configuration yields
-     * {@code found == 0} and makes no change.
+     * so {@code Configuration.mdo} no longer registers them. The removal is claimed
+     * ({@code removedFromModel}) ONLY after the write task has returned, i.e. after
+     * the transaction committed; a throwing task reports {@code danglingWarning}
+     * and no removal. When {@code remove} is {@code false} the method only reports
+     * what is dangling (no model change, no re-export). The operation is
+     * idempotent: a clean Configuration yields {@code found == 0} and makes no
+     * change.
      *
      * @param config the project configuration (a {@link IBmObject})
      * @param bmModel the project BM model
@@ -436,24 +502,23 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
 
         // Detection (and, when remove=true, mutation) run inside one BM write task so
         // the same transaction that observes the proxies also removes them atomically.
-        try
-        {
-            BmTransactions.<Void>write(bmModel, "CleanDanglingReferences", (tx, pm) -> //$NON-NLS-1$
+        // The task body only reports whether it removed anything IN the transaction;
+        // the removedFromModel claim is made by runRemovalWriteTask AFTER
+        // BmTransactions.write returned, i.e. only once the transaction actually
+        // committed - a failed commit must not be reported as "Removed N".
+        boolean committed = runRemovalWriteTask(result,
+            () -> BmTransactions.<Boolean>write(bmModel, "CleanDanglingReferences", (tx, pm) -> //$NON-NLS-1$
             {
                 Configuration cfg = (Configuration)tx.getObjectById(configBmId);
                 if (cfg == null)
                 {
                     result.warning = "Configuration not found in transaction; dangling-reference scan skipped."; //$NON-NLS-1$
-                    return null;
+                    return Boolean.FALSE;
                 }
-                scanAndRemove(cfg, tx, remove, result);
-                return null;
-            });
-        }
-        catch (Exception e)
+                return Boolean.valueOf(scanAndRemove(cfg, tx, remove, result));
+            }));
+        if (!committed)
         {
-            Activator.logError("Error cleaning dangling references in Configuration", e); //$NON-NLS-1$
-            result.warning = unwrapCauseMessage(e);
             return result;
         }
 
@@ -476,6 +541,40 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Runs the dangling-removal BM write task and applies its outcome to
+     * {@code result} with commit-honest reporting: {@code removedFromModel} is set
+     * ONLY after the task has returned successfully - i.e. after
+     * {@link BmTransactions#write} committed the transaction. Setting it inside the
+     * task body would claim "Removed N" even when the commit subsequently fails and
+     * the removal is rolled back.
+     * <p>
+     * When the task throws, no removal is claimed ({@code removedFromModel} stays
+     * {@code false}, so {@link DanglingResult#removedCount()} is {@code 0} and
+     * {@code danglingRemoved} stays empty); the failure is logged and surfaced as
+     * {@code result.warning} instead - the existing warning plumbing.
+     *
+     * @param result the result the outcome is applied to
+     * @param writeTask the BM write task; returns whether entries were removed
+     *            inside the transaction
+     * @return {@code true} when the task completed (the transaction committed),
+     *         {@code false} when it threw
+     */
+    static boolean runRemovalWriteTask(DanglingResult result, Callable<Boolean> writeTask)
+    {
+        try
+        {
+            result.removedFromModel = Boolean.TRUE.equals(writeTask.call());
+            return true;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error cleaning dangling references in Configuration", e); //$NON-NLS-1$
+            result.warning = unwrapCauseMessage(e);
+            return false;
+        }
+    }
+
+    /**
      * Scans every many-valued {@link MdObject} reference of the Configuration for
      * unresolved-proxy (dangling) elements, records them in {@code result}, and -
      * when {@code remove} is {@code true} - removes them from their {@link EList}.
@@ -483,11 +582,16 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      * Runs inside the supplied BM transaction so {@link #isDanglingReference} can
      * confirm a BM proxy's target is truly absent via
      * {@link IBmTransaction#getTopObjectByFqn(String)}.
+     *
+     * @return whether any dangling entry was removed INSIDE the transaction. The
+     *         caller ({@link #runRemovalWriteTask}) turns this into the
+     *         {@code removedFromModel} claim only after the transaction commits.
      */
     @SuppressWarnings("unchecked")
-    private static void scanAndRemove(Configuration cfg, IBmTransaction tx, boolean remove,
+    private static boolean scanAndRemove(Configuration cfg, IBmTransaction tx, boolean remove,
         DanglingResult result)
     {
+        boolean removedAny = false;
         for (EReference ref : cfg.eClass().getEAllReferences())
         {
             if (!ref.isMany())
@@ -536,9 +640,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             if (remove && !dangling.isEmpty())
             {
                 list.removeAll(dangling);
-                result.removedFromModel = true;
+                removedAny = true;
             }
         }
+        return removedAny;
     }
 
     /**
@@ -633,12 +738,12 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      * Returns the subset of the given FQNs whose expected {@code .mdo} file does
      * not exist on disk under {@code src/}.
      * <p>
-     * The expected path is {@code src/<TypeDir>/<Name>/<Name>.mdo}, where
-     * {@code <TypeDir>} comes from {@link MetadataTypeUtils#getDirectoryName(String)}.
-     * FQNs whose type has no {@code src/} directory layout (e.g. {@code Language},
-     * {@code Style}, or the {@code Configuration} root) are skipped rather than
-     * reported as missing, since they are not stored as an own {@code .mdo} under a
-     * type directory. The on-disk filesystem is checked directly (not the possibly
+     * The expected path is {@code src/<TypeDir>/<Name>/<Name>.mdo}, resolved via
+     * {@link MetadataPathResolver#resolveTopObjectMdoPath(String)}. FQNs whose type
+     * has no {@code src/} directory layout (e.g. {@code Language}, {@code Style},
+     * or the {@code Configuration} root) are skipped rather than reported as
+     * missing, since they are not stored as an own {@code .mdo} under a type
+     * directory. The on-disk filesystem is checked directly (not the possibly
      * stale workspace resource tree) so the result reflects reality immediately.
      *
      * @param project the workspace project
@@ -647,12 +752,12 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      */
     private static List<String> findMissingMdoFiles(IProject project, List<String> fqns)
     {
-        File srcRoot = srcRootOf(project);
-        if (srcRoot == null)
+        File projectRoot = projectRootOf(project);
+        if (projectRoot == null)
         {
             return new ArrayList<>();
         }
-        return findMissingMdoFiles(srcRoot, fqns);
+        return findMissingMdoFiles(projectRoot, fqns);
     }
 
     /**
@@ -676,17 +781,17 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     private static List<String> findMissingMdoFilesWithWait(IProject project, List<String> fqns, long waitMs,
         long pollMs)
     {
-        File srcRoot = srcRootOf(project);
-        if (srcRoot == null)
+        File projectRoot = projectRootOf(project);
+        if (projectRoot == null)
         {
             return new ArrayList<>();
         }
-        return findMissingMdoFilesWithWait(srcRoot, fqns, waitMs, pollMs);
+        return findMissingMdoFilesWithWait(projectRoot, fqns, waitMs, pollMs);
     }
 
     /**
      * Filesystem core of {@link #findMissingMdoFilesWithWait(IProject, List, long, long)}:
-     * polls {@code srcRoot} for each FQN's expected {@code .mdo} until none are
+     * polls {@code projectRoot} for each FQN's expected {@code .mdo} until none are
      * missing or the {@code waitMs} budget is spent. Decoupled from
      * {@link IProject} so the bounded-wait behaviour can be unit-tested against a
      * plain temp directory.
@@ -705,10 +810,11 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      * (a non-UI / headless caller, including the unit tests) we fall back to the
      * plain sleep loop, since that path is not on the UI thread.
      */
-    static List<String> findMissingMdoFilesWithWait(File srcRoot, List<String> fqns, long waitMs, long pollMs)
+    static List<String> findMissingMdoFilesWithWait(File projectRoot, List<String> fqns, long waitMs,
+        long pollMs)
     {
         long deadline = System.currentTimeMillis() + Math.max(0L, waitMs);
-        List<String> missing = findMissingMdoFiles(srcRoot, fqns);
+        List<String> missing = findMissingMdoFiles(projectRoot, fqns);
         // Display.getCurrent() is null off the UI thread (and in headless tests, where
         // no SWT display thread exists); only then is the plain sleep path safe.
         Display display = Display.getCurrent();
@@ -734,7 +840,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             }
             // Re-check only the still-missing subset: a file that already appeared
             // stays present, so it never returns to the missing set.
-            missing = findMissingMdoFiles(srcRoot, missing);
+            missing = findMissingMdoFiles(projectRoot, missing);
         }
         return missing;
     }
@@ -761,21 +867,24 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
 
     /**
      * Filesystem core of {@link #findMissingMdoFiles(IProject, List)}: returns the
-     * FQNs whose {@code .mdo} is absent under {@code srcRoot} right now. Decoupled
+     * FQNs whose {@code .mdo} is absent under {@code projectRoot} right now (the
+     * expected path - {@code src/<TypeDir>/<Name>/<Name>.mdo} relative to the
+     * project root - comes from
+     * {@link MetadataPathResolver#resolveTopObjectMdoPath(String)}). Decoupled
      * from {@link IProject} so it (and the bounded-wait variant) can be unit-tested.
      */
-    static List<String> findMissingMdoFiles(File srcRoot, List<String> fqns)
+    static List<String> findMissingMdoFiles(File projectRoot, List<String> fqns)
     {
         List<String> missing = new ArrayList<>();
         for (String fqn : fqns)
         {
-            String relative = mdoRelativePath(fqn);
+            String relative = MetadataPathResolver.resolveTopObjectMdoPath(fqn);
             if (relative == null)
             {
                 // Type has no own .mdo file under a type directory: not a desync candidate.
                 continue;
             }
-            File mdoFile = new File(srcRoot, relative);
+            File mdoFile = new File(projectRoot, relative);
             if (!mdoFile.isFile())
             {
                 missing.add(fqn);
@@ -785,48 +894,17 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Resolves the project's {@code src/} root as a {@link File}, or {@code null}
+     * Resolves the project's root directory as a {@link File}, or {@code null}
      * when the project has no on-disk location.
      */
-    private static File srcRootOf(IProject project)
+    private static File projectRootOf(IProject project)
     {
         IPath location = project.getLocation();
         if (location == null)
         {
             return null;
         }
-        return location.append("src").toFile(); //$NON-NLS-1$
-    }
-
-    /**
-     * Computes the {@code .mdo} path of a top object relative to {@code src/}, or
-     * {@code null} when the object's type has no own {@code .mdo} file under a type
-     * directory.
-     *
-     * @param fqn the top-object FQN (e.g. {@code "Catalog.Products"})
-     * @return relative path like {@code "Catalogs/Products/Products.mdo"}, or
-     *         {@code null}
-     */
-    private static String mdoRelativePath(String fqn)
-    {
-        if (fqn == null || fqn.isEmpty())
-        {
-            return null;
-        }
-        int dot = fqn.indexOf('.');
-        if (dot <= 0 || dot >= fqn.length() - 1)
-        {
-            // Dotless FQN (e.g. the Configuration root) - not a type-directory object.
-            return null;
-        }
-        String type = fqn.substring(0, dot);
-        String name = fqn.substring(dot + 1);
-        String dir = MetadataTypeUtils.getDirectoryName(type);
-        if (dir == null)
-        {
-            return null;
-        }
-        return dir + "/" + name + "/" + name + ".mdo"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return location.toFile();
     }
 
     /** Caps a list to {@link #MAX_LISTED_FQNS} entries for a bounded JSON response. */
@@ -850,8 +928,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     }
 
     /** Builds a concise human-readable summary of the outcome. */
-    private static String buildMessage(boolean exported, int objectsExported, int missingBefore,
-        int stillMissing, DanglingResult dangling, boolean cleanDangling)
+    private static String buildMessage(boolean exported, int objectsExported, boolean fullExport,
+        int missingBefore, int stillMissing, DanglingResult dangling, boolean cleanDangling)
     {
         StringBuilder sb = new StringBuilder();
         if (!exported)
@@ -859,26 +937,25 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             sb.append("Export to disk did not run (services/project unavailable). ").append(missingBefore) //$NON-NLS-1$
                 .append(" object(s) were missing on disk before the attempt."); //$NON-NLS-1$
         }
-        else
+        else if (fullExport)
         {
-            sb.append("Re-exported ").append(objectsExported).append(" top object(s) to src/. "); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append("Re-exported all ").append(objectsExported).append(" top object(s) to src/. "); //$NON-NLS-1$ //$NON-NLS-2$
             if (missingBefore == 0)
             {
                 sb.append("Already in sync: no .mdo files were missing."); //$NON-NLS-1$
             }
             else
             {
-                sb.append(missingBefore)
-                    .append(" object(s) had no .mdo on disk before and were written out"); //$NON-NLS-1$
-                if (stillMissing == 0)
-                {
-                    sb.append("; all are present now."); //$NON-NLS-1$
-                }
-                else
-                {
-                    sb.append("; ").append(stillMissing).append(" still missing after export."); //$NON-NLS-1$ //$NON-NLS-2$
-                }
+                appendMissingOutcome(sb, missingBefore, stillMissing);
             }
+        }
+        else if (missingBefore == 0)
+        {
+            sb.append("Already in sync: no .mdo files were missing, nothing to export."); //$NON-NLS-1$
+        }
+        else
+        {
+            appendMissingOutcome(sb, missingBefore, stillMissing);
         }
         // Dangling-reference summary.
         sb.append(' ');
@@ -897,8 +974,23 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                 .append(" dangling reference(s) in Configuration.mdo"); //$NON-NLS-1$
             sb.append(cleanDangling
                 ? " (not removed - see danglingWarning)." //$NON-NLS-1$
-                : " (cleanDanglingReferences=false, not removed)."); //$NON-NLS-1$
+                : " (report-only; pass cleanDanglingReferences=true to remove them)."); //$NON-NLS-1$
         }
         return sb.toString();
+    }
+
+    /** Appends the missing-before/still-missing outcome shared by both export modes. */
+    private static void appendMissingOutcome(StringBuilder sb, int missingBefore, int stillMissing)
+    {
+        sb.append(missingBefore)
+            .append(" object(s) had no .mdo on disk before and were written out"); //$NON-NLS-1$
+        if (stillMissing == 0)
+        {
+            sb.append("; all are present now."); //$NON-NLS-1$
+        }
+        else
+        {
+            sb.append("; ").append(stillMissing).append(" still missing after export."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 }

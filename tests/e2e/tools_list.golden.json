@@ -2460,11 +2460,15 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Walks EVERY top metadata object of the configuration (all kinds) and force-exports each object's .mdo, so objects that exist in the model / Configuration.mdo but have no .mdo on disk are written out. Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Read-safe and idempotent: when already in sync it re-exports harmlessly and reports 0 missing. Also CLEANS dangling/orphaned references in Configuration.mdo (unresolved proxies shown by get_project_errors as md-reference-intergrity 'lost reference' warnings that block update_database / XML import), reporting danglingFound + danglingRemovedCount (cleanDanglingReferences, default true; idempotent). Full parameters and examples: call get_tool_guide('resync_to_disk').",
+    "description": "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Walks EVERY top metadata object of the configuration (all kinds), reports the objects whose .mdo is missing on disk (missingBefore), and force-exports that missing subset so the files are restored (fullExport=true re-exports every object instead). Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Dangling/orphaned references in Configuration.mdo (unresolved proxies shown by get_project_errors as md-reference-intergrity 'lost reference' warnings that block update_database / XML import) are REPORTED by default (danglingFound + danglingDetails); set cleanDanglingReferences=true to REMOVE them - destructive: rewrites Configuration.mdo. Full parameters and examples: call get_tool_guide('resync_to_disk').",
     "inputSchema": {
       "properties": {
         "cleanDanglingReferences": {
-          "description": "When true (default), remove dangling/orphaned references from Configuration.mdo - entries that register an object with no .mdo and no BM body (unresolved proxies), the source of md-reference-intergrity 'lost reference' warnings that block update_database / XML import. Set false to only report danglingFound without removing anything.",
+          "description": "When true, REMOVE dangling/orphaned references from Configuration.mdo - entries that register an object with no .mdo and no BM body (unresolved proxies), the source of md-reference-intergrity 'lost reference' warnings that block update_database / XML import. Destructive: rewrites Configuration.mdo. Default: false - only report danglingFound + danglingDetails without changing anything.",
+          "type": "boolean"
+        },
+        "fullExport": {
+          "description": "When true, force-export EVERY metadata top object's .mdo (a full disk refresh; slow on a large configuration - the export runs on the UI thread). Default: false - export only the objects whose .mdo is missing on disk.",
           "type": "boolean"
         },
         "projectName": {
@@ -2514,6 +2518,10 @@
           "description": "Set when the dangling scan/cleanup could not complete cleanly",
           "type": "string"
         },
+        "fullExport": {
+          "description": "Whether a full export of every top object was requested",
+          "type": "boolean"
+        },
         "message": {
           "description": "Human-readable summary of the outcome",
           "type": "string"
@@ -2530,12 +2538,16 @@
           "type": "integer"
         },
         "objectsExported": {
-          "description": "Number of top objects whose .mdo was (re)written",
+          "description": "Number of top objects whose .mdo was (re)written - the missing subset by default, every object when fullExport=true",
           "type": "integer"
         },
         "projectName": {
           "description": "The project that was re-synchronized",
           "type": "string"
+        },
+        "revalidate": {
+          "description": "Whether a post-export revalidation was requested",
+          "type": "boolean"
         },
         "revalidateWarning": {
           "description": "Set when the optional post-export revalidation failed",

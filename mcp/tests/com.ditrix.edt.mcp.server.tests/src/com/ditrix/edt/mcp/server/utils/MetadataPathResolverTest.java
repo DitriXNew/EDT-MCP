@@ -207,6 +207,60 @@ public class MetadataPathResolverTest
         assertNull(MetadataPathResolver.resolveFormFolderPath("Catalog.Products")); //$NON-NLS-1$
     }
 
+    // ==================== resolveTopObjectMdoPath (top-object .mdo files) ====================
+
+    @Test
+    public void testTopObjectMdoEnglishCatalog()
+    {
+        assertEquals("src/Catalogs/Products/Products.mdo", //$NON-NLS-1$
+            MetadataPathResolver.resolveTopObjectMdoPath("Catalog.Products")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTopObjectMdoMultiWordTypeDirectory()
+    {
+        // InformationRegister -> InformationRegisters: the per-type directory mapping must
+        // be followed, not assumed (resync_to_disk's missing-.mdo check rides on this).
+        assertEquals("src/InformationRegisters/Prices/Prices.mdo", //$NON-NLS-1$
+            MetadataPathResolver.resolveTopObjectMdoPath("InformationRegister.Prices")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTopObjectMdoRussianTypeToken()
+    {
+        // The TYPE token is bilingual; the object Name passes through verbatim.
+        assertEquals(
+            "src/Catalogs/\u0422\u043E\u0432\u0430\u0440\u044B/\u0422\u043E\u0432\u0430\u0440\u044B.mdo", // src/Catalogs/Товары/Товары.mdo
+            MetadataPathResolver.resolveTopObjectMdoPath(
+                "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.\u0422\u043E\u0432\u0430\u0440\u044B")); // Справочник.Товары
+    }
+
+    @Test
+    public void testTopObjectMdoNullEmptyAndDotlessReturnNull()
+    {
+        // The Configuration root and other dotless FQNs have no own .mdo under a type
+        // directory; null/empty inputs resolve to null, never throw.
+        assertNull(MetadataPathResolver.resolveTopObjectMdoPath(null));
+        assertNull(MetadataPathResolver.resolveTopObjectMdoPath("")); //$NON-NLS-1$
+        assertNull(MetadataPathResolver.resolveTopObjectMdoPath("Configuration")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTopObjectMdoLeadingOrTrailingDotReturnsNull()
+    {
+        // Malformed FQNs (empty type or empty name) must not produce a half-built path.
+        assertNull(MetadataPathResolver.resolveTopObjectMdoPath(".Products")); //$NON-NLS-1$
+        assertNull(MetadataPathResolver.resolveTopObjectMdoPath("Catalog.")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTopObjectMdoUnknownTypeReturnsNull()
+    {
+        // An unrecognized type token (or a type with no src/ directory layout) is not a
+        // type-directory object: report null so callers skip it instead of mis-flagging it.
+        assertNull(MetadataPathResolver.resolveTopObjectMdoPath("Bogus.Products")); //$NON-NLS-1$
+    }
+
     // ==================== resolveMetadataDir ====================
 
     @Test
