@@ -10,6 +10,7 @@ re-implement them. See SKILL.md for the full guide.
 Python stdlib only. No third-party dependencies.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -314,10 +315,17 @@ def _git(*args):
     # Decode git output as UTF-8 explicitly. With bare text=True, Python uses the
     # platform locale codepage (cp125x on Windows), which mangles UTF-8 content in
     # `git diff` — Cyrillic BSL bodies came back as mojibake and substring checks
-    # missed them. git emits content as UTF-8 and quotes non-ASCII PATHS as ASCII
-    # octal escapes (core.quotepath), so utf-8 decoding is always safe here.
+    # missed them.
+    #
+    # core.quotepath=false: by default git quotes non-ASCII PATHS as C-style octal
+    # escapes ('?? "tests/.../\320\241..."'), so the `line[3:]` path parsing in
+    # assert_diff_contains / tree_snapshot got a quoted-escaped string that
+    # os.path.isfile() cannot resolve — a freshly created Cyrillic-named object
+    # (e.g. Catalogs/Сережка/Сережка.mdo) was silently skipped and its content
+    # never searched (the ё-normalization e2e failures). With quotepath=false git
+    # emits the raw UTF-8 bytes, which this explicit utf-8 decoding handles.
     return subprocess.run(
-        ["git", "-C", REPO_ROOT, *args],
+        ["git", "-C", REPO_ROOT, "-c", "core.quotepath=false", *args],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
@@ -492,6 +500,53 @@ def assert_no_substantive_diff(ctx=""):
         code = line[:2]
         if "?" in code or "A" in code or "D" in code or "R" in code:
             _fail("new/deleted/renamed file under %s [%s]:\n%s" % (PROJECT_REL, ctx, status[:500]))
+
+
+def tree_snapshot():
+    """Capture the BASE fixture's full on-disk state for a later 'changed NOTHING'
+    comparison: porcelain status (every untracked file listed individually), the
+    tracked content diff vs HEAD (staged + unstaged), and a content hash of each
+    untracked file (so an in-place rewrite of a brand-new file is caught too).
+
+    For tests whose SETUP legitimately dirties the tree (e.g. seeding a referenced
+    catalog before probing a blocked delete): plain assert_no_diff would flag the
+    seeding itself. Snapshot AFTER the seeding, run the operation under test, then
+    assert_tree_unchanged(snapshot) — asserting the operation added nothing on top."""
+    status = _git("status", "--porcelain", "--untracked-files=all", "--", PROJECT_REL).stdout
+    diff_head = _git("diff", "HEAD", "--", PROJECT_REL).stdout
+    hashes = {}
+    for line in status.splitlines():
+        if line[:2] == "??":
+            path = line[3:].strip()
+            full = os.path.join(REPO_ROOT, path)
+            if os.path.isfile(full):
+                try:
+                    with open(full, "rb") as f:
+                        hashes[path] = hashlib.sha1(f.read()).hexdigest()
+                except OSError:
+                    hashes[path] = "<unreadable>"
+    return {"status": status, "diff": diff_head, "untracked": hashes}
+
+
+def assert_tree_unchanged(before, ctx=""):
+    """The fixture's on-disk state is IDENTICAL to the given tree_snapshot() — the
+    operation between the snapshot and this call must not have touched the project
+    (even though the tree itself may be legitimately dirty from earlier seeding)."""
+    after = tree_snapshot()
+    if after == before:
+        return
+    deltas = []
+    if after["status"] != before["status"]:
+        deltas.append("status before:\n%s\nstatus after:\n%s"
+                      % (before["status"][:400], after["status"][:400]))
+    if after["diff"] != before["diff"]:
+        deltas.append("tracked diff changed (before %d chars, after %d chars)"
+                      % (len(before["diff"]), len(after["diff"])))
+    for path in sorted(set(before["untracked"]) | set(after["untracked"])):
+        if before["untracked"].get(path) != after["untracked"].get(path):
+            deltas.append("untracked file changed: %s" % path)
+    _fail("expected the operation to change NOTHING on disk (relative to the post-setup "
+          "snapshot) but it did [%s]:\n%s" % (ctx, "\n".join(deltas)[:700]))
 
 
 def assert_diff_contains(substr, ctx=""):

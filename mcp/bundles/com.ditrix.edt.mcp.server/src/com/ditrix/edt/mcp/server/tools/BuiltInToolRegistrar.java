@@ -57,6 +57,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.RemoveBreakpointTool;
 import com.ditrix.edt.mcp.server.tools.impl.RenameMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.ResumeTool;
+import com.ditrix.edt.mcp.server.tools.impl.ResyncToDiskTool;
 import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
@@ -109,6 +110,7 @@ public final class BuiltInToolRegistrar
         registry.register(new GetConfigurationPropertiesTool());
         registry.register(new CleanProjectTool());
         registry.register(new RevalidateObjectsTool());
+        registry.register(new ResyncToDiskTool());
         registry.register(new ExportConfigurationToXmlTool());
         registry.register(new ImportConfigurationFromXmlTool());
         registry.register(new DeleteProjectTool());

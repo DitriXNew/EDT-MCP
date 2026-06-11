@@ -154,7 +154,7 @@ public final class Toolsets
             "generate_translation_strings", "translate_configuration", "get_translation_project_info"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assign(PROJECT,
-            "clean_project", "revalidate_objects", "update_database", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "clean_project", "revalidate_objects", "resync_to_disk", "update_database", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             "export_configuration_to_xml", "import_configuration_from_xml", //$NON-NLS-1$ //$NON-NLS-2$
             "get_problem_summary", "get_project_errors", "get_markers", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "get_check_description", "get_platform_documentation"); //$NON-NLS-1$ //$NON-NLS-2$

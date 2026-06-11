@@ -161,7 +161,8 @@ public class ToolGroupTest
         assertTrue(tools.contains("export_configuration_to_xml"));
         assertTrue(tools.contains("import_configuration_from_xml"));
         assertTrue(tools.contains("delete_project"));
-        assertEquals(9, tools.size());
+        assertTrue(tools.contains("resync_to_disk"));
+        assertEquals(10, tools.size());
     }
 
     @Test
