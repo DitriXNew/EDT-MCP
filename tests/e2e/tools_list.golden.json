@@ -475,6 +475,17 @@
           "description": "Either 'preview', 'executed' or 'blocked'",
           "type": "string"
         },
+        "affectedReferences": {
+          "description": "Deprecated alias of blockingReferences (the same list), kept for one release for wire compatibility",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "affectedReferencesCount": {
+          "description": "Deprecated alias of blockingReferencesCount (the same count), kept for one release for wire compatibility",
+          "type": "integer"
+        },
         "blocking": {
           "description": "Whether the listed blockingReferences BLOCK the delete (the refactoring cannot auto-clean them; a confirm=true delete is refused unless force=true)",
           "type": "boolean"

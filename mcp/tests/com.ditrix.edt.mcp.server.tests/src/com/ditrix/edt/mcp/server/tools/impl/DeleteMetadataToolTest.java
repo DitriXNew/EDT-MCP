@@ -12,8 +12,17 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.Test;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
@@ -83,6 +92,55 @@ public class DeleteMetadataToolTest
             schema.contains("\"blockingReferences\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare the forced flag", //$NON-NLS-1$
             schema.contains("\"forced\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresLegacyAffectedAliases()
+    {
+        String schema = new DeleteMetadataTool().getOutputSchema();
+        assertNotNull(schema);
+        // The affected* keys are deprecated aliases of blocking*, kept for one release for wire
+        // compatibility — the schema must declare them for as long as the wire carries them.
+        assertTrue("outputSchema must declare the affectedReferences alias", //$NON-NLS-1$
+            schema.contains("\"affectedReferences\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare the affectedReferencesCount alias", //$NON-NLS-1$
+            schema.contains("\"affectedReferencesCount\"")); //$NON-NLS-1$
+    }
+
+    /**
+     * Every response branch emits the blocking-reference keys through the shared
+     * {@code putBlockingReferences} emitter, so asserting the emitter pins the whole wire contract:
+     * {@code affectedReferences} / {@code affectedReferencesCount} (legacy aliases, kept for one
+     * release) must carry content IDENTICAL to {@code blockingReferences} / {@code blockingReferencesCount}.
+     */
+    @Test
+    public void testLegacyAffectedAliasesCarryIdenticalContent()
+    {
+        List<Map<String, Object>> blocking = new ArrayList<>();
+        Map<String, Object> reference = new LinkedHashMap<>();
+        reference.put("problemType", "CleanReferenceProblem"); //$NON-NLS-1$ //$NON-NLS-2$
+        reference.put("referencingObject", "Document.Order"); //$NON-NLS-1$ //$NON-NLS-2$
+        reference.put("reference", "type"); //$NON-NLS-1$ //$NON-NLS-2$
+        blocking.add(reference);
+
+        String json =
+            DeleteMetadataTool.putBlockingReferences(ToolResult.success(), blocking).toJson();
+        JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+
+        assertEquals("affectedReferences must mirror blockingReferences exactly", //$NON-NLS-1$
+            obj.get("blockingReferences"), obj.get("affectedReferences")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("affectedReferencesCount must mirror blockingReferencesCount exactly", //$NON-NLS-1$
+            obj.get("blockingReferencesCount"), obj.get("affectedReferencesCount")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, obj.get("affectedReferencesCount").getAsInt()); //$NON-NLS-1$
+        assertEquals("Document.Order", obj.get("affectedReferences").getAsJsonArray() //$NON-NLS-1$ //$NON-NLS-2$
+            .get(0).getAsJsonObject().get("referencingObject").getAsString()); //$NON-NLS-1$
+
+        // The empty case (form previews) carries the aliases too — an empty list and a zero count.
+        String emptyJson = DeleteMetadataTool
+            .putBlockingReferences(ToolResult.success(), new ArrayList<>()).toJson();
+        JsonObject emptyObj = JsonParser.parseString(emptyJson).getAsJsonObject();
+        assertEquals(emptyObj.get("blockingReferences"), emptyObj.get("affectedReferences")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(0, emptyObj.get("affectedReferencesCount").getAsInt()); //$NON-NLS-1$
     }
 
     @Test

@@ -108,6 +108,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "auto-clean: listed in the preview, the reason a delete is refused " //$NON-NLS-1$
                 + "(action='blocked'), or left dangling when force=true (action='executed')") //$NON-NLS-1$
             .integerProperty("blockingReferencesCount", "Count of blocking references") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("affectedReferences", "Deprecated alias of blockingReferences (the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "same list), kept for one release for wire compatibility") //$NON-NLS-1$
+            .integerProperty("affectedReferencesCount", "Deprecated alias of blockingReferencesCount " //$NON-NLS-1$ //$NON-NLS-2$
+                + "(the same count), kept for one release for wire compatibility") //$NON-NLS-1$
             .booleanProperty("forced", "Whether the delete was forced past blocking references") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable description of the result") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -226,16 +230,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             : "Preview of delete refactoring. References listed above will be cleaned up. " //$NON-NLS-1$
                 + "Call with confirm=true to apply."; //$NON-NLS-1$
 
-        // The preview's "affected" references ARE exactly the blocking set, so the list is
-        // serialized ONCE under the blocking* fields shared with action='blocked' / 'executed'.
-        return ToolResult.success()
+        // The preview's "affected" references ARE exactly the blocking set, so the list is built ONCE
+        // and emitted under the blocking* fields (and their legacy affected* aliases) shared with
+        // action='blocked' / 'executed'.
+        ToolResult result = ToolResult.success()
             .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
             .put("fqn", fqn) //$NON-NLS-1$
             .put("refactoringTitle", title) //$NON-NLS-1$
             .put("items", allItems) //$NON-NLS-1$
-            .put("blocking", hasBlocking) //$NON-NLS-1$
-            .put("blockingReferences", blocking) //$NON-NLS-1$
-            .put("blockingReferencesCount", blocking.size()) //$NON-NLS-1$
+            .put("blocking", hasBlocking); //$NON-NLS-1$
+        return putBlockingReferences(result, blocking)
             .put("message", message) //$NON-NLS-1$
             .toJson();
     }
@@ -249,16 +253,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         List<Map<String, Object>> blocking = collectBlockingProblems(refactoring);
         if (!blocking.isEmpty() && !force)
         {
-            return ToolResult.error("Cannot delete '" + fqn + "': it is still referenced by " //$NON-NLS-1$ //$NON-NLS-2$
+            ToolResult blocked = ToolResult.error("Cannot delete '" + fqn + "': it is still referenced by " //$NON-NLS-1$ //$NON-NLS-2$
                     + blocking.size() + " object(s) that the refactoring cannot auto-clean. Remove the " //$NON-NLS-1$
                     + "references first, or call again with force=true to delete anyway (the references " //$NON-NLS-1$
                     + "will be left dangling).") //$NON-NLS-1$
                 .put("action", "blocked") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("fqn", fqn) //$NON-NLS-1$
-                .put("blocking", true) //$NON-NLS-1$
-                .put("blockingReferences", blocking) //$NON-NLS-1$
-                .put("blockingReferencesCount", blocking.size()) //$NON-NLS-1$
-                .toJson();
+                .put("blocking", true); //$NON-NLS-1$
+            return putBlockingReferences(blocked, blocking).toJson();
         }
 
         try
@@ -270,8 +272,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .put("forced", force); //$NON-NLS-1$
             if (!blocking.isEmpty())
             {
-                result.put("blockingReferences", blocking) //$NON-NLS-1$
-                    .put("blockingReferencesCount", blocking.size()) //$NON-NLS-1$
+                putBlockingReferences(result, blocking)
                     .put("message", "Delete refactoring completed (forced). " + blocking.size() //$NON-NLS-1$ //$NON-NLS-2$
                         + " incoming reference(s) were left dangling."); //$NON-NLS-1$
             }
@@ -286,6 +287,21 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("Error performing delete refactoring", e); //$NON-NLS-1$
             return ToolResult.error("Delete failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Puts the blocking-reference list and count onto {@code result} — the SINGLE place every response
+     * branch (preview / blocked / forced execute / form previews) emits them, so the legacy aliases
+     * below can never drift from the canonical keys. Package-visible for tests.
+     */
+    static ToolResult putBlockingReferences(ToolResult result, List<Map<String, Object>> blocking)
+    {
+        return result
+            .put("blockingReferences", blocking) //$NON-NLS-1$
+            .put("blockingReferencesCount", blocking.size()) //$NON-NLS-1$
+            // legacy aliases of blockingReferences*, kept for one release for wire compatibility (upstream review)
+            .put("affectedReferences", blocking) //$NON-NLS-1$
+            .put("affectedReferencesCount", blocking.size()); //$NON-NLS-1$
     }
 
     /**
@@ -508,14 +524,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         removed.add(head);
         removed.addAll(data.descendants);
 
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
             .put("fqn", normFqn) //$NON-NLS-1$
             .put("refactoringTitle", "Delete form " + (handler ? "handler" : "member") + " " + ref.name) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .put("items", removed) //$NON-NLS-1$
-            .put("blocking", false) //$NON-NLS-1$
-            .put("blockingReferences", Collections.emptyList()) //$NON-NLS-1$
-            .put("blockingReferencesCount", 0) //$NON-NLS-1$
+            .put("blocking", false); //$NON-NLS-1$
+        return putBlockingReferences(result, Collections.emptyList())
             .put("message", "Preview: deleting '" + ref.name + "' (" + data.type + ") from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ref.formPath + " would remove " //$NON-NLS-1$
                 + (data.descendants.isEmpty()
@@ -602,14 +617,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // blocking is hardcoded false: an owned form is removed by cascade (not through the
             // md-refactoring service), so unlike top-object previews NO incoming-reference scan
             // runs here — the message says so to keep the preview honest (deep scan is follow-up).
-            return ToolResult.success()
+            ToolResult preview = ToolResult.success()
                 .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("fqn", normFqn) //$NON-NLS-1$
                 .put("refactoringTitle", "Delete form " + ref.formName) //$NON-NLS-1$ //$NON-NLS-2$
                 .put("items", Collections.singletonList(formItem(ref.formName, mdForm.eClass().getName()))) //$NON-NLS-1$
-                .put("blocking", false) //$NON-NLS-1$
-                .put("blockingReferences", Collections.emptyList()) //$NON-NLS-1$
-                .put("blockingReferencesCount", 0) //$NON-NLS-1$
+                .put("blocking", false); //$NON-NLS-1$
+            return putBlockingReferences(preview, Collections.emptyList())
                 .put("message", "Preview: deleting form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
                     + " would remove the form and its content Form.form. Cross-references to it " //$NON-NLS-1$
                     + "(a default-form setting) are cleared on the owner. Note: incoming references " //$NON-NLS-1$
