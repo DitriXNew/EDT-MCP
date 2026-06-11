@@ -170,7 +170,7 @@ def main():
                                "[docs/tools/](docs/tools/)." % len(names),
                                ""] + index_lines("docs/tools/", 3) + [end_m])
             text = text[:si] + block + text[ei + len(end_m):]
-            open(readme, "w", encoding="utf-8").write(text)
+            open(readme, "w", encoding="utf-8", newline="\n").write(text)
             injected = True
 
     print("Wrote %d tool docs + docs/tools/README.md; README index injected: %s"

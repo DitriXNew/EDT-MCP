@@ -1,11 +1,11 @@
 # wait_for_break
 
-Wait for a debug suspend event (e.g. breakpoint hit) on the given application. Returns the suspended thread/frame snapshot, or {hit:false} on timeout. applicationId may be real or synthetic 'attach:<configName>'. If omitted and exactly one EDT debug launch is active, that launch is used. Does NOT terminate the launch on timeout — call again to keep waiting.
+Wait for a debug suspend event (e.g. breakpoint hit) on the given application. Returns the suspended thread/frame snapshot, or {hit:false} on timeout. applicationId accepts ANY id form for the session: the real id, 'attach:<name>', 'launch:<name>' (EDT-UI-started session), or 'ServerApplication.<app>' (server-side suspend from debug_yaxunit_tests). If omitted and exactly one EDT debug session is active, that session is used. Does NOT terminate the launch on timeout — call again to keep waiting.
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
-| applicationId | — | string | Application id of the running debug session (real or 'attach:<configName>'). Optional if exactly one debug launch is active. |
+| applicationId | — | string | Application id of the running debug session (real, 'attach:<configName>', 'launch:<configName>', or 'ServerApplication.<app>'). Optional if exactly one debug session is active. |
 | timeout | — | integer | Wait window in seconds (default: 60) |
 
 ## Guide

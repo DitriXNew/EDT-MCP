@@ -7,7 +7,7 @@ Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the f
 | --- | --- | --- | --- |
 | projectName | — | string | EDT project name. Required when formPath is specified. |
 | formPath | — | string | Form FQN (e.g. 'Catalog.Products.Forms.ItemForm' or 'CommonForm.MyForm'); if omitted, captures the active form editor. |
-| refresh | — | boolean | Force WYSIWYG refresh before capture (default: false) |
+| refresh | — | boolean | Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false) |
 
 ## Guide
 Captures a **PNG screenshot** of a form's WYSIWYG editor as it actually renders (the same visual EDT shows in the form designer). The response type is IMAGE - the tool returns the PNG, not text.
@@ -23,7 +23,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 ## Parameter details
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns the error "projectName is required when formPath is specified". Ignored when targeting the active editor.
 - `formPath` - metadata FQN of the form. If given, the tool opens and activates that form automatically, waits for the WYSIWYG page, then captures it. If omitted, the currently active form editor is captured.
-- `refresh` - force a WYSIWYG refresh before capturing; default `false`. Set `true` if the form was just edited and the rendered image may be stale.
+- `refresh` - force a **real re-render** before capturing; default `false`. Set `true` if the form was just edited and the rendered image may be stale. With `refresh: true` the previously rendered buffer is never returned: if the re-render cannot be completed in time the tool fails with an explicit error ("refresh=true was requested but the form could not be re-rendered in time...") instead of silently returning the pre-edit image; retry, or call with `refresh: false` to accept the last rendered image.
 
 ### formPath format
 `MetadataType.ObjectName.Forms.FormName`, or `CommonForm.FormName` for a common form. Examples:

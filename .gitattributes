@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Generated tool docs + e2e golden must stay LF regardless of platform/autocrlf
+docs/tools/** text eol=lf
+tests/e2e/tools_list.golden.json text eol=lf

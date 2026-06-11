@@ -1,12 +1,12 @@
 # resume
 
-Resume a suspended debug thread or all threads of a debug target. Pass threadId (from wait_for_break) or applicationId. With no arguments, resumes the single active debug launch if exactly one exists.
+Resume a suspended debug thread or all threads of a debug target. Pass threadId (from wait_for_break) or applicationId. applicationId accepts ANY id form for the session: the real id, 'attach:<name>', 'launch:<name>', or 'ServerApplication.<app>'. For a server-side suspend, resume targets the suspended thread directly. With no arguments, resumes the single active debug session (launch or server target) if exactly one exists. NOTE: if resume of a server-side suspend does not take effect, the breakpoint can also be released from the EDT UI.
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | threadId | — | integer | Thread id from wait_for_break |
-| applicationId | — | string | Application id (real or 'attach:<configName>' — resumes all threads of this target) |
+| applicationId | — | string | Application id (real, 'attach:<configName>', 'launch:<configName>', or 'ServerApplication.<app>'). Resumes this session's target/suspended thread. Optional if exactly one debug session is active. |
 
 ## Guide
 Resumes (un-pauses) a suspended debug session so the 1C application keeps running until the next breakpoint - the counterpart of `wait_for_break`. Resume a single thread, or all threads of a debug target.

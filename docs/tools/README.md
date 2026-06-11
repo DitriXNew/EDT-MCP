@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**64 tools.**
+**65 tools.**
 
 ## Core
 
@@ -31,7 +31,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 |------|-------------|
 | [`adopt_metadata_object`](adopt_metadata_object.md) | Adopt a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can… |
 | [`create_metadata`](create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
-| [`delete_metadata`](delete_metadata.md) | Delete a metadata node (object or member, including a FORM member - item / attribute / command / handler) addressed by a 1C full-name FQN, cascading the clea… |
+| [`delete_metadata`](delete_metadata.md) | Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name' or a FORM member - item / attribute / command / handler) addressed… |
 | [`get_configuration_properties`](get_configuration_properties.md) | Get 1C:Enterprise configuration properties (name, synonym, comment, script variant, compatibility mode, etc.) |
 | [`get_subsystem_content`](get_subsystem_content.md) | Get one 1C subsystem's content: properties, its metadata objects (Type/Name/Synonym/FQN) and child subsystems, identified by FQN (e.g. 'Subsystem.Sales.Subsy… |
 | [`list_configurations`](list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxu… |
@@ -61,13 +61,13 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | Tool | Description |
 |------|-------------|
 | [`debug_launch`](debug_launch.md) | Start an EDT debug session: either an existing config by launchConfigurationName (runtime client OR Attach, the latter needed to debug server-side code), or… |
-| [`debug_status`](debug_status.md) | Report active debug launches: applicationId (real or synthetic 'attach:<name>'), launch configuration name/type, mode (debug/run), whether the target is curr… |
+| [`debug_status`](debug_status.md) | Report active debug sessions: applicationId (real or synthetic 'attach:<name>' / 'launch:<name>'), launch configuration name/type, mode (debug/run), whether… |
 | [`evaluate_expression`](evaluate_expression.md) | Evaluate a BSL expression in the context of a suspended stack frame. Pass frameRef from wait_for_break and the expression text. WARNING: this executes arbitr… |
 | [`get_applications`](get_applications.md) | Get list of applications (infobases) for a project. Returns application ID, name, type, and update state. Application ID is required for update_database and… |
 | [`get_variables`](get_variables.md) | Read variables from a stack frame of a suspended debug thread. Pass frameRef from wait_for_break (preferred) or threadId+frameIndex. Use expandPath to drill… |
 | [`list_breakpoints`](list_breakpoints.md) | List active line breakpoints. Optionally filter by projectName. |
 | [`remove_breakpoint`](remove_breakpoint.md) | Remove a 1C BSL line breakpoint. Either pass breakpointId (returned from set_breakpoint) or projectName+module+lineNumber to look it up by coordinates. |
-| [`resume`](resume.md) | Resume a suspended debug thread or all threads of a debug target. Pass threadId (from wait_for_break) or applicationId. With no arguments, resumes the single… |
+| [`resume`](resume.md) | Resume a suspended debug thread or all threads of a debug target. Pass threadId (from wait_for_break) or applicationId. applicationId accepts ANY id form for… |
 | [`set_breakpoint`](set_breakpoint.md) | Set a line breakpoint on a 1C BSL module. Accepts either an EDT module-relative path (e.g. 'CommonModules/Foo/Module.bsl') or an absolute filesystem path. Us… |
 | [`step`](step.md) | Step a suspended debug thread. kind ∈ {over, into, out}. Blocks until the next SUSPEND event (or timeout) and returns the new frame snapshot. |
 | [`terminate_launch`](terminate_launch.md) | Terminate one or more 1C launches started from THIS EDT instance; externally launched 1C clients are never touched. Select ONE target mode: launchConfigurati… |
@@ -135,5 +135,6 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`get_problem_summary`](get_problem_summary.md) | Get problem summary with counts grouped by project and EDT severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). Use this for severity totals on… |
 | [`get_project_errors`](get_project_errors.md) | List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message,… |
 | [`import_configuration_from_xml`](import_configuration_from_xml.md) | Import a configuration from a directory of XML files into a NEW EDT project (EDT menu: Import); the reverse of export_configuration_to_xml. The projectName m… |
+| [`resync_to_disk`](resync_to_disk.md) | Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Walks EVERY top metadata object of the configuration… |
 | [`revalidate_objects`](revalidate_objects.md) | Revalidate EDT project or specific objects. If objects array is empty or missing, revalidates entire project. FQN examples: 'Document.SalesOrder', 'Catalog.P… |
 | [`update_database`](update_database.md) | Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + appl… |

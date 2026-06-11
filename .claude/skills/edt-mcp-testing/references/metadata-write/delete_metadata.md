@@ -42,7 +42,7 @@ FQN forms (EN/RU TYPE tokens both accepted):
 1. **Confirm ready.** `list_projects` → `TestConfiguration` `State=ready`. Confirm the subtree is clean first (`git status -- TestConfiguration`) so the post-revert diff is meaningful.
 2. **Create a throwaway target through MCP** (so model + disk stay in sync and the revert is trivial). Add a uniquely-named temporary attribute on `Catalog.Catalog`:
    `create_metadata(projectName="TestConfiguration", fqn="Catalog.Catalog.Attribute.E2EDelAttr")`, then `wait_for_project_ready` / poll `list_projects` until `ready`. Verify it exists with `get_metadata_details(projectName="TestConfiguration", fqn="Catalog.Catalog")` — `E2EDelAttr` should appear in the attribute list.
-3. **Preview first (no `confirm`).** `delete_metadata(projectName="TestConfiguration", fqn="Catalog.Catalog.Attribute.E2EDelAttr")`. Expect `action:"preview"`, an `items` array (refactoring items), `affectedReferencesCount`, and a `message` instructing you to re-call with `confirm=true`. **Nothing has changed yet** — re-confirm with `get_metadata_details` that `E2EDelAttr` is still present, and `git status -- TestConfiguration` should show no diff.
+3. **Preview first (no `confirm`).** `delete_metadata(projectName="TestConfiguration", fqn="Catalog.Catalog.Attribute.E2EDelAttr")`. Expect `action:"preview"`, an `items` array (refactoring items), `blockingReferencesCount`, and a `message` instructing you to re-call with `confirm=true`. **Nothing has changed yet** — re-confirm with `get_metadata_details` that `E2EDelAttr` is still present, and `git status -- TestConfiguration` should show no diff.
 4. **Execute (`confirm=true`).** `delete_metadata(projectName="TestConfiguration", fqn="Catalog.Catalog.Attribute.E2EDelAttr", confirm=true)`. Expect `action:"executed"` and the echoed `fqn`.
 5. **Verify the deletion in BOTH model and disk.**
    - **Model (member):** `get_metadata_details(projectName="TestConfiguration", fqn="Catalog.Catalog")` — `E2EDelAttr` must be **gone** from the attribute list, and the **parent `Catalog.Catalog` must survive** the member delete (`get_metadata_objects(metadataType="catalogs")` still lists `Catalog`).
@@ -51,7 +51,7 @@ FQN forms (EN/RU TYPE tokens both accepted):
    - **Sanity:** `get_project_errors` / `get_problem_summary` — the cascade cleanup should leave no dangling-reference errors.
 6. **REVERT the source (mandatory).** `git checkout HEAD -- TestConfiguration && git clean -fd -- TestConfiguration`. Because the throwaway node was added and deleted entirely through MCP, the working tree returns to its committed state. Then realign the **in-memory model** with the reverted disk — a `pwsh D:\Soft\edt-redeploy.ps1` `-clean` relaunch reloads the model from disk. Do **not** leave EDT running with a model that no longer matches the reverted `.mdo` files.
 
-**Result.** JSON envelope (`ResponseType.JSON`; the payload is in `structuredContent`, while `content[0].text` is just a `Done`/`Error` placeholder). Shapes below are **representative, based on what `test_delete_metadata.py` asserts** — *not a live capture*. Field order is not guaranteed; only the inner `items` / `affectedReferences` lists are insertion-ordered.
+**Result.** JSON envelope (`ResponseType.JSON`; the payload is in `structuredContent`, while `content[0].text` is just a `Done`/`Error` placeholder). Shapes below are **representative, based on what `test_delete_metadata.py` asserts** — *not a live capture*. Field order is not guaranteed; only the inner `items` / `blockingReferences` lists are insertion-ordered.
 
 Preview (`confirm` omitted):
 ```json
@@ -63,14 +63,15 @@ Preview (`confirm` omitted):
   "items": [
     { "name": "Catalog.Catalog.Attribute.E2EDelAttr", "optional": false, "checked": true }
   ],
-  "affectedReferences": [
+  "blocking": true,
+  "blockingReferences": [
     {
       "referencingObject": "CommonModule.Calc",
       "reference": "module",
       "targetObject": "Catalog.Catalog.Attribute.E2EDelAttr"
     }
   ],
-  "affectedReferencesCount": 1,
+  "blockingReferencesCount": 1,
   "message": "Preview of delete refactoring. References listed above will be cleaned up. Call with confirm=true to apply."
 }
 ```
@@ -89,8 +90,8 @@ Field meaning:
 - **`fqn`** — the resolved/echoed target FQN (normalized before resolution, so the echo may differ from a raw lowercase / alias input). The e2e suite asserts the response echoes the requested `fqn`.
 - **`refactoringTitle`** — the refactoring title (preview only).
 - **`items`** — refactoring items: `name`, `optional`, `checked` (preview only).
-- **`affectedReferences`** — one entry per cleanup problem: `referencingObject` (the artifact that points at the target), `reference` (the EMF feature name), `targetObject` (the node being deleted) (preview only).
-- **`affectedReferencesCount`** — size of `affectedReferences`; the e2e preview test asserts this key is present (preview only).
+- **`blockingReferences`** — one entry per blocking cleanup problem: `referencingObject` (the artifact that points at the target), `reference` (the EMF feature name), `targetObject` (the node being deleted). Listed in the preview; also the refusal list (action='blocked') / dangler list (forced execute).
+- **`blockingReferencesCount`** — size of `blockingReferences`; the e2e preview test asserts this key is present.
 - **`message`** — the preview hint; it **must** mention `confirm=true` (the e2e preview test asserts this).
 
 **Error contract.** Genuine failures use `ToolResult.error(...)` → `{success:false, error:"…"}`, and the protocol layer flags the payload with `isError:true`. The e2e negative matrix asserts each error names the offending input and suggests a remedy, and that the project is left **unchanged on disk** (`assert_no_diff`). Cases:
@@ -111,7 +112,7 @@ Representative error shape:
 ```
 
 **Gotchas.**
-- **Always preview before you confirm.** The preview is non-mutating and shows the exact cascade (`affectedReferences`). Calling with `confirm=true` blind can rewrite many artifacts at once. The two phases are distinguished only by `action` in the response, not by a separate tool. The e2e preview test verifies the preview lists change points (`items`, `affectedReferencesCount`) **and leaves disk untouched** (`assert_no_diff`).
+- **Always preview before you confirm.** The preview is non-mutating and shows the blocking references (`blockingReferences`). Calling with `confirm=true` blind can rewrite many artifacts at once. The two phases are distinguished only by `action` in the response, not by a separate tool. The e2e preview test verifies the preview lists change points (`items`, `blockingReferencesCount`) **and leaves disk untouched** (`assert_no_diff`).
 - **Member delete must not touch the parent.** Deleting `Catalog.Catalog.Attribute.X` removes only that member; the parent `Catalog.Catalog` survives. A failed nested-attribute delete (bad child name) likewise must not delete the parent — the FQN arity/child guard makes a nested delete *never* silently fall back to the object.
 - **Reversible on source, but only if mutated through MCP.** `git checkout HEAD -- TestConfiguration && git clean -fd -- TestConfiguration` restores the tree; then `-clean`-relaunch EDT so the in-memory model reloads from the reverted disk (otherwise model and `.mdo` disagree until restart). Do the delete **through MCP**, never by hand-editing `.mdo`. Run **only on `TestConfiguration`**, **only on explicit request**.
 - **Cascade / blast radius.** This is a refactoring delete: it removes the node *and* cleans references in BSL, forms, and other metadata. On a real configuration the cascade can be large — verify the scope in the preview first, and after execute check `get_project_errors` / `get_problem_summary` for any dangling references the cleanup missed.

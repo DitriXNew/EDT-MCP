@@ -116,6 +116,18 @@
     "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Full parameters and examples: call get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
+        "commonModuleKind": {
+          "description": "CommonModule top-object only. Selects a standards-compliant flag combination the common-module-type validator accepts (no warning), instead of a bare module: 'Server', 'ServerCall', 'ClientManaged', 'ClientOrdinary', 'ClientServer', 'Global'. Defaults to 'Server'. Ignored for other types. Combine with 'serverCall' / 'privileged' / 'returnValuesReuse'. These are create-time-only (the flag set cannot be re-derived post-hoc).",
+          "enum": [
+            "Server",
+            "ServerCall",
+            "ClientManaged",
+            "ClientOrdinary",
+            "ClientServer",
+            "Global"
+          ],
+          "type": "string"
+        },
         "expectedNotExists": {
           "description": "Optional stale-intent guard (default false): assert the node does not yet exist for a sharper precondition error. A real duplicate is always rejected anyway.",
           "type": "boolean"
@@ -123,6 +135,14 @@
         "fqn": {
           "description": "Full-name FQN of the node to create (required). Top object: 'Type.Name' (e.g. 'Catalog.Products'). Member: 'Type.Name.Kind.Name' (e.g. 'Catalog.Products.Attribute.Weight'). The trailing Name is the new node's programmatic Name; type / kind tokens may be English or Russian.",
           "type": "string"
+        },
+        "normalizeYo": {
+          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing FQN segment) and in any synonym / comment value (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied.",
+          "type": "boolean"
+        },
+        "privileged": {
+          "description": "CommonModule top-object only. When true, the module runs with full (privileged) access. Valid only with the 'Server' kind (not a server call). Ignored for other types.",
+          "type": "boolean"
         },
         "projectName": {
           "description": "EDT project name (required).",
@@ -134,6 +154,27 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "returnValuesReuse": {
+          "description": "CommonModule top-object only. Reuse of return values: 'DontUse' (default), 'DuringRequest' or 'DuringSession'. 'DuringSession' yields a cached module accepted by the common-module-type validator. Ignored for other types.",
+          "enum": [
+            "DontUse",
+            "DuringRequest",
+            "DuringSession"
+          ],
+          "type": "string"
+        },
+        "serverCall": {
+          "description": "CommonModule top-object only. When true, the server module is callable from the client (server call). Valid only with a server kind and incompatible with 'Global'. Ignored for other types.",
+          "type": "boolean"
+        },
+        "setAsDefault": {
+          "description": "Form OBJECT create only (FQN 'Type.Object.Form.FormName'). When true, registers the new form as the owner's default object form (default: false). Ignored for other create kinds.",
+          "type": "boolean"
+        },
+        "targetNamespace": {
+          "description": "XDTOPackage top-object only. URI namespace for the new package; a non-empty namespace is required for the package to be valid. Defaults to 'http://example.org/<Name>' when omitted. Create-time-only. Ignored for other types.",
+          "type": "string"
         }
       },
       "required": [
@@ -147,6 +188,10 @@
       "properties": {
         "action": {
           "description": "'created' on success",
+          "type": "string"
+        },
+        "commonModuleKind": {
+          "description": "Resolved CommonModule kind, when a CommonModule was created",
           "type": "string"
         },
         "fqn": {
@@ -169,8 +214,19 @@
           "description": "Programmatic name of the created node",
           "type": "string"
         },
+        "normalized": {
+          "description": "Fields whose value was rewritten by the 'ё'->'е' normalization (when any)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "persisted": {
           "description": "Whether the change was exported to disk",
+          "type": "boolean"
+        },
+        "setAsDefault": {
+          "description": "Whether the new form was registered as the owner's default object form (form-object create only)",
           "type": "boolean"
         },
         "success": {
@@ -179,6 +235,10 @@
         },
         "synonym": {
           "description": "Display name written, when a synonym property was provided",
+          "type": "string"
+        },
+        "targetNamespace": {
+          "description": "XDTO namespace written, when an XDTOPackage was created",
           "type": "string"
         }
       },
@@ -209,8 +269,12 @@
           "description": "EDT project name; required unless launchConfigurationName is given.",
           "type": "string"
         },
+        "restartIfRunning": {
+          "description": "Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call.",
+          "type": "boolean"
+        },
         "updateBeforeLaunch": {
-          "description": "Update the database before launching. Default true; ignored for Attach.",
+          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach.",
           "type": "boolean"
         }
       },
@@ -252,6 +316,10 @@
           "description": "EDT project name associated with the launch",
           "type": "string"
         },
+        "status": {
+          "description": "\"launching\" when the launch was dispatched asynchronously and is still starting; absent on the alreadyRunning short-circuit. Poll debug_status for readiness.",
+          "type": "string"
+        },
         "success": {
           "description": "Whether the operation succeeded",
           "type": "boolean"
@@ -269,7 +337,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Report active debug launches: applicationId (real or synthetic 'attach:<name>'), launch configuration name/type, mode (debug/run), whether the target is currently suspended, thread count, and the line of the top suspended frame. Optionally filter by applicationId.",
+    "description": "Report active debug sessions: applicationId (real or synthetic 'attach:<name>' / 'launch:<name>'), launch configuration name/type, mode (debug/run), whether the target is currently suspended, thread count, and the line of the top suspended frame. Also reports debugServerTargets: 1C debug-server sessions (server-side suspends, EDT-UI-started 'Debug As') addressable as 'ServerApplication.<app>'. Optionally filter by applicationId.",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -286,6 +354,17 @@
         "count": {
           "description": "Number of active debug launches returned",
           "type": "integer"
+        },
+        "debugServerTargetCount": {
+          "description": "Number of debug-server targets returned",
+          "type": "integer"
+        },
+        "debugServerTargets": {
+          "description": "1C debug-server targets (server-side / EDT-UI sessions) with real suspend state",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
         },
         "launches": {
           "description": "Active debug launches with state and frame info",
@@ -345,6 +424,10 @@
         "updateBeforeLaunch": {
           "description": "Default true: terminate any live client and run a silent DB update first so no modal 'Update database?' dialog blocks the call; false keeps legacy delegate behaviour.",
           "type": "boolean"
+        },
+        "updateScope": {
+          "description": "Which projects to rebuild+update before the run: 'all' (configuration + dependent extensions, default), 'configuration', or 'extension:<ProjectName>' (comma-separate several). Forces a derived-data recompute so a freshly edited extension's .cfe is regenerated and loaded into the infobase before the run. Unknown extension names fail the call (the error lists the available names). Only applies when updateBeforeLaunch=true.",
+          "type": "string"
         }
       },
       "required": [],
@@ -359,11 +442,15 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata node (object or member, including a FORM member - item / attribute / command / handler) addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). Full parameters and examples: call get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name' or a FORM member - item / attribute / command / handler) addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). If the node is still referenced by metadata the refactoring cannot auto-clean, a confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true to delete anyway (those references are left dangling). Full parameters and examples: call get_tool_guide('delete_metadata').",
     "inputSchema": {
       "properties": {
         "confirm": {
           "description": "true = execute the deletion; default false = preview only.",
+          "type": "boolean"
+        },
+        "force": {
+          "description": "true = delete even when the node is still referenced by other metadata that the refactoring cannot auto-clean (those incoming references are left dangling). Default false = on confirm=true the deletion is BLOCKED and the referencing objects are listed (independent of 'confirm', which is the preview gate).",
           "type": "boolean"
         },
         "fqn": {
@@ -385,19 +472,27 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "Either 'preview' or 'executed'",
+          "description": "Either 'preview', 'executed' or 'blocked'",
           "type": "string"
         },
-        "affectedReferences": {
-          "description": "References that would be affected (preview)",
+        "blocking": {
+          "description": "Whether the listed blockingReferences BLOCK the delete (the refactoring cannot auto-clean them; a confirm=true delete is refused unless force=true)",
+          "type": "boolean"
+        },
+        "blockingReferences": {
+          "description": "Incoming references the refactoring cannot auto-clean: listed in the preview, the reason a delete is refused (action='blocked'), or left dangling when force=true (action='executed')",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
-        "affectedReferencesCount": {
-          "description": "Count of affected references (preview)",
+        "blockingReferencesCount": {
+          "description": "Count of blocking references",
           "type": "integer"
+        },
+        "forced": {
+          "description": "Whether the delete was forced past blocking references",
+          "type": "boolean"
         },
         "fqn": {
           "description": "FQN of the node targeted for deletion",
@@ -1009,7 +1104,7 @@
           "type": "string"
         },
         "refresh": {
-          "description": "Force WYSIWYG refresh before capture (default: false)",
+          "description": "Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false)",
           "type": "boolean"
         }
       },
@@ -2064,12 +2159,16 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
+    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
     "inputSchema": {
       "properties": {
         "fqn": {
           "description": "Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or 'Catalog.Products.Attribute.Weight' (type / kind tokens may be English or Russian; the Name parts are the programmatic Name).",
           "type": "string"
+        },
+        "normalizeYo": {
+          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in synonym / comment / title and any other localized-string or free-text value being set (default true). Matches the 1C standard mdo-ru-name-unallowed-letter. Set false to keep 'ё' exactly as supplied.",
+          "type": "boolean"
         },
         "projectName": {
           "description": "EDT project name (required).",
@@ -2104,6 +2203,10 @@
           },
           "type": "array"
         },
+        "destination": {
+          "description": "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. \"group 'Main' at index 1\"",
+          "type": "string"
+        },
         "fqn": {
           "description": "Normalized FQN of the modified node",
           "type": "string"
@@ -2111,6 +2214,13 @@
         "message": {
           "description": "Human-readable confirmation message",
           "type": "string"
+        },
+        "normalized": {
+          "description": "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "persisted": {
           "description": "Whether the change was exported to disk",
@@ -2295,11 +2405,11 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Resume a suspended debug thread or all threads of a debug target. Pass threadId (from wait_for_break) or applicationId. With no arguments, resumes the single active debug launch if exactly one exists.",
+    "description": "Resume a suspended debug thread or all threads of a debug target. Pass threadId (from wait_for_break) or applicationId. applicationId accepts ANY id form for the session: the real id, 'attach:<name>', 'launch:<name>', or 'ServerApplication.<app>'. For a server-side suspend, resume targets the suspended thread directly. With no arguments, resumes the single active debug session (launch or server target) if exactly one exists. NOTE: if resume of a server-side suspend does not take effect, the breakpoint can also be released from the EDT UI.",
     "inputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application id (real or 'attach:<configName>' — resumes all threads of this target)",
+          "description": "Application id (real, 'attach:<configName>', 'launch:<configName>', or 'ServerApplication.<app>'). Resumes this session's target/suspended thread. Optional if exactly one debug session is active.",
           "type": "string"
         },
         "threadId": {
@@ -2318,7 +2428,7 @@
           "type": "string"
         },
         "autoResolved": {
-          "description": "Whether the lone active launch was auto-resolved",
+          "description": "Whether the lone active session was auto-resolved",
           "type": "boolean"
         },
         "resumed": {
@@ -2329,9 +2439,126 @@
           "description": "Resume scope: 'thread' or 'target'",
           "type": "string"
         },
+        "serverTarget": {
+          "description": "True if resolved via the 1C debug-server target bridge",
+          "type": "boolean"
+        },
         "success": {
           "description": "Whether the operation succeeded",
           "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Walks EVERY top metadata object of the configuration (all kinds) and force-exports each object's .mdo, so objects that exist in the model / Configuration.mdo but have no .mdo on disk are written out. Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Read-safe and idempotent: when already in sync it re-exports harmlessly and reports 0 missing. Also CLEANS dangling/orphaned references in Configuration.mdo (unresolved proxies shown by get_project_errors as md-reference-intergrity 'lost reference' warnings that block update_database / XML import), reporting danglingFound + danglingRemovedCount (cleanDanglingReferences, default true; idempotent). Full parameters and examples: call get_tool_guide('resync_to_disk').",
+    "inputSchema": {
+      "properties": {
+        "cleanDanglingReferences": {
+          "description": "When true (default), remove dangling/orphaned references from Configuration.mdo - entries that register an object with no .mdo and no BM body (unresolved proxies), the source of md-reference-intergrity 'lost reference' warnings that block update_database / XML import. Set false to only report danglingFound without removing anything.",
+          "type": "boolean"
+        },
+        "projectName": {
+          "description": "EDT project name (required).",
+          "type": "string"
+        },
+        "revalidate": {
+          "description": "When true, schedule a full project revalidation (clean build) after the export so stale markers refresh. Default: false (export only).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "resync_to_disk",
+    "outputSchema": {
+      "properties": {
+        "cleanDanglingReferences": {
+          "description": "Whether dangling-reference removal was requested",
+          "type": "boolean"
+        },
+        "danglingDetails": {
+          "description": "All dangling entries found: [{field, lostFqn, position}]",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "danglingFound": {
+          "description": "Dangling (unresolved-proxy) references detected in Configuration.mdo",
+          "type": "integer"
+        },
+        "danglingRemoved": {
+          "description": "Removed dangling entries: [{field, lostFqn, position}]",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "danglingRemovedCount": {
+          "description": "Dangling references actually removed (0 in report-only mode)",
+          "type": "integer"
+        },
+        "danglingWarning": {
+          "description": "Set when the dangling scan/cleanup could not complete cleanly",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable summary of the outcome",
+          "type": "string"
+        },
+        "missingBefore": {
+          "description": "FQNs that were missing on disk before the export",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "missingBeforeCount": {
+          "description": "Top objects that had no .mdo on disk before the export",
+          "type": "integer"
+        },
+        "objectsExported": {
+          "description": "Number of top objects whose .mdo was (re)written",
+          "type": "integer"
+        },
+        "projectName": {
+          "description": "The project that was re-synchronized",
+          "type": "string"
+        },
+        "revalidateWarning": {
+          "description": "Set when the optional post-export revalidation failed",
+          "type": "string"
+        },
+        "stillMissing": {
+          "description": "FQNs still missing on disk after the export",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stillMissingCount": {
+          "description": "Top objects still missing on disk after the export",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the export succeeded",
+          "type": "boolean"
+        },
+        "totalTopObjects": {
+          "description": "Total metadata top objects walked in the BM model",
+          "type": "integer"
         }
       },
       "required": [
@@ -2420,8 +2647,12 @@
           "type": "integer"
         },
         "updateBeforeLaunch": {
-          "description": "Auto-chain (default: true): terminate a live client and run a silent DB update first.",
+          "description": "Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale). Results are never served from a cache — a completed run is re-executed on the next identical call regardless of this flag.",
           "type": "boolean"
+        },
+        "updateScope": {
+          "description": "Which projects to rebuild+update before the run: 'all' (configuration + dependent extensions, default), 'configuration', or 'extension:<ProjectName>' (comma-separate several). Forces a derived-data recompute so a freshly edited extension's .cfe is regenerated and loaded into the infobase before the run. Unknown extension names fail the call (the error lists the available names). Only applies when updateBeforeLaunch=true.",
+          "type": "string"
         }
       },
       "required": [],
@@ -2670,6 +2901,10 @@
         "reason": {
           "description": "Reason when not hit (e.g. timeout)",
           "type": "string"
+        },
+        "serverTarget": {
+          "description": "True if stepping a 1C debug-server target",
+          "type": "boolean"
         },
         "success": {
           "description": "Whether the operation succeeded",
@@ -2987,11 +3222,11 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Wait for a debug suspend event (e.g. breakpoint hit) on the given application. Returns the suspended thread/frame snapshot, or {hit:false} on timeout. applicationId may be real or synthetic 'attach:<configName>'. If omitted and exactly one EDT debug launch is active, that launch is used. Does NOT terminate the launch on timeout — call again to keep waiting.",
+    "description": "Wait for a debug suspend event (e.g. breakpoint hit) on the given application. Returns the suspended thread/frame snapshot, or {hit:false} on timeout. applicationId accepts ANY id form for the session: the real id, 'attach:<name>', 'launch:<name>' (EDT-UI-started session), or 'ServerApplication.<app>' (server-side suspend from debug_yaxunit_tests). If omitted and exactly one EDT debug session is active, that session is used. Does NOT terminate the launch on timeout — call again to keep waiting.",
     "inputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application id of the running debug session (real or 'attach:<configName>'). Optional if exactly one debug launch is active.",
+          "description": "Application id of the running debug session (real, 'attach:<configName>', 'launch:<configName>', or 'ServerApplication.<app>'). Optional if exactly one debug session is active.",
           "type": "string"
         },
         "timeout": {
@@ -3027,6 +3262,10 @@
         "reason": {
           "description": "Reason when no suspend occurred (e.g. 'timeout')",
           "type": "string"
+        },
+        "serverTarget": {
+          "description": "True if resolved via the 1C debug-server target bridge",
+          "type": "boolean"
         },
         "success": {
           "description": "Whether the operation succeeded",

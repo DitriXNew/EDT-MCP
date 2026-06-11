@@ -1,6 +1,6 @@
 # debug_status
 
-Report active debug launches: applicationId (real or synthetic 'attach:<name>'), launch configuration name/type, mode (debug/run), whether the target is currently suspended, thread count, and the line of the top suspended frame. Optionally filter by applicationId.
+Report active debug sessions: applicationId (real or synthetic 'attach:<name>' / 'launch:<name>'), launch configuration name/type, mode (debug/run), whether the target is currently suspended, thread count, and the line of the top suspended frame. Also reports debugServerTargets: 1C debug-server sessions (server-side suspends, EDT-UI-started 'Debug As') addressable as 'ServerApplication.<app>'. Optionally filter by applicationId.
 
 ## Parameters
 | Parameter | Required | Type | Description |

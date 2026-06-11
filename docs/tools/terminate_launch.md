@@ -30,6 +30,8 @@ Run `list_configurations` first to see what is currently running (look for entri
 
 Combination rules enforced at runtime: `applicationId` requires `projectName`; `applicationId` cannot be combined with `all=true`; `projectName` alone (no applicationId, no all) is ambiguous and rejected; `all=true` without `confirm=true` is rejected.
 
+Every mode additionally matches **already-terminated launches that still linger in the launch registry** (a missed TERMINATE event). Those are reported as `already_terminated` and evicted — see Registry cleanup below.
+
 ## Parameter details
 
 - **launchConfigurationName** (string) — exact config name; mode 1.
@@ -49,6 +51,14 @@ Attach launches (RemoteRuntime / LocalRuntime) are **disconnected**, not killed:
 
 By default the tool waits up to `timeout` for a polite `ILaunch.terminate()`. With `force=true`, an unfinished termination escalates to an OS-level `IProcess.terminate()` on the launch's processes (plus a short grace window). This can lose unsaved 1C state. `force` is ignored for Attach launches.
 
+## Registry cleanup
+
+Once a launch has actually ended (`terminated`, `force_terminated`, or an Attach `detached`), this tool also removes it from EDT's launch registry (`ILaunchManager.removeLaunch`) and clears any cached debug-session state for its applicationId. This prevents a terminated-but-not-removed launch from lingering and blocking a later run (e.g. `run_yaxunit_tests` seeing it as a stale session).
+
+Selection deliberately includes launches that are **already terminated** but still present in the registry — the "stuck" entry that previously needed an EDT restart to clear. They are matched by the same criteria (name / project+applicationId / all, restricted to EDT/1C configs), reported as `already_terminated`, and evicted without restarting EDT. So calling this tool on a stale entry is the supported way to clean it up; it is never answered with `not_found` just because the process already exited.
+
+The response reports `Removed from registry: Yes/No` (single) or a `Removed from registry: N` count (batch); batch responses additionally report `Stale already-terminated launches cleaned: N` whenever any `already_terminated` entries were involved. `timeout`/`error` launches are left in place because they may still be live.
+
 ## Result codes
 
 `terminated`, `force_terminated`, `detached`, `timeout`, `already_terminated`, `error`. A `timeout` on a runtime launch suggests re-running with `force=true`.
@@ -64,6 +74,7 @@ By default the tool waits up to `timeout` for a polite `ILaunch.terminate()`. Wi
 
 - Nothing matched returns a `not_found` result, not an error — verify the name/appId against `list_configurations`/`get_applications`.
 - `force` only affects runtime launches; it never kills the 1C server behind an Attach session.
+- `includeAttach=false` skips Attach launches in every respect — including stale already-terminated Attach entries, which then stay in the registry.
 - This tool can only ever affect launches owned by this EDT instance.
 
 ---

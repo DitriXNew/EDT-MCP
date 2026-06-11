@@ -12,6 +12,7 @@ Deprecated alias for run_yaxunit_tests with debug=true. Launches YAXUnit tests i
 | modules | — | string | Comma-separated module names to filter tests. |
 | tests | — | string | Comma-separated test names as Module.Method (recommended: pin to one test for a predictable cycle). |
 | updateBeforeLaunch | — | boolean | Default true: terminate any live client and run a silent DB update first so no modal 'Update database?' dialog blocks the call; false keeps legacy delegate behaviour. |
+| updateScope | — | string | Which projects to rebuild+update before the run: 'all' (configuration + dependent extensions, default), 'configuration', or 'extension:<ProjectName>' (comma-separate several). Forces a derived-data recompute so a freshly edited extension's .cfe is regenerated and loaded into the infobase before the run. Unknown extension names fail the call (the error lists the available names). Only applies when updateBeforeLaunch=true. |
 
 ## Guide
 # debug_yaxunit_tests (deprecated)
