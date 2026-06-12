@@ -58,7 +58,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * </ul>
  *
  * <p>The {@code projectKind} parameter selects the kind. The extension path reuses the
- * fully reviewed machinery from the former {@code CreateExtensionProjectTool}:
+ * fully reviewed machinery from the former extension-only tool:
  * <ol>
  *   <li>Validates inputs and checks that neither the new project nor the base are missing.</li>
  *   <li>Constructs a {@link Configuration} object (or not, for externalObjects).</li>
@@ -200,7 +200,8 @@ public class CreateProjectTool implements IMcpTool
             .stringProperty("project", //$NON-NLS-1$
                 "EDT workspace project name of the created project (round-trip key for sibling tools)") //$NON-NLS-1$
             .stringProperty("projectKind", "Kind of project created: configuration, extension, or externalObjects") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("name", "Configuration name set on the project (configuration and extension only)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("name", //$NON-NLS-1$
+                "Configuration name (configuration/extension) or the supplied identifier (externalObjects).") //$NON-NLS-1$
             .stringProperty("baseProject", //$NON-NLS-1$
                 "Name of the base configuration project it extends (extension only, conditional)") //$NON-NLS-1$
             .stringProperty("prefix", "NamePrefix applied (extension only, conditional)") //$NON-NLS-1$ //$NON-NLS-2$
@@ -212,6 +213,8 @@ public class CreateProjectTool implements IMcpTool
                 "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}") //$NON-NLS-1$
             .stringProperty("synonymNote", //$NON-NLS-1$
                 "Present only when the synonym could not be applied (no resolvable language code).") //$NON-NLS-1$
+            .stringProperty("scriptVariantNote", //$NON-NLS-1$
+                "Present only when a requested scriptVariant could not be applied (externalObjects).") //$NON-NLS-1$
             .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -262,14 +265,14 @@ public class CreateProjectTool implements IMcpTool
         // 3. Validate kind-specific parameter constraints
         if (isExtension && versionStr != null && !versionStr.isEmpty())
         {
-            return ToolResult.error( //$NON-NLS-1$
+            return ToolResult.error(
                 "'version' is not valid for projectKind=extension: " //$NON-NLS-1$
                     + "the extension always inherits the version from the base configuration. " //$NON-NLS-1$
                     + "Remove the 'version' parameter.").toJson(); //$NON-NLS-1$
         }
         if (!isExtension && baseProjectName != null && !baseProjectName.isEmpty())
         {
-            return ToolResult.error( //$NON-NLS-1$
+            return ToolResult.error(
                 "'baseProjectName' is only valid for projectKind=extension. " //$NON-NLS-1$
                     + "Remove the 'baseProjectName' parameter for kind=" + projectKind + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -295,7 +298,7 @@ public class CreateProjectTool implements IMcpTool
         }
         if (isExtension && scriptVariantStr != null && !scriptVariantStr.isEmpty())
         {
-            return ToolResult.error( //$NON-NLS-1$
+            return ToolResult.error(
                 "'scriptVariant' is not valid for projectKind=extension: " //$NON-NLS-1$
                     + "the extension always inherits the scriptVariant from the base configuration. " //$NON-NLS-1$
                     + "Remove the 'scriptVariant' parameter.").toJson(); //$NON-NLS-1$
@@ -368,7 +371,7 @@ public class CreateProjectTool implements IMcpTool
         // baseProjectName required for extension
         if (baseProjectName == null || baseProjectName.trim().isEmpty())
         {
-            return ToolResult.error( //$NON-NLS-1$
+            return ToolResult.error(
                 "'baseProjectName' is required for projectKind=extension. " //$NON-NLS-1$
                     + "Use list_projects to find the base configuration project name.").toJson(); //$NON-NLS-1$
         }
@@ -596,10 +599,34 @@ public class CreateProjectTool implements IMcpTool
             }
         };
 
-        String timeoutError = runCreateJob(createJob, finalEffectiveProjectName, "extension"); //$NON-NLS-1$
-        if (timeoutError != null)
+        final ScriptVariant finalScriptVariant = scriptVariant;
+        final ConfigurationExtensionPurpose finalPurpose = purpose;
+
+        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, "extension"); //$NON-NLS-1$
+        if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
-            return timeoutError;
+            // Creation completed past the wait window — build the full extension response
+            return ToolResult.success()
+                .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("project", finalEffectiveProjectName) //$NON-NLS-1$
+                .put("projectKind", "extension") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("name", configName) //$NON-NLS-1$
+                .put("baseProject", baseProjectName) //$NON-NLS-1$
+                .put("prefix", prefix) //$NON-NLS-1$
+                .put("purpose", finalPurpose.getLiteral()) //$NON-NLS-1$
+                .put("scriptVariant", finalScriptVariant.getLiteral()) //$NON-NLS-1$
+                .put("version", version.toString()) //$NON-NLS-1$
+                .put("state", "created") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("codestyle", slowPathCodestyleMap()) //$NON-NLS-1$
+                .put("message", "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' created and bound to '" + baseProjectName //$NON-NLS-1$
+                    + "' (creation completed past the " //$NON-NLS-1$
+                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists).") //$NON-NLS-1$
+                .toJson();
+        }
+        if (jobResult.errorJson != null)
+        {
+            return jobResult.errorJson;
         }
 
         // Check for creation errors reported via errorHolder
@@ -618,9 +645,6 @@ public class CreateProjectTool implements IMcpTool
 
         // Apply v8codestyle preferences
         Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
-
-        final ScriptVariant finalScriptVariant = scriptVariant;
-        final ConfigurationExtensionPurpose finalPurpose = purpose;
 
         ToolResult result = ToolResult.success()
             .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
@@ -780,10 +804,29 @@ public class CreateProjectTool implements IMcpTool
             }
         };
 
-        String timeoutError = runCreateJob(createJob, finalEffectiveProjectName, "configuration"); //$NON-NLS-1$
-        if (timeoutError != null)
+        final ScriptVariant finalScriptVariant = scriptVariant;
+
+        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, "configuration"); //$NON-NLS-1$
+        if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
-            return timeoutError;
+            // Creation completed past the wait window — build the full configuration response
+            return ToolResult.success()
+                .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("project", finalEffectiveProjectName) //$NON-NLS-1$
+                .put("projectKind", "configuration") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("name", configName) //$NON-NLS-1$
+                .put("scriptVariant", finalScriptVariant.getLiteral()) //$NON-NLS-1$
+                .put("version", finalVersion.toString()) //$NON-NLS-1$
+                .put("state", "created") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("codestyle", slowPathCodestyleMap()) //$NON-NLS-1$
+                .put("message", "Configuration project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' created (creation completed past the " //$NON-NLS-1$
+                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists).") //$NON-NLS-1$
+                .toJson();
+        }
+        if (jobResult.errorJson != null)
+        {
+            return jobResult.errorJson;
         }
 
         if (errorHolder[0] != null)
@@ -800,8 +843,6 @@ public class CreateProjectTool implements IMcpTool
 
         // Apply v8codestyle preferences
         Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
-
-        final ScriptVariant finalScriptVariant = scriptVariant;
 
         ToolResult result = ToolResult.success()
             .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
@@ -882,10 +923,33 @@ public class CreateProjectTool implements IMcpTool
             }
         };
 
-        String timeoutError = runCreateJob(createJob, finalEffectiveProjectName, "externalObjects"); //$NON-NLS-1$
-        if (timeoutError != null)
+        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, "externalObjects"); //$NON-NLS-1$
+        if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
-            return timeoutError;
+            // Creation completed past the wait window — build the full externalObjects response
+            ToolResult slowResult = ToolResult.success()
+                .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("project", finalEffectiveProjectName) //$NON-NLS-1$
+                .put("projectKind", "externalObjects") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("name", configName) //$NON-NLS-1$
+                .put("version", finalVersion.toString()) //$NON-NLS-1$
+                .put("state", "created") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("codestyle", slowPathCodestyleMap()) //$NON-NLS-1$
+                .put("message", "External objects project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' created (creation completed past the " //$NON-NLS-1$
+                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists)."); //$NON-NLS-1$
+            if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
+            {
+                slowResult.put("scriptVariant", scriptVariantStr); //$NON-NLS-1$
+                String slowScriptNote =
+                    "setScriptVariant skipped: creation exceeded the wait window; set the project preferences manually if needed."; //$NON-NLS-1$
+                slowResult.put("scriptVariantNote", slowScriptNote); //$NON-NLS-1$
+            }
+            return slowResult.toJson();
+        }
+        if (jobResult.errorJson != null)
+        {
+            return jobResult.errorJson;
         }
 
         if (errorHolder[0] != null)
@@ -938,6 +1002,11 @@ public class CreateProjectTool implements IMcpTool
         // Apply v8codestyle preferences
         Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
 
+        String message = "External objects project '" + finalEffectiveProjectName + "' created."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (scriptVariantNote != null)
+        {
+            message = message + " " + scriptVariantNote; //$NON-NLS-1$
+        }
         ToolResult result = ToolResult.success()
             .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
             .put("project", finalEffectiveProjectName) //$NON-NLS-1$
@@ -946,31 +1015,65 @@ public class CreateProjectTool implements IMcpTool
             .put("version", finalVersion.toString()) //$NON-NLS-1$
             .put("state", projectState) //$NON-NLS-1$
             .put("codestyle", codestyleMap) //$NON-NLS-1$
-            .put("message", "External objects project '" + finalEffectiveProjectName + "' created."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .put("message", message); //$NON-NLS-1$
         if (effectiveScriptVariantStr != null && !effectiveScriptVariantStr.isEmpty())
         {
             result.put("scriptVariant", effectiveScriptVariantStr); //$NON-NLS-1$
         }
         if (scriptVariantNote != null)
         {
-            result.put("synonymNote", scriptVariantNote); //$NON-NLS-1$
+            result.put("scriptVariantNote", scriptVariantNote); //$NON-NLS-1$
         }
         return result.toJson();
     }
 
     // ─────────────────────── Shared helpers ──────────────────────────────────
 
+    /** Status codes returned by {@link #runCreateJob}. */
+    private enum CreateStatus
+    {
+        /** Job completed within the timeout window; caller must check {@code errorHolder}. */
+        OK,
+        /**
+         * Job timed out but the project already exists in the workspace (slow creation
+         * past the wait window). The caller must build the full kind-specific response
+         * with {@code state="created"} and {@code codestyle.applied=false}.
+         */
+        SLOW_EXISTS,
+        /** Job timed out and the project does NOT exist — return an error response. */
+        TIMED_OUT,
+        /** Job was interrupted — return an error response. */
+        INTERRUPTED
+    }
+
+    /** Minimal result returned by {@link #runCreateJob}. */
+    private static final class CreateJobResult
+    {
+        final CreateStatus status;
+        /** Non-null for {@link CreateStatus#TIMED_OUT} and {@link CreateStatus#INTERRUPTED}: ready-to-return JSON error. */
+        final String errorJson;
+
+        private CreateJobResult(CreateStatus status, String errorJson)
+        {
+            this.status = status;
+            this.errorJson = errorJson;
+        }
+    }
+
     /**
      * Runs the given project-creation Job, joins with {@link #CREATE_TIMEOUT_MS}, and
-     * returns a JSON error string when the job timed out but the project does NOT exist
-     * in the workspace, or {@code null} on success (job completed, project may or may
-     * not have been created — the caller checks {@code errorHolder}).
-     *
-     * <p>When the job timed out but the project exists anyway (slow creation past the
-     * wait window), the method returns a success-ish slow-path response directly so the
-     * caller can skip post-create steps that require a live project reference.
+     * returns a {@link CreateJobResult} describing the outcome:
+     * <ul>
+     *   <li>{@link CreateStatus#OK} — job completed in time; caller checks {@code errorHolder}.</li>
+     *   <li>{@link CreateStatus#SLOW_EXISTS} — timed out but project already exists; caller
+     *       builds the full kind-specific success response with {@code state="created"}.</li>
+     *   <li>{@link CreateStatus#TIMED_OUT} — timed out and project absent; {@code errorJson}
+     *       is ready to return.</li>
+     *   <li>{@link CreateStatus#INTERRUPTED} — job interrupted; {@code errorJson} is ready
+     *       to return.</li>
+     * </ul>
      */
-    private String runCreateJob(Job createJob, String effectiveProjectName, String kindLabel)
+    private CreateJobResult runCreateJob(Job createJob, String effectiveProjectName, String kindLabel)
     {
         createJob.setUser(false);
         createJob.schedule();
@@ -982,7 +1085,8 @@ public class CreateProjectTool implements IMcpTool
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            return ToolResult.error(kindLabel + " project creation was interrupted.").toJson(); //$NON-NLS-1$
+            return new CreateJobResult(CreateStatus.INTERRUPTED,
+                ToolResult.error(kindLabel + " project creation was interrupted.").toJson()); //$NON-NLS-1$
         }
 
         // Check job state: if still running, it timed out
@@ -992,29 +1096,29 @@ public class CreateProjectTool implements IMcpTool
             // Re-check whether the project actually exists despite the timeout
             if (ProjectContext.of(effectiveProjectName).exists())
             {
-                // Creation completed slowly past the wait window
-                Map<String, Object> slowCodestyle = new LinkedHashMap<>();
-                slowCodestyle.put("applied", false); //$NON-NLS-1$
-                slowCodestyle.put("note", //$NON-NLS-1$
-                    "Not applied: creation exceeded the wait window; set the project preferences manually if needed."); //$NON-NLS-1$
-                slowCodestyle.put("autoSortNote", //$NON-NLS-1$
-                    "autoSortTopObjects is reserved for a future release and was not applied (enable-key unconfirmed)."); //$NON-NLS-1$
-                return ToolResult.success()
-                    .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put("project", effectiveProjectName) //$NON-NLS-1$
-                    .put("projectKind", kindLabel) //$NON-NLS-1$
-                    .put("state", "created") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put("codestyle", slowCodestyle) //$NON-NLS-1$
-                    .put("message", kindLabel + " project '" + effectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
-                        + "' was created (creation completed past the " //$NON-NLS-1$
-                        + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists).") //$NON-NLS-1$
-                    .toJson();
+                return new CreateJobResult(CreateStatus.SLOW_EXISTS, null);
             }
-            return ToolResult.error(kindLabel + " project creation timed out after " //$NON-NLS-1$
-                + (CREATE_TIMEOUT_MS / 1000) + " seconds. The project may still appear shortly; " //$NON-NLS-1$
-                + "if it does and is unwanted, remove it with delete_project.").toJson(); //$NON-NLS-1$
+            return new CreateJobResult(CreateStatus.TIMED_OUT,
+                ToolResult.error(kindLabel + " project creation timed out after " //$NON-NLS-1$
+                    + (CREATE_TIMEOUT_MS / 1000) + " seconds. The project may still appear shortly; " //$NON-NLS-1$
+                    + "if it does and is unwanted, remove it with delete_project.").toJson()); //$NON-NLS-1$
         }
-        return null; // job completed in time; caller checks errorHolder
+        return new CreateJobResult(CreateStatus.OK, null);
+    }
+
+    /**
+     * Builds the {@code codestyle} map for the slow-path (creation exceeded the wait window).
+     * Applied is always {@code false}; the note directs the caller to set preferences manually.
+     */
+    private static Map<String, Object> slowPathCodestyleMap()
+    {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("applied", false); //$NON-NLS-1$
+        map.put("note", //$NON-NLS-1$
+            "Not applied: creation exceeded the wait window; set the project preferences manually if needed."); //$NON-NLS-1$
+        map.put("autoSortNote", //$NON-NLS-1$
+            "autoSortTopObjects is reserved for a future release and was not applied (enable-key unconfirmed)."); //$NON-NLS-1$
+        return map;
     }
 
     /**

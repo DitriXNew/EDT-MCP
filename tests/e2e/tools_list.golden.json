@@ -354,7 +354,7 @@
           "type": "string"
         },
         "name": {
-          "description": "Configuration name set on the project (configuration and extension only)",
+          "description": "Configuration name (configuration/extension) or the supplied identifier (externalObjects).",
           "type": "string"
         },
         "prefix": {
@@ -375,6 +375,10 @@
         },
         "scriptVariant": {
           "description": "ScriptVariant applied or inherited",
+          "type": "string"
+        },
+        "scriptVariantNote": {
+          "description": "Present only when a requested scriptVariant could not be applied (externalObjects).",
           "type": "string"
         },
         "state": {
