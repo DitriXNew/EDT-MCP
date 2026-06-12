@@ -1049,8 +1049,8 @@ public final class LaunchLifecycleUtils
             + "not yet applied) after " + (syncApplyTimeoutMs / 1000) //$NON-NLS-1$
             + "s (final update state: " + finalState + ") — results would be stale, " //$NON-NLS-1$ //$NON-NLS-2$
             + "so the run was refused. Retry the run; if it persists, call " //$NON-NLS-1$
-            + "`update_database` (optionally with `fullUpdate=true` / " //$NON-NLS-1$
-            + "`autoRestructure=true`) and inspect the EDT problems view."; //$NON-NLS-1$
+            + "`update_database` (optionally with `fullUpdate=true`) and " //$NON-NLS-1$
+            + "inspect the EDT problems view."; //$NON-NLS-1$
     }
 
     /**
@@ -1068,7 +1068,7 @@ public final class LaunchLifecycleUtils
             + "(final update state: " + finalState + ") — the update requires user " //$NON-NLS-1$ //$NON-NLS-2$
             + "action (e.g. an interactive restructure), so the run was refused " //$NON-NLS-1$
             + "immediately rather than executed stale. Call `update_database` " //$NON-NLS-1$
-            + "(optionally with `fullUpdate=true` / `autoRestructure=true`) and " //$NON-NLS-1$
+            + "(optionally with `fullUpdate=true`) and " //$NON-NLS-1$
             + "inspect the EDT problems view, then retry."; //$NON-NLS-1$
     }
 

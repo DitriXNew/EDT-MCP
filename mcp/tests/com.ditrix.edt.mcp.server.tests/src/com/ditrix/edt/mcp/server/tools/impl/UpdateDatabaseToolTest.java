@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -63,10 +64,14 @@ public class UpdateDatabaseToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"fullUpdate\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"autoRestructure\"")); //$NON-NLS-1$
         assertTrue("schema must declare the confirm gate", schema.contains("\"confirm\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("schema must declare the terminateRunningClients opt-out", //$NON-NLS-1$
             schema.contains("\"terminateRunningClients\"")); //$NON-NLS-1$
+        // autoRestructure was removed: the EDT update API (IApplicationManager.update /
+        // ExecutionContext) has no per-call restructure-confirmation switch, so the parameter
+        // could never influence the update — advertising it misled unattended clients.
+        assertFalse("autoRestructure must not reappear without being wired into the EDT call", //$NON-NLS-1$
+            schema.contains("\"autoRestructure\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -133,8 +138,9 @@ public class UpdateDatabaseToolTest
         // Exclusive-lock guidance migrated from the old description.
         assertTrue(guide.contains("terminate_launch")); //$NON-NLS-1$
         assertTrue(guide.contains("exclusive")); //$NON-NLS-1$
-        // fullUpdate/autoRestructure rationale migrated from the old schema descriptions.
-        assertTrue(guide.contains("autoRestructure")); //$NON-NLS-1$
+        // The guide must state that a DB restructure is EDT-confirmed and not controllable
+        // per call (the former autoRestructure parameter was a no-op and was removed).
+        assertTrue(guide.contains("restructure")); //$NON-NLS-1$
     }
 
     @Test

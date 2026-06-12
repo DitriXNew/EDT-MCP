@@ -3096,10 +3096,6 @@
           "description": "Application ID from get_applications; required if launchConfigurationName is omitted.",
           "type": "string"
         },
-        "autoRestructure": {
-          "description": "Auto-apply restructurization when needed (default true).",
-          "type": "boolean"
-        },
         "confirm": {
           "description": "true = apply the update; default false = preview only (resolves the target and reports what would change WITHOUT mutating the infobase).",
           "type": "boolean"

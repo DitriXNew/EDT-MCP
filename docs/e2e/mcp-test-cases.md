@@ -346,7 +346,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 
 ### update_database
 - **Type:** destructive (DB migration) · **Runnable on IRP:** SKIPPED — permission‑gated
-- **Cases (sandbox + explicit approval only):** by `launchConfigurationName`, or `projectName+applicationId`; `fullUpdate`, `autoRestructure`.
+- **Cases (sandbox + explicit approval only):** by `launchConfigurationName`, or `projectName+applicationId`; `fullUpdate`.
 - **Note:** CLAUDE.md restricts this to explicit user request; the Claude Code auto‑mode classifier **blocks** it even on the error path. A test agent must treat it as `SKIPPED (needs approval + infobase)`.
 - **Validated 2026‑06‑01:** not run — blocked by safety classifier (expected).
 

@@ -23,7 +23,6 @@ After changing metadata/configuration, to push those changes into the running in
 - **projectName** (string) — required if launchConfigurationName is omitted.
 - **applicationId** (string) — from `get_applications`; required if launchConfigurationName is omitted.
 - **fullUpdate** (boolean, default false) — true performs a FULL reload (complete rebuild), false performs an INCREMENTAL update (changed objects only). Incremental is faster; use full when the structure changed substantially or an incremental update fails.
-- **autoRestructure** (boolean, default true) — automatically apply database restructurization (table/index changes) when the update requires it, instead of prompting. Leave true for unattended use.
 - **confirm** (boolean, default false) — false previews the resolved update without touching the infobase; true applies it.
 - **terminateRunningClients** (boolean, default true) — before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock and stop it running stale modules. Set false to leave a running client in place (the update then fails if that client holds the infobase exclusively). Only affects the apply phase (confirm=true); the preview reports `willTerminateRunningClients` but terminates nothing.
 
@@ -32,6 +31,10 @@ After changing metadata/configuration, to push those changes into the running in
 A 1C client launched from this EDT that is running against the target infobase holds it in **exclusive** use (so the update fails) and **caches the old module version** (it keeps running stale code even after a successful publish). With the default `terminateRunningClients=true` the tool frees the infobase itself before applying: it terminates that EDT-launched client using the same client-typed sweep the launch tools use — it never touches a debug-server session or a launch owned by another MCP tool — and reports `terminatedClient`.
 
 Pass `terminateRunningClients=false` to keep the client running; then the old manual flow applies — check `list_configurations` for `running: true` and call `terminate_launch` yourself before retrying. Externally launched clients (Designer, ad-hoc 1cv8c.exe) are invisible to both this sweep and `terminate_launch`, and must be closed by hand.
+
+## Database restructure (not controllable here)
+
+When the update requires a database restructure (table/index changes), EDT itself decides how to confirm it: it shows its own confirmation dialog in the EDT window, or — if confirmation cannot happen — the update returns with the infobase still requiring an update. The EDT update API offers no per-call switch to auto-confirm a restructure, so this tool intentionally has no parameter for it. If the result reports a state other than `UPDATED`, confirm the restructure in the EDT UI (or use `fullUpdate=true`, which may avoid the incremental restructure path) and re-run.
 
 ## Examples
 

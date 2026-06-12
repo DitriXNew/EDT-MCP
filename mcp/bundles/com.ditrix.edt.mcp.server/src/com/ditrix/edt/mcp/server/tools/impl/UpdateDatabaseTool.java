@@ -71,8 +71,6 @@ public class UpdateDatabaseTool implements IMcpTool
                 "Application ID from get_applications; required if launchConfigurationName is omitted.") //$NON-NLS-1$
             .booleanProperty("fullUpdate", //$NON-NLS-1$
                 "true = full reload, false = incremental (default false).") //$NON-NLS-1$
-            .booleanProperty("autoRestructure", //$NON-NLS-1$
-                "Auto-apply restructurization when needed (default true).") //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = apply the update; default false = preview only (resolves the target and " //$NON-NLS-1$
                 + "reports what would change WITHOUT mutating the infobase).") //$NON-NLS-1$
@@ -121,7 +119,6 @@ public class UpdateDatabaseTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
         boolean fullUpdate = JsonUtils.extractBooleanArgument(params, "fullUpdate", false); //$NON-NLS-1$
-        boolean autoRestructure = JsonUtils.extractBooleanArgument(params, "autoRestructure", true); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         boolean terminateRunningClients =
             JsonUtils.extractBooleanArgument(params, "terminateRunningClients", true); //$NON-NLS-1$
@@ -180,7 +177,7 @@ public class UpdateDatabaseTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        return updateDatabase(projectName, applicationId, fullUpdate, autoRestructure, confirm,
+        return updateDatabase(projectName, applicationId, fullUpdate, confirm,
             terminateRunningClients);
     }
 
@@ -190,14 +187,13 @@ public class UpdateDatabaseTool implements IMcpTool
      * @param projectName name of the project
      * @param applicationId ID of the application
      * @param fullUpdate true for full update, false for incremental
-     * @param autoRestructure whether to auto-apply restructurization
      * @param confirm false previews without mutating; true applies the update
      * @param terminateRunningClients true (default) frees the infobase by terminating a 1C client
      *            this EDT launched on it before the update; false leaves a running client in place
      * @return JSON string with result
      */
     private String updateDatabase(String projectName, String applicationId,
-            boolean fullUpdate, boolean autoRestructure, boolean confirm,
+            boolean fullUpdate, boolean confirm,
             boolean terminateRunningClients)
     {
         boolean terminatedClient = false;
@@ -281,8 +277,7 @@ public class UpdateDatabaseTool implements IMcpTool
 
             Activator.logInfo("Update database: project=" + projectName +  //$NON-NLS-1$
                     ", application=" + applicationId +  //$NON-NLS-1$
-                    ", type=" + updateType +  //$NON-NLS-1$
-                    ", autoRestructure=" + autoRestructure); //$NON-NLS-1$
+                    ", type=" + updateType); //$NON-NLS-1$
 
             IProgressMonitor monitor = new NullProgressMonitor();
 
