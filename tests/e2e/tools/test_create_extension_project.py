@@ -73,7 +73,9 @@ def test_nonexistent_base_project_errors():
 @e2e_test(tool="create_extension_project", kind="action")
 def test_create_extension_then_delete():
     """Create a fresh extension from the fixture base, verify it, then clean up."""
-    _ensure_absent(NEW_EXT)
+    # The tool creates PROJECT + "." + NEW_EXT as the effective project name; pre-clean that.
+    effective_name = PROJECT + "." + NEW_EXT
+    _ensure_absent(effective_name)
     try:
         # Happy path: create the extension
         r = call("create_extension_project",

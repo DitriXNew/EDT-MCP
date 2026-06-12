@@ -159,14 +159,37 @@ public class CreateExtensionProjectToolTest
     }
 
     @Test
-    public void testInvalidPurposeErrors()
+    public void testBlankNameErrors()
     {
+        Map<String, String> params = new HashMap<>();
+        params.put("name", "   "); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("baseProjectName", "SomeBase"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateExtensionProjectTool().execute(params);
+        assertTrue("blank name must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("blank name error must mention 'name'", result.contains("name")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testInvalidIdentifierNameErrors()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("name", "123Bad"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("baseProjectName", "SomeBase"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateExtensionProjectTool().execute(params);
+        assertTrue("invalid identifier must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("invalid identifier error must name the bad value", result.contains("123Bad")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testHeadlessExecutionReturnsError()
+    {
+        // Verifies that execute() with a nominally valid name + base project returns a JSON error
+        // in a headless (no EDT workspace) context rather than throwing an exception.
+        // The exact failure point (workspace lookup, nature check, service unavailability) is
+        // environment-dependent; this test only asserts that the result is a well-formed JSON error.
         Map<String, String> params = new HashMap<>();
         params.put("name", "MyExt"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("baseProjectName", "SomeBase"); //$NON-NLS-1$ //$NON-NLS-2$
-        params.put("purpose", "InvalidPurpose"); //$NON-NLS-1$ //$NON-NLS-2$
-        // This would normally reach the V8ConfigurationNature check before purpose validation,
-        // but in a headless test context both checks fail — we just verify the call is an error.
         String result = new CreateExtensionProjectTool().execute(params);
         assertNotNull(result);
         // The result must be a JSON error (success=false)

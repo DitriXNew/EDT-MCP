@@ -137,7 +137,7 @@
           "type": "string"
         },
         "name": {
-          "description": "Name of the new extension Configuration object (required). Also used as the default EDT project name if projectName is not supplied.",
+          "description": "Name of the new extension Configuration object (required). Must be a valid 1C identifier: starts with a letter or underscore, then letters, digits and underscores only (Cyrillic allowed). Also used as the default EDT project name if projectName is not supplied.",
           "type": "string"
         },
         "prefix": {
@@ -184,7 +184,7 @@
           "type": "string"
         },
         "codestyle": {
-          "description": "v8codestyle preference application result: {applied: bool, note: string}",
+          "description": "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}",
           "type": "object"
         },
         "extensionProject": {
@@ -218,6 +218,10 @@
         "success": {
           "description": "Whether the project was created",
           "type": "boolean"
+        },
+        "synonymNote": {
+          "description": "Present only when the synonym could not be applied (no resolvable language code).",
+          "type": "string"
         },
         "version": {
           "description": "Platform version string from the base project",

@@ -111,6 +111,8 @@ public class CreateExtensionProjectTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty("name", //$NON-NLS-1$
                 "Name of the new extension Configuration object (required). " //$NON-NLS-1$
+                    + "Must be a valid 1C identifier: starts with a letter or underscore, " //$NON-NLS-1$
+                    + "then letters, digits and underscores only (Cyrillic allowed). " //$NON-NLS-1$
                     + "Also used as the default EDT project name if projectName is not supplied.", //$NON-NLS-1$
                 true)
             .stringProperty("baseProjectName", //$NON-NLS-1$
@@ -162,7 +164,9 @@ public class CreateExtensionProjectTool implements IMcpTool
             .stringProperty("version", "Platform version string from the base project") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("state", "'ready' when lifecycle STARTED was reached, 'created' otherwise") //$NON-NLS-1$ //$NON-NLS-2$
             .objectProperty("codestyle", //$NON-NLS-1$
-                "v8codestyle preference application result: {applied: bool, note: string}") //$NON-NLS-1$
+                "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}") //$NON-NLS-1$
+            .stringProperty("synonymNote", //$NON-NLS-1$
+                "Present only when the synonym could not be applied (no resolvable language code).") //$NON-NLS-1$
             .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -195,6 +199,28 @@ public class CreateExtensionProjectTool implements IMcpTool
         boolean commonChecks = JsonUtils.extractBooleanArgument(params, "commonChecks", true); //$NON-NLS-1$
         // autoSortTopObjects is read to satisfy schema parity; not yet applied (see class-level doc)
         JsonUtils.extractBooleanArgument(params, "autoSortTopObjects", true); //$NON-NLS-1$
+
+        // Trim and validate 'name'
+        if (configName != null)
+        {
+            configName = configName.trim();
+        }
+        if (configName == null || configName.isEmpty())
+        {
+            return ToolResult.error("'name' must not be blank.").toJson(); //$NON-NLS-1$
+        }
+        if (!isValidIdentifier(configName))
+        {
+            return ToolResult.error("Invalid name '" + configName //$NON-NLS-1$
+                + "'. A name must start with a letter or underscore and contain only " //$NON-NLS-1$
+                + "letters, digits and underscores (Cyrillic letters are allowed).").toJson(); //$NON-NLS-1$
+        }
+
+        // Trim projectName if provided
+        if (projectName != null)
+        {
+            projectName = projectName.trim();
+        }
 
         // Normalize empties to null
         if (projectName != null && projectName.isEmpty())
@@ -254,8 +280,8 @@ public class CreateExtensionProjectTool implements IMcpTool
         IExtensionProjectManager extMgr = Activator.getDefault().getExtensionProjectManager();
         if (extMgr == null)
         {
-            return ToolResult.error( //$NON-NLS-1$
-                "IExtensionProjectManager service not available. The EDT platform may not be ready.").toJson();
+            return ToolResult.error(
+                "IExtensionProjectManager service not available. The EDT platform may not be ready.").toJson(); //$NON-NLS-1$
         }
 
         IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
@@ -285,7 +311,13 @@ public class CreateExtensionProjectTool implements IMcpTool
             ? configProvider.getConfiguration(baseIProject)
             : null;
 
-        ScriptVariant scriptVariant = (baseConfig != null) ? baseConfig.getScriptVariant() : ScriptVariant.RUSSIAN;
+        if (baseConfig == null)
+        {
+            return ToolResult.error("The configuration model of base project '" + baseProjectName //$NON-NLS-1$
+                + "' is not loaded yet (the project may still be indexing). " //$NON-NLS-1$
+                + "Wait until the project is ready and retry.").toJson(); //$NON-NLS-1$
+        }
+        ScriptVariant scriptVariant = baseConfig.getScriptVariant();
         if (scriptVariant == null)
         {
             scriptVariant = ScriptVariant.RUSSIAN;
@@ -317,11 +349,55 @@ public class CreateExtensionProjectTool implements IMcpTool
         CompatibilityMode compatMode = null;
         if (compatModeStr != null)
         {
+            // First try exact literal match
             compatMode = CompatibilityMode.get(compatModeStr);
             if (compatMode == null)
             {
+                // Tolerant fallback: strip non-alphanumerics and compare case-insensitively
+                // (handles 'Version8.3.10' vs 'Version8_3_10' and case variants)
+                String normalizedInput = compatModeStr.replaceAll("[^A-Za-z0-9]", "").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+                for (CompatibilityMode candidate : CompatibilityMode.VALUES)
+                {
+                    String normalizedCandidate = candidate.getLiteral()
+                        .replaceAll("[^A-Za-z0-9]", "").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+                    if (normalizedInput.equals(normalizedCandidate))
+                    {
+                        compatMode = candidate;
+                        break;
+                    }
+                    // Also try getName() if different from getLiteral()
+                    String normalizedName = candidate.getName()
+                        .replaceAll("[^A-Za-z0-9]", "").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+                    if (normalizedInput.equals(normalizedName))
+                    {
+                        compatMode = candidate;
+                        break;
+                    }
+                }
+            }
+            if (compatMode == null)
+            {
+                // Build a short example list from VALUES dynamically
+                StringBuilder examples = new StringBuilder();
+                int shown = 0;
+                for (CompatibilityMode candidate : CompatibilityMode.VALUES)
+                {
+                    if (shown > 0)
+                    {
+                        examples.append(", "); //$NON-NLS-1$
+                    }
+                    examples.append("'").append(candidate.getLiteral()).append("'"); //$NON-NLS-1$ //$NON-NLS-2$
+                    shown++;
+                    if (shown >= 3)
+                    {
+                        break;
+                    }
+                }
+                int total = CompatibilityMode.VALUES.size();
                 return ToolResult.error("Unknown compatibilityMode value: '" + compatModeStr //$NON-NLS-1$
-                    + "'. Use a CompatibilityMode enum literal, e.g. 'Version8_3_10', or omit for the factory default.").toJson(); //$NON-NLS-1$
+                    + "'. Use a CompatibilityMode enum literal (e.g. " + examples //$NON-NLS-1$
+                    + (total > 3 ? " and " + (total - 3) + " more" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "), or omit for the factory default.").toJson(); //$NON-NLS-1$
             }
         }
 
@@ -350,12 +426,20 @@ public class CreateExtensionProjectTool implements IMcpTool
         // Set synonym via language-code-keyed EMap (do not use Language.getName() — bug #2 in CLAUDE.md)
         String synonymValue = (synonym != null && !synonym.isEmpty()) ? synonym : configName;
         String langCode = MetadataLanguageUtils.resolveLanguageCode(baseConfig, null);
+        // FIX 5: If base config gave no language code, fall back to the new extension config
+        // (which was populated by fillDefaultReferences above).
+        if (langCode == null)
+        {
+            langCode = MetadataLanguageUtils.resolveLanguageCode(config, null);
+        }
+        boolean synonymApplied = false;
         if (langCode != null)
         {
             EMap<String, String> synonymMap = config.getSynonym();
             if (synonymMap != null)
             {
                 synonymMap.put(langCode, synonymValue);
+                synonymApplied = true;
             }
         }
 
@@ -402,8 +486,34 @@ public class CreateExtensionProjectTool implements IMcpTool
         if (createJob.getState() != Job.NONE)
         {
             createJob.cancel();
+            // Re-check whether the project actually exists despite the timeout
+            if (ProjectContext.of(finalEffectiveProjectName).exists())
+            {
+                // Creation completed slowly past the wait window — treat as success, but be
+                // honest that the post-create steps (codestyle prefs) were skipped.
+                Map<String, Object> slowCodestyle = new LinkedHashMap<>();
+                slowCodestyle.put("applied", false); //$NON-NLS-1$
+                slowCodestyle.put("note", //$NON-NLS-1$
+                    "Not applied: creation exceeded the wait window; set the project preferences manually if needed."); //$NON-NLS-1$
+                return ToolResult.success()
+                    .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put("extensionProject", finalEffectiveProjectName) //$NON-NLS-1$
+                    .put("name", configName) //$NON-NLS-1$
+                    .put("baseProject", baseProjectName) //$NON-NLS-1$
+                    .put("prefix", prefix) //$NON-NLS-1$
+                    .put("purpose", purpose.getLiteral()) //$NON-NLS-1$
+                    .put("scriptVariant", scriptVariant.getLiteral()) //$NON-NLS-1$
+                    .put("version", version.toString()) //$NON-NLS-1$
+                    .put("state", "created") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put("codestyle", slowCodestyle) //$NON-NLS-1$
+                    .put("message", "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' was created (creation completed past the " //$NON-NLS-1$
+                        + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists).") //$NON-NLS-1$
+                    .toJson();
+            }
             return ToolResult.error("Extension project creation timed out after " //$NON-NLS-1$
-                + (CREATE_TIMEOUT_MS / 1000) + " seconds.").toJson(); //$NON-NLS-1$
+                + (CREATE_TIMEOUT_MS / 1000) + " seconds. The project may still appear shortly; " //$NON-NLS-1$
+                + "if it does and is unwanted, remove it with delete_project.").toJson(); //$NON-NLS-1$
         }
 
         if (errorHolder[0] != null)
@@ -446,8 +556,10 @@ public class CreateExtensionProjectTool implements IMcpTool
         // 13. Apply v8codestyle preferences (guarded — no compile dependency on com.e1c.v8codestyle)
         boolean codestyleApplied = false;
         String codestyleNote = ""; //$NON-NLS-1$
+        // Installed is enough: the prefs are plain project-scoped entries the (lazily
+        // activated) v8codestyle bundle reads later — do not require Bundle.ACTIVE.
         Bundle v8codestyleBundle = Platform.getBundle(V8CODESTYLE_BUNDLE);
-        if (v8codestyleBundle != null && v8codestyleBundle.getState() == Bundle.ACTIVE)
+        if (v8codestyleBundle != null)
         {
             try
             {
@@ -483,7 +595,7 @@ public class CreateExtensionProjectTool implements IMcpTool
         codestyleMap.put("note", codestyleNote); //$NON-NLS-1$
         codestyleMap.put("autoSortNote", autoSortNote); //$NON-NLS-1$
 
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
             .put("extensionProject", finalEffectiveProjectName) //$NON-NLS-1$
             .put("name", configName) //$NON-NLS-1$
@@ -495,7 +607,39 @@ public class CreateExtensionProjectTool implements IMcpTool
             .put("state", projectState) //$NON-NLS-1$
             .put("codestyle", codestyleMap) //$NON-NLS-1$
             .put("message", "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
-                + "' created and bound to '" + baseProjectName + "'.") //$NON-NLS-1$ //$NON-NLS-2$
-            .toJson();
+                + "' created and bound to '" + baseProjectName + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        // FIX 5: report when synonym could not be applied (language code indeterminate)
+        if (!synonymApplied)
+        {
+            result.put("synonymNote", //$NON-NLS-1$
+                "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
+                    + "the base configuration or the new extension configuration."); //$NON-NLS-1$
+        }
+        return result.toJson();
+    }
+
+    /**
+     * Checks that a name is a valid 1C identifier: starts with a letter or underscore,
+     * then letters, digits and underscores only. Cyrillic letters are valid.
+     */
+    private static boolean isValidIdentifier(String name)
+    {
+        if (name == null || name.isEmpty())
+        {
+            return false;
+        }
+        if (!Character.isLetter(name.charAt(0)) && name.charAt(0) != '_')
+        {
+            return false;
+        }
+        for (int i = 1; i < name.length(); i++)
+        {
+            char c = name.charAt(i);
+            if (!Character.isLetterOrDigit(c) && c != '_')
+            {
+                return false;
+            }
+        }
+        return true;
     }
 }

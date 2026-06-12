@@ -23,7 +23,7 @@ public enum ToolGroup
         "get_edt_version", "list_projects", "get_configuration_properties", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "clean_project", "revalidate_objects", "resync_to_disk", "get_check_description", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "export_configuration_to_xml", "import_configuration_from_xml", //$NON-NLS-1$ //$NON-NLS-2$
-        "delete_project"), //$NON-NLS-1$
+        "delete_project", "create_extension_project"), //$NON-NLS-1$ //$NON-NLS-2$
 
     PROBLEMS("problems", "Errors & Problems", //$NON-NLS-1$ //$NON-NLS-2$
         "Error reporting and workspace markers (bookmarks, tasks)", //$NON-NLS-1$
@@ -41,8 +41,7 @@ public enum ToolGroup
     APPLICATIONS("applications", "Applications & Testing", //$NON-NLS-1$ //$NON-NLS-2$
         "Application management, database update, launch, termination, and testing", //$NON-NLS-1$
         "get_applications", "list_configurations", "update_database", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "debug_launch", "terminate_launch", "run_yaxunit_tests", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "create_extension_project"), //$NON-NLS-1$
+        "debug_launch", "terminate_launch", "run_yaxunit_tests"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     DEBUG("debug", "Debugging", //$NON-NLS-1$ //$NON-NLS-2$
         "Breakpoints, stepping, variables, expression evaluation, and profiling", //$NON-NLS-1$
