@@ -9,7 +9,7 @@ package com.ditrix.edt.mcp.server.tools;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
-import com.ditrix.edt.mcp.server.tools.impl.CreateExtensionProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
@@ -115,7 +115,7 @@ public final class BuiltInToolRegistrar
         registry.register(new ExportConfigurationToXmlTool());
         registry.register(new ImportConfigurationFromXmlTool());
         registry.register(new DeleteProjectTool());
-        registry.register(new CreateExtensionProjectTool());
+        registry.register(new CreateProjectTool());
         registry.register(new GetProblemSummaryTool());
         registry.register(new GetProjectErrorsTool());
         registry.register(new GetMarkersTool());

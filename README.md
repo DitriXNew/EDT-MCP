@@ -193,7 +193,7 @@ All 63 tools are organized into 9 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
-| **Core / Project** | EDT version, server self-diagnosis, on-demand tool guides, project listing, configuration, validation, XML export/import, project removal, extension project creation | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml`, `delete_project`, `create_extension_project` |
+| **Core / Project** | EDT version, server self-diagnosis, on-demand tool guides, project listing, configuration, validation, XML export/import, project removal, project creation (configuration / extension / externalObjects) | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml`, `delete_project`, `create_project` |
 | **Errors & Problems** | Error reporting and workspace markers (bookmarks, tasks) | `get_problem_summary`, `get_project_errors`, `get_markers` |
 | **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
 | **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
@@ -480,7 +480,7 @@ with `python docs/generate_tool_docs.py`.
 | Tool | Description |
 |------|-------------|
 | [`clean_project`](docs/tools/clean_project.md) | Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. |
-| [`create_extension_project`](docs/tools/create_extension_project.md) | Create a NEW 1C configuration extension project in the EDT workspace bound to a base configuration project. The extension project is immediately available f… |
+| [`create_project`](docs/tools/create_project.md) | Create a NEW 1C project in the EDT workspace. projectKind selects the kind: configuration (standalone), extension (bound to a base configuration), or extern… |
 | [`delete_project`](docs/tools/delete_project.md) | Remove an EDT project from the workspace, optionally deleting its files from disk (deleteContent). Destructive: guarded by a confirm-preview - call without c… |
 | [`export_configuration_to_xml`](docs/tools/export_configuration_to_xml.md) | Export an EDT configuration project to XML files (EDT menu: Export -> Configuration to XML Files). Equivalent of 1C platform DumpConfigToFiles. |
 | [`get_check_description`](docs/tools/get_check_description.md) | Get detailed description of an EDT check by its ID. Returns markdown content with check explanation, examples, and how to fix. Accepts the symbolic check id… |

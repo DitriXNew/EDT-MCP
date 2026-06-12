@@ -113,133 +113,6 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a NEW 1C configuration extension project in the EDT workspace bound to a base configuration project. The extension project is immediately available for metadata adoption (adopt_metadata_object) and BSL override. The name must not already exist as a project. standardChecks/commonChecks are applied only when com.e1c.v8codestyle is installed. Full parameters and examples: call get_tool_guide('create_extension_project').",
-    "inputSchema": {
-      "properties": {
-        "autoSortTopObjects": {
-          "description": "Reserved for future use: auto-sort top-level metadata objects. Accepted but not yet applied in this release (see codestyle.autoSortNote in the response).",
-          "type": "boolean"
-        },
-        "baseProjectName": {
-          "description": "Name of the BASE configuration EDT project the extension will extend (required). Must be an existing, open V8 configuration project. Use list_projects to find it.",
-          "type": "string"
-        },
-        "comment": {
-          "description": "Optional free-text comment set on the extension Configuration.",
-          "type": "string"
-        },
-        "commonChecks": {
-          "description": "Enable common (project-level) BSL checks for the new project (default true). Applied only when com.e1c.v8codestyle is installed; ignored otherwise.",
-          "type": "boolean"
-        },
-        "compatibilityMode": {
-          "description": "Optional extension compatibility-mode string matching a CompatibilityMode enum literal (e.g. 'Version8_3_10'); empty = factory default. Unknown values are rejected.",
-          "type": "string"
-        },
-        "name": {
-          "description": "Name of the new extension Configuration object (required). Must be a valid 1C identifier: starts with a letter or underscore, then letters, digits and underscores only (Cyrillic allowed). Also used as the default EDT project name if projectName is not supplied.",
-          "type": "string"
-        },
-        "prefix": {
-          "description": "NamePrefix for the extension (default empty string). The wizard generates a value like 'Ext1_'; pass an explicit value or omit for empty.",
-          "type": "string"
-        },
-        "projectName": {
-          "description": "EDT workspace project name to create. Defaults to '<baseProjectName>.<name>' when omitted.",
-          "type": "string"
-        },
-        "purpose": {
-          "description": "Extension purpose (default Customization). Customization = user adaptation; AddOn = add-on functionality; Patch = hotfix.",
-          "enum": [
-            "Customization",
-            "AddOn",
-            "Patch"
-          ],
-          "type": "string"
-        },
-        "standardChecks": {
-          "description": "Enable 1C:Standards BSL checks for the new project (default true). Applied only when com.e1c.v8codestyle is installed; ignored otherwise.",
-          "type": "boolean"
-        },
-        "synonym": {
-          "description": "Human-readable synonym for the extension Configuration. Defaults to the 'name' value if omitted.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "baseProjectName"
-      ],
-      "type": "object"
-    },
-    "name": "create_extension_project",
-    "outputSchema": {
-      "properties": {
-        "action": {
-          "description": "'created' on success",
-          "type": "string"
-        },
-        "baseProject": {
-          "description": "Name of the base configuration project it extends",
-          "type": "string"
-        },
-        "codestyle": {
-          "description": "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}",
-          "type": "object"
-        },
-        "extensionProject": {
-          "description": "EDT workspace project name of the created extension (round-trip key for sibling tools)",
-          "type": "string"
-        },
-        "message": {
-          "description": "Human-readable confirmation message",
-          "type": "string"
-        },
-        "name": {
-          "description": "Configuration name set on the extension",
-          "type": "string"
-        },
-        "prefix": {
-          "description": "NamePrefix applied to the extension",
-          "type": "string"
-        },
-        "purpose": {
-          "description": "ConfigurationExtensionPurpose value applied",
-          "type": "string"
-        },
-        "scriptVariant": {
-          "description": "ScriptVariant inherited from the base configuration",
-          "type": "string"
-        },
-        "state": {
-          "description": "'ready' when lifecycle STARTED was reached, 'created' otherwise",
-          "type": "string"
-        },
-        "success": {
-          "description": "Whether the project was created",
-          "type": "boolean"
-        },
-        "synonymNote": {
-          "description": "Present only when the synonym could not be applied (no resolvable language code).",
-          "type": "string"
-        },
-        "version": {
-          "description": "Platform version string from the base project",
-          "type": "string"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "type": "object"
-    }
-  },
-  {
-    "annotations": {
-      "destructiveHint": false,
-      "openWorldHint": false,
-      "readOnlyHint": false
-    },
     "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Full parameters and examples: call get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
@@ -366,6 +239,158 @@
         },
         "targetNamespace": {
           "description": "XDTO namespace written, when an XDTOPackage was created",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a NEW 1C project in the EDT workspace. projectKind selects the kind: 'configuration' (standalone), 'extension' (bound to a base configuration), or 'externalObjects' (external data processors/reports). The name must not already exist as a project. standardChecks/commonChecks are applied only when com.e1c.v8codestyle is installed. Full parameters and examples: call get_tool_guide('create_project').",
+    "inputSchema": {
+      "properties": {
+        "autoSortTopObjects": {
+          "description": "Reserved for future use: auto-sort top-level metadata objects. Accepted but not yet applied in this release (see codestyle.autoSortNote in the response).",
+          "type": "boolean"
+        },
+        "baseProjectName": {
+          "description": "Name of the BASE configuration EDT project (required for extension; REJECTED for configuration and externalObjects). Must be an existing, open V8 configuration project. Use list_projects to find it.",
+          "type": "string"
+        },
+        "comment": {
+          "description": "Optional free-text comment set on the Configuration (configuration and extension only; REJECTED for externalObjects).",
+          "type": "string"
+        },
+        "commonChecks": {
+          "description": "Enable common (project-level) BSL checks for the new project (default true). Applied to all kinds only when com.e1c.v8codestyle is installed; ignored otherwise.",
+          "type": "boolean"
+        },
+        "compatibilityMode": {
+          "description": "Optional extension compatibility-mode string matching a CompatibilityMode enum literal (e.g. 'Version8_3_10'); empty = factory default. Unknown values are rejected. Extension only; REJECTED for other kinds.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the new Configuration object (required). For configuration/extension: the programmatic Configuration name. For externalObjects: used as the default project name (no Configuration object exists). Must be a valid 1C identifier: starts with a letter or underscore, then letters, digits and underscores only (Cyrillic allowed). Also used as the default EDT project name if projectName is not supplied.",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "NamePrefix for the extension (extension only; REJECTED for other kinds). Default: empty string. The wizard generates a value like 'Ext1_'; pass an explicit value or omit for empty.",
+          "type": "string"
+        },
+        "projectKind": {
+          "description": "Kind of project to create (required): 'configuration' = standalone 1C configuration; 'extension' = configuration extension bound to a base project; 'externalObjects' = external data processors/reports project.",
+          "enum": [
+            "configuration",
+            "extension",
+            "externalObjects"
+          ],
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT workspace project name to create. Default: extension -> '<baseProjectName>.<name>'; configuration/externalObjects -> 'name'.",
+          "type": "string"
+        },
+        "purpose": {
+          "description": "Extension purpose (extension only; REJECTED for other kinds). Default: Customization. Customization = user adaptation; AddOn = add-on functionality; Patch = hotfix.",
+          "enum": [
+            "Customization",
+            "AddOn",
+            "Patch"
+          ],
+          "type": "string"
+        },
+        "scriptVariant": {
+          "description": "Script variant (Russian or English). configuration: sets the Configuration scriptVariant and default Language code (default Russian). externalObjects: applied post-create via setScriptVariant (non-fatal on failure). extension: REJECTED — scriptVariant is always inherited from the base configuration.",
+          "enum": [
+            "Russian",
+            "English"
+          ],
+          "type": "string"
+        },
+        "standardChecks": {
+          "description": "Enable 1C:Standards BSL checks for the new project (default true). Applied to all kinds only when com.e1c.v8codestyle is installed; ignored otherwise.",
+          "type": "boolean"
+        },
+        "synonym": {
+          "description": "Human-readable synonym for the Configuration (configuration and extension only; REJECTED for externalObjects). Defaults to the 'name' value if omitted.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; for extension: REJECTED — version is always inherited from the base configuration). Default: Version.LATEST when omitted.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectKind",
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "create_project",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "'created' on success",
+          "type": "string"
+        },
+        "baseProject": {
+          "description": "Name of the base configuration project it extends (extension only, conditional)",
+          "type": "string"
+        },
+        "codestyle": {
+          "description": "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}",
+          "type": "object"
+        },
+        "message": {
+          "description": "Human-readable confirmation message",
+          "type": "string"
+        },
+        "name": {
+          "description": "Configuration name set on the project (configuration and extension only)",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "NamePrefix applied (extension only, conditional)",
+          "type": "string"
+        },
+        "project": {
+          "description": "EDT workspace project name of the created project (round-trip key for sibling tools)",
+          "type": "string"
+        },
+        "projectKind": {
+          "description": "Kind of project created: configuration, extension, or externalObjects",
+          "type": "string"
+        },
+        "purpose": {
+          "description": "ConfigurationExtensionPurpose value applied (extension only, conditional)",
+          "type": "string"
+        },
+        "scriptVariant": {
+          "description": "ScriptVariant applied or inherited",
+          "type": "string"
+        },
+        "state": {
+          "description": "'ready' when lifecycle STARTED was reached, 'created' otherwise",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the project was created",
+          "type": "boolean"
+        },
+        "synonymNote": {
+          "description": "Present only when the synonym could not be applied (no resolvable language code).",
+          "type": "string"
+        },
+        "version": {
+          "description": "Platform version string used for project creation",
           "type": "string"
         }
       },

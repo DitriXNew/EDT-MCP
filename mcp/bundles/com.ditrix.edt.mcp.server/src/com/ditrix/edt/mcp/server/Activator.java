@@ -16,6 +16,8 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
+import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
@@ -270,6 +272,28 @@ public class Activator extends AbstractUIPlugin
     public IExtensionProjectManager getExtensionProjectManager()
     {
         return services.getExtensionProjectManager();
+    }
+
+    /**
+     * Returns the {@link IConfigurationProjectManager} service used to create
+     * 1C standalone configuration projects programmatically.
+     *
+     * @return configuration project manager or null if not available
+     */
+    public IConfigurationProjectManager getConfigurationProjectManager()
+    {
+        return services.getConfigurationProjectManager();
+    }
+
+    /**
+     * Returns the {@link IExternalObjectProjectManager} service used to create
+     * 1C external data processors/reports projects programmatically.
+     *
+     * @return external object project manager or null if not available
+     */
+    public IExternalObjectProjectManager getExternalObjectProjectManager()
+    {
+        return services.getExternalObjectProjectManager();
     }
 
     /**

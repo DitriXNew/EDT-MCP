@@ -20,6 +20,8 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
+import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
@@ -59,6 +61,8 @@ public class EdtServices
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
     private ServiceTracker<ITopObjectFqnGenerator, ITopObjectFqnGenerator> topObjectFqnGeneratorTracker;
     private ServiceTracker<IExtensionProjectManager, IExtensionProjectManager> extensionProjectManagerTracker;
+    private ServiceTracker<IConfigurationProjectManager, IConfigurationProjectManager> configurationProjectManagerTracker;
+    private ServiceTracker<IExternalObjectProjectManager, IExternalObjectProjectManager> externalObjectProjectManagerTracker;
 
     /**
      * The FORM-model {@link IModelObjectFactory}, tracked with an LDAP filter on the EDT wiring
@@ -154,6 +158,12 @@ public class EdtServices
 
         extensionProjectManagerTracker = new ServiceTracker<>(context, IExtensionProjectManager.class, null);
         extensionProjectManagerTracker.open();
+
+        configurationProjectManagerTracker = new ServiceTracker<>(context, IConfigurationProjectManager.class, null);
+        configurationProjectManagerTracker.open();
+
+        externalObjectProjectManagerTracker = new ServiceTracker<>(context, IExternalObjectProjectManager.class, null);
+        externalObjectProjectManagerTracker.open();
 
         try
         {
@@ -275,6 +285,16 @@ public class EdtServices
         {
             extensionProjectManagerTracker.close();
             extensionProjectManagerTracker = null;
+        }
+        if (configurationProjectManagerTracker != null)
+        {
+            configurationProjectManagerTracker.close();
+            configurationProjectManagerTracker = null;
+        }
+        if (externalObjectProjectManagerTracker != null)
+        {
+            externalObjectProjectManagerTracker.close();
+            externalObjectProjectManagerTracker = null;
         }
         if (formModelObjectFactoryTracker != null)
         {
@@ -684,6 +704,38 @@ public class EdtServices
             return null;
         }
         return extensionProjectManagerTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IConfigurationProjectManager} service used to create
+     * 1C standalone configuration projects programmatically (the MCP counterpart
+     * of the EDT "New Configuration" wizard).
+     *
+     * @return configuration project manager or null if not available
+     */
+    public IConfigurationProjectManager getConfigurationProjectManager()
+    {
+        if (configurationProjectManagerTracker == null)
+        {
+            return null;
+        }
+        return configurationProjectManagerTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IExternalObjectProjectManager} service used to create
+     * 1C external data processors/reports projects programmatically (the MCP
+     * counterpart of the EDT "New External Data Processor" wizard).
+     *
+     * @return external object project manager or null if not available
+     */
+    public IExternalObjectProjectManager getExternalObjectProjectManager()
+    {
+        if (externalObjectProjectManagerTracker == null)
+        {
+            return null;
+        }
+        return externalObjectProjectManagerTracker.getService();
     }
 
     /**
