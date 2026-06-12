@@ -99,3 +99,7 @@ On success the response includes:
   project must complete lifecycle indexing. If `state=created` is returned, retry after a
   few seconds or call `revalidate_objects` to trigger indexing.
 - **autoSortTopObjects is not yet applied.** See `codestyle.autoSortNote` in the response.
+- **Client-side timeouts.** Creation can take a couple of minutes on a busy workspace (the
+  tool waits for the create operation and then for lifecycle STARTED). If your MCP client
+  times out first, the creation usually still completes server-side — re-check with
+  `list_projects` before retrying, or the retry will hit the duplicate-name guard.
