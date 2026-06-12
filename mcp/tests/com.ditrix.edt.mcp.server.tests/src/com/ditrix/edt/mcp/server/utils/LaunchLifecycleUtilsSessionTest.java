@@ -509,4 +509,84 @@ public class LaunchLifecycleUtilsSessionTest
         assertTrue(LaunchLifecycleUtils.sweepLaunchManagerSession(session, "app-foreign")); //$NON-NLS-1$
         verify(foreign, times(1)).terminate();
     }
+
+    // ============ confirmed-termination boolean (truthful terminatedClient) ============
+
+    @Test
+    public void testTerminateExistingSessionAndWaitReturnsTrueWhenConfirmed() throws Exception
+    {
+        // The terminate-half now returns whether death was CONFIRMED within the window, so a
+        // caller (update_database) can report terminatedClient truthfully.
+        IDebugTarget client = targetWithThreads(liveThread());
+        when(client.canTerminate()).thenReturn(true);
+        when(client.isTerminated()).thenReturn(false, true);
+        assertTrue(LaunchLifecycleUtils.terminateExistingSessionAndWait(client, "app-x")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTerminateExistingSessionAndWaitReturnsFalseOnTimeout() throws Exception
+    {
+        // A client that never reports terminated within the wait window: the helper must NOT
+        // claim success — it returns false (and logs a warning) so update_database does not
+        // report a client as terminated while it may still hold the infobase exclusively.
+        // Exercised through the timeout-parameterized seam with a short window (one genuine
+        // poll+sleep iteration) instead of waiting out the production 3s timeout.
+        IDebugTarget client = targetWithThreads(liveThread());
+        when(client.canTerminate()).thenReturn(true);
+        when(client.isTerminated()).thenReturn(false);
+        assertFalse(LaunchLifecycleUtils.terminateExistingSessionAndWait(client, "app-stuck", 150L)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTerminateExistingSessionAndWaitNullReturnsFalse()
+    {
+        // Null target: nothing was terminated, so the confirmed-termination contract is false.
+        assertFalse(LaunchLifecycleUtils.terminateExistingSessionAndWait(null, "app-x")); //$NON-NLS-1$
+    }
+
+    // ============ target-manager sweep vs MCP-owned debug sessions (the 🔴 finding) ============
+    // The debug-target-manager source of ensureNoExistingClientSession, exercised through its
+    // seam sweepTargetManagerSession (the live IRuntimeDebugClientTargetManager scan needs a
+    // workbench and is covered E2E).
+
+    @Test
+    public void testSweepTargetManagerNullTargetIsNoOp()
+    {
+        assertFalse(LaunchLifecycleUtils.sweepTargetManagerSession(null, "app-none")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSweepTargetManagerSkipsOwnedDebugSession() throws Exception
+    {
+        // THE FINDING: the debug-target-manager source must NOT terminate a target whose owning
+        // launch is MCP-owned (e.g. a concurrent debug_yaxunit_tests session on the same infobase)
+        // — Source 2 previously killed it unconditionally, bypassing the owned-exemption.
+        ILaunch ownedLaunch = mock(ILaunch.class);
+        IDebugTarget owned = targetWithThreads(liveThread());
+        when(owned.getLaunch()).thenReturn(ownedLaunch);
+        LaunchLifecycleUtils.registerOwnedLaunch(ownedLaunch);
+        try
+        {
+            assertFalse(LaunchLifecycleUtils.sweepTargetManagerSession(owned, "app-owned-dbg")); //$NON-NLS-1$
+            verify(owned, never()).terminate();
+        }
+        finally
+        {
+            LaunchLifecycleUtils.unregisterOwnedLaunch(ownedLaunch);
+        }
+    }
+
+    @Test
+    public void testSweepTargetManagerTerminatesForeignDebugSession() throws Exception
+    {
+        // A foreign (not MCP-owned, e.g. a UI-started 'Debug As') client target IS terminated, and
+        // the confirmed-termination boolean is returned.
+        ILaunch foreignLaunch = mock(ILaunch.class);
+        IDebugTarget foreign = targetWithThreads(liveThread());
+        when(foreign.getLaunch()).thenReturn(foreignLaunch);
+        when(foreign.canTerminate()).thenReturn(true);
+        when(foreign.isTerminated()).thenReturn(false, true);
+        assertTrue(LaunchLifecycleUtils.sweepTargetManagerSession(foreign, "app-foreign-dbg")); //$NON-NLS-1$
+        verify(foreign, times(1)).terminate();
+    }
 }

@@ -20,8 +20,7 @@ By launch configuration name (preferred — fixes the project + applicationId pa
 ```
 update_database(
   launchConfigurationName="TestConfiguration Thin Client",
-  fullUpdate=false,
-  autoRestructure=true
+  fullUpdate=false
 )
 ```
 
@@ -30,8 +29,7 @@ By project + application id (use the `id` from `get_applications`):
 update_database(
   projectName="TestConfiguration",
   applicationId="82e532bc-b103-401d-9ce2-6f0785aad340",
-  fullUpdate=false,
-  autoRestructure=true
+  fullUpdate=false
 )
 ```
 
@@ -91,9 +89,9 @@ Field meaning (from source):
 - **Destructive at the DB level; source-revert is not enough.** `git checkout`/`git clean` only restores `TestConfiguration/src`. The infobase restructuring is already done — re-running `update_database` is the only way to realign the DB with the reverted source. Run **only** on `TestConfiguration`, **only** on an explicit request.
 - **Infobase exclusivity is the #1 failure.** A running client (`running:true` in `list_configurations`) holds the IB exclusively → update fails. An elevated/external `1cv8`/`1cv8c` holding the IB makes the call **stall at "Connecting to designer agent"** and it cannot be killed from a non-elevated shell. Always free the IB (via `terminate_launch` for EDT-started launches) before calling.
 - **Heavy / blocking.** `update()` runs synchronously with a `NullProgressMonitor`; a real restructuring can take a while. It also grabs the active SWT shell (`LaunchLifecycleUtils.grabActiveShell`) so EDT can parent confirmation/restructuring dialogs — in a headless/automated run a dialog may block. This is why the procedure is documented, not auto-executed.
-- **`fullUpdate` vs `autoRestructure`.** `fullUpdate=true` → `ApplicationUpdateType.FULL` (complete reload, heavier/more destructive); default `false` → `INCREMENTAL` (changes only). `autoRestructure` (default `true`) lets EDT apply restructurization without a manual prompt; both are declared in the schema and read in `execute()`.
+- **`fullUpdate`.** `fullUpdate=true` → `ApplicationUpdateType.FULL` (complete reload, heavier/more destructive); default `false` → `INCREMENTAL` (changes only). There is NO restructure switch: when the update needs a DB restructure, EDT confirms it via its own dialog (or the update returns still-out-of-sync) — the EDT update API has no per-call auto-confirm, which is why the former `autoRestructure` parameter was removed as a no-op.
 - **Resolution precedence.** If `launchConfigurationName` is given it wins and *derives* `projectName`/`applicationId` from the config's `ATTR_PROJECT_NAME`/`ATTR_APPLICATION_ID` (any passed `projectName`/`applicationId` are overwritten). Only when the name is omitted are `projectName` **and** `applicationId` both required.
 - **State gate.** Because of `checkReadyOrError`, calling against an indexing project returns the not-ready error, not a partial update. Re-poll `list_projects` until `ready`.
 - **JSON tool, no HTML escaping.** Output is the `ToolResult` JSON envelope; `GsonProvider` uses `disableHtmlEscaping()`, so `ToolResult.toJson()` keeps `>`, `<`, `&`, `=`, and the apostrophe `'` RAW (not `\uXXXX`). If you assert on text, match a delimiter-free substring (e.g. `not found`) for robustness, never raw `'…'` or `>=`.
-- **Flaky output channel.** If the result comes back garbled/empty (a bare `Error`/`Done`), do **not** retry-spam a *mutating* tool — a retry could apply the update twice. Re-verify independently: check `updateState` via `get_applications`, and read the EDT log at `D:\WS\EDT\.metadata\.log` (the tool logs `"Update database: project=…, application=…, type=…, autoRestructure=…"` and any error).
+- **Flaky output channel.** If the result comes back garbled/empty (a bare `Error`/`Done`), do **not** retry-spam a *mutating* tool — a retry could apply the update twice. Re-verify independently: check `updateState` via `get_applications`, and read the EDT log at `D:\WS\EDT\.metadata\.log` (the tool logs `"Update database: project=…, application=…, type=…"` and any error).
 - **Bilingual.** Field keys and enum names (`updateType`, `stateBefore/After`) are fixed English/programmatic identifiers. `applicationName` is the configured application name, not a translatable 1C synonym — nothing here goes through the synonym / TYPE-token bilingual path. Target the application by its programmatic `applicationId` / launch-config `name`, not by a localized label.

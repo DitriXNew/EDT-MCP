@@ -9,7 +9,6 @@ Apply configuration changes to an application's database (infobase), full or inc
 | projectName | — | string | EDT project name; required if launchConfigurationName is omitted. |
 | applicationId | — | string | Application ID from get_applications; required if launchConfigurationName is omitted. |
 | fullUpdate | — | boolean | true = full reload, false = incremental (default false). |
-| autoRestructure | — | boolean | Auto-apply restructurization when needed (default true). |
 | confirm | — | boolean | true = apply the update; default false = preview only (resolves the target and reports what would change WITHOUT mutating the infobase). |
 
 ## Guide
@@ -38,7 +37,6 @@ After changing metadata/configuration, to push those changes into the running in
 - **projectName** (string) — required if launchConfigurationName is omitted.
 - **applicationId** (string) — from `get_applications`; required if launchConfigurationName is omitted.
 - **fullUpdate** (boolean, default false) — true performs a FULL reload (complete rebuild), false performs an INCREMENTAL update (changed objects only). Incremental is faster; use full when the structure changed substantially or an incremental update fails.
-- **autoRestructure** (boolean, default true) — automatically apply database restructurization (table/index changes) when the update requires it, instead of prompting. Leave true for unattended use.
 - **confirm** (boolean, default false) — false previews the resolved update without touching the infobase; true applies it.
 
 ## Exclusive-lock gotcha
