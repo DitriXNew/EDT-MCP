@@ -104,13 +104,15 @@ def test_real_project_unknown_application_is_resolved_and_rejected_without_mutat
 
 @e2e_test(tool="update_database", kind="action")
 def test_terminate_running_clients_param_accepted_without_mutation():
-    """The terminateRunningClients opt-out is wired into execute() (read + declared in schema).
+    """The terminateRunningClients opt-out is parsed by execute() and does not break the
+    resolution chain.
 
-    Passing it (false) alongside a real project + non-existent applicationId must still be rejected
-    at the application lookup BEFORE the apply phase — so neither the destructive update() nor the
-    client-freeing sweep ever runs. This proves the new parameter is accepted (not an unknown-arg
-    error) and does not alter the safe resolution chain; terminateRunningClients=false also
-    guarantees no client-termination side effect regardless. The fixture source stays clean.
+    Passing it (false) alongside a real project + non-existent applicationId is still rejected at
+    the application lookup BEFORE the apply phase — so neither the destructive update() nor the
+    client-freeing sweep runs. This is a platform-boundary test: it proves the parameter is PARSED
+    and the resolution chain still reaches getApplication() with an un-mangled id, NOT that the
+    sweep itself works (the sweep needs a live launch + infobase and is verify-live-only). The
+    fixture source stays clean on every path.
     """
     r = call("update_database", {
         "projectName": PROJECT,
@@ -118,6 +120,11 @@ def test_terminate_running_clients_param_accepted_without_mutation():
         "terminateRunningClients": False,
     })
     e = assert_error(r, "real project + non-existent applicationId + terminateRunningClients=false")
+    # Same quality bar as the twin happy test: prove execution reached getApplication() with the
+    # un-mangled id (names=[BOGUS_APP_ID]) and stayed actionable (suggests=[get_applications]) —
+    # without it, any "Application not found"-ish text would pass without proving real resolution.
+    assert_error_quality(e, names=[BOGUS_APP_ID], suggests=["get_applications"],
+                         ctx="param-accepted path still names the bad id and suggests get_applications")
     assert_contains(e, "Application not found",
                     "the terminateRunningClients param must not change the application-lookup rejection")
     assert_no_diff("a rejected update (even with terminateRunningClients) must not touch the project on disk")

@@ -3164,7 +3164,7 @@
           "type": "boolean"
         },
         "terminatedClient": {
-          "description": "true when a running 1C client holding the infobase was terminated before the update (only when terminateRunningClients=true).",
+          "description": "Present and true ONLY when an applied update (confirm=true) terminated a running client to free the infobase; absent otherwise (preview, opt-out, or no running client).",
           "type": "boolean"
         },
         "updateType": {

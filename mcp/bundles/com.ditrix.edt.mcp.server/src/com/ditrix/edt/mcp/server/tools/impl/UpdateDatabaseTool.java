@@ -99,8 +99,9 @@ public class UpdateDatabaseTool implements IMcpTool
             .stringProperty("stateAfter", "Application update state after the update.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable status message for the update.") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("terminatedClient", //$NON-NLS-1$
-                "true when a running 1C client holding the infobase was terminated before the update " //$NON-NLS-1$
-                + "(only when terminateRunningClients=true).") //$NON-NLS-1$
+                "Present and true ONLY when an applied update (confirm=true) terminated a running " //$NON-NLS-1$
+                + "client to free the infobase; absent otherwise (preview, opt-out, or no running " //$NON-NLS-1$
+                + "client).") //$NON-NLS-1$
             .booleanProperty("willTerminateRunningClients", //$NON-NLS-1$
                 "On a preview: whether confirm=true would first terminate a running client " //$NON-NLS-1$
                 + "(reflects terminateRunningClients).") //$NON-NLS-1$
@@ -199,6 +200,7 @@ public class UpdateDatabaseTool implements IMcpTool
             boolean fullUpdate, boolean autoRestructure, boolean confirm,
             boolean terminateRunningClients)
     {
+        boolean terminatedClient = false;
         try
         {
             ProjectContext ctx = ProjectContext.of(projectName);
@@ -268,22 +270,6 @@ public class UpdateDatabaseTool implements IMcpTool
                     .toJson();
             }
 
-            // Free the infobase before updating. A 1C client THIS EDT launched holds the IB in
-            // exclusive use (so the update blocks/fails) and caches the old module version (it keeps
-            // running stale code even after a successful publish). Reuse the launch path's
-            // battle-tested sweep — client-typed-thread discriminated (never touches a debug-server
-            // session) and exempting MCP-owned launches. Runs only on confirm=true, never in preview.
-            boolean terminatedClient = false;
-            if (terminateRunningClients)
-            {
-                terminatedClient = LaunchLifecycleUtils.ensureNoExistingClientSession(project, applicationId);
-                if (terminatedClient)
-                {
-                    Activator.logInfo("Update database: terminated a running client to free the " //$NON-NLS-1$
-                        + "infobase: project=" + projectName + ", application=" + applicationId); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
-
             // Create execution context with the active Shell so EDT can parent
             // its dialogs. Shared SWT-grab lives in LaunchLifecycleUtils.
             ExecutionContext context = new ExecutionContext();
@@ -297,14 +283,36 @@ public class UpdateDatabaseTool implements IMcpTool
                     ", application=" + applicationId +  //$NON-NLS-1$
                     ", type=" + updateType +  //$NON-NLS-1$
                     ", autoRestructure=" + autoRestructure); //$NON-NLS-1$
-            
-            // Create progress monitor
+
             IProgressMonitor monitor = new NullProgressMonitor();
-            
-            // Perform update
-            ApplicationUpdateState stateAfter = appManager.update(application, updateType, context, monitor);
-            
-            // Build result
+
+            // Free the infobase and apply the update under the SAME per-IB lock the launch path
+            // uses (LaunchLifecycleUtils.lockFor), so a concurrent run_yaxunit_tests / debug_launch
+            // on this infobase cannot interleave its own terminate+update (two updates racing, or a
+            // freshly-freed IB grabbed by a new client between the sweep and update()). A 1C client
+            // THIS EDT launched holds the IB in exclusive use (the update fails) and caches the old
+            // module version (stale code even after a successful publish); the reused sweep is
+            // client-typed-thread discriminated (never a debug-server session) and exempts MCP-owned
+            // launches. Runs only on confirm=true, never in preview.
+            ApplicationUpdateState stateAfter;
+            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+            {
+                if (terminateRunningClients)
+                {
+                    terminatedClient =
+                        LaunchLifecycleUtils.ensureNoExistingClientSession(project, applicationId);
+                    if (terminatedClient)
+                    {
+                        Activator.logInfo("Update database: terminated a running client to free the " //$NON-NLS-1$
+                            + "infobase: project=" + projectName + ", application=" + applicationId); //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                }
+                stateAfter = appManager.update(application, updateType, context, monitor);
+            }
+
+            // Build result. terminatedClient is emitted ONLY when a client was actually terminated
+            // (truthful; "swept but none / not confirmed" and opt-out are indistinguishable by
+            // absence — the confirmationRequired idiom).
             ToolResult result = ToolResult.success()
                 .put("action", "updated") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("project", projectName) //$NON-NLS-1$
@@ -312,8 +320,11 @@ public class UpdateDatabaseTool implements IMcpTool
                 .put("applicationName", application.getName()) //$NON-NLS-1$
                 .put("updateType", updateType.name()) //$NON-NLS-1$
                 .put("stateBefore", stateBefore.name()) //$NON-NLS-1$
-                .put("stateAfter", stateAfter.name()) //$NON-NLS-1$
-                .put("terminatedClient", terminatedClient); //$NON-NLS-1$
+                .put("stateAfter", stateAfter.name()); //$NON-NLS-1$
+            if (terminatedClient)
+            {
+                result.put("terminatedClient", true); //$NON-NLS-1$
+            }
             
             // Add status message based on result
             if (stateAfter == ApplicationUpdateState.UPDATED)
@@ -335,11 +346,18 @@ public class UpdateDatabaseTool implements IMcpTool
         {
             Activator.logError("Error updating database for application: " + applicationId, e); //$NON-NLS-1$
             
-            // Return detailed error information
-            ToolResult errorResult = ToolResult.error("Database update failed: " + e.getMessage()); //$NON-NLS-1$
+            // The common failure is the exclusive lock: name a 1C client that still holds the
+            // infobase (an MCP-owned sibling launch is exempt from the sweep, or a client outlived
+            // the terminate window) so the agent can act instead of seeing a bare failure.
+            ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
+                + e.getMessage() + describeInfobaseHolder(applicationId));
             errorResult.put("applicationId", applicationId); //$NON-NLS-1$
             errorResult.put("projectName", projectName); //$NON-NLS-1$
-            
+            if (terminatedClient)
+            {
+                errorResult.put("terminatedClient", true); //$NON-NLS-1$
+            }
+
             // Try to get additional error details
             if (e.getCause() != null)
             {
@@ -352,7 +370,40 @@ public class UpdateDatabaseTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Unexpected error during database update", e); //$NON-NLS-1$
-            return ToolResult.error("Unexpected error: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            ToolResult errorResult = ToolResult.error("Unexpected error: " + e.getMessage()); //$NON-NLS-1$
+            if (terminatedClient)
+            {
+                errorResult.put("terminatedClient", true); //$NON-NLS-1$
+            }
+            return errorResult.toJson();
         }
+    }
+
+    /**
+     * Best-effort hint naming a 1C client that still holds the infobase, appended to the
+     * exclusive-lock failure message: an MCP-owned sibling launch (exempt from the auto-sweep)
+     * or a client that outlived the terminate window. Empty string when none is resolvable, so
+     * the base error message is unchanged.
+     */
+    private static String describeInfobaseHolder(String applicationId)
+    {
+        try
+        {
+            LaunchLifecycleUtils.ExistingClientSession holder =
+                LaunchLifecycleUtils.resolveExistingClientSession(applicationId);
+            if (holder != null && holder.launch != null)
+            {
+                String name = holder.launch.getLaunchConfiguration() != null
+                    ? holder.launch.getLaunchConfiguration().getName() : "<unknown>"; //$NON-NLS-1$
+                return " A 1C client still holds the infobase (launch '" + name //$NON-NLS-1$
+                    + "'); if it is an MCP-owned session, stop it with terminate_launch " //$NON-NLS-1$
+                    + "(force=true) and retry."; //$NON-NLS-1$
+            }
+        }
+        catch (Exception ignore)
+        {
+            // best-effort hint only — never let it mask the real error
+        }
+        return ""; //$NON-NLS-1$
     }
 }

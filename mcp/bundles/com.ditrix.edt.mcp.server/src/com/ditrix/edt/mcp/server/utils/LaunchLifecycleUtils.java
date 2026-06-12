@@ -1791,8 +1791,13 @@ public final class LaunchLifecycleUtils
      * delegate's modal is the armed auto-confirmer's job. Callers must only ever pass
      * a target the type-aware discriminator matched as a CLIENT — never a server
      * target.
+     *
+     * @return {@code true} when the target was observed terminated within
+     *     {@link #RESTART_TERMINATE_TIMEOUT_MS}; {@code false} on a {@code null} target or
+     *     when the wait elapsed without confirming death (a warning is logged) — callers
+     *     must NOT report "terminated" on a {@code false} return.
      */
-    public static void terminateExistingSessionAndWait(IDebugTarget target, String appId)
+    public static boolean terminateExistingSessionAndWait(IDebugTarget target, String appId)
     {
         if (target == null)
         {
@@ -1800,7 +1805,7 @@ public final class LaunchLifecycleUtils
             {
                 DebugSessionRegistry.get().forgetApplication(appId);
             }
-            return;
+            return false;
         }
         try
         {
@@ -1813,6 +1818,7 @@ public final class LaunchLifecycleUtils
         {
             Activator.logError("Error terminating existing debug session before restart", e); //$NON-NLS-1$
         }
+        boolean terminated = false;
         long deadline = System.currentTimeMillis() + RESTART_TERMINATE_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline)
         {
@@ -1820,6 +1826,7 @@ public final class LaunchLifecycleUtils
             {
                 if (target.isTerminated())
                 {
+                    terminated = true;
                     break;
                 }
             }
@@ -1837,10 +1844,17 @@ public final class LaunchLifecycleUtils
                 break;
             }
         }
+        if (!terminated)
+        {
+            Activator.logWarning("Existing client debug session did not confirm termination within " //$NON-NLS-1$
+                + RESTART_TERMINATE_TIMEOUT_MS + "ms (applicationId=" + appId //$NON-NLS-1$
+                + ") — the infobase may still be held"); //$NON-NLS-1$
+        }
         if (appId != null && !appId.isEmpty())
         {
             DebugSessionRegistry.get().forgetApplication(appId);
         }
+        return terminated;
     }
 
     /**
@@ -1849,8 +1863,13 @@ public final class LaunchLifecycleUtils
      * to die, then clears the registry for {@code appId} — the launch analogue of
      * {@link #terminateExistingSessionAndWait}. Best-effort: a failure is logged, not
      * thrown; the caller proceeds to launch regardless.
+     *
+     * @return {@code true} when the launch was observed terminated within
+     *     {@link #RESTART_TERMINATE_TIMEOUT_MS}; {@code false} on a {@code null} launch or
+     *     when the wait elapsed without confirming death (a warning is logged) — callers
+     *     must NOT report "terminated" on a {@code false} return.
      */
-    public static void terminateExistingLaunchAndWait(ILaunch launch, String appId)
+    public static boolean terminateExistingLaunchAndWait(ILaunch launch, String appId)
     {
         if (launch == null)
         {
@@ -1858,7 +1877,7 @@ public final class LaunchLifecycleUtils
             {
                 DebugSessionRegistry.get().forgetApplication(appId);
             }
-            return;
+            return false;
         }
         try
         {
@@ -1871,6 +1890,7 @@ public final class LaunchLifecycleUtils
         {
             Activator.logError("Error terminating existing launch before restart", e); //$NON-NLS-1$
         }
+        boolean terminated = false;
         long deadline = System.currentTimeMillis() + RESTART_TERMINATE_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline)
         {
@@ -1878,6 +1898,7 @@ public final class LaunchLifecycleUtils
             {
                 if (launch.isTerminated())
                 {
+                    terminated = true;
                     break;
                 }
             }
@@ -1895,10 +1916,17 @@ public final class LaunchLifecycleUtils
                 break;
             }
         }
+        if (!terminated)
+        {
+            Activator.logWarning("Existing client launch did not confirm termination within " //$NON-NLS-1$
+                + RESTART_TERMINATE_TIMEOUT_MS + "ms (applicationId=" + appId //$NON-NLS-1$
+                + ") — the infobase may still be held"); //$NON-NLS-1$
+        }
         if (appId != null && !appId.isEmpty())
         {
             DebugSessionRegistry.get().forgetApplication(appId);
         }
+        return terminated;
     }
 
     /**
@@ -1996,16 +2024,9 @@ public final class LaunchLifecycleUtils
         // (catches UI-started "Debug As" sessions the ILaunchManager never sees).
         if (project != null)
         {
-            IDebugTarget existing = DebugServerTargetSupport.findRuntimeClientDebugTarget(
-                project.getName(), delegateAppId);
-            if (existing != null)
-            {
-                Activator.logInfo("Fresh-launch guard: terminating existing client session from " //$NON-NLS-1$
-                    + "the debug target manager (e.g. UI-started 'Debug As'): applicationId=" //$NON-NLS-1$
-                    + delegateAppId);
-                terminateExistingSessionAndWait(existing, delegateAppId);
-                terminatedAny = true;
-            }
+            terminatedAny |= sweepTargetManagerSession(
+                DebugServerTargetSupport.findRuntimeClientDebugTarget(project.getName(), delegateAppId),
+                delegateAppId);
         }
         return terminatedAny;
     }
@@ -2053,14 +2074,47 @@ public final class LaunchLifecycleUtils
         {
             Activator.logInfo("Fresh-launch guard: terminating existing client debug target: " //$NON-NLS-1$
                 + "applicationId=" + delegateAppId); //$NON-NLS-1$
-            terminateExistingSessionAndWait(session.liveTarget, delegateAppId);
+            return terminateExistingSessionAndWait(session.liveTarget, delegateAppId);
         }
-        else
+        Activator.logInfo("Fresh-launch guard: terminating existing client launch (mode=" //$NON-NLS-1$
+            + session.mode + "): applicationId=" + delegateAppId); //$NON-NLS-1$ //$NON-NLS-2$
+        return terminateExistingLaunchAndWait(session.launch, delegateAppId);
+    }
+
+    /**
+     * Handles the debug-target-manager half of {@link #ensureNoExistingClientSession}: the
+     * {@code IRuntimeDebugClientTargetManager} can surface a UI-started "Debug As" client the
+     * {@link ILaunchManager} never sees. Mirrors {@link #sweepLaunchManagerSession} — a target
+     * whose owning {@link ILaunch} is MCP-owned ({@link #registerOwnedLaunch}) is SKIPPED
+     * (managed by its own tool), closing the gap where a concurrent MCP DEBUG session on the
+     * same infobase was silently terminated; any other (UI-started / foreign) client is
+     * terminated. Returns whether termination was CONFIRMED, not merely attempted.
+     *
+     * <p>Package-visible so the owned-vs-foreign decision is unit-testable without a live
+     * target manager.
+     *
+     * @param existing the target resolved by {@code findRuntimeClientDebugTarget} (may be
+     *     {@code null} — no-op)
+     * @param delegateAppId the delegate-resolved application id (registry cleanup + logging)
+     * @return {@code true} when a foreign client target was confirmed terminated; {@code false}
+     *     when none, skipped as MCP-owned, or termination did not confirm
+     */
+    static boolean sweepTargetManagerSession(IDebugTarget existing, String delegateAppId)
+    {
+        if (existing == null)
         {
-            Activator.logInfo("Fresh-launch guard: terminating existing client launch (mode=" //$NON-NLS-1$
-                + session.mode + "): applicationId=" + delegateAppId); //$NON-NLS-1$ //$NON-NLS-2$
-            terminateExistingLaunchAndWait(session.launch, delegateAppId);
+            return false;
         }
-        return true;
+        if (isOwnedLaunch(existing.getLaunch()))
+        {
+            Activator.logInfo("Fresh-launch guard: skipping MCP-owned debug session from the " //$NON-NLS-1$
+                + "debug target manager; it is managed by its own tool: applicationId=" //$NON-NLS-1$
+                + delegateAppId);
+            return false;
+        }
+        Activator.logInfo("Fresh-launch guard: terminating existing client session from " //$NON-NLS-1$
+            + "the debug target manager (e.g. UI-started 'Debug As'): applicationId=" //$NON-NLS-1$
+            + delegateAppId);
+        return terminateExistingSessionAndWait(existing, delegateAppId);
     }
 }

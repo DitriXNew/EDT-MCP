@@ -40,7 +40,7 @@ Pass `terminateRunningClients=false` to keep the client running; then the old ma
 
 ## Result
 
-JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCREMENTAL), `stateBefore`, `stateAfter`, `terminatedClient` (true if a running client was terminated to free the infobase) and a `message`. A successful run reports `stateAfter = UPDATED`. If the application is already BEING_UPDATED the tool returns an error and you should wait.
+JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCREMENTAL), `stateBefore`, `stateAfter` and a `message`. `terminatedClient: true` is present ONLY when a running client was actually terminated to free the infobase (absent on a preview, on opt-out, or when no client was running). A successful run reports `stateAfter = UPDATED`. If the application is already BEING_UPDATED the tool returns an error and you should wait.
 
 ## Gotchas
 
