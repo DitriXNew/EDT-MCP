@@ -352,7 +352,7 @@ public class UpdateDatabaseTool implements IMcpTool
             ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
                 + e.getMessage() + describeInfobaseHolder(applicationId));
             errorResult.put("applicationId", applicationId); //$NON-NLS-1$
-            errorResult.put("projectName", projectName); //$NON-NLS-1$
+            errorResult.put("project", projectName); //$NON-NLS-1$
             if (terminatedClient)
             {
                 errorResult.put("terminatedClient", true); //$NON-NLS-1$

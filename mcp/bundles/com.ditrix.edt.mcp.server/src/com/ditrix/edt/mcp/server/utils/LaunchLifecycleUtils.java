@@ -1799,6 +1799,17 @@ public final class LaunchLifecycleUtils
      */
     public static boolean terminateExistingSessionAndWait(IDebugTarget target, String appId)
     {
+        return terminateExistingSessionAndWait(target, appId, RESTART_TERMINATE_TIMEOUT_MS);
+    }
+
+    /**
+     * Timeout-parameterized seam of {@link #terminateExistingSessionAndWait(IDebugTarget, String)}
+     * — package-private so the headless test can exercise the timeout-elapsed path without
+     * waiting out the full production window. Production callers always go through the public
+     * overload ({@link #RESTART_TERMINATE_TIMEOUT_MS}).
+     */
+    static boolean terminateExistingSessionAndWait(IDebugTarget target, String appId, long timeoutMs)
+    {
         if (target == null)
         {
             if (appId != null && !appId.isEmpty())
@@ -1819,7 +1830,7 @@ public final class LaunchLifecycleUtils
             Activator.logError("Error terminating existing debug session before restart", e); //$NON-NLS-1$
         }
         boolean terminated = false;
-        long deadline = System.currentTimeMillis() + RESTART_TERMINATE_TIMEOUT_MS;
+        long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline)
         {
             try
@@ -1847,7 +1858,7 @@ public final class LaunchLifecycleUtils
         if (!terminated)
         {
             Activator.logWarning("Existing client debug session did not confirm termination within " //$NON-NLS-1$
-                + RESTART_TERMINATE_TIMEOUT_MS + "ms (applicationId=" + appId //$NON-NLS-1$
+                + timeoutMs + "ms (applicationId=" + appId //$NON-NLS-1$
                 + ") — the infobase may still be held"); //$NON-NLS-1$
         }
         if (appId != null && !appId.isEmpty())

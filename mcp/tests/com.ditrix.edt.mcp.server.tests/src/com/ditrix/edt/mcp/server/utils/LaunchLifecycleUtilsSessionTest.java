@@ -526,14 +526,15 @@ public class LaunchLifecycleUtilsSessionTest
     @Test
     public void testTerminateExistingSessionAndWaitReturnsFalseOnTimeout() throws Exception
     {
-        // A client that never reports terminated within RESTART_TERMINATE_TIMEOUT_MS: the helper
-        // must NOT claim success — it returns false (and logs a warning) so update_database does not
-        // report a client as terminated while it may still hold the infobase exclusively. (Waits
-        // out the terminate window once.)
+        // A client that never reports terminated within the wait window: the helper must NOT
+        // claim success — it returns false (and logs a warning) so update_database does not
+        // report a client as terminated while it may still hold the infobase exclusively.
+        // Exercised through the timeout-parameterized seam with a short window (one genuine
+        // poll+sleep iteration) instead of waiting out the production 3s timeout.
         IDebugTarget client = targetWithThreads(liveThread());
         when(client.canTerminate()).thenReturn(true);
         when(client.isTerminated()).thenReturn(false);
-        assertFalse(LaunchLifecycleUtils.terminateExistingSessionAndWait(client, "app-stuck")); //$NON-NLS-1$
+        assertFalse(LaunchLifecycleUtils.terminateExistingSessionAndWait(client, "app-stuck", 150L)); //$NON-NLS-1$
     }
 
     @Test
