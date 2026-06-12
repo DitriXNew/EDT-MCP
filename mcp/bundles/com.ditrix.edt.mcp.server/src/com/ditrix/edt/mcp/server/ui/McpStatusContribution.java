@@ -41,8 +41,15 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
  */
 public class McpStatusContribution extends WorkbenchWindowControlContribution
 {
-    /** Width hint for the status label to accommodate full tool names */
-    private static final int STATUS_LABEL_WIDTH_HINT = 200;
+    /**
+     * Width hint for the counter label cell. The status bar trim allocates space once at creation,
+     * so this reserve (placed after the counter text) keeps room for long tool names in the status
+     * label and for the growing request counter without clipping.
+     */
+    private static final int COUNTER_LABEL_WIDTH_HINT = 200;
+
+    /** Minimum width for the counter label cell so the timer/counter stays visible when space is tight */
+    private static final int COUNTER_LABEL_MIN_WIDTH = 56;
     
     /** Maximum length for tool name display before truncation */
     private static final int TOOL_NAME_MAX_LENGTH = 25;
@@ -119,8 +126,8 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         font = new Font(originalFont.getDevice(), fontData);
         statusLabel.setFont(font);
         
-        GridData statusGd = new GridData(SWT.CENTER, SWT.CENTER, true, true);
-        statusGd.widthHint = STATUS_LABEL_WIDTH_HINT;
+        // Left-aligned, sized by its text: the counter follows right after, all spare width goes after the counter
+        GridData statusGd = new GridData(SWT.BEGINNING, SWT.CENTER, false, true);
         statusLabel.setLayoutData(statusGd);
         
         // Create counter label [N]
@@ -128,7 +135,11 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         counterLabel.setText("[0]"); //$NON-NLS-1$
         counterLabel.setFont(font);
         
-        GridData counterGd = new GridData(SWT.CENTER, SWT.CENTER, true, true);
+        // The counter sits right after the status text; the width reserve trails after it,
+        // so neither the counter nor a long tool name ever gets clipped at the trim edge
+        GridData counterGd = new GridData(SWT.BEGINNING, SWT.CENTER, true, true);
+        counterGd.widthHint = COUNTER_LABEL_WIDTH_HINT;
+        counterGd.minimumWidth = COUNTER_LABEL_MIN_WIDTH;
         counterLabel.setLayoutData(counterGd);
         
         // Force redraw
@@ -560,7 +571,7 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             {
                 long minutes = executionSeconds / 60;
                 long seconds = executionSeconds % 60;
-                String timeStr = String.format("%02d:%02d        ", minutes, seconds); //$NON-NLS-1$
+                String timeStr = String.format("%02d:%02d", minutes, seconds); //$NON-NLS-1$
                 counterLabel.setText(timeStr);
             }
             else
