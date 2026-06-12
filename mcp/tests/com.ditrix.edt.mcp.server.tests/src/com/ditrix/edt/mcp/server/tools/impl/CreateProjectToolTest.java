@@ -258,6 +258,43 @@ public class CreateProjectToolTest
         assertTrue("error must mention 'baseProjectName'", result.contains("baseProjectName")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * FIX 1: invalid scriptVariant value must be rejected immediately (before any EDT
+     * service lookup) with an error naming the bad value and the two allowed values.
+     * <p>
+     * This validation fires in {@code execute()} for non-extension kinds, before dispatch
+     * to the kind-specific handler, so it is headless-safe.
+     */
+    @Test
+    public void testInvalidScriptVariantConfigurationErrors()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectKind", "configuration"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("name", "MyConfig"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("scriptVariant", "Frenglish"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateProjectTool().execute(params);
+        assertNotNull(result);
+        assertTrue("invalid scriptVariant must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the bad value", result.contains("Frenglish")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the allowed values", //$NON-NLS-1$
+            result.contains("Russian") && result.contains("English")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testInvalidScriptVariantExternalObjectsErrors()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectKind", "externalObjects"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("name", "MyExternal"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("scriptVariant", "Frenglish"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateProjectTool().execute(params);
+        assertNotNull(result);
+        assertTrue("invalid scriptVariant must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the bad value", result.contains("Frenglish")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the allowed values", //$NON-NLS-1$
+            result.contains("Russian") && result.contains("English")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     @Test
     public void testHeadlessExecutionConfigurationReturnsError()
     {

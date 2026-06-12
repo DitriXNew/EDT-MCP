@@ -59,7 +59,7 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
 - **version** (optional): platform version string. Default: `Version.LATEST`.
 - **scriptVariant** (optional, `Russian` or `English`): applied post-create via
   `IExternalObjectProjectManager.setScriptVariant`. Non-fatal on failure (see
-  `synonymNote` in response).
+  `scriptVariantNote` in response).
 - **baseProjectName**, **prefix**, **purpose**, **compatibilityMode**, **synonym**,
   **comment**: all REJECTED for this kind.
 
@@ -144,8 +144,10 @@ On success the response includes:
   indexed); `created` when the timeout elapsed before STARTED.
 - `codestyle` — `{applied: bool, note: string, autoSortNote: string}` reporting the
   v8codestyle preference write result.
-- `synonymNote` — present when the synonym (or externalObjects scriptVariant) could not
-  be applied.
+- `synonymNote` — present only when the synonym (configuration/extension) could not be
+  applied (no resolvable language code).
+- `scriptVariantNote` — present only when the requested `scriptVariant` could not be
+  applied for `externalObjects` (post-create `setScriptVariant` failed or was skipped).
 
 ## Gotchas
 
@@ -165,5 +167,5 @@ On success the response includes:
   Language (Russian/`ru` or English/`en` per `scriptVariant`). This matches the EDT wizard
   behavior; passing `null` would produce a project with validation errors.
 - **externalObjects scriptVariant is post-create and non-fatal.** If `setScriptVariant`
-  fails after lifecycle wait, the project is still created. Check `synonymNote` in the
-  response for details.
+  fails after lifecycle wait, the project is still created. Check `scriptVariantNote` in
+  the response for details.

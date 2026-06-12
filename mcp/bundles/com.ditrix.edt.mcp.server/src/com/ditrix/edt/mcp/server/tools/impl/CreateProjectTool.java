@@ -71,7 +71,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  *       {@link IExternalObjectProjectManager#setScriptVariant} after lifecycle wait
  *       (non-fatal on failure).</li>
  *   <li>Optionally applies v8codestyle {@code standardChecks}/{@code commonChecks}
- *       preferences when the {@code com.e1c.v8codestyle} bundle is active (guarded —
+ *       preferences when the {@code com.e1c.v8codestyle} bundle is installed (guarded —
  *       no compile dependency).</li>
  * </ol>
  *
@@ -302,6 +302,16 @@ public class CreateProjectTool implements IMcpTool
                 "'scriptVariant' is not valid for projectKind=extension: " //$NON-NLS-1$
                     + "the extension always inherits the scriptVariant from the base configuration. " //$NON-NLS-1$
                     + "Remove the 'scriptVariant' parameter.").toJson(); //$NON-NLS-1$
+        }
+
+        // Strict scriptVariant validation: must be exactly "Russian" or "English" (case-insensitive)
+        // when supplied for configuration or externalObjects.
+        if (!isExtension && scriptVariantStr != null && !scriptVariantStr.isEmpty()
+            && !"Russian".equalsIgnoreCase(scriptVariantStr) //$NON-NLS-1$
+            && !"English".equalsIgnoreCase(scriptVariantStr)) //$NON-NLS-1$
+        {
+            return ToolResult.error("Invalid scriptVariant value: '" + scriptVariantStr //$NON-NLS-1$
+                + "'. Allowed values: 'Russian', 'English'.").toJson(); //$NON-NLS-1$
         }
 
         // 4. Validate 'name'
@@ -940,7 +950,10 @@ public class CreateProjectTool implements IMcpTool
                     + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists)."); //$NON-NLS-1$
             if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
             {
-                slowResult.put("scriptVariant", scriptVariantStr); //$NON-NLS-1$
+                // Emit canonical literal (normalized from user input casing)
+                ScriptVariant slowSv = "Russian".equalsIgnoreCase(scriptVariantStr) //$NON-NLS-1$
+                    ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
+                slowResult.put("scriptVariant", slowSv.getLiteral()); //$NON-NLS-1$
                 String slowScriptNote =
                     "setScriptVariant skipped: creation exceeded the wait window; set the project preferences manually if needed."; //$NON-NLS-1$
                 slowResult.put("scriptVariantNote", slowScriptNote); //$NON-NLS-1$
@@ -965,15 +978,15 @@ public class CreateProjectTool implements IMcpTool
         String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], "externalObjects"); //$NON-NLS-1$
 
         // Post-create: apply scriptVariant if supplied (non-fatal on failure)
+        // Input is guaranteed "Russian" or "English" (case-insensitive) by the shared validation above.
         String scriptVariantNote = null;
-        String effectiveScriptVariantStr = scriptVariantStr;
-        if (effectiveScriptVariantStr != null && !effectiveScriptVariantStr.isEmpty())
+        ScriptVariant requestedSv = null;
+        if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
         {
+            requestedSv = "Russian".equalsIgnoreCase(scriptVariantStr) //$NON-NLS-1$
+                ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
             try
             {
-                boolean isRussian = "Russian".equalsIgnoreCase(effectiveScriptVariantStr); //$NON-NLS-1$
-                ScriptVariant sv = isRussian ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
-
                 IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
                 IProject newIProject = createdHolder[0] != null ? createdHolder[0]
                     : ProjectContext.of(finalEffectiveProjectName).project();
@@ -982,7 +995,7 @@ public class CreateProjectTool implements IMcpTool
                     IV8Project v8project = v8ProjectManager.getProject(newIProject);
                     if (v8project instanceof IExternalObjectProject)
                     {
-                        extObjMgr.setScriptVariant((IExternalObjectProject) v8project, sv,
+                        extObjMgr.setScriptVariant((IExternalObjectProject) v8project, requestedSv,
                             new NullProgressMonitor());
                     }
                     else
@@ -1016,9 +1029,10 @@ public class CreateProjectTool implements IMcpTool
             .put("state", projectState) //$NON-NLS-1$
             .put("codestyle", codestyleMap) //$NON-NLS-1$
             .put("message", message); //$NON-NLS-1$
-        if (effectiveScriptVariantStr != null && !effectiveScriptVariantStr.isEmpty())
+        if (requestedSv != null)
         {
-            result.put("scriptVariant", effectiveScriptVariantStr); //$NON-NLS-1$
+            // Emit the canonical ScriptVariant literal (normalized from user input casing)
+            result.put("scriptVariant", requestedSv.getLiteral()); //$NON-NLS-1$
         }
         if (scriptVariantNote != null)
         {
