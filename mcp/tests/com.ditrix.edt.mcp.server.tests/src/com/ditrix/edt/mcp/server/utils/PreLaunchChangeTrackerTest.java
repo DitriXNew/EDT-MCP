@@ -7,12 +7,16 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -68,7 +72,9 @@ public class PreLaunchChangeTrackerTest
     public void testPreparedProjectIsClean()
     {
         IProject project = mockProject("Config");
-        PreLaunchChangeTracker.markPrepared(Collections.singletonList(project));
+        java.util.List<IProject> list = Collections.singletonList(project);
+        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(list);
+        PreLaunchChangeTracker.markPrepared(list, snapshot);
         assertFalse("a prepared project with no subsequent change must be clean",
             PreLaunchChangeTracker.isDirty(project));
     }
@@ -77,8 +83,8 @@ public class PreLaunchChangeTrackerTest
     public void testMarkPreparedNullCollectionIsNoOp()
     {
         // Must not throw when null or null entries are passed.
-        PreLaunchChangeTracker.markPrepared(null);
-        PreLaunchChangeTracker.markPrepared(Collections.singletonList(null));
+        PreLaunchChangeTracker.markPrepared(null, null);
+        PreLaunchChangeTracker.markPrepared(Collections.singletonList(null), null);
     }
 
     // =========================================================================
@@ -86,10 +92,12 @@ public class PreLaunchChangeTrackerTest
     // =========================================================================
 
     @Test
-    public void testFilChangeAfterPrepareRedirties()
+    public void testFileChangeAfterPrepareRedirties()
     {
         IProject project = mockProject("Config");
-        PreLaunchChangeTracker.markPrepared(Collections.singletonList(project));
+        java.util.List<IProject> list = Collections.singletonList(project);
+        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(list);
+        PreLaunchChangeTracker.markPrepared(list, snapshot);
         assertFalse("clean after prepare", PreLaunchChangeTracker.isDirty(project));
 
         PreLaunchChangeTracker.markDirtyForTest("Config");
@@ -107,7 +115,9 @@ public class PreLaunchChangeTrackerTest
         PreLaunchChangeTracker.markDirtyForTest("Config");
         assertTrue("dirty after explicit mark", PreLaunchChangeTracker.isDirty(project));
 
-        PreLaunchChangeTracker.markPrepared(Collections.singletonList(project));
+        java.util.List<IProject> list = Collections.singletonList(project);
+        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(list);
+        PreLaunchChangeTracker.markPrepared(list, snapshot);
         assertFalse("markPrepared must clear the dirty flag", PreLaunchChangeTracker.isDirty(project));
     }
 
@@ -122,7 +132,9 @@ public class PreLaunchChangeTrackerTest
         IProject projectB = mockProject("Extension");
 
         // Prepare both first so neither is "never-prepared".
-        PreLaunchChangeTracker.markPrepared(Arrays.asList(projectA, projectB));
+        java.util.List<IProject> both = Arrays.asList(projectA, projectB);
+        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(both);
+        PreLaunchChangeTracker.markPrepared(both, snapshot);
         assertFalse("Config must be clean", PreLaunchChangeTracker.isDirty(projectA));
         assertFalse("Extension must be clean", PreLaunchChangeTracker.isDirty(projectB));
 
@@ -138,14 +150,82 @@ public class PreLaunchChangeTrackerTest
         IProject projectA = mockProject("Config");
         IProject projectB = mockProject("Extension");
 
-        PreLaunchChangeTracker.markPrepared(Arrays.asList(projectA, projectB));
+        java.util.List<IProject> both = Arrays.asList(projectA, projectB);
+        Map<String, Long> snapshotBoth = PreLaunchChangeTracker.snapshotDirty(both);
+        PreLaunchChangeTracker.markPrepared(both, snapshotBoth);
         PreLaunchChangeTracker.markDirtyForTest("Config");
         PreLaunchChangeTracker.markDirtyForTest("Extension");
 
         // Prepare only Config.
-        PreLaunchChangeTracker.markPrepared(Collections.singletonList(projectA));
+        java.util.List<IProject> onlyA = Collections.singletonList(projectA);
+        Map<String, Long> snapshotA = PreLaunchChangeTracker.snapshotDirty(onlyA);
+        PreLaunchChangeTracker.markPrepared(onlyA, snapshotA);
         assertFalse("Config must be clean after its own prepare", PreLaunchChangeTracker.isDirty(projectA));
         assertTrue("Extension must still be dirty (not in the prepare call)", PreLaunchChangeTracker.isDirty(projectB));
+    }
+
+    // =========================================================================
+    // Ordering-race regression (Finding 1): a new dirty event arriving DURING
+    // recompute must not be silently cleared by the subsequent markPrepared.
+    // =========================================================================
+
+    @Test
+    public void testDirtyEventDuringRecomputeKeepsProjectDirty()
+    {
+        // Setup: project has been prepared once (not never-prepared).
+        IProject project = mockProject("Config");
+        PreLaunchChangeTracker.markPreparedForTest("Config");
+
+        // Step 1: project is dirty before the recompute starts.
+        PreLaunchChangeTracker.markDirtyForTest("Config");
+        assertTrue("project must be dirty before snapshot", PreLaunchChangeTracker.isDirty(project));
+
+        // Step 2: snapshot is taken (simulates what recomputeAndSettleIfDirty does).
+        java.util.List<IProject> scope = Collections.singletonList(project);
+        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(scope);
+        assertNotNull("snapshot must capture the dirty entry", snapshot.get("Config"));
+
+        // Step 3: a NEW dirty event arrives DURING the recompute (higher generation).
+        PreLaunchChangeTracker.markDirtyForTest("Config");
+        Long genAfterNewChange = PreLaunchChangeTracker.getDirtyGenerationForTest("Config");
+        assertNotNull("DIRTY map must still hold the new generation", genAfterNewChange);
+        assertTrue("new generation must be higher than snapshot", genAfterNewChange > snapshot.get("Config"));
+
+        // Step 4: markPrepared is called with the STALE snapshot.
+        PreLaunchChangeTracker.markPrepared(scope, snapshot);
+
+        // The project must STILL be dirty — the conditional remove must have failed
+        // because the stored generation is now higher than the snapshot.
+        assertTrue("project must remain dirty after a change-during-recompute", PreLaunchChangeTracker.isDirty(project));
+        assertNotNull("DIRTY map entry must not have been removed", PreLaunchChangeTracker.getDirtyGenerationForTest("Config"));
+    }
+
+    // =========================================================================
+    // PrepInFlight double-start test (Finding 3): only one thread wins the
+    // started.compareAndSet(false, true) gate.
+    // =========================================================================
+
+    @Test
+    public void testPrepInFlightOnlyOneThreadWinsStartedCas()
+    {
+        // Two sequential CAS calls on the same entry — only the first wins.
+        LaunchLifecycleUtils.PrepInFlight entry =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+
+        AtomicBoolean firstWon = new AtomicBoolean(false);
+        AtomicBoolean secondWon = new AtomicBoolean(false);
+
+        if (entry.started.compareAndSet(false, true))
+        {
+            firstWon.set(true);
+        }
+        if (entry.started.compareAndSet(false, true))
+        {
+            secondWon.set(true);
+        }
+
+        assertTrue("first CAS must win", firstWon.get());
+        assertFalse("second CAS must NOT win — only one Job must be scheduled", secondWon.get());
     }
 
     // =========================================================================

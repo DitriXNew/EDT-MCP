@@ -7,9 +7,12 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -38,15 +41,31 @@ import com.ditrix.edt.mcp.server.Activator;
  * <p>Conservative first-launch rule: a project that has never been through a
  * successful prepare is treated as dirty so the very first run always
  * force-rebuilds, matching the pre-regression behaviour.
+ *
+ * <h3>Ordering-race fix (generation counters)</h3>
+ * <p>The dirty state is stored as a {@code ConcurrentHashMap<String, Long>}
+ * mapping project name to the generation number at the time of the last change.
+ * A global {@link AtomicLong} counter is incremented on every qualifying file
+ * change. The conditional remove in {@link #markPrepared(Collection, Map)} uses
+ * {@link ConcurrentHashMap#remove(Object, Object)} — which removes the entry
+ * ONLY when the stored generation still equals the snapshot value — so a change
+ * that arrives DURING a recompute keeps the project dirty after
+ * {@code markPrepared} returns instead of being silently discarded.
  */
 public final class PreLaunchChangeTracker
 {
     /**
-     * Projects known to have had at least one qualifying file change since the
-     * last successful prepare. Concurrent so listener and tool threads do not
-     * need broader synchronization.
+     * Per-project dirty generation. Maps project name to the generation counter
+     * value at the time of the LAST qualifying file change. Absent when the
+     * project is clean (was prepared and has had no subsequent change).
      */
-    private static final Set<String> DIRTY_PROJECTS = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentHashMap<String, Long> DIRTY = new ConcurrentHashMap<>();
+
+    /**
+     * Global change counter. Every qualifying file change increments this and
+     * stores the new value into {@link #DIRTY} for the affected project.
+     */
+    private static final AtomicLong GENERATION = new AtomicLong(0L);
 
     /**
      * Projects that have been through at least one successful prepare. A project
@@ -91,22 +110,34 @@ public final class PreLaunchChangeTracker
         ensureListenerInstalled();
         String name = project.getName();
         // Never-prepared projects are always dirty (conservative).
-        return !PREPARED_PROJECTS.contains(name) || DIRTY_PROJECTS.contains(name);
+        return !PREPARED_PROJECTS.contains(name) || DIRTY.containsKey(name);
     }
 
     /**
-     * Records that the given projects completed a successful pre-launch prepare.
-     * Clears their dirty flags and registers them as "prepared" so future calls
-     * without intervening file changes skip the expensive recompute.
+     * Takes a snapshot of the dirty-generation map for the given projects.
+     * Returns a new {@code Map<String, Long>} containing (name, generation)
+     * entries for every project in {@code projects} that is currently dirty
+     * (present in {@link #DIRTY}). Projects that are clean (absent from
+     * {@link #DIRTY}) and never-prepared projects (absent from
+     * {@link #PREPARED_PROJECTS}) are both included: never-prepared entries get
+     * generation {@code -1L} as a sentinel (distinct from any real counter value,
+     * which starts at 1).
      *
-     * @param projects projects whose dirty flags should be cleared (may be
-     *            {@code null} or contain {@code null} entries — all skipped)
+     * <p>This snapshot must be taken BEFORE the recompute begins so that any
+     * change arriving DURING the recompute is captured by a subsequent
+     * {@code DIRTY.put} with a HIGHER generation; the conditional
+     * {@link #markPrepared(Collection, Map)} will then leave that entry in place.
+     *
+     * @param projects scope to snapshot (may be {@code null} — returns empty map)
+     * @return a mutable map of (name, generation) entries; empty when all
+     *         projects are clean-and-prepared
      */
-    public static void markPrepared(Collection<IProject> projects)
+    public static Map<String, Long> snapshotDirty(Collection<IProject> projects)
     {
+        Map<String, Long> snapshot = new HashMap<>();
         if (projects == null)
         {
-            return;
+            return snapshot;
         }
         for (IProject project : projects)
         {
@@ -115,8 +146,75 @@ public final class PreLaunchChangeTracker
                 continue;
             }
             String name = project.getName();
-            PREPARED_PROJECTS.add(name);
-            DIRTY_PROJECTS.remove(name);
+            Long gen = DIRTY.get(name);
+            if (gen != null)
+            {
+                // Project is explicitly dirty: record its current generation.
+                snapshot.put(name, gen);
+            }
+            else if (!PREPARED_PROJECTS.contains(name))
+            {
+                // Never-prepared: dirty by the conservative first-launch rule.
+                // Sentinel generation -1 so markPrepared can add to PREPARED but
+                // cannot accidentally discard a real dirty entry (those have gen >= 1).
+                snapshot.put(name, -1L);
+            }
+        }
+        return snapshot;
+    }
+
+    /**
+     * Records that the given projects completed a successful pre-launch prepare.
+     *
+     * <p>For each project in {@code dirtySnapshot}:
+     * <ul>
+     *   <li>If the snapshot generation matches the CURRENT {@link #DIRTY} entry,
+     *       the entry is removed (conditional {@code ConcurrentHashMap.remove}).
+     *       If the generation already advanced (a change arrived DURING the
+     *       recompute), the entry is left in place so the project stays dirty for
+     *       the next launch.</li>
+     *   <li>If the snapshot held the sentinel {@code -1L} (never-prepared), no
+     *       {@code DIRTY} entry exists, so the conditional remove is a no-op.</li>
+     * </ul>
+     * Independently, ALL projects in {@code all} are unconditionally added to
+     * {@link #PREPARED_PROJECTS} — this records the first-ever successful prepare
+     * and clears the conservative never-prepared dirty rule, which is safe even
+     * when the project re-dirtied during the recompute (the DIRTY entry remains
+     * and {@link #isDirty} will still return {@code true} for it).
+     *
+     * @param all all projects that were in scope (dirty and clean); their
+     *            "never-prepared" flag is cleared unconditionally
+     * @param dirtySnapshot the snapshot returned by {@link #snapshotDirty} before
+     *            the recompute started; may be {@code null} (no conditional removes)
+     */
+    public static void markPrepared(Collection<IProject> all, Map<String, Long> dirtySnapshot)
+    {
+        if (all != null)
+        {
+            for (IProject project : all)
+            {
+                if (project != null)
+                {
+                    PREPARED_PROJECTS.add(project.getName());
+                }
+            }
+        }
+        if (dirtySnapshot == null)
+        {
+            return;
+        }
+        for (Map.Entry<String, Long> entry : dirtySnapshot.entrySet())
+        {
+            String name = entry.getKey();
+            long snapshotGen = entry.getValue();
+            if (snapshotGen >= 0L)
+            {
+                // Conditional remove: only succeeds when the DIRTY map still holds
+                // the SAME generation (no new change arrived during recompute).
+                DIRTY.remove(name, snapshotGen);
+            }
+            // sentinel (-1L): never-prepared — no DIRTY entry to remove; PREPARED
+            // already updated in the loop above.
         }
     }
 
@@ -228,8 +326,13 @@ public final class PreLaunchChangeTracker
      */
     static void resetForTest()
     {
-        DIRTY_PROJECTS.clear();
+        DIRTY.clear();
         PREPARED_PROJECTS.clear();
+        // Reset the generation counter so each test starts from a predictable
+        // baseline.  Values are always positive after the first real change
+        // (incrementAndGet starts at 1), so tests that compare generation values
+        // see consistent numbers.
+        GENERATION.set(0L);
     }
 
     /**
@@ -240,7 +343,7 @@ public final class PreLaunchChangeTracker
     {
         if (projectName != null)
         {
-            DIRTY_PROJECTS.add(projectName);
+            DIRTY.put(projectName, GENERATION.incrementAndGet());
         }
     }
 
@@ -253,8 +356,18 @@ public final class PreLaunchChangeTracker
         if (projectName != null)
         {
             PREPARED_PROJECTS.add(projectName);
-            DIRTY_PROJECTS.remove(projectName);
+            DIRTY.remove(projectName);
         }
+    }
+
+    /**
+     * Returns the current entry in the DIRTY map for the given project name, or
+     * {@code null} when the project is clean. Package-visible so tests can assert
+     * the generation counter directly.
+     */
+    static Long getDirtyGenerationForTest(String projectName)
+    {
+        return projectName != null ? DIRTY.get(projectName) : null;
     }
 
     // =========================================================================
@@ -289,7 +402,11 @@ public final class PreLaunchChangeTracker
                         IProject project = resource.getProject();
                         if (project != null)
                         {
-                            DIRTY_PROJECTS.add(project.getName());
+                            // Unconditional put-with-new-generation: a concurrent
+                            // markPrepared conditional-remove on the old generation
+                            // will fail and the project will remain dirty, which is
+                            // exactly correct.
+                            DIRTY.put(project.getName(), GENERATION.incrementAndGet());
                         }
                     }
                     return true; // keep walking children
