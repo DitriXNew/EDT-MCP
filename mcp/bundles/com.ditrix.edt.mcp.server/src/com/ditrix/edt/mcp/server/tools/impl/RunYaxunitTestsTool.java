@@ -869,8 +869,11 @@ public class RunYaxunitTestsTool implements IMcpTool
                             jobEntry.error = result.getError();
                         }
                     }
-                    catch (Exception e)
+                    catch (Throwable e)
                     {
+                        // Throwable, not Exception: an Error escaping the prep must still
+                        // surface as a prep failure — otherwise the retry call would see
+                        // done-without-error and proceed as if preparation succeeded.
                         jobEntry.error = e.getMessage() != null ? e.getMessage()
                             : e.getClass().getSimpleName();
                         Activator.logError("Pre-launch preparation job failed: " + projectName, e); //$NON-NLS-1$

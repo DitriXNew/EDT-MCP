@@ -1,6 +1,6 @@
 /**
  * MCP Server for EDT
- * Copyright (C) 2026 Diversus23 (https://github.com/Diversus23)
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
  */
 
