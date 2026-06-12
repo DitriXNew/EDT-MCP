@@ -16,6 +16,7 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
@@ -258,6 +259,17 @@ public class Activator extends AbstractUIPlugin
     public IMdRefactoringService getMdRefactoringService()
     {
         return services.getMdRefactoringService();
+    }
+
+    /**
+     * Returns the {@link IExtensionProjectManager} service used to create
+     * 1C configuration extension projects programmatically.
+     *
+     * @return extension project manager or null if not available
+     */
+    public IExtensionProjectManager getExtensionProjectManager()
+    {
+        return services.getExtensionProjectManager();
     }
 
     /**
