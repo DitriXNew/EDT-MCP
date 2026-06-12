@@ -65,6 +65,8 @@ public class UpdateDatabaseToolTest
         assertTrue(schema.contains("\"fullUpdate\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"autoRestructure\"")); //$NON-NLS-1$
         assertTrue("schema must declare the confirm gate", schema.contains("\"confirm\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("schema must declare the terminateRunningClients opt-out", //$NON-NLS-1$
+            schema.contains("\"terminateRunningClients\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -77,6 +79,19 @@ public class UpdateDatabaseToolTest
         assertTrue("outputSchema must declare action", schema.contains("\"action\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare confirmationRequired", //$NON-NLS-1$
             schema.contains("\"confirmationRequired\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresTerminateFields()
+    {
+        // The free-the-infobase behaviour reports terminatedClient on an applied update and
+        // willTerminateRunningClients on a preview, so a client can see the lock-freeing side effect.
+        String schema = new UpdateDatabaseTool().getOutputSchema();
+        assertNotNull(schema);
+        assertTrue("outputSchema must declare terminatedClient", //$NON-NLS-1$
+            schema.contains("\"terminatedClient\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare willTerminateRunningClients", //$NON-NLS-1$
+            schema.contains("\"willTerminateRunningClients\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -120,6 +135,17 @@ public class UpdateDatabaseToolTest
         assertTrue(guide.contains("exclusive")); //$NON-NLS-1$
         // fullUpdate/autoRestructure rationale migrated from the old schema descriptions.
         assertTrue(guide.contains("autoRestructure")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsTerminateRunningClients()
+    {
+        // The default-on free-the-infobase behaviour (and its opt-out) must be documented so an
+        // agent knows the tool now terminates a running client itself instead of failing on the lock.
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertNotNull(guide);
+        assertTrue("guide must document the terminateRunningClients parameter", //$NON-NLS-1$
+            guide.contains("terminateRunningClients")); //$NON-NLS-1$
     }
 
     @Test

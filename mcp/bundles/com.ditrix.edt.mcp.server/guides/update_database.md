@@ -25,10 +25,13 @@ After changing metadata/configuration, to push those changes into the running in
 - **fullUpdate** (boolean, default false) — true performs a FULL reload (complete rebuild), false performs an INCREMENTAL update (changed objects only). Incremental is faster; use full when the structure changed substantially or an incremental update fails.
 - **autoRestructure** (boolean, default true) — automatically apply database restructurization (table/index changes) when the update requires it, instead of prompting. Leave true for unattended use.
 - **confirm** (boolean, default false) — false previews the resolved update without touching the infobase; true applies it.
+- **terminateRunningClients** (boolean, default true) — before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock and stop it running stale modules. Set false to leave a running client in place (the update then fails if that client holds the infobase exclusively). Only affects the apply phase (confirm=true); the preview reports `willTerminateRunningClients` but terminates nothing.
 
-## Exclusive-lock gotcha
+## Exclusive-lock handling (automatic)
 
-If a 1C client launched from this EDT is currently running against the target infobase, the update typically FAILS because the infobase is held in exclusive use. Check `list_configurations` for `running: true`; if so, call `terminate_launch` first (it only affects launches started from this EDT instance), then retry. Externally launched clients (Designer, ad-hoc 1cv8c.exe) are invisible to `terminate_launch` and must be closed by hand.
+A 1C client launched from this EDT that is running against the target infobase holds it in **exclusive** use (so the update fails) and **caches the old module version** (it keeps running stale code even after a successful publish). With the default `terminateRunningClients=true` the tool frees the infobase itself before applying: it terminates that EDT-launched client using the same client-typed sweep the launch tools use — it never touches a debug-server session or a launch owned by another MCP tool — and reports `terminatedClient`.
+
+Pass `terminateRunningClients=false` to keep the client running; then the old manual flow applies — check `list_configurations` for `running: true` and call `terminate_launch` yourself before retrying. Externally launched clients (Designer, ad-hoc 1cv8c.exe) are invisible to both this sweep and `terminate_launch`, and must be closed by hand.
 
 ## Examples
 
@@ -37,11 +40,11 @@ If a 1C client launched from this EDT is currently running against the target in
 
 ## Result
 
-JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCREMENTAL), `stateBefore`, `stateAfter` and a `message`. A successful run reports `stateAfter = UPDATED`. If the application is already BEING_UPDATED the tool returns an error and you should wait.
+JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCREMENTAL), `stateBefore`, `stateAfter`, `terminatedClient` (true if a running client was terminated to free the infobase) and a `message`. A successful run reports `stateAfter = UPDATED`. If the application is already BEING_UPDATED the tool returns an error and you should wait.
 
 ## Gotchas
 
-- Most failures are the exclusive lock above — terminate the running launch first.
+- With `terminateRunningClients=false`, most failures are the exclusive lock above — terminate the running launch first (the default frees it automatically).
 - `launchConfigurationName` must reference a runtime-client config; an Attach config is rejected.
 - The project must exist and be open; a closed project returns an error.
 - Running this on a **standalone-server** application (`applicationId` starting with `ServerApplication.`) STARTS the standalone server in RUN mode as a side effect — that is EDT-native behaviour of the server-application update (the configurator agent publishes the modules into the running server). A subsequent `debug_launch` will then have to restart that server in DEBUG mode. Prefer letting the launch do the update: `debug_launch` / `run_yaxunit_tests` with `updateBeforeLaunch=true` defer the server-app update to EDT's coordinated launch flow.

@@ -54,7 +54,8 @@ public class UpdateDatabaseTool implements IMcpTool
             + "incremental. Target by launchConfigurationName (preferred) or projectName + " //$NON-NLS-1$
             + "applicationId. Destructive/irreversible: guarded by a confirm-preview - call without " //$NON-NLS-1$
             + "confirm to preview the exact update (no infobase change), then confirm=true to apply. " //$NON-NLS-1$
-            + "Terminate any running 1C client on the target infobase first (exclusive lock). " //$NON-NLS-1$
+            + "Auto-terminates any 1C client THIS EDT launched on the target infobase first to free the " //$NON-NLS-1$
+            + "exclusive lock (opt out with terminateRunningClients=false). " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('update_database')."; //$NON-NLS-1$
     }
 
@@ -75,6 +76,10 @@ public class UpdateDatabaseTool implements IMcpTool
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = apply the update; default false = preview only (resolves the target and " //$NON-NLS-1$
                 + "reports what would change WITHOUT mutating the infobase).") //$NON-NLS-1$
+            .booleanProperty("terminateRunningClients", //$NON-NLS-1$
+                "Before applying, terminate any 1C client THIS EDT launched on the target infobase " //$NON-NLS-1$
+                + "to free the exclusive lock (default true). false keeps a running client — the " //$NON-NLS-1$
+                + "update then fails if that client holds the infobase exclusively.") //$NON-NLS-1$
             .build();
     }
 
@@ -93,6 +98,12 @@ public class UpdateDatabaseTool implements IMcpTool
             .stringProperty("stateBefore", "Application update state before the update.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("stateAfter", "Application update state after the update.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable status message for the update.") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("terminatedClient", //$NON-NLS-1$
+                "true when a running 1C client holding the infobase was terminated before the update " //$NON-NLS-1$
+                + "(only when terminateRunningClients=true).") //$NON-NLS-1$
+            .booleanProperty("willTerminateRunningClients", //$NON-NLS-1$
+                "On a preview: whether confirm=true would first terminate a running client " //$NON-NLS-1$
+                + "(reflects terminateRunningClients).") //$NON-NLS-1$
             .build();
     }
 
@@ -111,6 +122,8 @@ public class UpdateDatabaseTool implements IMcpTool
         boolean fullUpdate = JsonUtils.extractBooleanArgument(params, "fullUpdate", false); //$NON-NLS-1$
         boolean autoRestructure = JsonUtils.extractBooleanArgument(params, "autoRestructure", true); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+        boolean terminateRunningClients =
+            JsonUtils.extractBooleanArgument(params, "terminateRunningClients", true); //$NON-NLS-1$
 
         boolean hasName = configName != null && !configName.isEmpty();
         if (!hasName)
@@ -166,20 +179,25 @@ public class UpdateDatabaseTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        return updateDatabase(projectName, applicationId, fullUpdate, autoRestructure, confirm);
+        return updateDatabase(projectName, applicationId, fullUpdate, autoRestructure, confirm,
+            terminateRunningClients);
     }
-    
+
     /**
      * Updates the database for the specified application.
-     * 
+     *
      * @param projectName name of the project
      * @param applicationId ID of the application
      * @param fullUpdate true for full update, false for incremental
      * @param autoRestructure whether to auto-apply restructurization
+     * @param confirm false previews without mutating; true applies the update
+     * @param terminateRunningClients true (default) frees the infobase by terminating a 1C client
+     *            this EDT launched on it before the update; false leaves a running client in place
      * @return JSON string with result
      */
     private String updateDatabase(String projectName, String applicationId,
-            boolean fullUpdate, boolean autoRestructure, boolean confirm)
+            boolean fullUpdate, boolean autoRestructure, boolean confirm,
+            boolean terminateRunningClients)
     {
         try
         {
@@ -238,11 +256,32 @@ public class UpdateDatabaseTool implements IMcpTool
                     .put("applicationName", application.getName()) //$NON-NLS-1$
                     .put("updateType", updateType.name()) //$NON-NLS-1$
                     .put("stateBefore", stateBefore.name()) //$NON-NLS-1$
+                    .put("willTerminateRunningClients", terminateRunningClients) //$NON-NLS-1$
                     .put("message", "PREVIEW: this would apply a " + updateType.name() //$NON-NLS-1$ //$NON-NLS-2$
                         + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
                         + "' (project " + projectName + "). This mutates the infobase and is " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "IRREVERSIBLE. Re-call with confirm=true to apply it.") //$NON-NLS-1$
+                        + "IRREVERSIBLE." //$NON-NLS-1$
+                        + (terminateRunningClients
+                            ? " It will first terminate any 1C client this EDT launched on the infobase." //$NON-NLS-1$
+                            : "") //$NON-NLS-1$
+                        + " Re-call with confirm=true to apply it.") //$NON-NLS-1$
                     .toJson();
+            }
+
+            // Free the infobase before updating. A 1C client THIS EDT launched holds the IB in
+            // exclusive use (so the update blocks/fails) and caches the old module version (it keeps
+            // running stale code even after a successful publish). Reuse the launch path's
+            // battle-tested sweep — client-typed-thread discriminated (never touches a debug-server
+            // session) and exempting MCP-owned launches. Runs only on confirm=true, never in preview.
+            boolean terminatedClient = false;
+            if (terminateRunningClients)
+            {
+                terminatedClient = LaunchLifecycleUtils.ensureNoExistingClientSession(project, applicationId);
+                if (terminatedClient)
+                {
+                    Activator.logInfo("Update database: terminated a running client to free the " //$NON-NLS-1$
+                        + "infobase: project=" + projectName + ", application=" + applicationId); //$NON-NLS-1$ //$NON-NLS-2$
+                }
             }
 
             // Create execution context with the active Shell so EDT can parent
@@ -273,7 +312,8 @@ public class UpdateDatabaseTool implements IMcpTool
                 .put("applicationName", application.getName()) //$NON-NLS-1$
                 .put("updateType", updateType.name()) //$NON-NLS-1$
                 .put("stateBefore", stateBefore.name()) //$NON-NLS-1$
-                .put("stateAfter", stateAfter.name()); //$NON-NLS-1$
+                .put("stateAfter", stateAfter.name()) //$NON-NLS-1$
+                .put("terminatedClient", terminatedClient); //$NON-NLS-1$
             
             // Add status message based on result
             if (stateAfter == ApplicationUpdateState.UPDATED)

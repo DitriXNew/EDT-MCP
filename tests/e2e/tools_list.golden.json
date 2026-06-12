@@ -3089,7 +3089,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + applicationId. Destructive/irreversible: guarded by a confirm-preview - call without confirm to preview the exact update (no infobase change), then confirm=true to apply. Terminate any running 1C client on the target infobase first (exclusive lock). Full parameters and examples: call get_tool_guide('update_database').",
+    "description": "Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + applicationId. Destructive/irreversible: guarded by a confirm-preview - call without confirm to preview the exact update (no infobase change), then confirm=true to apply. Auto-terminates any 1C client THIS EDT launched on the target infobase first to free the exclusive lock (opt out with terminateRunningClients=false). Full parameters and examples: call get_tool_guide('update_database').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -3115,6 +3115,10 @@
         "projectName": {
           "description": "EDT project name; required if launchConfigurationName is omitted.",
           "type": "string"
+        },
+        "terminateRunningClients": {
+          "description": "Before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock (default true). false keeps a running client — the update then fails if that client holds the infobase exclusively.",
+          "type": "boolean"
         }
       },
       "required": [],
@@ -3159,9 +3163,17 @@
           "description": "Whether the operation succeeded",
           "type": "boolean"
         },
+        "terminatedClient": {
+          "description": "true when a running 1C client holding the infobase was terminated before the update (only when terminateRunningClients=true).",
+          "type": "boolean"
+        },
         "updateType": {
           "description": "Update mode applied: FULL or INCREMENTAL.",
           "type": "string"
+        },
+        "willTerminateRunningClients": {
+          "description": "On a preview: whether confirm=true would first terminate a running client (reflects terminateRunningClients).",
+          "type": "boolean"
         }
       },
       "required": [
