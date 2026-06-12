@@ -326,4 +326,58 @@ public class RunYaxunitTestsToolTest
         assertTrue("guide must document that updateBeforeLaunch=false skips the sweep",
             guide.contains("the sweep is skipped")); //$NON-NLS-1$
     }
+
+    // ============ selective recompute + 25s pending budget (new) ============
+
+    @Test
+    public void testDescriptionDocumentsSelectiveRecompute()
+    {
+        // Ratchet: the description must mention that only changed projects are
+        // recomputed (not all projects on every call) and that the first call
+        // after EDT start always recomputes fully.
+        String desc = new RunYaxunitTestsTool().getDescription();
+        assertTrue("description must mention that only changed projects are recomputed",
+            desc.contains("recomputes only projects")); //$NON-NLS-1$
+        assertTrue("description must note the full recompute on first call after EDT start",
+            desc.contains("first call after EDT starts")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionDocuments25sPendingBudget()
+    {
+        // Ratchet: the description must mention the 25s pre-launch budget and
+        // that the tool returns Pending when it is exceeded.
+        String desc = new RunYaxunitTestsTool().getDescription();
+        assertTrue("description must mention the 25s budget",
+            desc.contains("25s")); //$NON-NLS-1$
+        assertTrue("description must say Pending is returned when budget exceeded",
+            desc.contains("Pending")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsSelectiveRecompute()
+    {
+        // Ratchet: the guide must explain the dirty-tracking mechanism —
+        // only file-changed projects are force-recomputed; others get the cheap
+        // derived-data drain; first launch is always full.
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must document that only changed projects are recomputed",
+            guide.contains("selective")); //$NON-NLS-1$
+        assertTrue("guide must document the conservative first-launch recompute",
+            guide.contains("first call after EDT starts")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocuments25sBudgetAndBackgroundPrep()
+    {
+        // Ratchet: the guide must explain the 25-second budget, the background
+        // prep job, and the pending-retry contract when the budget is exceeded.
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must mention the 25-second budget",
+            guide.contains("25s") || guide.contains("25-second")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must say preparation runs in a background job",
+            guide.contains("background")); //$NON-NLS-1$
+        assertTrue("guide must document the pending-retry contract for prep",
+            guide.contains("same arguments")); //$NON-NLS-1$
+    }
 }

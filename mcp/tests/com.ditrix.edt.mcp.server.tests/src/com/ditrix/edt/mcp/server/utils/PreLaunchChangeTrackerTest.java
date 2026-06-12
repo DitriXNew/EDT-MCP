@@ -1,0 +1,397 @@
+/**
+ * MCP Server for EDT - Tests
+ * Copyright (C) 2026 Diversus23 (https://github.com/Diversus23)
+ * Licensed under AGPL-3.0-or-later
+ */
+
+package com.ditrix.edt.mcp.server.utils;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.util.Arrays;
+import java.util.Collections;
+
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceDelta;
+import org.junit.After;
+import org.junit.Test;
+
+/**
+ * Unit tests for {@link PreLaunchChangeTracker}.
+ *
+ * <p>All tests run headless (no OSGi runtime). The listener-installation is never
+ * exercised — we seed state directly via the package-visible test helpers
+ * ({@link PreLaunchChangeTracker#markDirtyForTest} /
+ * {@link PreLaunchChangeTracker#markPreparedForTest} /
+ * {@link PreLaunchChangeTracker#resetForTest}) and drive
+ * {@link PreLaunchChangeTracker#deltaMakesProjectDirty} through Mockito mocks of
+ * {@link IResourceDelta} and {@link IResource}. The live workspace-listener
+ * install path needs the Eclipse runtime and is an integration concern; only the
+ * pure, mockable parts are asserted here.
+ */
+public class PreLaunchChangeTrackerTest
+{
+    @After
+    public void tearDown()
+    {
+        PreLaunchChangeTracker.resetForTest();
+    }
+
+    // =========================================================================
+    // isDirty — never-prepared (conservative first-launch rule)
+    // =========================================================================
+
+    @Test
+    public void testNeverPreparedIsDirty()
+    {
+        // A project that has never been through a successful prepare is always
+        // treated as dirty — conservative first-launch rule.
+        IProject project = mockProject("Config");
+        assertTrue("never-prepared project must be dirty", PreLaunchChangeTracker.isDirty(project));
+    }
+
+    @Test
+    public void testNullProjectIsNotDirty()
+    {
+        assertFalse("null project must not be dirty", PreLaunchChangeTracker.isDirty(null));
+    }
+
+    // =========================================================================
+    // isDirty — after markPrepared (clean baseline)
+    // =========================================================================
+
+    @Test
+    public void testPreparedProjectIsClean()
+    {
+        IProject project = mockProject("Config");
+        PreLaunchChangeTracker.markPrepared(Collections.singletonList(project));
+        assertFalse("a prepared project with no subsequent change must be clean",
+            PreLaunchChangeTracker.isDirty(project));
+    }
+
+    @Test
+    public void testMarkPreparedNullCollectionIsNoOp()
+    {
+        // Must not throw when null or null entries are passed.
+        PreLaunchChangeTracker.markPrepared(null);
+        PreLaunchChangeTracker.markPrepared(Collections.singletonList(null));
+    }
+
+    // =========================================================================
+    // isDirty — after markPrepared then markDirtyForTest (file change re-dirties)
+    // =========================================================================
+
+    @Test
+    public void testFilChangeAfterPrepareRedirties()
+    {
+        IProject project = mockProject("Config");
+        PreLaunchChangeTracker.markPrepared(Collections.singletonList(project));
+        assertFalse("clean after prepare", PreLaunchChangeTracker.isDirty(project));
+
+        PreLaunchChangeTracker.markDirtyForTest("Config");
+        assertTrue("dirty after a file change", PreLaunchChangeTracker.isDirty(project));
+    }
+
+    @Test
+    public void testMarkPreparedClearsDirtyFlag()
+    {
+        IProject project = mockProject("Config");
+        PreLaunchChangeTracker.markDirtyForTest("Config");
+        // Seed it as prepared too so it is in the prepared set (otherwise it's
+        // dirty solely because it's never-prepared, not because of the dirty flag).
+        PreLaunchChangeTracker.markPreparedForTest("Config");
+        PreLaunchChangeTracker.markDirtyForTest("Config");
+        assertTrue("dirty after explicit mark", PreLaunchChangeTracker.isDirty(project));
+
+        PreLaunchChangeTracker.markPrepared(Collections.singletonList(project));
+        assertFalse("markPrepared must clear the dirty flag", PreLaunchChangeTracker.isDirty(project));
+    }
+
+    // =========================================================================
+    // isDirty — multiple projects (dirty/clean partition)
+    // =========================================================================
+
+    @Test
+    public void testDirtyCleanPartitionIndependent()
+    {
+        IProject projectA = mockProject("Config");
+        IProject projectB = mockProject("Extension");
+
+        // Prepare both first so neither is "never-prepared".
+        PreLaunchChangeTracker.markPrepared(Arrays.asList(projectA, projectB));
+        assertFalse("Config must be clean", PreLaunchChangeTracker.isDirty(projectA));
+        assertFalse("Extension must be clean", PreLaunchChangeTracker.isDirty(projectB));
+
+        // Mark only one dirty.
+        PreLaunchChangeTracker.markDirtyForTest("Extension");
+        assertFalse("Config must remain clean", PreLaunchChangeTracker.isDirty(projectA));
+        assertTrue("Extension must be dirty", PreLaunchChangeTracker.isDirty(projectB));
+    }
+
+    @Test
+    public void testMarkPreparedPartialListLeavesOtherDirty()
+    {
+        IProject projectA = mockProject("Config");
+        IProject projectB = mockProject("Extension");
+
+        PreLaunchChangeTracker.markPrepared(Arrays.asList(projectA, projectB));
+        PreLaunchChangeTracker.markDirtyForTest("Config");
+        PreLaunchChangeTracker.markDirtyForTest("Extension");
+
+        // Prepare only Config.
+        PreLaunchChangeTracker.markPrepared(Collections.singletonList(projectA));
+        assertFalse("Config must be clean after its own prepare", PreLaunchChangeTracker.isDirty(projectA));
+        assertTrue("Extension must still be dirty (not in the prepare call)", PreLaunchChangeTracker.isDirty(projectB));
+    }
+
+    // =========================================================================
+    // deltaMakesProjectDirty — ADDED / REMOVED kind
+    // =========================================================================
+
+    @Test
+    public void testAddedFileIsDirty()
+    {
+        IResourceDelta delta = mockFileDelta(IResourceDelta.ADDED, 0, false);
+        assertTrue("ADDED non-derived file must make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testRemovedFileIsDirty()
+    {
+        IResourceDelta delta = mockFileDelta(IResourceDelta.REMOVED, 0, false);
+        assertTrue("REMOVED non-derived file must make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testAddedDerivedFileIsNotDirty()
+    {
+        IResourceDelta delta = mockFileDelta(IResourceDelta.ADDED, 0, true);
+        assertFalse("ADDED derived file must NOT make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testRemovedDerivedFileIsNotDirty()
+    {
+        IResourceDelta delta = mockFileDelta(IResourceDelta.REMOVED, 0, true);
+        assertFalse("REMOVED derived file must NOT make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    // =========================================================================
+    // deltaMakesProjectDirty — CHANGED with content-carrying flags
+    // =========================================================================
+
+    @Test
+    public void testChangedWithContentFlagIsDirty()
+    {
+        IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.CONTENT, false);
+        assertTrue("CHANGED+CONTENT must make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testChangedWithMovedFromFlagIsDirty()
+    {
+        IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.MOVED_FROM, false);
+        assertTrue("CHANGED+MOVED_FROM must make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testChangedWithMovedToFlagIsDirty()
+    {
+        IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.MOVED_TO, false);
+        assertTrue("CHANGED+MOVED_TO must make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testChangedWithReplacedFlagIsDirty()
+    {
+        IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.REPLACED, false);
+        assertTrue("CHANGED+REPLACED must make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testChangedWithContentAndDerivedIsNotDirty()
+    {
+        // A derived file with CONTENT changes must never be counted as user content.
+        IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.CONTENT, true);
+        assertFalse("CHANGED+CONTENT on a derived file must NOT make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    // =========================================================================
+    // deltaMakesProjectDirty — marker-only delta (ignored)
+    // =========================================================================
+
+    @Test
+    public void testChangedWithMarkersOnlyIsNotDirty()
+    {
+        // Marker-only change (problem markers, bookmarks, etc.) is metadata
+        // bookkeeping and must not be treated as a content change.
+        IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.MARKERS, false);
+        assertFalse("CHANGED+MARKERS-only must NOT make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testChangedWithMarkersAndContentIsDirty()
+    {
+        // Marker flag combined with a content-carrying flag — the CONTENT flag
+        // dominates; the project is dirty.
+        int flags = IResourceDelta.MARKERS | IResourceDelta.CONTENT;
+        IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, flags, false);
+        assertTrue("CHANGED+MARKERS+CONTENT must make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    // =========================================================================
+    // deltaMakesProjectDirty — non-FILE resource kinds (folders, projects)
+    // =========================================================================
+
+    @Test
+    public void testFolderDeltaIsNotDirty()
+    {
+        // Only FILE deltas should count — a folder entry records structural
+        // membership, not file content.
+        IResourceDelta delta = mockResourceDelta(IResourceDelta.ADDED, 0, IResource.FOLDER, false);
+        assertFalse("ADDED folder delta must NOT make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testProjectDeltaIsNotDirty()
+    {
+        IResourceDelta delta = mockResourceDelta(IResourceDelta.CHANGED, IResourceDelta.CONTENT,
+            IResource.PROJECT, false);
+        assertFalse("PROJECT-level delta must NOT make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    // =========================================================================
+    // deltaMakesProjectDirty — null safety
+    // =========================================================================
+
+    @Test
+    public void testNullDeltaIsNotDirty()
+    {
+        assertFalse("null delta must not make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(null));
+    }
+
+    @Test
+    public void testDeltaWithNullResourceIsNotDirty()
+    {
+        IResourceDelta delta = mock(IResourceDelta.class);
+        when(delta.getResource()).thenReturn(null);
+        assertFalse("delta with null resource must not make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    // =========================================================================
+    // PrepInFlight — state-machine basics (headless, no Job)
+    // =========================================================================
+
+    @Test
+    public void testPrepInFlightElapsedSecondsNonNegative()
+    {
+        LaunchLifecycleUtils.PrepInFlight entry =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+        assertTrue("elapsedSeconds must be >= 0", entry.elapsedSeconds() >= 0);
+    }
+
+    @Test
+    public void testPrepInFlightNotDoneInitially()
+    {
+        LaunchLifecycleUtils.PrepInFlight entry =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+        assertFalse("entry must not be done initially", entry.done);
+    }
+
+    @Test
+    public void testPrepInFlightNotExpiredImmediately()
+    {
+        LaunchLifecycleUtils.PrepInFlight entry =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+        assertFalse("a brand-new entry must not be expired", entry.isExpired());
+    }
+
+    @Test
+    public void testPrepInFlightExpiredAfterExpiryTime()
+    {
+        // Seed with a start time well in the past (> INFLIGHT_EXPIRY_MS = 10 min).
+        long veryOld = System.currentTimeMillis() - (11 * 60 * 1000L);
+        LaunchLifecycleUtils.PrepInFlight entry = new LaunchLifecycleUtils.PrepInFlight(veryOld);
+        assertTrue("an entry older than 10 min must be expired", entry.isExpired());
+    }
+
+    @Test
+    public void testPrepInFlightLatchCountsDown() throws InterruptedException
+    {
+        LaunchLifecycleUtils.PrepInFlight entry =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+        // Count down the latch to simulate a background job completing.
+        entry.done = true;
+        entry.latch.countDown();
+        // Await with zero timeout — latch is already counted-down.
+        boolean released = entry.latch.await(0, java.util.concurrent.TimeUnit.MILLISECONDS);
+        assertTrue("latch must be counted down", released);
+    }
+
+    @Test
+    public void testPrepKeyForNullSafe()
+    {
+        // prepKeyFor must not throw on null arguments.
+        String key1 = LaunchLifecycleUtils.prepKeyFor(null, null);
+        String key2 = LaunchLifecycleUtils.prepKeyFor("Project", null);
+        String key3 = LaunchLifecycleUtils.prepKeyFor(null, "AppId");
+        String key4 = LaunchLifecycleUtils.prepKeyFor("Project", "AppId");
+
+        assertTrue("null/null key must start with the NUL separator", key1.startsWith("\u0000"));
+        assertTrue("project/null key must start with project name", key2.startsWith("Project"));
+        assertTrue("null/appId key must contain appId", key3.contains("AppId"));
+        assertTrue("full key must contain both parts", key4.contains("Project") && key4.contains("AppId"));
+    }
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
+    private static IProject mockProject(String name)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        when(project.exists()).thenReturn(true);
+        when(project.isOpen()).thenReturn(true);
+        return project;
+    }
+
+    /** Mocks an {@link IResourceDelta} for a FILE resource. */
+    private static IResourceDelta mockFileDelta(int kind, int flags, boolean derived)
+    {
+        return mockResourceDelta(kind, flags, IResource.FILE, derived);
+    }
+
+    private static IResourceDelta mockResourceDelta(int kind, int flags, int resourceType,
+        boolean derived)
+    {
+        IResource resource = mock(IResource.class);
+        when(resource.getType()).thenReturn(resourceType);
+        when(resource.isDerived()).thenReturn(derived);
+
+        IResourceDelta delta = mock(IResourceDelta.class);
+        when(delta.getResource()).thenReturn(resource);
+        when(delta.getKind()).thenReturn(kind);
+        when(delta.getFlags()).thenReturn(flags);
+        return delta;
+    }
+}
