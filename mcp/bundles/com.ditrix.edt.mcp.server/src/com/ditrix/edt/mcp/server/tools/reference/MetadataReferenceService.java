@@ -685,8 +685,9 @@ public class MetadataReferenceService
                 Activator.logError("Error extracting line number from URI: " + sourceUri, e); //$NON-NLS-1$
             }
 
-            // Fallback: try to parse line from fragment
-            return extractLineNumberFromFragment(sourceUri.fragment());
+            // The URI fragment carries a method index, not a line number, so the line
+            // cannot be derived here; 0 signals "unknown line".
+            return 0;
         }
 
         /**
@@ -715,46 +716,6 @@ public class MetadataReferenceService
                 lineResolveResourceSet = rs;
             }
             return lineResolveResourceSet;
-        }
-
-        /**
-         * Fallback method to extract approximate line number from URI fragment.
-         */
-        private int extractLineNumberFromFragment(String fragment)
-        {
-            if (fragment == null || fragment.isEmpty())
-            {
-                return 0;
-            }
-
-            // Fragment format may contain method index info, e.g. "//@methods.5"
-            // This is not accurate but better than nothing
-            try
-            {
-                // Look for method index - methods typically correlate with lines
-                if (fragment.contains("@methods.")) //$NON-NLS-1$
-                {
-                    int idx = fragment.indexOf("@methods."); //$NON-NLS-1$
-                    String rest = fragment.substring(idx + 9);
-                    int endIdx = rest.indexOf('/');
-                    if (endIdx > 0)
-                    {
-                        rest = rest.substring(0, endIdx);
-                    }
-                    endIdx = rest.indexOf('@');
-                    if (endIdx > 0)
-                    {
-                        rest = rest.substring(0, endIdx);
-                    }
-                    // Method index is not line number, return 0 for now
-                }
-            }
-            catch (Exception e)
-            {
-                // Ignore
-            }
-
-            return 0;
         }
 
         private boolean isInternalReference(IBmCrossReference ref)
