@@ -49,7 +49,7 @@ jobs:
           path: |
             ~/.m2/repository/.cache/tycho
             ~/.m2/repository/p2
-          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/*.target') }}
           restore-keys: |
             ${{ runner.os }}-tycho-p2-
 
@@ -57,7 +57,19 @@ jobs:
         working-directory: mcp
         env:
           MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
-        run: mvn clean verify --batch-mode --no-transfer-progress -T 1C -DskipTests
+        run: |
+          # edt.1c.ru intermittently 502s / resets while Tycho mirrors the EDT p2 platform
+          # (most often on a cold cache). Retry, but ONLY on those transient network errors —
+          # fail fast on a real compile failure.
+          for attempt in 1 2 3; do
+            if mvn clean verify --batch-mode --no-transfer-progress -T 1C -DskipTests 2>&1 | tee "$RUNNER_TEMP/mvn.log"; then
+              exit 0
+            fi
+            grep -qiE "Could not mirror artifact|Connection reset|HTTP code: 50[0-9]|Unable to read repository|Return code is: 50[0-9]" "$RUNNER_TEMP/mvn.log" \
+              || { echo "::error::plugin build failed (not a transient edt.1c.ru error)"; exit 1; }
+            echo "::warning::transient edt.1c.ru failure (attempt $attempt/3); cooling 30s"; sleep 30
+          done
+          exit 1
 
       - name: Upload plugin p2 repository
         uses: actions/upload-artifact@v7
