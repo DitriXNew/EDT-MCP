@@ -33,6 +33,25 @@
     <connection>scm:git:git@github.com:DitriXNew/EDT-MCP.git</connection>
   </scm>
 
+  <build>
+    <pluginManagement>
+      <plugins>
+        <!-- Pinned so `mvn sonar:sonar` resolves a fixed scanner version (no "unspecified version" warning) -->
+        <plugin>
+          <groupId>org.sonarsource.scanner.maven</groupId>
+          <artifactId>sonar-maven-plugin</artifactId>
+          <version>5.7.0.6970</version>
+        </plugin>
+        <!-- Code-coverage agent + report; used by the tests fragment and the bundle -->
+        <plugin>
+          <groupId>org.jacoco</groupId>
+          <artifactId>jacoco-maven-plugin</artifactId>
+          <version>0.8.13</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+
   <modules>
     <module>targets</module>
     <module>bundles</module>

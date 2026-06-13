@@ -53,12 +53,16 @@ jobs:
           MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
         run: mvn clean verify --batch-mode --no-transfer-progress -T 1C
 
+      - name: JaCoCo coverage report
+        working-directory: mcp
+        run: mvn --batch-mode --no-transfer-progress -pl bundles/com.ditrix.edt.mcp.server jacoco:report
+
       - name: SonarQube Cloud analysis
         if: env.SONAR_TOKEN != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         working-directory: mcp
         env:
           MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
-        run: mvn --batch-mode --no-transfer-progress -T 1C org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+        run: mvn --batch-mode --no-transfer-progress -T 1C sonar:sonar
 
       - name: Publish Unit Test Results
         uses: EnricoMi/publish-unit-test-result-action@v2

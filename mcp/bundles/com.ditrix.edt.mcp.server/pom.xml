@@ -16,7 +16,25 @@
 
   <name>EDT MCP Server Plugin</name>
 
+  <properties>
+    <!-- Sonar reads coverage for this bundle from the report generated below -->
+    <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+  </properties>
+
   <build>
+    <plugins>
+      <!-- `mvn -pl bundles/com.ditrix.edt.mcp.server jacoco:report` (after verify) turns the
+           tests fragment's .exec into an XML report against THIS bundle's classes/sources.
+           No execution binding: the bundle builds before the tests, so the report is a
+           separate CLI step once the .exec exists. -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <configuration>
+          <dataFile>${project.basedir}/../../tests/com.ditrix.edt.mcp.server.tests/target/jacoco.exec</dataFile>
+        </configuration>
+      </plugin>
+    </plugins>
     <pluginManagement>
       <plugins>
         <plugin>

@@ -32,6 +32,27 @@
           </includes>
         </configuration>
       </plugin>
+      <!-- Coverage: instrument the production bundle while these tests run.
+           Tycho Surefire appends ${tycho.testArgLine} to the test JVM args, so the
+           agent is attached there; the .exec lands in this fragment's target/. -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>jacoco-prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+            <configuration>
+              <propertyName>tycho.testArgLine</propertyName>
+              <includes>
+                <include>com.ditrix.edt.mcp.*</include>
+              </includes>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 
