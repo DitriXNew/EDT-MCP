@@ -113,9 +113,17 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. FILE type only (server/web rejected). Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase').",
+    "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase').",
     "inputSchema": {
       "properties": {
+        "applicationKind": {
+          "description": "'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23).",
+          "enum": [
+            "infobase",
+            "standaloneServer"
+          ],
+          "type": "string"
+        },
         "infobaseFile": {
           "description": "Absolute path to the infobase directory (required). For mode='create' the directory is created if absent and the 1Cv8.1CD files are written into it; for mode='register' it must already contain an existing file infobase.",
           "type": "string"
@@ -136,8 +144,16 @@
           "description": "1C platform version mask to use for creation (e.g. '8.3.25'). If omitted, EDT resolves the best available installed version automatically.",
           "type": "string"
         },
+        "port": {
+          "description": "applicationKind='standaloneServer' only: the cluster/server listen port. Default 8314.",
+          "type": "integer"
+        },
         "projectName": {
           "description": "EDT configuration project to bind the new infobase to (required).",
+          "type": "string"
+        },
+        "publicationName": {
+          "description": "applicationKind='standaloneServer' only: the web publication base/path. If omitted, a sanitized infobaseName (or the project name) is used.",
           "type": "string"
         },
         "setDefault": {
@@ -159,7 +175,11 @@
           "type": "string"
         },
         "applicationId": {
-          "description": "ID of the newly created infobase application (for chaining into update_database).",
+          "description": "ID of the newly created application (for chaining into update_database).",
+          "type": "string"
+        },
+        "applicationKind": {
+          "description": "'infobase' or 'standaloneServer' — the kind of application created.",
           "type": "string"
         },
         "applications": {
@@ -188,6 +208,10 @@
         "success": {
           "description": "Whether the operation succeeded",
           "type": "boolean"
+        },
+        "webUrl": {
+          "description": "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing.",
+          "type": "string"
         }
       },
       "required": [

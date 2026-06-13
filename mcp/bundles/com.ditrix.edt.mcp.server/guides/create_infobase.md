@@ -7,6 +7,32 @@ Creates a new FILE infobase (1C:Enterprise database) OR registers an existing on
 
 FILE infobases only. SERVER and WEB infobases are out of scope for v1 and are rejected with a clear "not yet supported" error.
 
+## Application kind: infobase vs standalone server
+
+`applicationKind` selects what is created:
+
+- **`applicationKind='infobase'` (default)** — a plain file infobase via the 1C configurator, exactly as described above (this is the original behaviour; omitting `applicationKind` is byte-identical to before). Surfaces as `com.e1c.g5.dt.applications.type.infobase`.
+- **`applicationKind='standaloneServer'`** — an **autonomous (standalone) server** that creates *and serves* a new file infobase, binds it to the project, and exposes a **web URL for HTTP testing**. It goes through the EDT WST standalone-server layer (shelling out to `ibcmd`, not `1cv8`) and surfaces as a `com.e1c.g5.dt.applications.type.wst-server` application (its id is `"ServerApplication.<name>"`, not a UUID). It runs in a background Job (up to 120 s); `get_applications` and `update_database` work unchanged on the resulting application.
+
+Standalone-server-only parameters (ignored for `applicationKind='infobase'`):
+
+- **port** (integer, optional): the cluster/server listen port. Default **8314**.
+- **publicationName** (string, optional): the web publication base/path. If omitted, a sanitized (alphanumeric) `infobaseName` is used, falling back to the project name.
+
+The standalone-server path **always creates** a new infobase (`mode='register'` is not supported with `applicationKind='standaloneServer'`).
+
+### Prerequisites and result
+
+- Requires a **registered 1C standalone-server runtime** — a 1C:Enterprise platform **>= 8.3.23** with the standalone server (`ibsrv`/`ibcmd`), registered in EDT. The tool probes for it **before** the background Job and fails FAST with an actionable error if absent (no hang).
+- On success the result adds **`applicationKind='standaloneServer'`**, **`port`**, and **`webUrl`** (the infobase web URL — use it for HTTP testing) alongside the usual `applications`, `applicationId`, and `message` fields.
+
+```
+# Create an autonomous (standalone) server with a web URL:
+1. create_infobase  projectName="MyProject"  infobaseFile="C:\infobases\MyAppSrv"  applicationKind="standaloneServer"  port=8314
+2. update_database  projectName="MyProject"  applicationId=<id from step 1>  confirm=true
+#    -> the result's webUrl is the HTTP endpoint to test against.
+```
+
 ## What it does
 
 1. Resolves and validates the project and the `mode`.
@@ -23,6 +49,9 @@ FILE infobases only. SERVER and WEB infobases are out of scope for v1 and are re
 - **infobaseName** (optional): display name for the infobase in the EDT Infobases view. If omitted, a name is auto-generated.
 - **platform** (optional, `create` only): 1C platform version mask (e.g. `8.3.25`). If omitted, EDT resolves the best available installed version automatically.
 - **setDefault** (boolean, default false): set the infobase as the default application for the project afterwards.
+- **applicationKind** (optional, `infobase` | `standaloneServer`, default `infobase`): see "Application kind" above.
+- **port** (integer, optional, `standaloneServer` only): cluster/server listen port (default 8314).
+- **publicationName** (string, optional, `standaloneServer` only): web publication base/path (default = sanitized `infobaseName`, else project name).
 
 ## Result
 

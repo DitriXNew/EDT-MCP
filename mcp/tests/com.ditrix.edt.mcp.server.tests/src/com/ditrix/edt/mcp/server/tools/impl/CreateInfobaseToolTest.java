@@ -68,6 +68,70 @@ public class CreateInfobaseToolTest
     }
 
     @Test
+    public void testInputSchemaDeclaresStandaloneServerParameters()
+    {
+        // The autonomous/standalone-server path adds applicationKind (closed enum), port, and
+        // publicationName. See IMPL-BRIEF-AS.md (issue #153 / PR #155).
+        String schema = new CreateInfobaseTool().getInputSchema();
+        assertNotNull(schema);
+        assertTrue("schema must declare applicationKind", //$NON-NLS-1$
+            schema.contains("\"applicationKind\"")); //$NON-NLS-1$
+        assertTrue("applicationKind must advertise the 'infobase' enum value", //$NON-NLS-1$
+            schema.contains("\"infobase\"")); //$NON-NLS-1$
+        assertTrue("applicationKind must advertise the 'standaloneServer' enum value", //$NON-NLS-1$
+            schema.contains("\"standaloneServer\"")); //$NON-NLS-1$
+        // The applicationKind property must be a CLOSED enum (so a client can only pick the two
+        // supported kinds). The "enum" keyword must appear in the schema.
+        assertTrue("applicationKind must be a closed enum", schema.contains("\"enum\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("schema must declare port", schema.contains("\"port\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("schema must declare publicationName", //$NON-NLS-1$
+            schema.contains("\"publicationName\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerParametersAreNotRequired()
+    {
+        // Backward-compat: applicationKind/port/publicationName MUST be optional so existing callers
+        // (no applicationKind => plain file infobase) keep working byte-identically.
+        String schema = new CreateInfobaseTool().getInputSchema();
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue("schema must declare a required array", requiredIdx >= 0); //$NON-NLS-1$
+        int open = schema.indexOf('[', requiredIdx);
+        int close = schema.indexOf(']', open);
+        assertTrue("required array must be present", open >= 0 && close > open); //$NON-NLS-1$
+        String requiredBlock = schema.substring(open, close + 1);
+        assertTrue("applicationKind must NOT be required", //$NON-NLS-1$
+            !requiredBlock.contains("\"applicationKind\"")); //$NON-NLS-1$
+        assertTrue("port must NOT be required", //$NON-NLS-1$
+            !requiredBlock.contains("\"port\"")); //$NON-NLS-1$
+        assertTrue("publicationName must NOT be required", //$NON-NLS-1$
+            !requiredBlock.contains("\"publicationName\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInvalidApplicationKindIsError()
+    {
+        // An unknown applicationKind value is rejected before any service lookup (headless-safe),
+        // with an error naming the bad value and the two allowed kinds.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/Any"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationKind", "cluster"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("invalid applicationKind must be an error", //$NON-NLS-1$
+            result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("error must name the bad value", result.contains("cluster")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must list allowed kinds", //$NON-NLS-1$
+            result.contains("infobase") && result.contains("standaloneServer")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // NOTE: the actual standalone-server creation (OSGi lookup of IStandaloneServerService ->
+    // findRuntime probe -> background Job -> createServerWithInfobase -> ibcmd -> get_applications
+    // read-back) is Tier-2 LIVE: it needs a registered 1C standalone-server runtime (platform
+    // >= 8.3.23 with ibsrv/ibcmd) and is verified on the live EDT stand, not in this unit suite.
+
+    @Test
     public void testRequiredParametersInSchema()
     {
         String schema = new CreateInfobaseTool().getInputSchema();
@@ -102,6 +166,9 @@ public class CreateInfobaseToolTest
         assertTrue("outputSchema must declare applicationId", schema.contains("\"applicationId\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare infobaseFile", schema.contains("\"infobaseFile\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare applications", schema.contains("\"applications\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare applicationKind", //$NON-NLS-1$
+            schema.contains("\"applicationKind\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare webUrl", schema.contains("\"webUrl\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

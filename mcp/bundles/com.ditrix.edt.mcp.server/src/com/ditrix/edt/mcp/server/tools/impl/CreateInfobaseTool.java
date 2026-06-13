@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -20,7 +21,10 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.jobs.Job;
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceReference;
 
+import com._1c.g5.v8.dt.common.Pair;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationSettings;
@@ -40,6 +44,8 @@ import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
+import com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.IStandaloneServerService;
+import com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.StandaloneServerInfobase;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -76,6 +82,30 @@ public class CreateInfobaseTool implements IMcpTool
     /** Infobase application type ID as defined in the applications.infobases plugin.xml. */
     private static final String INFOBASE_APP_TYPE = "com.e1c.g5.dt.applications.type.infobase"; //$NON-NLS-1$
 
+    /**
+     * Standalone-server (WST) application type ID as defined in the applications.wst plugin.xml.
+     * The application framework surfaces an {@code IServerApplication} of this type once a WST
+     * standalone server with a project-bound infobase module exists.
+     */
+    private static final String WST_SERVER_APP_TYPE = "com.e1c.g5.dt.applications.type.wst-server"; //$NON-NLS-1$
+
+    /** {@code applicationKind} value for the standalone-server path (autonomous server). */
+    private static final String KIND_STANDALONE_SERVER = "standaloneServer"; //$NON-NLS-1$
+
+    /** {@code applicationKind} value for the default file-infobase path. */
+    private static final String KIND_INFOBASE = "infobase"; //$NON-NLS-1$
+
+    /**
+     * Default cluster/server listen port for a standalone server (the value {@code generateDefaultConfig}
+     * uses). Confirmed live: a server created with this default returned a working web URL on the EDT
+     * 2025.2 stand.
+     */
+    private static final int DEFAULT_STANDALONE_SERVER_PORT = 8314;
+
+    /** Symbolic name of the bundle that owns the standalone-server WST service. */
+    private static final String STANDALONE_SERVER_WST_CORE_BUNDLE_ID =
+        "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core"; //$NON-NLS-1$
+
     /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
     private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
         "com._1c.g5.v8.dt.platform.services.core"; //$NON-NLS-1$
@@ -97,8 +127,11 @@ public class CreateInfobaseTool implements IMcpTool
             + "a configuration project so it appears in get_applications. mode='create' (default) " //$NON-NLS-1$
             + "makes a new database (requires a registered 1C platform runtime); mode='register' " //$NON-NLS-1$
             + "adds an already-existing infobase at the given path without launching the platform. " //$NON-NLS-1$
-            + "FILE type only (server/web rejected). Runs in a background Job (up to 120 s). " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('create_infobase')."; //$NON-NLS-1$
+            + "applicationKind='infobase' (default) makes a plain file infobase; " //$NON-NLS-1$
+            + "applicationKind='standaloneServer' creates an autonomous (standalone) server that also " //$NON-NLS-1$
+            + "exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, " //$NON-NLS-1$
+            + "platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job " //$NON-NLS-1$
+            + "(up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase')."; //$NON-NLS-1$
     }
 
     @Override
@@ -125,6 +158,18 @@ public class CreateInfobaseTool implements IMcpTool
             .booleanProperty("setDefault", //$NON-NLS-1$
                 "Set the new infobase as the default application for the project after creation " //$NON-NLS-1$
                 + "(default false).") //$NON-NLS-1$
+            .enumProperty("applicationKind", //$NON-NLS-1$
+                "'infobase' (default) = a plain file infobase via the configurator; " //$NON-NLS-1$
+                + "'standaloneServer' = an autonomous (standalone) server that creates and serves a " //$NON-NLS-1$
+                + "new file infobase and exposes a web URL for HTTP testing (requires a registered 1C " //$NON-NLS-1$
+                + "standalone-server runtime, platform >= 8.3.23).", //$NON-NLS-1$
+                KIND_INFOBASE, KIND_STANDALONE_SERVER)
+            .integerProperty("port", //$NON-NLS-1$
+                "applicationKind='standaloneServer' only: the cluster/server listen port. " //$NON-NLS-1$
+                + "Default 8314.") //$NON-NLS-1$
+            .stringProperty("publicationName", //$NON-NLS-1$
+                "applicationKind='standaloneServer' only: the web publication base/path. If omitted, " //$NON-NLS-1$
+                + "a sanitized infobaseName (or the project name) is used.") //$NON-NLS-1$
             .build();
     }
 
@@ -134,13 +179,17 @@ public class CreateInfobaseTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("action", "'created' (mode=create) or 'registered' (mode=register).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("applicationKind", //$NON-NLS-1$
+                "'infobase' or 'standaloneServer' — the kind of application created.") //$NON-NLS-1$
             .stringProperty("project", "Name of the configuration project.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("infobaseFile", "Path of the created infobase directory.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("infobaseName", "Display name of the created infobase.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("webUrl", //$NON-NLS-1$
+                "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing.") //$NON-NLS-1$
             .objectArrayProperty("applications", //$NON-NLS-1$
                 "Applications bound to the project after creation (same shape as get_applications).") //$NON-NLS-1$
             .stringProperty("applicationId", //$NON-NLS-1$
-                "ID of the newly created infobase application (for chaining into update_database).") //$NON-NLS-1$
+                "ID of the newly created application (for chaining into update_database).") //$NON-NLS-1$
             .stringProperty("message", "Human-readable status message.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -172,6 +221,27 @@ public class CreateInfobaseTool implements IMcpTool
         String platform = JsonUtils.extractStringArgument(params, "platform"); //$NON-NLS-1$
         boolean setDefault = JsonUtils.extractBooleanArgument(params, "setDefault", false); //$NON-NLS-1$
         String modeStr = JsonUtils.extractStringArgument(params, "mode"); //$NON-NLS-1$
+        String applicationKind = JsonUtils.extractStringArgument(params, "applicationKind"); //$NON-NLS-1$
+        String publicationName = JsonUtils.extractStringArgument(params, "publicationName"); //$NON-NLS-1$
+        int port = JsonUtils.extractIntArgument(params, "port", DEFAULT_STANDALONE_SERVER_PORT); //$NON-NLS-1$
+
+        // Validate applicationKind (default 'infobase'). When absent or 'infobase' the behaviour is
+        // byte-identical to the original file-infobase tool.
+        boolean standaloneServer;
+        if (applicationKind == null || applicationKind.isEmpty() || KIND_INFOBASE.equals(applicationKind))
+        {
+            standaloneServer = false;
+        }
+        else if (KIND_STANDALONE_SERVER.equals(applicationKind))
+        {
+            standaloneServer = true;
+        }
+        else
+        {
+            return ToolResult.error("Invalid applicationKind: '" + applicationKind //$NON-NLS-1$
+                + "'. Allowed values: '" + KIND_INFOBASE + "', '" + KIND_STANDALONE_SERVER //$NON-NLS-1$ //$NON-NLS-2$
+                + "'.").toJson(); //$NON-NLS-1$
+        }
 
         // Validate mode (default 'create').
         boolean register;
@@ -206,6 +276,20 @@ public class CreateInfobaseTool implements IMcpTool
         if (building != null)
         {
             return ToolResult.error(building).toJson();
+        }
+
+        if (standaloneServer)
+        {
+            // The standalone-server path always CREATES a new infobase (served by the server); it has
+            // no register analogue, so reject mode='register' for clarity.
+            if (register)
+            {
+                return ToolResult.error("mode='register' is not supported with " //$NON-NLS-1$
+                    + "applicationKind='standaloneServer'. A standalone server creates and serves a " //$NON-NLS-1$
+                    + "new infobase; omit mode (or use mode='create').").toJson(); //$NON-NLS-1$
+            }
+            return createStandaloneServer(projectName, infobaseDir, infobaseName, platform, port,
+                publicationName);
         }
 
         return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register);
@@ -440,6 +524,373 @@ public class CreateInfobaseTool implements IMcpTool
         // --- 9. Read back and return ---
         return buildSuccessResult(projectName, infobaseDir, infobaseName,
             appManager, project, ibRef, setDefaultNote, register);
+    }
+
+    /**
+     * Creates an autonomous (standalone) server that creates and serves a new file infobase, binds
+     * it to the project, and exposes a web URL for HTTP testing.
+     *
+     * <p>This is a fully separate path from {@link #createInfobase}: instead of the configurator
+     * ({@code 1cv8}) it goes through the EDT WST standalone-server layer
+     * ({@link IStandaloneServerService#createServerWithInfobase}), which shells out to {@code ibcmd}
+     * to create the infobase and registers a WST {@code IServer}. The application framework then
+     * surfaces an {@code IServerApplication} of type {@link #WST_SERVER_APP_TYPE} automatically via
+     * the same {@code IApplicationManager.getApplications(project)} read-back we already use.
+     *
+     * <p><strong>Unattended-safety:</strong> the runtime probe ({@code findRuntime}) fires BEFORE
+     * the Job so "no runtime" fails instantly; the {@code ibcmd} shell-out runs entirely inside a
+     * bounded background Job — never on the UI thread, no modal.
+     *
+     * @param projectName the configuration project to bind the new server to
+     * @param infobaseDir the infobase / server working directory
+     * @param infobaseName the display name (auto-generated from the directory if absent)
+     * @param platform the platform version mask (may be {@code null}/empty = any)
+     * @param port the cluster/server listen port (default {@value #DEFAULT_STANDALONE_SERVER_PORT})
+     * @param publicationName the web publication base/path (defaults to a sanitized name)
+     * @return the tool result JSON
+     */
+    private String createStandaloneServer(String projectName, Path infobaseDir,
+            String infobaseName, String platform, int port, String publicationName)
+    {
+        // --- 1. Resolve project ---
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+        }
+        if (!ctx.isOpen())
+        {
+            return ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+                + ". Open the project in EDT first.").toJson(); //$NON-NLS-1$
+        }
+        IProject project = ctx.project();
+
+        // --- 2. Acquire services ---
+        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
+        if (appManager == null)
+        {
+            return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
+        }
+
+        IStandaloneServerService serverService = acquireStandaloneServerService();
+        if (serverService == null)
+        {
+            return ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
+                + "standalone-server feature is missing. Install a 1C platform >= 8.3.23 with the " //$NON-NLS-1$
+                + "standalone server and ensure the EDT standalone-server plugins are present.") //$NON-NLS-1$
+                .toJson();
+        }
+
+        // --- 3. Fail-fast runtime probe (BEFORE the Job, so "no runtime" fails instantly) ---
+        final String versionMask = platform != null ? platform : ""; //$NON-NLS-1$
+        boolean hasRuntime;
+        try
+        {
+            hasRuntime = serverService.findRuntime(versionMask, null).isPresent();
+        }
+        catch (Exception e)
+        {
+            Activator.logError("create_infobase: standalone-server runtime probe failed", e); //$NON-NLS-1$
+            hasRuntime = false;
+        }
+        if (!hasRuntime)
+        {
+            return ToolResult.error("No standalone-server runtime registered" //$NON-NLS-1$
+                + (platform != null && !platform.isEmpty() ? " for version '" + platform + "'" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ". Install a 1C platform >= 8.3.23 with the standalone server (ibsrv/ibcmd) and " //$NON-NLS-1$
+                + "register it in EDT (Window -> Preferences -> 1C:Enterprise -> Installed " //$NON-NLS-1$
+                + "Installations), or pass a matching platform=...").toJson(); //$NON-NLS-1$
+        }
+
+        // --- 4. Auto-generate the infobase name from the directory if omitted ---
+        if (infobaseName == null || infobaseName.isEmpty())
+        {
+            Path fileName = infobaseDir.getFileName();
+            infobaseName = fileName != null ? fileName.toString() : projectName;
+        }
+
+        // --- 5. Build the FILE infobase reference for the new IB ---
+        InfobaseReference ibRef =
+            InfobaseReferences.newFileInfobaseReference(infobaseDir.toAbsolutePath().toString());
+        ibRef.setName(infobaseName);
+        ibRef.setUuid(java.util.UUID.randomUUID());
+
+        // --- 6. Defaults for the standalone-server-specific arguments ---
+        final int clusterPort = port; // default DEFAULT_STANDALONE_SERVER_PORT, applied in execute()
+        // Confirmed live: the given infobase directory is reused as the server working/registry dir.
+        final String clusterRegistryDirectory = infobaseDir.toAbsolutePath().toString();
+        // Confirmed live: the publication path defaults to a sanitized infobase name (alnum), else the
+        // project name. Pass an explicit publicationName to disambiguate multiple unnamed servers in one project.
+        final String publicationPath = effectivePublicationPath(publicationName, infobaseName, projectName);
+
+        // --- 7. Run the one-shot create in a bounded background Job (ibcmd shell-out) ---
+        final IStandaloneServerService finalService = serverService;
+        final InfobaseReference finalIbRef = ibRef;
+        final String jobInfobaseName = infobaseName;
+        final AtomicReference<Pair<?, StandaloneServerInfobase>> jobResult = new AtomicReference<>();
+        final AtomicReference<Exception> jobError = new AtomicReference<>();
+
+        Job createJob = new Job("Create standalone server: " + jobInfobaseName) //$NON-NLS-1$
+        {
+            @Override
+            protected org.eclipse.core.runtime.IStatus run(
+                    org.eclipse.core.runtime.IProgressMonitor monitor)
+            {
+                try
+                {
+                    Pair<?, StandaloneServerInfobase> pair = finalService.createServerWithInfobase(
+                        versionMask, projectName, finalIbRef, clusterPort, clusterRegistryDirectory,
+                        publicationPath, monitor);
+                    jobResult.set(pair);
+                }
+                catch (Exception e)
+                {
+                    jobError.set(e);
+                }
+                return org.eclipse.core.runtime.Status.OK_STATUS;
+            }
+        };
+        createJob.setUser(false);
+        createJob.setSystem(true);
+        createJob.schedule();
+
+        try
+        {
+            boolean finished = createJob.join(
+                TimeUnit.SECONDS.toMillis(CREATE_TIMEOUT_SECONDS), null);
+            if (!finished)
+            {
+                createJob.cancel();
+                return ToolResult.error("Standalone-server creation timed out after " //$NON-NLS-1$
+                    + CREATE_TIMEOUT_SECONDS + " seconds. The ibcmd process may still be running. " //$NON-NLS-1$
+                    + "Check the EDT log and the directory '" + infobaseDir //$NON-NLS-1$
+                    + "' for partial results.").toJson(); //$NON-NLS-1$
+            }
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return ToolResult.error("Standalone-server creation was interrupted.").toJson(); //$NON-NLS-1$
+        }
+
+        if (jobError.get() != null)
+        {
+            Exception ex = jobError.get();
+            Activator.logError("create_infobase: standalone-server creation failed for " //$NON-NLS-1$
+                + infobaseDir, ex);
+            return ToolResult.error("Standalone-server creation failed: " + ex.getMessage() //$NON-NLS-1$
+                + ". Verify that a compatible 1C standalone-server runtime (platform >= 8.3.23) is " //$NON-NLS-1$
+                + "registered and that the directory '" + infobaseDir + "' is accessible.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        Pair<?, StandaloneServerInfobase> pair = jobResult.get();
+        if (pair == null || pair.getSecond() == null)
+        {
+            return ToolResult.error("Standalone-server creation returned no infobase handle.").toJson(); //$NON-NLS-1$
+        }
+
+        Activator.logInfo("create_infobase: standalone server created at " + infobaseDir); //$NON-NLS-1$
+
+        // --- 8. Resolve the web URL (best-effort) ---
+        String webUrl = null;
+        try
+        {
+            URI url = finalService.getInfobaseUrl(pair.getSecond());
+            if (url != null)
+            {
+                webUrl = url.toString();
+            }
+        }
+        catch (Exception e)
+        {
+            // Non-fatal: the server was created; only the URL lookup failed.
+            Activator.logError("create_infobase: could not resolve standalone-server web URL", e); //$NON-NLS-1$
+        }
+
+        // --- 9. Read back applications and return ---
+        return buildStandaloneServerResult(projectName, infobaseDir, infobaseName, clusterPort,
+            webUrl, appManager, project);
+    }
+
+    /**
+     * Acquires the {@link IStandaloneServerService} from the OSGi service registry (it is published
+     * via the {@code com._1c.g5.wiring.serviceProvider} wiring of the standalone-server WST bundle).
+     * Returns {@code null} if the bundle or service is unavailable so the caller can fail gracefully.
+     *
+     * @return the service, or {@code null} when unavailable
+     */
+    private static IStandaloneServerService acquireStandaloneServerService()
+    {
+        try
+        {
+            Bundle bundle = Platform.getBundle(STANDALONE_SERVER_WST_CORE_BUNDLE_ID);
+            if (bundle == null)
+            {
+                Activator.logError("create_infobase: bundle '" //$NON-NLS-1$
+                    + STANDALONE_SERVER_WST_CORE_BUNDLE_ID
+                    + "' not found — the EDT standalone-server feature is not installed", null); //$NON-NLS-1$
+                return null;
+            }
+            BundleContext context = bundle.getBundleContext();
+            if (context == null)
+            {
+                // The bundle is not active yet — start it transiently so its services register.
+                try
+                {
+                    bundle.start(Bundle.START_TRANSIENT);
+                    context = bundle.getBundleContext();
+                }
+                catch (Exception startEx)
+                {
+                    Activator.logError("create_infobase: could not start standalone-server bundle", //$NON-NLS-1$
+                        startEx);
+                }
+            }
+            if (context == null)
+            {
+                return null;
+            }
+            ServiceReference<IStandaloneServerService> ref =
+                context.getServiceReference(IStandaloneServerService.class);
+            return ref != null ? context.getService(ref) : null;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("create_infobase: could not acquire the standalone-server service", e); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Computes the publication path for a standalone server: the explicit {@code publicationName}
+     * if given, otherwise a sanitized (alphanumeric) infobase name, falling back to the project name.
+     *
+     * @param publicationName the user-provided publication name (may be {@code null}/empty)
+     * @param infobaseName the infobase display name
+     * @param projectName the project name (fallback)
+     * @return the publication path
+     */
+    private static String effectivePublicationPath(String publicationName, String infobaseName,
+            String projectName)
+    {
+        if (publicationName != null && !publicationName.isEmpty())
+        {
+            return publicationName;
+        }
+        // Sanitize the infobase name to an alnum web path; fall back to the project name.
+        String sanitized = infobaseName != null ? infobaseName.replaceAll("[^A-Za-z0-9]", "") : ""; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (!sanitized.isEmpty())
+        {
+            return sanitized;
+        }
+        String fromProject = projectName != null ? projectName.replaceAll("[^A-Za-z0-9]", "") : ""; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return fromProject.isEmpty() ? "infobase" : fromProject; //$NON-NLS-1$
+    }
+
+    /**
+     * Reads back the applications for the project, finds the new {@code wst-server} application, and
+     * builds the success JSON for the standalone-server path. Uses the same short bounded re-poll as
+     * the file path to absorb the provision-delegate listener race.
+     */
+    private static String buildStandaloneServerResult(String projectName, Path infobaseDir,
+            String infobaseName, int port, String webUrl, IApplicationManager appManager,
+            IProject project)
+    {
+        JsonArray appsArray = new JsonArray();
+        String newAppId = null;
+
+        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
+        {
+            appsArray = new JsonArray();
+            newAppId = null;
+
+            try
+            {
+                List<IApplication> applications = appManager.getApplications(project);
+                if (applications != null)
+                {
+                    for (IApplication app : applications)
+                    {
+                        JsonObject appObj = new JsonObject();
+                        appObj.addProperty("id", app.getId()); //$NON-NLS-1$
+                        appObj.addProperty("name", app.getName()); //$NON-NLS-1$
+                        String typeId = app.getType() != null ? app.getType().getId() : null;
+                        if (typeId != null)
+                        {
+                            appObj.addProperty("type", typeId); //$NON-NLS-1$
+                        }
+                        try
+                        {
+                            ApplicationUpdateState updateState = appManager.getUpdateState(app);
+                            if (updateState != null)
+                            {
+                                appObj.addProperty("updateState", updateState.name()); //$NON-NLS-1$
+                            }
+                        }
+                        catch (ApplicationException e)
+                        {
+                            appObj.addProperty("updateState", "UNKNOWN"); //$NON-NLS-1$ //$NON-NLS-2$
+                        }
+                        // The new standalone server surfaces as a wst-server application.
+                        if (newAppId == null && WST_SERVER_APP_TYPE.equals(typeId))
+                        {
+                            newAppId = app.getId();
+                        }
+                        appsArray.add(appObj);
+                    }
+                }
+            }
+            catch (ApplicationException e)
+            {
+                Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
+                break;
+            }
+
+            if (newAppId != null)
+            {
+                break;
+            }
+
+            if (poll < READ_BACK_MAX_POLLS - 1)
+            {
+                try
+                {
+                    Thread.sleep(READ_BACK_POLL_DELAY_MS);
+                }
+                catch (InterruptedException ie)
+                {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        ToolResult result = ToolResult.success()
+            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("applicationKind", KIND_STANDALONE_SERVER) //$NON-NLS-1$
+            .put("project", projectName) //$NON-NLS-1$
+            .put("infobaseFile", infobaseDir.toAbsolutePath().toString()) //$NON-NLS-1$
+            .put("infobaseName", infobaseName) //$NON-NLS-1$
+            .put("port", port) //$NON-NLS-1$
+            .put("applications", appsArray); //$NON-NLS-1$
+
+        if (webUrl != null)
+        {
+            result.put("webUrl", webUrl); //$NON-NLS-1$
+        }
+        if (newAppId != null)
+        {
+            result.put("applicationId", newAppId); //$NON-NLS-1$
+        }
+
+        String message = "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
+            + "' created at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
+            + "' and bound to project '" + projectName + "' (port " + port + ")." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + (webUrl != null ? " Web URL for HTTP testing: " + webUrl + "." : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " Use update_database to push the configuration into the infobase."; //$NON-NLS-1$
+        result.put("message", message); //$NON-NLS-1$
+
+        return result.toJson();
     }
 
     /**
