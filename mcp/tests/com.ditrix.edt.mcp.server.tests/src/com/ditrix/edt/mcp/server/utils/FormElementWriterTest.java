@@ -598,6 +598,229 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testCallTypeRejectedOnCommandAction()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject command = FormElementWriter.findFormCommand(form, "Print"); //$NON-NLS-1$
+        // callType is form-EVENT interception only (a form:EventHandlerExtension on a form item); a
+        // form command action has no call type, so the new 7-arg overload rejects it.
+        String err = FormElementWriter.createHandler(command, "Action", null, null, "en", "After", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new String[1]);
+        assertNotNull(err);
+        assertTrue(err.contains("command action")); //$NON-NLS-1$
+    }
+
+    /**
+     * Builds a synthetic {@code EventHandlerExtension} EClass carrying a {@code callType} EEnum shaped
+     * like the form metamodel's {@code ExtendedMethodCallType} (literal == name), so the pure
+     * call-type resolver can be exercised headlessly without the real form package.
+     */
+    private static EClass syntheticEventHandlerExtensionType()
+    {
+        EEnum callTypeEnum = EcoreFactory.eINSTANCE.createEEnum();
+        callTypeEnum.setName("ExtendedMethodCallType"); //$NON-NLS-1$
+        addEnumLiteral(callTypeEnum, "Before", 0); //$NON-NLS-1$
+        addEnumLiteral(callTypeEnum, "After", 1); //$NON-NLS-1$
+        addEnumLiteral(callTypeEnum, "ChangeAndValidate", 2); //$NON-NLS-1$
+        addEnumLiteral(callTypeEnum, "Override", 3); //$NON-NLS-1$
+        EAttribute callType = EcoreFactory.eINSTANCE.createEAttribute();
+        callType.setName("callType"); //$NON-NLS-1$
+        callType.setEType(callTypeEnum);
+        EClass ehExt = EcoreFactory.eINSTANCE.createEClass();
+        ehExt.setName("EventHandlerExtension"); //$NON-NLS-1$
+        ehExt.getEStructuralFeatures().add(callType);
+        EPackage pkg = EcoreFactory.eINSTANCE.createEPackage();
+        pkg.setName("form"); //$NON-NLS-1$
+        pkg.setNsURI("http://g5.1c.ru/v8/dt/form/test"); //$NON-NLS-1$
+        pkg.setNsPrefix("form"); //$NON-NLS-1$
+        pkg.getEClassifiers().add(callTypeEnum);
+        pkg.getEClassifiers().add(ehExt);
+        return ehExt;
+    }
+
+    private static void addEnumLiteral(EEnum target, String name, int value)
+    {
+        EEnumLiteral lit = EcoreFactory.eINSTANCE.createEEnumLiteral();
+        lit.setName(name);
+        lit.setLiteral(name);
+        lit.setValue(value);
+        // bindEventHandler stores lit.getInstance(); a dynamic literal already returns itself (the impl
+        // IS an Enumerator), matching how a generated form-model literal returns its enum constant.
+        target.getELiterals().add(lit);
+    }
+
+    @Test
+    public void testResolveEventCallTypeMapsTokensToLiterals()
+    {
+        EClass ehExt = syntheticEventHandlerExtensionType();
+        // Before / After resolve to their own literals (case-insensitively, tolerating whitespace).
+        assertEquals("Before", FormElementWriter.resolveEventCallType(ehExt, "Before").getName()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("After", FormElementWriter.resolveEventCallType(ehExt, "after").getName()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("After", FormElementWriter.resolveEventCallType(ehExt, "  After  ").getName()); //$NON-NLS-1$ //$NON-NLS-2$
+        // The 1C UI label "Instead" (Вместо) maps to the EMF enum literal "Override".
+        assertEquals("Override", FormElementWriter.resolveEventCallType(ehExt, "Instead").getName()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Override", FormElementWriter.resolveEventCallType(ehExt, "instead").getName()); //$NON-NLS-1$ //$NON-NLS-2$
+        // The raw literal "Override" is also accepted.
+        assertEquals("Override", FormElementWriter.resolveEventCallType(ehExt, "Override").getName()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testResolveEventCallTypeRejectsMethodOnlyAndUnknown()
+    {
+        EClass ehExt = syntheticEventHandlerExtensionType();
+        // ChangeAndValidate is a METHOD call type, never valid for a form event (both spellings).
+        assertNull(FormElementWriter.resolveEventCallType(ehExt, "ChangeAndValidate")); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveEventCallType(ehExt, "CHANGE_AND_VALIDATE")); //$NON-NLS-1$
+        // Unknown / empty tokens resolve to null (the caller then errors loudly).
+        assertNull(FormElementWriter.resolveEventCallType(ehExt, "Nonsense")); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveEventCallType(ehExt, "")); //$NON-NLS-1$
+    }
+
+    /**
+     * A self-contained dynamic EMF model shaped like the form metamodel's handler containment: a
+     * {@code FormField} container with a {@code handlers} containment list typed to base
+     * {@code EventHandler} (which has {@code event} + {@code name}), and (optionally) the
+     * {@code EventHandlerExtension} subtype with a {@code callType} EEnum. Lets {@link
+     * FormElementWriter#bindEventHandler} be exercised headlessly, without the real form package.
+     */
+    private static final class HandlerModel
+    {
+        EObject container;
+        EStructuralFeature handlersFeat;
+        EObject event;
+    }
+
+    private static HandlerModel newHandlerModel(boolean withExtensionType)
+    {
+        EPackage pkg = EcoreFactory.eINSTANCE.createEPackage();
+        pkg.setName("form"); //$NON-NLS-1$
+        pkg.setNsURI("http://g5.1c.ru/v8/dt/form/handlertest"); //$NON-NLS-1$
+        pkg.setNsPrefix("form"); //$NON-NLS-1$
+
+        EClass eventType = EcoreFactory.eINSTANCE.createEClass();
+        eventType.setName("Event"); //$NON-NLS-1$
+        pkg.getEClassifiers().add(eventType);
+
+        EClass eventHandler = EcoreFactory.eINSTANCE.createEClass();
+        eventHandler.setName("EventHandler"); //$NON-NLS-1$
+        EReference eventRef = EcoreFactory.eINSTANCE.createEReference();
+        eventRef.setName("event"); //$NON-NLS-1$
+        eventRef.setEType(eventType);
+        EAttribute nameAttr = EcoreFactory.eINSTANCE.createEAttribute();
+        nameAttr.setName("name"); //$NON-NLS-1$
+        nameAttr.setEType(EcorePackage.Literals.ESTRING);
+        eventHandler.getEStructuralFeatures().add(eventRef);
+        eventHandler.getEStructuralFeatures().add(nameAttr);
+        pkg.getEClassifiers().add(eventHandler);
+
+        if (withExtensionType)
+        {
+            EEnum callTypeEnum = EcoreFactory.eINSTANCE.createEEnum();
+            callTypeEnum.setName("ExtendedMethodCallType"); //$NON-NLS-1$
+            addEnumLiteral(callTypeEnum, "Before", 0); //$NON-NLS-1$
+            addEnumLiteral(callTypeEnum, "After", 1); //$NON-NLS-1$
+            addEnumLiteral(callTypeEnum, "ChangeAndValidate", 2); //$NON-NLS-1$
+            addEnumLiteral(callTypeEnum, "Override", 3); //$NON-NLS-1$
+            pkg.getEClassifiers().add(callTypeEnum);
+            EClass ehExt = EcoreFactory.eINSTANCE.createEClass();
+            ehExt.setName("EventHandlerExtension"); //$NON-NLS-1$
+            ehExt.getESuperTypes().add(eventHandler);
+            EAttribute callType = EcoreFactory.eINSTANCE.createEAttribute();
+            callType.setName("callType"); //$NON-NLS-1$
+            callType.setEType(callTypeEnum);
+            ehExt.getEStructuralFeatures().add(callType);
+            pkg.getEClassifiers().add(ehExt);
+        }
+
+        EClass field = EcoreFactory.eINSTANCE.createEClass();
+        field.setName("FormField"); //$NON-NLS-1$
+        EReference handlers = EcoreFactory.eINSTANCE.createEReference();
+        handlers.setName("handlers"); //$NON-NLS-1$
+        handlers.setEType(eventHandler);
+        handlers.setContainment(true);
+        handlers.setUpperBound(-1);
+        field.getEStructuralFeatures().add(handlers);
+        pkg.getEClassifiers().add(field);
+
+        HandlerModel m = new HandlerModel();
+        m.container = pkg.getEFactoryInstance().create(field);
+        m.handlersFeat = field.getEStructuralFeature("handlers"); //$NON-NLS-1$
+        m.event = pkg.getEFactoryInstance().create(eventType);
+        return m;
+    }
+
+    private static String handlerCallTypeName(EObject handler)
+    {
+        EStructuralFeature ct = handler.eClass().getEStructuralFeature("callType"); //$NON-NLS-1$
+        Object v = ct != null ? handler.eGet(ct) : null;
+        return v instanceof Enumerator ? ((Enumerator)v).getName() : null;
+    }
+
+    @Test
+    public void testBindEventHandlerBaseAndExtensionCoexist()
+    {
+        HandlerModel m = newHandlerModel(true);
+        String[] baseKind = new String[1];
+        // Base handler (no callType).
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "OnChange", null, baseKind)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("EventHandler", baseKind[0]); //$NON-NLS-1$
+        // Extension After handler on the SAME event coexists with the base handler.
+        String[] extKind = new String[1];
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "ext_OnChangeAfter", "After", extKind)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("EventHandlerExtension", extKind[0]); //$NON-NLS-1$
+        List<?> handlers = (List<?>)m.container.eGet(m.handlersFeat);
+        assertEquals("base + extension handler must coexist", 2, handlers.size()); //$NON-NLS-1$
+        assertEquals("After", handlerCallTypeName((EObject)handlers.get(1))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testBindEventHandlerDuplicateCallTypeRejectedOtherwiseCoexists()
+    {
+        HandlerModel m = newHandlerModel(true);
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "a", "After", new String[1])); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // A second After extension handler on the same event is a duplicate.
+        String dup = FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "b", "After", new String[1]); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotNull(dup);
+        assertTrue(dup.contains("already exists")); //$NON-NLS-1$
+        // A DIFFERENT call type (Before) on the same event is allowed (coexists).
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "c", "Before", new String[1])); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(2, ((List<?>)m.container.eGet(m.handlersFeat)).size());
+    }
+
+    @Test
+    public void testBindEventHandlerInsteadMapsToOverrideLiteral()
+    {
+        HandlerModel m = newHandlerModel(true);
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "ext_OnChangeInstead", "Instead", new String[1])); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        List<?> handlers = (List<?>)m.container.eGet(m.handlersFeat);
+        assertEquals(1, handlers.size());
+        // The 1C UI "Instead" is written as the EMF enum literal "Override".
+        assertEquals("Override", handlerCallTypeName((EObject)handlers.get(0))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testBindEventHandlerWithoutExtensionTypeErrors()
+    {
+        // A form model lacking the EventHandlerExtension type cannot host extension interception.
+        HandlerModel m = newHandlerModel(false);
+        String err = FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "x", "After", new String[1]); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotNull(err);
+        assertTrue(err.contains("EventHandlerExtension")); //$NON-NLS-1$
+        // The base path still works on the same model.
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "x", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testResolveHandlerContainerByKind()
     {
         EObject form = newForm();

@@ -73,6 +73,9 @@ public class CreateMetadataToolTest
         // Form-object create flag (execute() reads it; schema parity).
         assertTrue("schema must declare the setAsDefault form-object flag", //$NON-NLS-1$
             schema.contains("\"setAsDefault\"")); //$NON-NLS-1$
+        // Extension event-interception call type (execute() reads it; schema parity).
+        assertTrue("schema must declare the callType form-event flag", //$NON-NLS-1$
+            schema.contains("\"callType\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -95,6 +98,38 @@ public class CreateMetadataToolTest
         assertNotNull(schema);
         assertTrue("output schema must declare setAsDefault", //$NON-NLS-1$
             schema.contains("\"setAsDefault\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCallTypeIsOptionalClosedEnum()
+    {
+        // Extension event interception: callType is optional (defaults to a base handler) and a closed
+        // enum offering exactly the three form-event call types.
+        String schema = new CreateMetadataTool().getInputSchema();
+        int callTypeIdx = schema.indexOf("\"callType\""); //$NON-NLS-1$
+        assertTrue("schema must declare callType", callTypeIdx >= 0); //$NON-NLS-1$
+        // Scope the enum/literal checks to the callType property block (up to the next property) so the
+        // closed-enum assertion is about callType itself, not a later enum property.
+        int nextIdx = schema.indexOf("\"commonModuleKind\"", callTypeIdx); //$NON-NLS-1$
+        String block = nextIdx > callTypeIdx ? schema.substring(callTypeIdx, nextIdx) : schema.substring(callTypeIdx);
+        assertTrue("callType must be a closed enum", block.contains("\"enum\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("callType enum must offer Before", block.contains("\"Before\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("callType enum must offer After", block.contains("\"After\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("callType enum must offer Instead", block.contains("\"Instead\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue(requiredIdx >= 0);
+        assertFalse("callType must not be required (defaults to a base handler)", //$NON-NLS-1$
+            schema.substring(requiredIdx).contains("\"callType\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresCallType()
+    {
+        // Output parity: an extension event handler echoes the written callType.
+        String schema = new CreateMetadataTool().getOutputSchema();
+        assertNotNull(schema);
+        assertTrue("output schema must declare callType", //$NON-NLS-1$
+            schema.contains("\"callType\"")); //$NON-NLS-1$
     }
 
     @Test

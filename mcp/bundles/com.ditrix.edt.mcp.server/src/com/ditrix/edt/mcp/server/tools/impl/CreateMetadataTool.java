@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
@@ -113,6 +114,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "Form OBJECT create only (FQN 'Type.Object.Form.FormName'). When true, registers the " //$NON-NLS-1$
                 + "new form as the owner's default object form (default: false). Ignored for other " //$NON-NLS-1$
                 + "create kinds.") //$NON-NLS-1$
+            .enumProperty("callType", //$NON-NLS-1$
+                "Form event handler ONLY (item-level '...Form.F.<ItemKind>.Item.Handler.<Event>' or " //$NON-NLS-1$
+                + "form-level '...Form.F.Handler.<Event>'), in a " //$NON-NLS-1$
+                + "configuration EXTENSION project. Selects EXTENSION event interception: binds a " //$NON-NLS-1$
+                + "form:EventHandlerExtension with this call type instead of a plain base handler, so the " //$NON-NLS-1$
+                + "extension reacts Before / After / Instead of the base element's event (works even when " //$NON-NLS-1$
+                + "the base element has no handler of its own). Omit for a normal base handler. The BSL " //$NON-NLS-1$
+                + "handler procedure itself is added separately via write_module_source. Rejected on a " //$NON-NLS-1$
+                + "base configuration; ignored for non-handler creates.", //$NON-NLS-1$
+                "Before", "After", "Instead") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .enumProperty("commonModuleKind", //$NON-NLS-1$
                 "CommonModule top-object only. Selects a standards-compliant flag combination the " //$NON-NLS-1$
                 + "common-module-type validator accepts (no warning), instead of a bare module: " //$NON-NLS-1$
@@ -164,6 +175,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .booleanProperty("setAsDefault", //$NON-NLS-1$
                 "Whether the new form was registered as the owner's default object form " //$NON-NLS-1$
                 + "(form-object create only)") //$NON-NLS-1$
+            .stringProperty("callType", //$NON-NLS-1$
+                "Extension event call type written (Before/After/Instead), when an extension event " //$NON-NLS-1$
+                + "handler (form:EventHandlerExtension) was created") //$NON-NLS-1$
             .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -181,6 +195,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, "expectedNotExists", false); //$NON-NLS-1$
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
+        String callType = JsonUtils.extractStringArgument(params, "callType"); //$NON-NLS-1$
 
         // Normalize 'ё'->'е' at the PARSE step, BEFORE identifier validation, so a Name carrying the
         // letter 'ё' (which the 1C standard mdo-ru-name-unallowed-letter rejects) is stored compliant.
@@ -193,11 +208,20 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // not the mdclass tree, and take 'title'/'parent' properties rather than synonym/comment.
         String normFqn = normalizeLeafName(MetadataTypeUtils.normalizeFqn(fqn), normReport);
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
+        // callType is meaningful ONLY for a form event handler FQN; reject it loudly elsewhere rather
+        // than silently dropping the interception intent.
+        boolean isHandlerFqn = formRef != null && FormElementWriter.isHandlerToken(formRef.kindToken);
+        if (callType != null && !callType.trim().isEmpty() && !isHandlerFqn)
+        {
+            return ToolResult.error("callType applies only to a form EVENT HANDLER FQN " //$NON-NLS-1$
+                + "('...Form.F.<ItemKind>.Item.Handler.<Event>'). The FQN '" + fqn + "' is not a form " //$NON-NLS-1$ //$NON-NLS-2$
+                + "event handler; omit callType.").toJson(); //$NON-NLS-1$
+        }
         if (formRef != null)
         {
             if (FormElementWriter.isHandlerToken(formRef.kindToken))
             {
-                return createFormHandler(projectName, normFqn, formRef, properties);
+                return createFormHandler(projectName, normFqn, formRef, properties, callType);
             }
             return createFormMember(projectName, normFqn, formRef, properties, normReport);
         }
@@ -797,7 +821,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * localized to the configuration language.
      */
     private String createFormHandler(String projectName, String normFqn,
-        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties, String callType)
     {
         String procName = null;
         for (JsonObject prop : properties)
@@ -828,6 +852,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IProject project = ctx.project;
         Configuration config = ctx.config;
 
+        final boolean extensionHandler = callType != null && !callType.trim().isEmpty();
+        if (extensionHandler && !ExtensionOriginUtils.isExtensionProject(project))
+        {
+            return ToolResult.error("callType (extension event interception) is only valid in a " //$NON-NLS-1$
+                + "configuration EXTENSION project. '" + projectName + "' is a base configuration: " //$NON-NLS-1$ //$NON-NLS-2$
+                + "create a plain handler without callType, or target the extension project (and adopt " //$NON-NLS-1$
+                + "the form there first via adopt_metadata_object).").toJson(); //$NON-NLS-1$
+        }
+
         IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
         IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(project) : null;
         final Version version = v8Project != null ? v8Project.getVersion() : null;
@@ -840,16 +873,26 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         final String eventName = ref.name;
         final String fProc = procName;
+        final String fCallType = callType;
         final boolean commandOwner =
             FormElementWriter.kindForToken(ref.itemKindToken) == FormElementWriter.Kind.COMMAND;
         final String[] createdKind = new String[1];
+
+        // For an EXTENSION event handler the most likely cause of a missing form is that the base form
+        // was never adopted into the extension, so the not-found advisory points at adopt_metadata_object.
+        String formNotFound = "Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
+            + "'Type.Object.Form.FormName' or 'CommonForm.FormName'."; //$NON-NLS-1$
+        if (extensionHandler)
+        {
+            formNotFound += " If this is a base form, adopt it into the extension first via " //$NON-NLS-1$
+                + "adopt_metadata_object."; //$NON-NLS-1$
+        }
 
         final boolean persisted;
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, config,
-                ref.formPath, "Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "'Type.Object.Form.FormName' or 'CommonForm.FormName'."); //$NON-NLS-1$
+                ref.formPath, formNotFound);
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormHandler", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
@@ -867,7 +910,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                                 + ". Create the item first, then add the handler."); //$NON-NLS-1$
                     }
                     String err = FormElementWriter.createHandler(container, eventName, fProc, version,
-                        langCode, createdKind);
+                        langCode, fCallType, createdKind);
                     if (err != null)
                     {
                         throw new RuntimeException(err);
@@ -885,15 +928,31 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create form handler: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        return ToolResult.success()
+        String location = ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath; //$NON-NLS-1$
+        String effectiveProc = (fProc == null || fProc.isEmpty()) ? eventName : fProc;
+        String message;
+        if (extensionHandler)
+        {
+            message = "Created extension (" + callType + ") handler for event '" + eventName //$NON-NLS-1$ //$NON-NLS-2$
+                + "' on " + location + ". Add the BSL procedure '" + effectiveProc //$NON-NLS-1$ //$NON-NLS-2$
+                + "' to the extension form module via write_module_source."; //$NON-NLS-1$
+        }
+        else
+        {
+            message = "Created handler for event '" + eventName + "' on " + location; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        ToolResult result = ToolResult.success()
             .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
             .put("fqn", normFqn) //$NON-NLS-1$
             .put("kind", createdKind[0] != null ? createdKind[0] : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
             .put("name", eventName) //$NON-NLS-1$
             .put("persisted", persisted) //$NON-NLS-1$
-            .put("message", "Created handler for event '" + eventName + "' on " //$NON-NLS-1$ //$NON-NLS-2$
-                + (ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath)) //$NON-NLS-1$
-            .toJson();
+            .put("message", message); //$NON-NLS-1$
+        if (extensionHandler)
+        {
+            result.put("callType", callType); //$NON-NLS-1$
+        }
+        return result.toJson();
     }
 
     /**

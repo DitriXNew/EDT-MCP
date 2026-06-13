@@ -110,6 +110,20 @@ public final class FormElementWriter
     private static final String ECLASS_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND_HANDLER_CONTAINER = "FormCommandHandlerContainer"; //$NON-NLS-1$
     private static final String ECLASS_COMMAND_HANDLER = "CommandHandler"; //$NON-NLS-1$
+    /**
+     * The {@code form:EventHandlerExtension} EClass (subtype of {@code EventHandler}, same EPackage) a
+     * configuration EXTENSION uses to intercept a base element's event with a {@code callType}. Resolved
+     * reflectively from the form EPackage - no {@code com._1c.g5.v8.dt.form.model} compile import.
+     */
+    private static final String ECLASS_EVENT_HANDLER_EXTENSION = "EventHandlerExtension"; //$NON-NLS-1$
+    /** The {@code callType} EAttribute (EEnum {@code ExtendedMethodCallType}) on EventHandlerExtension. */
+    private static final String FEATURE_CALL_TYPE = "callType"; //$NON-NLS-1$
+    /** The 1C UI call-type label "Instead" (Вместо) maps to the EMF enum literal "Override". */
+    private static final String CALL_TYPE_UI_INSTEAD = "Instead"; //$NON-NLS-1$
+    private static final String CALL_TYPE_LITERAL_OVERRIDE = "Override"; //$NON-NLS-1$
+    /** Enum literal/name of the method-only call type, never valid for a form EVENT. */
+    private static final String CALL_TYPE_NAME_CHANGE_AND_VALIDATE = "CHANGE_AND_VALIDATE"; //$NON-NLS-1$
+    private static final String CALL_TYPE_LITERAL_CHANGE_AND_VALIDATE = "ChangeAndValidate"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND_INTERFACE = "FormCommandInterface"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND_INTERFACE_ITEMS = "FormCommandInterfaceItems"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_USUAL_GROUP = "UsualGroup"; //$NON-NLS-1$
@@ -1847,19 +1861,49 @@ public final class FormElementWriter
     // ---- event handlers -------------------------------------------------------------------------
 
     /**
+     * Convenience overload binding a BASE event {@code Handler} (no call type). Equivalent to
+     * {@link #createHandler(EObject, String, String, Version, String, String, String[])} with a
+     * {@code null} call type. Preserved for the existing callers/tests that bind plain handlers.
+     */
+    public static String createHandler(EObject container, String eventName, String procName,
+        Version version, String langCode, String[] createdKind)
+    {
+        return createHandler(container, eventName, procName, version, langCode, null, createdKind);
+    }
+
+    /**
      * Binds an event {@code Handler} to {@code container} (the form itself or a form item): resolves
      * the requested {@code eventName} against the element's AVAILABLE events; on no match returns an
      * error LISTING the available events localized to {@code langCode} (the user-required advisory).
      * The {@code procName} is the BSL handler procedure name (defaults to the event name when blank).
      *
+     * <p>When {@code callType} is non-blank this binds an EXTENSION handler ({@code
+     * form:EventHandlerExtension} with a {@code <callType>}) instead of a base {@code EventHandler} -
+     * how a configuration EXTENSION intercepts a base element's event Before / After / Instead (the 1C
+     * UI label "Instead" / "Вместо" is the EMF enum literal {@code Override}). The extension handler
+     * COEXISTS with the base element's own handler for the same event (the point of interception); only
+     * another extension handler with the SAME call type is a duplicate. {@code ChangeAndValidate} is a
+     * method-only call type and is rejected for a form event. A blank {@code callType} reproduces the
+     * base-handler behavior exactly (one handler per event).
+     *
+     * <p>This writes only the {@code .form} model; the BSL handler procedure itself (like the base
+     * path) is left to {@code write_module_source}.
+     *
      * @param version the platform version (to resolve the element's platform Type and its events)
+     * @param callType {@code null}/blank for a base handler; otherwise Before | After | Instead
      * @return {@code null} on success, or a human-readable error message
      */
     public static String createHandler(EObject container, String eventName, String procName,
-        Version version, String langCode, String[] createdKind)
+        Version version, String langCode, String callType, String[] createdKind)
     {
+        final boolean extension = callType != null && !callType.trim().isEmpty();
         if (ECLASS_FORM_COMMAND.equals(container.eClass().getName()))
         {
+            if (extension)
+            {
+                return "Call-type interception is not supported for a form command action; " //$NON-NLS-1$
+                    + "callType applies to a form ITEM event."; //$NON-NLS-1$
+            }
             return createCommandAction(container, eventName, procName, createdKind);
         }
         EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
@@ -1906,18 +1950,73 @@ public final class FormElementWriter
             return "Event '" + eventName + "' is not valid for " + container.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Available events: " + sb; //$NON-NLS-1$
         }
+        return bindEventHandler(container, handlersFeat, matched, eventName, procName, callType,
+            createdKind);
+    }
+
+    /**
+     * Binds the already-resolved {@code matched} event to {@code container}: creates a base
+     * {@code EventHandler} or, when {@code callType} is non-blank, a {@code form:EventHandlerExtension}
+     * carrying that call type; sets {@code name}/{@code event}[/{@code callType}]; and appends it to the
+     * {@code handlers} list. Duplicate rule: the base path keeps one handler per event; an extension
+     * handler COEXISTS with the base handler and with other-call-type extension handlers, so only a
+     * same-(event, callType) extension handler is a real duplicate. A wrong call type fails loudly (the
+     * extension handler is never produced with an unset {@code callType}). Reflective throughout - no
+     * {@code com._1c.g5.v8.dt.form.model} import. Package-visible for the headless unit test (the
+     * model-dependent event resolution above is exercised by the e2e suite / live verification).
+     *
+     * @return {@code null} on success, or a human-readable error message
+     */
+    static String bindEventHandler(EObject container, EStructuralFeature handlersFeat, EObject matched,
+        String eventName, String procName, String callType, String[] createdKind)
+    {
+        final boolean extension = callType != null && !callType.trim().isEmpty();
+        EClass baseEhType = ((EReference)handlersFeat).getEReferenceType();
+        if (baseEhType == null || baseEhType.getEPackage() == null)
+        {
+            return "Cannot create an event handler for this form model."; //$NON-NLS-1$
+        }
+        // Resolve the extension type and call-type literal UP FRONT - a wrong literal must fail loudly,
+        // never silently produce an extension handler whose callType is left unset.
+        EClass ehType = baseEhType;
+        EEnumLiteral callTypeLiteral = null;
+        if (extension)
+        {
+            EClassifier extClassifier =
+                baseEhType.getEPackage().getEClassifier(ECLASS_EVENT_HANDLER_EXTENSION);
+            if (!(extClassifier instanceof EClass))
+            {
+                return "This form model has no '" + ECLASS_EVENT_HANDLER_EXTENSION //$NON-NLS-1$
+                    + "' type; extension event interception is not available here."; //$NON-NLS-1$
+            }
+            ehType = (EClass)extClassifier;
+            callTypeLiteral = resolveEventCallType(ehType, callType);
+            if (callTypeLiteral == null)
+            {
+                return "Invalid callType '" + callType + "' for a form event. Use Before, After or " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Instead (ChangeAndValidate is for method interception, not events)."; //$NON-NLS-1$
+            }
+        }
+        // Duplicate guard. Base path keeps the original "one handler per event" rule. Extension path lets
+        // the extension handler COEXIST with the base handler and with other-call-type extension handlers;
+        // only a same-(event, callType) EventHandlerExtension is a real duplicate.
         EStructuralFeature evFeat = handlerEventFeature(handlersFeat);
         for (EObject existing : referenceList(container, "handlers")) //$NON-NLS-1$
         {
-            if (evFeat != null && existing.eGet(evFeat) == matched)
+            if (evFeat == null || existing.eGet(evFeat) != matched)
+            {
+                continue;
+            }
+            if (!extension)
             {
                 return "An event handler for '" + eventName + "' already exists on this element."; //$NON-NLS-1$ //$NON-NLS-2$
             }
-        }
-        EClass ehType = ((EReference)handlersFeat).getEReferenceType();
-        if (ehType == null || ehType.getEPackage() == null)
-        {
-            return "Cannot create an event handler for this form model."; //$NON-NLS-1$
+            if (ECLASS_EVENT_HANDLER_EXTENSION.equals(existing.eClass().getName())
+                && callTypeLiteral.getName().equals(callTypeNameOf(existing)))
+            {
+                return "An extension event handler for '" + eventName + "' with call type '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + callType + "' already exists on this element."; //$NON-NLS-1$
+            }
         }
         EObject handler = ehType.getEPackage().getEFactoryInstance().create(ehType);
         setStringFeature(handler, FEATURE_NAME, (procName == null || procName.isEmpty()) ? eventName : procName);
@@ -1925,9 +2024,76 @@ public final class FormElementWriter
         {
             handler.eSet(evFeat, matched);
         }
+        if (extension)
+        {
+            EStructuralFeature ctFeat = handler.eClass().getEStructuralFeature(FEATURE_CALL_TYPE);
+            if (ctFeat == null)
+            {
+                return "The form model's EventHandlerExtension has no 'callType' attribute."; //$NON-NLS-1$
+            }
+            handler.eSet(ctFeat, callTypeLiteral.getInstance());
+        }
         addToList(container, "handlers", handler); //$NON-NLS-1$
         recordKind(handler, createdKind);
         return null;
+    }
+
+    /**
+     * Resolves a user-facing form-event call type (Before | After | Instead) to the {@code
+     * EventHandlerExtension.callType} EEnum literal. The 1C UI label "Instead" (Вместо) maps to the EMF
+     * literal {@code Override}. Matching is case-insensitive against the literal OR the name. The
+     * method-only {@code ChangeAndValidate} and any unknown token resolve to {@code null} (the caller
+     * then errors loudly). No {@code com._1c.g5.v8.dt.form.model} import - all reflective.
+     * Package-visible for the headless unit test.
+     */
+    static EEnumLiteral resolveEventCallType(EClass eventHandlerExtType, String token)
+    {
+        EStructuralFeature feature = eventHandlerExtType.getEStructuralFeature(FEATURE_CALL_TYPE);
+        if (!(feature instanceof EAttribute))
+        {
+            return null;
+        }
+        EClassifier type = ((EAttribute)feature).getEAttributeType();
+        if (!(type instanceof EEnum))
+        {
+            return null;
+        }
+        String want = token.trim();
+        if (CALL_TYPE_UI_INSTEAD.equalsIgnoreCase(want))
+        {
+            want = CALL_TYPE_LITERAL_OVERRIDE; // 1C UI label -> EMF enum literal
+        }
+        // A form EVENT never accepts the method-only call type, even if addressed by literal or name.
+        if (CALL_TYPE_LITERAL_CHANGE_AND_VALIDATE.equalsIgnoreCase(want)
+            || CALL_TYPE_NAME_CHANGE_AND_VALIDATE.equalsIgnoreCase(want))
+        {
+            return null;
+        }
+        for (EEnumLiteral lit : ((EEnum)type).getELiterals())
+        {
+            // Defense in depth: never hand back the method-only literal even if it were addressed
+            // directly. The EEnum literal/name is "ChangeAndValidate" (not the Java constant name), so
+            // compare against the literal form, case-insensitively.
+            if (CALL_TYPE_LITERAL_CHANGE_AND_VALIDATE.equalsIgnoreCase(lit.getName())
+                || CALL_TYPE_LITERAL_CHANGE_AND_VALIDATE.equalsIgnoreCase(lit.getLiteral()))
+            {
+                continue;
+            }
+            if (want.equalsIgnoreCase(lit.getLiteral()) || want.equalsIgnoreCase(lit.getName()))
+            {
+                return lit;
+            }
+        }
+        return null;
+    }
+
+    /** The {@code callType} EEnum literal NAME currently set on an EventHandlerExtension, or null. */
+    private static String callTypeNameOf(EObject handler)
+    {
+        EStructuralFeature ctFeat = handler.eClass().getEStructuralFeature(FEATURE_CALL_TYPE);
+        Object value = ctFeat != null ? handler.eGet(ctFeat) : null;
+        return value instanceof org.eclipse.emf.common.util.Enumerator
+            ? ((org.eclipse.emf.common.util.Enumerator)value).getName() : null;
     }
 
     /**

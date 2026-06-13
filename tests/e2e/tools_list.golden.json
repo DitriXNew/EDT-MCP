@@ -116,6 +116,15 @@
     "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Full parameters and examples: call get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
+        "callType": {
+          "description": "Form event handler ONLY (item-level '...Form.F.<ItemKind>.Item.Handler.<Event>' or form-level '...Form.F.Handler.<Event>'), in a configuration EXTENSION project. Selects EXTENSION event interception: binds a form:EventHandlerExtension with this call type instead of a plain base handler, so the extension reacts Before / After / Instead of the base element's event (works even when the base element has no handler of its own). Omit for a normal base handler. The BSL handler procedure itself is added separately via write_module_source. Rejected on a base configuration; ignored for non-handler creates.",
+          "enum": [
+            "Before",
+            "After",
+            "Instead"
+          ],
+          "type": "string"
+        },
         "commonModuleKind": {
           "description": "CommonModule top-object only. Selects a standards-compliant flag combination the common-module-type validator accepts (no warning), instead of a bare module: 'Server', 'ServerCall', 'ClientManaged', 'ClientOrdinary', 'ClientServer', 'Global'. Defaults to 'Server'. Ignored for other types. Combine with 'serverCall' / 'privileged' / 'returnValuesReuse'. These are create-time-only (the flag set cannot be re-derived post-hoc).",
           "enum": [
@@ -188,6 +197,10 @@
       "properties": {
         "action": {
           "description": "'created' on success",
+          "type": "string"
+        },
+        "callType": {
+          "description": "Extension event call type written (Before/After/Instead), when an extension event handler (form:EventHandlerExtension) was created",
           "type": "string"
         },
         "commonModuleKind": {
