@@ -172,7 +172,7 @@ public class DeleteLaunchConfigTool implements IMcpTool
             {
                 result.put("type", typeId); //$NON-NLS-1$
             }
-            result.put("message", "Launch configuration '" + configName + "' deleted."); //$NON-NLS-1$ //$NON-NLS-2$
+            result.put("message", "Launch configuration '" + configName + "' deleted."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return result.toJson();
         }
         catch (CoreException e)

@@ -177,7 +177,7 @@ public class CreateLaunchConfigTool implements IMcpTool
         String applicationIdParam = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
 
         // ── 2. Resolve client type ─────────────────────────────────────────────
-        String clientType = (clientTypeParam == null || clientTypeParam.isEmpty()) ? "thin" : clientTypeParam.toLowerCase(); //$NON-NLS-1$
+        String clientType = (clientTypeParam == null || clientTypeParam.isEmpty()) ? "thin" : clientTypeParam.toLowerCase(java.util.Locale.ROOT); //$NON-NLS-1$
         String componentTypeId = componentTypeIdFor(clientType);
         if (componentTypeId == null)
         {
@@ -266,7 +266,7 @@ public class CreateLaunchConfigTool implements IMcpTool
             {
                 Activator.logError("Error resolving default application for: " + projectName, e); //$NON-NLS-1$
                 return ToolResult.error("Cannot resolve default application for '" + projectName //$NON-NLS-1$
-                    + "': " + e.getMessage() + ". Use get_applications to list available applications.").toJson(); //$NON-NLS-1$
+                    + "': " + e.getMessage() + ". Use get_applications to list available applications.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
 
@@ -354,7 +354,7 @@ public class CreateLaunchConfigTool implements IMcpTool
                 .put("clientType", clientType) //$NON-NLS-1$
                 .put("applicationId", effectiveApplicationId) //$NON-NLS-1$
                 .put("type", LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID) //$NON-NLS-1$
-                .put("message", "Created '" + saved.getName() + "' (" + clientLabel //$NON-NLS-1$ //$NON-NLS-2$
+                .put("message", "Created '" + saved.getName() + "' (" + clientLabel //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + ") for project '" + projectName + "'. Use debug_launch or " //$NON-NLS-1$ //$NON-NLS-2$
                     + "run_yaxunit_tests with launchConfigurationName='" + saved.getName() //$NON-NLS-1$
                     + "' to launch it.") //$NON-NLS-1$
