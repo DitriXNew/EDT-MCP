@@ -1065,7 +1065,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         int dot = normFqn.lastIndexOf('.');
         String leaf = dot >= 0 ? normFqn.substring(dot + 1) : normFqn;
         String normalizedLeaf = normReport.apply("name", leaf); //$NON-NLS-1$
-        if (normalizedLeaf == leaf)
+        if (leaf.equals(normalizedLeaf))
         {
             return normFqn;
         }

@@ -269,7 +269,7 @@ public class ReadMethodSourceTool implements IMcpTool
                     if (closeParen >= 0)
                     {
                         String afterParen = afterMethod.substring(closeParen + 1);
-                        isExport = afterParen.matches("(?i)\\s*(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*"); //$NON-NLS-1$
+                        isExport = afterParen.matches("(?iu)\\s*(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*"); //$NON-NLS-1$
                     }
                     break;
                 }

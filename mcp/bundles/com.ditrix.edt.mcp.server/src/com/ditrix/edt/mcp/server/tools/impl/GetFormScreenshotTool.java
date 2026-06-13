@@ -290,6 +290,10 @@ public class GetFormScreenshotTool implements IMcpTool
         }
         catch (Exception e)
         {
+            if (e instanceof InterruptedException)
+            {
+                Thread.currentThread().interrupt();
+            }
             Activator.logError("Failed to capture form screenshot", e); //$NON-NLS-1$
             return CaptureResult.error(
                 ToolResult.error("Failed to capture form screenshot: " + e.getMessage()).toJson()); //$NON-NLS-1$
