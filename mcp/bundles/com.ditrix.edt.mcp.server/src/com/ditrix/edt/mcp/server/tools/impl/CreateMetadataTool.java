@@ -214,8 +214,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (callType != null && !callType.trim().isEmpty() && !isHandlerFqn)
         {
             return ToolResult.error("callType applies only to a form EVENT HANDLER FQN " //$NON-NLS-1$
-                + "('...Form.F.<ItemKind>.Item.Handler.<Event>'). The FQN '" + fqn + "' is not a form " //$NON-NLS-1$ //$NON-NLS-2$
-                + "event handler; omit callType.").toJson(); //$NON-NLS-1$
+                + "('...Form.F.<ItemKind>.Item.Handler.<Event>' or '...Form.F.Handler.<Event>'). " //$NON-NLS-1$
+                + "The FQN '" + fqn + "' is not a form event handler; omit callType.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (formRef != null)
         {
