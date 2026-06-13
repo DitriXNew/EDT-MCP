@@ -23,7 +23,7 @@ public enum ToolGroup
         "get_edt_version", "list_projects", "get_configuration_properties", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "clean_project", "revalidate_objects", "resync_to_disk", "get_check_description", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "export_configuration_to_xml", "import_configuration_from_xml", //$NON-NLS-1$ //$NON-NLS-2$
-        "delete_project"), //$NON-NLS-1$
+        "delete_project", "create_project"), //$NON-NLS-1$ //$NON-NLS-2$
 
     PROBLEMS("problems", "Errors & Problems", //$NON-NLS-1$ //$NON-NLS-2$
         "Error reporting and workspace markers (bookmarks, tasks)", //$NON-NLS-1$

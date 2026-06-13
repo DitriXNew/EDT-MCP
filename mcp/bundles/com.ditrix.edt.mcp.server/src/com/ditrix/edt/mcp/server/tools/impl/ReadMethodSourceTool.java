@@ -38,6 +38,14 @@ public class ReadMethodSourceTool implements IMcpTool
 {
     public static final String NAME = "read_method_source"; //$NON-NLS-1$
 
+    private static final String KEY_MODULE = "module"; //$NON-NLS-1$
+    private static final String KEY_METHOD = "method"; //$NON-NLS-1$
+    private static final String KEY_EXPORT = "export"; //$NON-NLS-1$
+    private static final String KEY_START_LINE = "startLine"; //$NON-NLS-1$
+    private static final String KEY_END_LINE = "endLine"; //$NON-NLS-1$
+    private static final String TYPE_PROCEDURE = "Procedure"; //$NON-NLS-1$
+    private static final String TYPE_FUNCTION = "Function"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -174,7 +182,7 @@ public class ReadMethodSourceTool implements IMcpTool
         int to = Math.min(allLines.size(), endLine);
 
         // Build signature info
-        String typeStr = method instanceof Function ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
+        String typeStr = method instanceof Function ? TYPE_FUNCTION : TYPE_PROCEDURE; //$NON-NLS-1$ //$NON-NLS-2$
 
         // Find containing region
         String region = BslModuleUtils.findRegionForLine(allLines, startLine);
@@ -187,16 +195,16 @@ public class ReadMethodSourceTool implements IMcpTool
 
         FrontMatter fm = FrontMatter.create()
             .put("projectName", projectName) //$NON-NLS-1$
-            .put("module", modulePath); //$NON-NLS-1$
+            .put(KEY_MODULE, modulePath); //$NON-NLS-1$
         if (contentHash != null)
         {
             fm.put("contentHash", contentHash); //$NON-NLS-1$
         }
-        fm.put("method", method.getName()) //$NON-NLS-1$
+        fm.put(KEY_METHOD, method.getName()) //$NON-NLS-1$
             .put("type", typeStr) //$NON-NLS-1$
-            .put("export", method.isExport()) //$NON-NLS-1$
-            .put("startLine", from) //$NON-NLS-1$
-            .put("endLine", to) //$NON-NLS-1$
+            .put(KEY_EXPORT, method.isExport()) //$NON-NLS-1$
+            .put(KEY_START_LINE, from) //$NON-NLS-1$
+            .put(KEY_END_LINE, to) //$NON-NLS-1$
             .put("totalLines", allLines.size()); //$NON-NLS-1$
 
         if (region != null)
@@ -255,7 +263,7 @@ public class ReadMethodSourceTool implements IMcpTool
 
             int methodStart = tm.startLine;
             int methodEnd = tm.endLine;
-            String typeStr = tm.isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
+            String typeStr = tm.isFunction ? TYPE_FUNCTION : TYPE_PROCEDURE; //$NON-NLS-1$ //$NON-NLS-2$
 
             // Detect export flag
             boolean isExport = false;
@@ -269,7 +277,7 @@ public class ReadMethodSourceTool implements IMcpTool
                     if (closeParen >= 0)
                     {
                         String afterParen = afterMethod.substring(closeParen + 1);
-                        isExport = afterParen.matches("(?i)\\s*(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*"); //$NON-NLS-1$
+                        isExport = afterParen.matches("(?iu)\\s*(?:\u042d\u043a\u0441\u043f\u043e\u0440\u0442|Export)\\s*"); //$NON-NLS-1$
                     }
                     break;
                 }
@@ -284,16 +292,16 @@ public class ReadMethodSourceTool implements IMcpTool
 
             FrontMatter fm = FrontMatter.create()
                 .put("projectName", projectName) //$NON-NLS-1$
-                .put("module", modulePath); //$NON-NLS-1$
+                .put(KEY_MODULE, modulePath); //$NON-NLS-1$
             if (contentHash != null)
             {
                 fm.put("contentHash", contentHash); //$NON-NLS-1$
             }
-            fm.put("method", methodName) //$NON-NLS-1$
+            fm.put(KEY_METHOD, methodName) //$NON-NLS-1$
                 .put("type", typeStr) //$NON-NLS-1$
-                .put("export", isExport) //$NON-NLS-1$
-                .put("startLine", methodStart + 1) //$NON-NLS-1$
-                .put("endLine", methodEnd + 1) //$NON-NLS-1$
+                .put(KEY_EXPORT, isExport) //$NON-NLS-1$
+                .put(KEY_START_LINE, methodStart + 1) //$NON-NLS-1$
+                .put(KEY_END_LINE, methodEnd + 1) //$NON-NLS-1$
                 .put("totalLines", allLines.size()); //$NON-NLS-1$
 
             if (region != null)
@@ -351,16 +359,16 @@ public class ReadMethodSourceTool implements IMcpTool
         int startLine, int endLine)
     {
         String sourceText = BslModuleUtils.getSourceText(method);
-        String typeStr = method instanceof Function ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
+        String typeStr = method instanceof Function ? TYPE_FUNCTION : TYPE_PROCEDURE; //$NON-NLS-1$ //$NON-NLS-2$
 
         FrontMatter fm = FrontMatter.create()
             .put("projectName", projectName) //$NON-NLS-1$
-            .put("module", modulePath) //$NON-NLS-1$
-            .put("method", method.getName()) //$NON-NLS-1$
+            .put(KEY_MODULE, modulePath) //$NON-NLS-1$
+            .put(KEY_METHOD, method.getName()) //$NON-NLS-1$
             .put("type", typeStr) //$NON-NLS-1$
-            .put("export", method.isExport()) //$NON-NLS-1$
-            .put("startLine", startLine) //$NON-NLS-1$
-            .put("endLine", endLine); //$NON-NLS-1$
+            .put(KEY_EXPORT, method.isExport()) //$NON-NLS-1$
+            .put(KEY_START_LINE, startLine) //$NON-NLS-1$
+            .put(KEY_END_LINE, endLine); //$NON-NLS-1$
 
         StringBuilder sb = new StringBuilder();
         if (sourceText != null)

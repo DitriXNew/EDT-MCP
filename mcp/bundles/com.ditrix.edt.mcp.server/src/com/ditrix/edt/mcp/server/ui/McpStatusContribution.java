@@ -198,7 +198,9 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         {
             for (int x = 0; x < size; x++)
             {
-                double distance = Math.sqrt((x - centerX) * (x - centerX) + (y - centerY) * (y - centerY));
+                double dx = (double)x - centerX;
+                double dy = (double)y - centerY;
+                double distance = Math.sqrt(dx * dx + dy * dy);
                 if (distance <= radius - 0.5)
                 {
                     // Inside circle - fill color

@@ -31,7 +31,6 @@ leave the project tree clean: assert_no_diff() on all paths.
 
 from harness import (
     call,
-    assert_ok,
     assert_error,
     assert_error_quality,
     assert_no_diff,

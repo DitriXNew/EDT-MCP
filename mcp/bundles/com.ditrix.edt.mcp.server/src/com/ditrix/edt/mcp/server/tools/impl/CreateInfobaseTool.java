@@ -249,7 +249,7 @@ public class CreateInfobaseTool implements IMcpTool
                 + "Ensure EDT platform-services are running.").toJson(); //$NON-NLS-1$
         }
 
-        // --- 4. Auto-generate infobase name if omitted ---
+        // --- 3. Auto-generate infobase name if omitted ---
         if (infobaseName == null || infobaseName.isEmpty())
         {
             try
@@ -262,7 +262,7 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
 
-        // --- 5. Prepare the directory ---
+        // --- 4. Prepare the directory ---
         if (register)
         {
             // mode=register: the infobase must already exist on disk; do NOT create it.
@@ -288,7 +288,7 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
 
-        // --- 6. Build the FILE infobase reference ---
+        // --- 5. Build the FILE infobase reference ---
         InfobaseReference ibRef =
             InfobaseReferences.newFileInfobaseReference(infobaseDir.toAbsolutePath().toString());
         ibRef.setName(infobaseName);
@@ -296,7 +296,7 @@ public class CreateInfobaseTool implements IMcpTool
         // infobase by its UUID very early (LockManager.getLock), which NPEs on a null id.
         ibRef.setUuid(java.util.UUID.randomUUID());
 
-        // --- 7. Create the database (create) or register the existing one (register) ---
+        // --- 6. Create the database (create) or register the existing one (register) ---
         if (register)
         {
             // mode=register: add the existing infobase to EDT directly. No 1cv8 launch, no
@@ -395,7 +395,7 @@ public class CreateInfobaseTool implements IMcpTool
             Activator.logInfo("create_infobase: infobase created at " + infobaseDir); //$NON-NLS-1$
         }
 
-        // --- 9. Associate with the project ---
+        // --- 7. Associate with the project ---
         try
         {
             assocManager.associate(project, ibRef, InfobaseAssociationSettings.notSynchronized());
@@ -411,7 +411,7 @@ public class CreateInfobaseTool implements IMcpTool
 
         Activator.logInfo("create_infobase: associated with project " + projectName); //$NON-NLS-1$
 
-        // --- 10. Optionally set as default ---
+        // --- 8. Optionally set as default ---
         String setDefaultNote = null;
         if (setDefault)
         {
@@ -437,7 +437,7 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
 
-        // --- 11. Read back and return ---
+        // --- 9. Read back and return ---
         return buildSuccessResult(projectName, infobaseDir, infobaseName,
             appManager, project, ibRef, setDefaultNote, register);
     }
