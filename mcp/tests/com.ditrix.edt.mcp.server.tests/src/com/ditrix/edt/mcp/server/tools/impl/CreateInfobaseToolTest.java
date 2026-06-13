@@ -146,4 +146,21 @@ public class CreateInfobaseToolTest
         assertTrue("missing both params — projectName checked first", //$NON-NLS-1$
             result.contains("projectName is required")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testInvalidModeIsError()
+    {
+        // An unknown mode value is rejected (headless-safe: validated before any service lookup)
+        // with an error naming the bad value and the two allowed modes.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/Any"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "import"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("invalid mode must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the bad value", result.contains("import")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must list allowed modes", //$NON-NLS-1$
+            result.contains("create") && result.contains("register")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }
