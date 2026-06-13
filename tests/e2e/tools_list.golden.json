@@ -531,7 +531,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Remove a FILE infobase association from a configuration project (and optionally deregister it from the global EDT infobases list). Destructive: guarded by a confirm-preview  -  call without confirm to preview what would be removed (no change), then confirm=true to delete. The inverse of create_infobase. Full parameters and examples: call get_tool_guide('delete_infobase').",
+    "description": "Remove a FILE infobase association from a configuration project (and optionally deregister it from the global EDT infobases list). Destructive: guarded by a confirm-preview - call without confirm to preview what would be removed (no change), then confirm=true to delete. The inverse of create_infobase. Full parameters and examples: call get_tool_guide('delete_infobase').",
     "inputSchema": {
       "properties": {
         "applicationId": {
