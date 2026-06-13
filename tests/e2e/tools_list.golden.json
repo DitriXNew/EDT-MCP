@@ -202,6 +202,84 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_launch/run_yaxunit_tests — there is no separate debug-config type). Use delete_launch_config to remove it. Full parameters and examples: call get_tool_guide('create_launch_config').",
+    "inputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Application (infobase) ID from get_applications. If omitted the project's default application is used. If the project has no applications, the call is rejected with a hint.",
+          "type": "string"
+        },
+        "clientType": {
+          "description": "Client kind: thin (default), thick, or web.",
+          "enum": [
+            "thin",
+            "thick",
+            "web"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "Config name; default '<Project> Thin|Thick|Web Client', uniquified. If a config with this name already exists the call is rejected.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "V8 configuration project name (required). Must be a V8ConfigurationNature project. Use list_projects to discover available projects.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "create_launch_config",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "Always 'created' on success.",
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "Application ID stored in the config (real IApplicationManager id).",
+          "type": "string"
+        },
+        "clientType": {
+          "description": "Client kind: thin, thick, or web.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable status message.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Exact name of the created launch configuration.",
+          "type": "string"
+        },
+        "project": {
+          "description": "Project the configuration targets.",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "type": {
+          "description": "Launch configuration type id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Full parameters and examples: call get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
@@ -763,6 +841,67 @@
         "success": {
           "description": "Whether the operation succeeded",
           "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no change), then confirm=true to delete. Refuses to delete a running config (terminate_launch first). The inverse of create_launch_config. Full parameters and examples: call get_tool_guide('delete_launch_config').",
+    "inputSchema": {
+      "properties": {
+        "confirm": {
+          "description": "true = perform the deletion; default false = preview only (what would be removed, no change).",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Exact launch configuration name (required). Use list_configurations to find available names.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "delete_launch_config",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "Either 'preview' (nothing changed) or 'deleted' (removed).",
+          "type": "string"
+        },
+        "confirmationRequired": {
+          "description": "true on a preview (no change made); absent/false once deleted.",
+          "type": "boolean"
+        },
+        "message": {
+          "description": "Human-readable status message.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the targeted launch configuration.",
+          "type": "string"
+        },
+        "project": {
+          "description": "Project the configuration targets (if known).",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "type": {
+          "description": "Launch configuration type id (if known).",
+          "type": "string"
         }
       },
       "required": [
