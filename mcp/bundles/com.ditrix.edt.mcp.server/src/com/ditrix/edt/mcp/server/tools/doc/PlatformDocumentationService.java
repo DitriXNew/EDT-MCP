@@ -401,9 +401,10 @@ public class PlatformDocumentationService
             IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
             if (v8pm != null)
             {
-                for (IV8Project project : v8pm.getProjects())
+                java.util.Iterator<IV8Project> it = v8pm.getProjects().iterator();
+                if (it.hasNext())
                 {
-                    return project.getVersion();
+                    return it.next().getVersion();
                 }
             }
             return null;
