@@ -214,10 +214,6 @@ The complete set of flag combinations accepted by the check (mirrors the `Common
 2. It is compared **by equality** against each allowed type (the matrix above).
 3. If it equals no allowed type, the module is reported; the message names the closest type and the flags that differ.
 
-### Known Limitation
-
-Because the comparison is by exact flag set, a legitimate but unlisted combination is reported as a false positive. A known case is a module that reuses returned values *for the duration of the call* (`Return value reuse = During request`): such modules are flagged even though they are valid — see [v8-code-style issue #1455](https://github.com/1C-Company/v8-code-style/issues/1455).
-
 ### Check Implementation Class
 
 ```
@@ -241,4 +237,3 @@ bundles/com.e1c.v8codestyle.md/src/com/e1c/v8codestyle/md/CommonModuleTypes.java
 ## 📚 References
 
 - [1C:Enterprise Development Standards - Standard 469](https://its.1c.ru/db/v8std/content/469/hdoc)
-- [v8-code-style issue #1455 — CommonModuleType false positive for "during request" reuse](https://github.com/1C-Company/v8-code-style/issues/1455)
