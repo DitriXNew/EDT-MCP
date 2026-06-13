@@ -143,7 +143,8 @@ def test_create_extension_then_delete():
                              ctx="duplicate project name is named in the error")
 
     finally:
-        _ensure_absent(NEW_EXT)
+        # The extension's effective project name is always '<base>.<name>'; clean up
+        # only that. Deleting the bare NEW_EXT would risk an unrelated same-named project.
         _ensure_absent(PROJECT + "." + NEW_EXT)
 
     assert_no_diff("the fixture must be untouched after the round-trip")

@@ -616,7 +616,7 @@ public class CreateProjectTool implements IMcpTool
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full extension response
-            return ToolResult.success()
+            ToolResult slowResult = ToolResult.success()
                 .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("project", finalEffectiveProjectName) //$NON-NLS-1$
                 .put("projectKind", "extension") //$NON-NLS-1$ //$NON-NLS-2$
@@ -631,8 +631,15 @@ public class CreateProjectTool implements IMcpTool
                 .put("message", "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
                     + "' created and bound to '" + baseProjectName //$NON-NLS-1$
                     + "' (creation completed past the " //$NON-NLS-1$
-                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists).") //$NON-NLS-1$
-                .toJson();
+                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists)."); //$NON-NLS-1$
+            // Mirror the normal success path: report when the synonym could not be applied.
+            if (!synonymApplied)
+            {
+                slowResult.put("synonymNote", //$NON-NLS-1$
+                    "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
+                        + "the base configuration or the new extension configuration."); //$NON-NLS-1$
+            }
+            return slowResult.toJson();
         }
         if (jobResult.errorJson != null)
         {
@@ -820,7 +827,7 @@ public class CreateProjectTool implements IMcpTool
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full configuration response
-            return ToolResult.success()
+            ToolResult slowResult = ToolResult.success()
                 .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("project", finalEffectiveProjectName) //$NON-NLS-1$
                 .put("projectKind", "configuration") //$NON-NLS-1$ //$NON-NLS-2$
@@ -831,8 +838,14 @@ public class CreateProjectTool implements IMcpTool
                 .put("codestyle", slowPathCodestyleMap()) //$NON-NLS-1$
                 .put("message", "Configuration project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
                     + "' created (creation completed past the " //$NON-NLS-1$
-                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists).") //$NON-NLS-1$
-                .toJson();
+                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists)."); //$NON-NLS-1$
+            // Mirror the normal success path: report when the synonym could not be applied.
+            if (!synonymApplied)
+            {
+                slowResult.put("synonymNote", //$NON-NLS-1$
+                    "Synonym was not applied: synonym map was not available on the new Configuration."); //$NON-NLS-1$
+            }
+            return slowResult.toJson();
         }
         if (jobResult.errorJson != null)
         {
