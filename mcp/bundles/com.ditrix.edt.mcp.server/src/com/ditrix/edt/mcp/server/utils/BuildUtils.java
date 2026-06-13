@@ -24,7 +24,7 @@ import com.ditrix.edt.mcp.server.Activator;
 public final class BuildUtils
 {
     /** Default timeout for waiting derived data computations (5 minutes) */
-    private static final long DEFAULT_DD_TIMEOUT_MS = 5 * 60 * 1000;
+    private static final long DEFAULT_DD_TIMEOUT_MS = 5L * 60 * 1000;
     
     private BuildUtils()
     {

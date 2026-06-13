@@ -39,7 +39,7 @@ public class CleanProjectTool implements IMcpTool
     public static final String NAME = "clean_project"; //$NON-NLS-1$
     
     /** Default timeout for waiting project lifecycle restart (3 minutes) */
-    private static final long DEFAULT_LIFECYCLE_TIMEOUT_MS = 3 * 60 * 1000;
+    private static final long DEFAULT_LIFECYCLE_TIMEOUT_MS = 3L * 60 * 1000;
     
     @Override
     public String getName()
