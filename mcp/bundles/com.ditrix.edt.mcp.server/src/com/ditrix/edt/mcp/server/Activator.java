@@ -20,6 +20,8 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.utils.Log;
@@ -231,14 +233,37 @@ public class Activator extends AbstractUIPlugin
     /**
      * Returns the IApplicationManager service for managing applications.
      * Used for application lifecycle operations (update, start, etc.).
-     * 
+     *
      * @return application manager or null if not available
      */
     public IApplicationManager getApplicationManager()
     {
         return services.getApplicationManager();
     }
-    
+
+    /**
+     * Returns the IInfobaseManager service for managing the global infobases list.
+     * Used by create_infobase and delete_infobase.
+     *
+     * @return infobase manager or null if not available
+     */
+    public IInfobaseManager getInfobaseManager()
+    {
+        return services.getInfobaseManager();
+    }
+
+    /**
+     * Returns the IInfobaseAssociationManager service for binding/unbinding infobases
+     * to configuration projects.
+     * Used by create_infobase and delete_infobase.
+     *
+     * @return infobase association manager or null if not available
+     */
+    public IInfobaseAssociationManager getInfobaseAssociationManager()
+    {
+        return services.getInfobaseAssociationManager();
+    }
+
     /**
      * Returns the INavigatorContentProviderStateProvider service.
      * Used for controlling navigator content filtering state.
