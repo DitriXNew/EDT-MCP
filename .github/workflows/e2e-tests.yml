@@ -120,6 +120,19 @@ jobs:
           name: mcp-plugin-p2
           path: plugin-p2
 
+      # Coverage: pull the JaCoCo agent (attached to the EDT JVM below) and the CLI
+      # (used to dump the .exec out of the running JVM before EDT is stopped).
+      - name: "Coverage · fetch JaCoCo agent + CLI"
+        shell: bash
+        run: |
+          set -euxo pipefail
+          V=0.8.13
+          BASE=https://repo1.maven.org/maven2/org/jacoco
+          curl -fSL "$BASE/org.jacoco.agent/$V/org.jacoco.agent-$V-runtime.jar" -o "$RUNNER_TEMP/jacocoagent.jar"
+          curl -fSL "$BASE/org.jacoco.cli/$V/org.jacoco.cli-$V-nodeps.jar" -o "$RUNNER_TEMP/jacococli.jar"
+          echo "JACOCO_AGENT=$RUNNER_TEMP/jacocoagent.jar" >> "$GITHUB_ENV"
+          echo "JACOCO_CLI=$RUNNER_TEMP/jacococli.jar" >> "$GITHUB_ENV"
+
       # ── EDT setup (inlined for per-step visibility) ──────────────────────────────
       - name: "EDT setup 1/8 · system libs (apt — NOT cached)"
         shell: bash
@@ -264,6 +277,7 @@ jobs:
             "$ECLIPSE/eclipse" -data "$WS" -clean -nosplash -consoleLog \
             --launcher.suppressErrors \
             -vmargs \
+            "-javaagent:$JACOCO_AGENT=output=tcpserver,address=127.0.0.1,port=6300,includes=com.ditrix.edt.mcp.*" \
             -Xmx4g \
             -Dosgi.requiredJavaVersion=17 \
             -Dorg.osgi.framework.bundle.parent=ext \
@@ -312,6 +326,28 @@ jobs:
           python -u tests/e2e/run_all.py \
             --project TestConfiguration \
             --junit-xml tests/e2e/e2e-results.xml
+
+      # Coverage: dump the in-memory JaCoCo data out of the still-running EDT JVM (the
+      # agent is in tcpserver mode), then upload it for the Coverage workflow to merge
+      # with the unit .exec. Runs even on test failure, but BEFORE "Stop EDT".
+      - name: "Coverage · dump JaCoCo exec from the EDT JVM"
+        if: always()
+        shell: bash
+        run: |
+          set -uxo pipefail
+          java -jar "$JACOCO_CLI" dump \
+            --address 127.0.0.1 --port 6300 \
+            --destfile "$RUNNER_TEMP/e2e-jacoco.exec" \
+            || echo "[coverage] jacoco dump failed (agent unreachable / EDT not up)"
+          ls -la "$RUNNER_TEMP/e2e-jacoco.exec" 2>/dev/null || echo "[coverage] no e2e exec produced"
+
+      - name: "Coverage · upload e2e JaCoCo exec"
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-jacoco-exec-${{ inputs.edt }}
+          path: ${{ runner.temp }}/e2e-jacoco.exec
+          if-no-files-found: warn
 
       - name: Dump EDT IDE log (the real boot/index log — separate from this console)
         if: always()

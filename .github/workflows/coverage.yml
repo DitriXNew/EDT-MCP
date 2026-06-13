@@ -1,0 +1,127 @@
+name: Coverage
+
+# Combined unit + e2e coverage → a SINGLE SonarCloud analysis.
+#
+# Triggered by workflow_run AFTER an E2E workflow finishes: it rebuilds + runs the unit
+# tests (fresh unit jacoco.exec), downloads the e2e jacoco.exec that the triggering E2E
+# run dumped out of the EDT JVM, MERGES the two, and runs `sonar:sonar` once with the
+# combined coverage. build.yml still runs a unit-only Sonar analysis as an always-on
+# baseline; this run supersedes it with the merged number whenever e2e succeeds (if e2e
+# fails, the guard below skips this and the unit-only baseline stands).
+#
+# NOTE: workflow_run always executes the copy of this file on the DEFAULT branch, so it
+# only takes effect once merged to master. The e2e-side changes (agent + dump + upload)
+# are exercised by the E2E workflows directly on every PR.
+
+on:
+  workflow_run:
+    workflows: ["E2E 2025.2", "E2E 2026.1"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  coverage:
+    # Only when the e2e run passed and originates from this repo (forks have no SONAR_TOKEN).
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Checkout (the analyzed commit)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Cache Tycho P2 repositories
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.m2/repository/.cache/tycho
+            ~/.m2/repository/p2
+          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/pom.xml', '**/*.target') }}
+          restore-keys: |
+            ${{ runner.os }}-tycho-p2-
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Maven build + unit tests (unit jacoco.exec)
+        working-directory: mcp
+        env:
+          MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
+        run: mvn clean verify --batch-mode --no-transfer-progress -T 1C
+
+      - name: Download e2e JaCoCo exec (from the triggering E2E run)
+        uses: actions/download-artifact@v8
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          pattern: e2e-jacoco-exec-*
+          path: coverage-execs
+          merge-multiple: true
+
+      - name: Merge unit + e2e coverage
+        shell: bash
+        run: |
+          set -uxo pipefail
+          UNIT=mcp/tests/com.ditrix.edt.mcp.server.tests/target/jacoco.exec
+          curl -fSL "https://repo1.maven.org/maven2/org/jacoco/org.jacoco.cli/0.8.13/org.jacoco.cli-0.8.13-nodeps.jar" \
+            -o "$RUNNER_TEMP/jacococli.jar"
+          EXECS=$(ls coverage-execs/*.exec 2>/dev/null || true)
+          if [ -n "$EXECS" ]; then
+            java -jar "$RUNNER_TEMP/jacococli.jar" merge "$UNIT" $EXECS --destfile "$RUNNER_TEMP/merged.exec"
+            cp "$RUNNER_TEMP/merged.exec" "$UNIT"
+            echo "[coverage] merged unit + e2e exec into $UNIT"
+          else
+            echo "[coverage] WARNING: no e2e exec downloaded — analysing unit coverage only"
+          fi
+
+      - name: JaCoCo coverage report (merged)
+        working-directory: mcp
+        run: mvn --batch-mode --no-transfer-progress -pl bundles/com.ditrix.edt.mcp.server jacoco:report
+
+      - name: Compute Sonar PR/branch args
+        id: sonarargs
+        shell: bash
+        run: |
+          set -uo pipefail
+          EVENT='${{ github.event.workflow_run.event }}'
+          HEAD='${{ github.event.workflow_run.head_branch }}'
+          PRS='${{ toJson(github.event.workflow_run.pull_requests) }}'
+          if [ "$EVENT" = "pull_request" ]; then
+            PRNUM=$(echo "$PRS" | jq -r '.[0].number // empty')
+            BASE=$(echo "$PRS" | jq -r '.[0].base.ref // "master"')
+            if [ -n "$PRNUM" ]; then
+              echo "args=-Dsonar.pullRequest.key=$PRNUM -Dsonar.pullRequest.branch=$HEAD -Dsonar.pullRequest.base=$BASE" >> "$GITHUB_OUTPUT"
+            else
+              echo "args=-Dsonar.branch.name=$HEAD" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "args=-Dsonar.branch.name=$HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: SonarQube Cloud analysis (unit + e2e)
+        if: env.SONAR_TOKEN != ''
+        working-directory: mcp
+        env:
+          MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
+        run: mvn --batch-mode --no-transfer-progress -T 1C sonar:sonar ${{ steps.sonarargs.outputs.args }}
