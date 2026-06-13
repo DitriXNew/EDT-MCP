@@ -117,7 +117,7 @@
     "inputSchema": {
       "properties": {
         "callType": {
-          "description": "Form event handler ONLY (item-level '...Form.F.<ItemKind>.Item.Handler.<Event>' or form-level '...Form.F.Handler.<Event>'), in a configuration EXTENSION project. Selects EXTENSION event interception: binds a form:EventHandlerExtension with this call type instead of a plain base handler, so the extension reacts Before / After / Instead of the base element's event (works even when the base element has no handler of its own). Omit for a normal base handler. The BSL handler procedure itself is added separately via write_module_source. Rejected on a base configuration; ignored for non-handler creates.",
+          "description": "Form event handler ONLY (item-level '...Form.F.<ItemKind>.Item.Handler.<Event>' or form-level '...Form.F.Handler.<Event>'), in a configuration EXTENSION project. Selects EXTENSION event interception: binds a form:EventHandlerExtension with this call type instead of a plain base handler, so the extension reacts Before / After / Instead of the base element's event (works even when the base element has no handler of its own). Omit for a normal base handler. The BSL handler procedure itself is added separately via write_module_source. Rejected on a base configuration or a non-handler FQN.",
           "enum": [
             "Before",
             "After",

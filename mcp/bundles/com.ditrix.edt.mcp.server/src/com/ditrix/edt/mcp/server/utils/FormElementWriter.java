@@ -2092,8 +2092,7 @@ public final class FormElementWriter
     {
         EStructuralFeature ctFeat = handler.eClass().getEStructuralFeature(FEATURE_CALL_TYPE);
         Object value = ctFeat != null ? handler.eGet(ctFeat) : null;
-        return value instanceof org.eclipse.emf.common.util.Enumerator
-            ? ((org.eclipse.emf.common.util.Enumerator)value).getName() : null;
+        return value instanceof Enumerator ? ((Enumerator)value).getName() : null;
     }
 
     /**

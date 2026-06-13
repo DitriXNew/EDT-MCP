@@ -24,7 +24,7 @@ Creates one metadata node addressed by a 1C full-name FQN, then force-exports th
 - `expectedNotExists` (optional, default false) - assert the node does not yet exist, for a sharper precondition error. A real duplicate is rejected regardless.
 - `normalizeYo` (optional, default true) - normalize the Russian letter `ё`->`е` / `Ё`->`Е` in the NAME (the trailing FQN segment) and in any `synonym` / `comment` value, applied at the parse step before identifier validation. `ё` in a Name is flagged by the 1C standard `mdo-ru-name-unallowed-letter`, so this stores a compliant Name; set `false` to keep `ё` exactly as supplied. The result lists the rewritten fields under `normalized`.
 - `setAsDefault` (optional, default false) - FORM OBJECT create only (`Type.Object.Form.FormName`). When true, registers the new form as the owner's default object form. Ignored for other create kinds.
-- `callType` (optional) - FORM EVENT HANDLER only, in a configuration EXTENSION (`Before`/`After`/`Instead`). Selects extension event interception (see below). Omit for a plain base handler; rejected on a base configuration; ignored for non-handler creates.
+- `callType` (optional) - FORM EVENT HANDLER only, in a configuration EXTENSION (`Before`/`After`/`Instead`). Selects extension event interception (see below). Omit for a plain base handler; rejected on a base configuration or a non-handler FQN.
 
 ### Extension event interception (configuration extensions)
 In a configuration EXTENSION you intercept a base form element's event rather than replacing its handler. Address the item handler FQN and pass `callType`:

@@ -122,7 +122,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "extension reacts Before / After / Instead of the base element's event (works even when " //$NON-NLS-1$
                 + "the base element has no handler of its own). Omit for a normal base handler. The BSL " //$NON-NLS-1$
                 + "handler procedure itself is added separately via write_module_source. Rejected on a " //$NON-NLS-1$
-                + "base configuration; ignored for non-handler creates.", //$NON-NLS-1$
+                + "base configuration or a non-handler FQN.", //$NON-NLS-1$
                 "Before", "After", "Instead") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .enumProperty("commonModuleKind", //$NON-NLS-1$
                 "CommonModule top-object only. Selects a standards-compliant flag combination the " //$NON-NLS-1$
