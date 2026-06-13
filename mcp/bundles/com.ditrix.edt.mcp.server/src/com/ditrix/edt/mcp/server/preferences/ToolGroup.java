@@ -40,7 +40,8 @@ public enum ToolGroup
 
     APPLICATIONS("applications", "Applications & Testing", //$NON-NLS-1$ //$NON-NLS-2$
         "Application management, database update, launch, termination, and testing", //$NON-NLS-1$
-        "get_applications", "list_configurations", "update_database", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "get_applications", "create_infobase", "delete_infobase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "list_configurations", "update_database", //$NON-NLS-1$ //$NON-NLS-2$
         "debug_launch", "terminate_launch", "run_yaxunit_tests"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     DEBUG("debug", "Debugging", //$NON-NLS-1$ //$NON-NLS-2$
