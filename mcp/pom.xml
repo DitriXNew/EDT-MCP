@@ -23,6 +23,12 @@
 
   <name>EDT MCP Server Plugin</name>
 
+  <properties>
+    <sonar.projectKey>DitriXNew_EDT-MCP</sonar.projectKey>
+    <sonar.organization>ditrixnew</sonar.organization>
+    <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+  </properties>
+
   <scm>
     <connection>scm:git:git@github.com:DitriXNew/EDT-MCP.git</connection>
   </scm>

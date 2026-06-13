@@ -14,10 +14,14 @@ jobs:
       contents: read
       checks: write
       pull-requests: write
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -36,11 +40,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-tycho-p2-
 
+      - name: Cache SonarQube packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
       - name: Maven build
         working-directory: mcp
         env:
           MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
         run: mvn clean verify --batch-mode --no-transfer-progress -T 1C
+
+      - name: SonarQube Cloud analysis
+        if: env.SONAR_TOKEN != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        working-directory: mcp
+        env:
+          MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
+        run: mvn --batch-mode --no-transfer-progress -T 1C org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
 
       - name: Publish Unit Test Results
         uses: EnricoMi/publish-unit-test-result-action@v2

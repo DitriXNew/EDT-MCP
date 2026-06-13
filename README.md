@@ -1,6 +1,10 @@
 [![GitHub all releases](https://img.shields.io/github/downloads/DitriXNew/EDT-MCP/total)](https://github.com/DitriXNew/EDT-MCP/releases)
 
 [![Build & Unit Tests](https://github.com/DitriXNew/EDT-MCP/actions/workflows/build.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/build.yml)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=DitriXNew_EDT-MCP&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=DitriXNew_EDT-MCP)
+[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=DitriXNew_EDT-MCP&metric=bugs)](https://sonarcloud.io/summary/new_code?id=DitriXNew_EDT-MCP)
+[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=DitriXNew_EDT-MCP&metric=code_smells)](https://sonarcloud.io/summary/new_code?id=DitriXNew_EDT-MCP)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=DitriXNew_EDT-MCP&metric=coverage)](https://sonarcloud.io/summary/new_code?id=DitriXNew_EDT-MCP)
 
 [![E2E 2025.2](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-2025.2.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-2025.2.yml)
 [![E2E 2026.1](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-2026.1.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-2026.1.yml)
