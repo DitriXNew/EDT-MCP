@@ -17,6 +17,11 @@
   <name>EDT MCP Server Plugin</name>
 
   <properties>
+    <!-- Tycho eclipse-plugin layout: sources live in src/ and Tycho compiles to
+         target/classes. The Sonar Maven scanner does NOT infer these for eclipse-plugin
+         packaging (without them Sonar indexes ~0 Java files and imports no coverage). -->
+    <sonar.sources>src</sonar.sources>
+    <sonar.java.binaries>target/classes</sonar.java.binaries>
     <!-- Sonar reads coverage for this bundle from the report generated below -->
     <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
   </properties>
