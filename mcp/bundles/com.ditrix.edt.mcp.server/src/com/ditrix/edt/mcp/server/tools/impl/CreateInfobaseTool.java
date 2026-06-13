@@ -17,7 +17,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.jobs.Job;
+import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
@@ -73,6 +75,14 @@ public class CreateInfobaseTool implements IMcpTool
 
     /** Infobase application type ID as defined in the applications.infobases plugin.xml. */
     private static final String INFOBASE_APP_TYPE = "com.e1c.g5.dt.applications.type.infobase"; //$NON-NLS-1$
+
+    /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
+    private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
+        "com._1c.g5.v8.dt.platform.services.core"; //$NON-NLS-1$
+
+    /** Internal singleton holding the platform-services Guice injector (loaded via the owning bundle). */
+    private static final String PLATFORM_SERVICES_CORE_CLASS =
+        "com._1c.g5.v8.dt.internal.platform.services.core.PlatformServicesCore"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -254,6 +264,9 @@ public class CreateInfobaseTool implements IMcpTool
         InfobaseReference ibRef =
             InfobaseReferences.newFileInfobaseReference(infobaseDir.toAbsolutePath().toString());
         ibRef.setName(infobaseName);
+        // The reference MUST carry a UUID before perform(): the creation operation locks the
+        // infobase by its UUID very early (LockManager.getLock), which NPEs on a null id.
+        ibRef.setUuid(java.util.UUID.randomUUID());
 
         // --- 7. Build the creation descriptor ---
         IInfobaseCreationOperation.Builder builder = new IInfobaseCreationOperation.Builder()
@@ -388,16 +401,39 @@ public class CreateInfobaseTool implements IMcpTool
     {
         try
         {
-            // com._1c.g5.v8.dt.internal.platform.services.core.PlatformServicesCore
-            // (internal class — must be reached via reflection)
-            Class<?> coreClass = Class.forName(
-                "com._1c.g5.v8.dt.internal.platform.services.core.PlatformServicesCore"); //$NON-NLS-1$
+            // PlatformServicesCore is an INTERNAL class of the platform-services.core bundle;
+            // it is not exported, so Class.forName via OUR bundle classloader cannot see it.
+            // Load it through the OWNING bundle's classloader instead (the same pattern
+            // EdtServices uses for the form bundle's internal service class).
+            Bundle psCoreBundle = Platform.getBundle(PLATFORM_SERVICES_CORE_BUNDLE_ID);
+            if (psCoreBundle == null)
+            {
+                Activator.logError("create_infobase: bundle '" + PLATFORM_SERVICES_CORE_BUNDLE_ID //$NON-NLS-1$
+                    + "' not found — the EDT platform-services plugin is not installed", null); //$NON-NLS-1$
+                return null;
+            }
+            // Touching a class trips the bundle's lazy activation so getDefault() is populated.
+            Class<?> coreClass = psCoreBundle.loadClass(PLATFORM_SERVICES_CORE_CLASS);
             java.lang.reflect.Method getDefault = coreClass.getDeclaredMethod("getDefault"); //$NON-NLS-1$
             getDefault.setAccessible(true);
             Object coreInstance = getDefault.invoke(null);
             if (coreInstance == null)
             {
-                return null;
+                // Bundle not active yet — start it transiently and retry once.
+                try
+                {
+                    psCoreBundle.start(Bundle.START_TRANSIENT);
+                }
+                catch (Exception startEx)
+                {
+                    Activator.logError("create_infobase: could not start platform-services.core bundle", //$NON-NLS-1$
+                        startEx);
+                }
+                coreInstance = getDefault.invoke(null);
+                if (coreInstance == null)
+                {
+                    return null;
+                }
             }
             java.lang.reflect.Method getInjector =
                 coreClass.getDeclaredMethod("getInjector"); //$NON-NLS-1$
@@ -413,8 +449,8 @@ public class CreateInfobaseTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError(
-                "create_infobase: platform probe failed — PlatformServicesCore not available " //$NON-NLS-1$
-                    + "(this is expected in headless CI without a 1C platform)", e); //$NON-NLS-1$
+                "create_infobase: platform probe failed — could not resolve the infobase " //$NON-NLS-1$
+                    + "creation operation (a 1C platform may not be registered in EDT)", e); //$NON-NLS-1$
             return null;
         }
     }
