@@ -552,6 +552,33 @@ def test_create_form_event_handler():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_handler_calltype_rejected_on_base_config():
+    # callType (extension event interception) is only valid in a configuration EXTENSION; on the base
+    # TestConfiguration it must be rejected with an actionable error that names the project and points
+    # at adopt_metadata_object — never silently written as a plain handler.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Handler.OnOpen",
+        "callType": "After"})
+    e = assert_error(r, "callType on a base configuration")
+    assert_error_quality(e, names=[PROJECT], suggests=["adopt_metadata_object"],
+                         ctx="callType on a base config must point at extension projects")
+    assert_no_diff("a rejected extension-only handler must not change the base project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_calltype_on_non_handler_fqn_rejected():
+    # callType applies ONLY to a form event handler FQN; on any other create it is rejected (not
+    # silently dropped), naming callType and steering to a handler FQN.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute.CallTypeMisuse_zz",
+        "callType": "After"})
+    e = assert_error(r, "callType on a non-handler FQN")
+    assert_error_quality(e, names=["callType"], suggests=["handler"],
+                         ctx="callType on a non-handler FQN is rejected, not dropped")
+    assert_no_diff("a rejected callType misuse must not change the project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_unknown_event_lists_available():
     # An unknown event must be rejected WITH the list of available events (the user-required advisory).
     r = call("create_metadata", {

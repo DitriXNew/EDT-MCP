@@ -58,6 +58,23 @@ Before writing, the resulting content is checked for balanced block keywords (Pr
 
 `objectName` resolves by the object's programmatic `Name`, NOT by its synonym. Only the TYPE token may be bilingual: the English `Document.MyDoc` and its Russian equivalent (the Cyrillic type token plus the SAME programmatic Name) resolve to the same module. Resolve by Name, never by synonym.
 
+## Extension method interception (annotations)
+
+In a configuration EXTENSION you intercept a base module METHOD by writing an annotated procedure. This is plain BSL, so `write_module_source` handles it directly - the annotation passes through verbatim (the syntax check only balances block keywords, it does not touch annotations). This is the METHOD counterpart of the form-EVENT interception that `create_metadata`'s `callType` produces; methods use annotations, events use `form:EventHandlerExtension`.
+
+Annotation over the extending procedure, naming the BASE method in quotes:
+- `&Before("BaseMethod")` - run before the base method.
+- `&After("BaseMethod")` - run after the base method.
+- `&Around("BaseMethod")` - run instead of / wrapping the base method (1C "Вместо"; can call `ПродолжитьВызов`).
+- `&ChangeAndValidate("BaseMethod")` - 1C "ИзменениеИКонтроль".
+
+The keywords serialize in ENGLISH on disk (`&Before`/`&After`/`&Around`/`&ChangeAndValidate`); the Russian `&Перед`/`&После`/`&Вместо`/`&ИзменениеИКонтроль` are editor display aliases for the same annotations. Note: the METHOD "Вместо" annotation is `&Around` (a method wrapper), which is distinct from the form-EVENT "Instead" call type (`create_metadata` `callType=Instead`, serialized as the `Override` call type) - methods and events use different mechanisms.
+
+Preconditions for a clean `get_project_errors`:
+1. The host extension module must EXIST - adopt the base object/form into the extension first (`adopt_metadata_object`), or create the extension common module via `create_metadata`. `write_module_source` writes `.bsl` text only; it does not adopt the module object. `mode=replace` can create a missing file, `searchReplace`/`append` need it to exist.
+2. The BASE method must exist in the parent configuration with a matching signature.
+3. Run `get_project_errors` after writing to confirm the extension method resolved.
+
 ## Examples
 
 Surgical edit (default mode):
@@ -71,6 +88,13 @@ Form module via objectName:
 { "projectName": "MyProj", "objectName": "Document.MyDoc",
   "moduleType": "FormModule", "formName": "ItemForm",
   "mode": "replace", "source": "...", "overwrite": true }
+```
+
+Extension method interception (append an annotated procedure to an adopted extension common module):
+```
+{ "projectName": "MyExt", "objectName": "CommonModule.Calc", "moduleType": "Module",
+  "mode": "append",
+  "source": "\n&After(\"Add\")\nProcedure ext_AddAfter(A, B, Result) Export\n\t// runs after CommonModule.Calc.Add\nEndProcedure\n" }
 ```
 
 ## Gotchas

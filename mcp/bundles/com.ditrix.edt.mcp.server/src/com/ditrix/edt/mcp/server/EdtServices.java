@@ -28,6 +28,8 @@ import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.wiring.ServiceProperties;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -57,6 +59,8 @@ public class EdtServices
     private ServiceTracker<IServicesOrchestrator, IServicesOrchestrator> servicesOrchestratorTracker;
     private ServiceTracker<BmAwareResourceSetProvider, BmAwareResourceSetProvider> resourceSetProviderTracker;
     private ServiceTracker<IApplicationManager, IApplicationManager> applicationManagerTracker;
+    private ServiceTracker<IInfobaseManager, IInfobaseManager> infobaseManagerTracker;
+    private ServiceTracker<IInfobaseAssociationManager, IInfobaseAssociationManager> infobaseAssociationManagerTracker;
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
     private ServiceTracker<ITopObjectFqnGenerator, ITopObjectFqnGenerator> topObjectFqnGeneratorTracker;
@@ -146,6 +150,13 @@ public class EdtServices
 
         applicationManagerTracker = new ServiceTracker<>(context, IApplicationManager.class, null);
         applicationManagerTracker.open();
+
+        infobaseManagerTracker = new ServiceTracker<>(context, IInfobaseManager.class, null);
+        infobaseManagerTracker.open();
+
+        infobaseAssociationManagerTracker =
+            new ServiceTracker<>(context, IInfobaseAssociationManager.class, null);
+        infobaseAssociationManagerTracker.open();
 
         navigatorStateProviderTracker = new ServiceTracker<>(context, INavigatorContentProviderStateProvider.class, null);
         navigatorStateProviderTracker.open();
@@ -265,6 +276,16 @@ public class EdtServices
         {
             applicationManagerTracker.close();
             applicationManagerTracker = null;
+        }
+        if (infobaseManagerTracker != null)
+        {
+            infobaseManagerTracker.close();
+            infobaseManagerTracker = null;
+        }
+        if (infobaseAssociationManagerTracker != null)
+        {
+            infobaseAssociationManagerTracker.close();
+            infobaseAssociationManagerTracker = null;
         }
         if (navigatorStateProviderTracker != null)
         {
@@ -490,6 +511,38 @@ public class EdtServices
             return null;
         }
         return applicationManagerTracker.getService();
+    }
+
+    /**
+     * Returns the IInfobaseManager service for managing the global infobases list.
+     * Used by create_infobase and delete_infobase to generate names and
+     * deregister infobases from the EDT Infobases list.
+     *
+     * @return infobase manager or null if not available
+     */
+    public IInfobaseManager getInfobaseManager()
+    {
+        if (infobaseManagerTracker == null)
+        {
+            return null;
+        }
+        return infobaseManagerTracker.getService();
+    }
+
+    /**
+     * Returns the IInfobaseAssociationManager service for binding infobases to
+     * configuration projects (and removing those bindings).
+     * Used by create_infobase and delete_infobase.
+     *
+     * @return infobase association manager or null if not available
+     */
+    public IInfobaseAssociationManager getInfobaseAssociationManager()
+    {
+        if (infobaseAssociationManagerTracker == null)
+        {
+            return null;
+        }
+        return infobaseAssociationManagerTracker.getService();
     }
 
     /**
