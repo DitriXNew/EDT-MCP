@@ -22,10 +22,10 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
-import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -200,24 +200,13 @@ public class UpdateDatabaseTool implements IMcpTool
         boolean terminatedClient = false;
         try
         {
-            ProjectContext ctx = ProjectContext.of(projectName);
-            if (!ctx.exists())
+            ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
+            if (!mr.ok())
             {
-                return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+                return mr.errorJson();
             }
-
-            if (!ctx.isOpen())
-            {
-                return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
-            }
-            IProject project = ctx.project();
-
-            // Get application manager
-            IApplicationManager appManager = Activator.getDefault().getApplicationManager();
-            if (appManager == null)
-            {
-                return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
-            }
+            IProject project = mr.project();
+            IApplicationManager appManager = mr.manager();
             
             // Find application by ID
             Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
