@@ -169,6 +169,7 @@ public class CreateInfobaseToolTest
         assertTrue("outputSchema must declare applicationKind", //$NON-NLS-1$
             schema.contains("\"applicationKind\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare webUrl", schema.contains("\"webUrl\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare port", schema.contains("\"port\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
