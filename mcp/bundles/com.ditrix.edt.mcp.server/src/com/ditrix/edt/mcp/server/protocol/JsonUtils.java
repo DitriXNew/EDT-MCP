@@ -519,6 +519,8 @@ public final class JsonUtils
                     + " whose names are listed by get_metadata_details."; //$NON-NLS-1$
             case "applicationId": //$NON-NLS-1$
                 return ". Use get_applications to list available application IDs."; //$NON-NLS-1$
+            case "launchConfigurationName": //$NON-NLS-1$
+                return ". Use list_configurations to find available configuration names."; //$NON-NLS-1$
             default:
                 return ""; //$NON-NLS-1$
         }

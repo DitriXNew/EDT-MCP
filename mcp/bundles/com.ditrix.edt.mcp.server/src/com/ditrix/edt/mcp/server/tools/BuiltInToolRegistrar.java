@@ -10,12 +10,14 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateInfobaseTool;
+import com.ditrix.edt.mcp.server.tools.impl.CreateLaunchConfigTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteInfobaseTool;
+import com.ditrix.edt.mcp.server.tools.impl.DeleteLaunchConfigTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.EnableToolsetTool;
@@ -141,6 +143,8 @@ public final class BuiltInToolRegistrar
         registry.register(new UpdateDatabaseTool());
         registry.register(new DebugLaunchTool());
         registry.register(new ListConfigurationsTool());
+        registry.register(new CreateLaunchConfigTool());
+        registry.register(new DeleteLaunchConfigTool());
         registry.register(new RunYaxunitTestsTool());
         registry.register(new TerminateLaunchTool());
 

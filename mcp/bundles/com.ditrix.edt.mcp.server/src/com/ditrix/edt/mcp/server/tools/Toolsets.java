@@ -126,7 +126,8 @@ public final class Toolsets
             "create_metadata", "modify_metadata", "delete_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "rename_metadata_object", "adopt_metadata_object", //$NON-NLS-1$ //$NON-NLS-2$
             "get_subsystem_content", "list_subsystems", //$NON-NLS-1$ //$NON-NLS-2$
-            "get_configuration_properties", "list_configurations"); //$NON-NLS-1$ //$NON-NLS-2$
+            "get_configuration_properties", "list_configurations", //$NON-NLS-1$ //$NON-NLS-2$
+            "create_launch_config", "delete_launch_config"); //$NON-NLS-1$ //$NON-NLS-2$
 
         assign(CODE,
             "write_module_source", "read_method_source", "get_method_call_hierarchy", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

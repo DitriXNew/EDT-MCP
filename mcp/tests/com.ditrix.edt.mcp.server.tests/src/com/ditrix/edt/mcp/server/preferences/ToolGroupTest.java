@@ -187,6 +187,18 @@ public class ToolGroupTest
     }
 
     @Test
+    public void testApplicationsGroupIncludesLaunchConfigTools()
+    {
+        List<String> tools = ToolGroup.APPLICATIONS.getToolNames();
+        assertTrue("create_launch_config must be registered in APPLICATIONS group",
+            tools.contains("create_launch_config"));
+        assertTrue("delete_launch_config must be registered in APPLICATIONS group",
+            tools.contains("delete_launch_config"));
+        assertEquals(ToolGroup.APPLICATIONS, ToolGroup.getGroupForTool("create_launch_config"));
+        assertEquals(ToolGroup.APPLICATIONS, ToolGroup.getGroupForTool("delete_launch_config"));
+    }
+
+    @Test
     public void testRefactoringGroupContents()
     {
         List<String> tools = ToolGroup.REFACTORING.getToolNames();
