@@ -14,11 +14,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.eclipse.core.resources.IProject;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
@@ -134,24 +132,12 @@ public class GetSubsystemContentTool implements IMcpTool
     private String getSubsystemContentInternal(String projectName, String subsystemFqn,
         boolean recursive, String language)
     {
-        ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.exists())
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
+        if (!resolved.ok())
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return resolved.errorJson();
         }
-        IProject project = ctx.project();
-
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        if (configProvider == null)
-        {
-            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
-        }
-
-        Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
-        {
-            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
+        Configuration config = resolved.configuration();
 
         Subsystem subsystem = SubsystemUtils.resolveByFqn(config, subsystemFqn);
         if (subsystem == null)

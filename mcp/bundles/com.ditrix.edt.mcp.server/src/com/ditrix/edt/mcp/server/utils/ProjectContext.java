@@ -9,6 +9,11 @@ package com.ditrix.edt.mcp.server.utils;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 
+import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
+
 /**
  * Resolves an MCP {@code projectName} argument to a workspace {@link IProject}
  * and exposes the existence/open predicates that the project tools previously
@@ -24,12 +29,14 @@ import org.eclipse.core.resources.ResourcesPlugin;
  * vs {@link #isOpen()}) and its own wording for the distinct "project is closed"
  * case; only the not-found message and the lookup-and-check boilerplate are shared.
  * <p>
- * This is the first, purely {@link IProject}-level increment of the shared
- * project resolver. TODO (card {@code introduce-project-context-resolver}):
- * extend with cached {@code IV8Project} + {@code Configuration} + BM
- * model-manager resolution so tools stop repeating that chain too. That part
- * works against the live BM model and must be introduced incrementally with
- * end-to-end validation, so it is intentionally left out here.
+ * Beyond {@link IProject} resolution this also resolves the live
+ * {@link Configuration} via {@link #resolveConfiguration()} /
+ * {@link #resolveConfiguration(String)} — the read tools' shared
+ * {@code IConfigurationProvider.getConfiguration(project)} block, with the same
+ * actionable errors. TODO (card {@code introduce-project-context-resolver}):
+ * extend with cached {@code IV8Project} + BM model-manager resolution so tools
+ * stop repeating that chain too. That part works against the live BM model and
+ * must be introduced incrementally with end-to-end validation.
  *
  * @see ProjectStateChecker for the complementary readiness (building / derived
  *      data) check.
@@ -127,5 +134,99 @@ public final class ProjectContext
     {
         return "Project not found: " + projectName //$NON-NLS-1$
             + ". Use list_projects to see available projects."; //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves the live {@link Configuration} for THIS already-resolved project via
+     * the EDT {@code IConfigurationProvider}. Assumes the project handle exists (call
+     * after {@link #exists()}); it does not re-check existence. Use the static
+     * {@link #resolveConfiguration(String)} when you still need the not-found check.
+     *
+     * @return a result carrying the configuration on success, or the matching error
+     *         JSON ({@code "Configuration provider not available"} /
+     *         {@code "Could not get configuration for project: <name>"}) — the exact
+     *         wording the read tools used inline
+     */
+    public ConfigurationResult resolveConfiguration()
+    {
+        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
+        if (configProvider == null)
+        {
+            return new ConfigurationResult(project, null,
+                ToolResult.error("Configuration provider not available").toJson()); //$NON-NLS-1$
+        }
+
+        Configuration config = configProvider.getConfiguration(project);
+        if (config == null)
+        {
+            return new ConfigurationResult(project, null,
+                ToolResult.error("Could not get configuration for project: " + projectName).toJson()); //$NON-NLS-1$
+        }
+
+        return new ConfigurationResult(project, config, null);
+    }
+
+    /**
+     * Resolves a project by name AND its live {@link Configuration} in one step — the
+     * full block the read tools shared: {@code ProjectContext.of(name)} →
+     * {@link #exists()} → not-found error → {@link #resolveConfiguration()}.
+     *
+     * @param projectName the MCP project name argument
+     * @return a result carrying the project + configuration on success, or the first
+     *         matching error JSON (not-found / provider-missing / configuration-missing)
+     */
+    public static ConfigurationResult resolveConfiguration(String projectName)
+    {
+        ProjectContext ctx = of(projectName);
+        if (!ctx.exists())
+        {
+            return new ConfigurationResult(null, null,
+                ToolResult.error(notFoundMessage(projectName)).toJson());
+        }
+        return ctx.resolveConfiguration();
+    }
+
+    /**
+     * Outcome of resolving a project's live {@link Configuration}: either the
+     * configuration (and its project) or an actionable error JSON, mirroring the
+     * inline {@code ToolResult.error(...).toJson()} the tools returned. Check
+     * {@link #ok()} first; on failure return {@link #errorJson()} verbatim.
+     */
+    public static final class ConfigurationResult
+    {
+        private final IProject project;
+        private final Configuration configuration;
+        private final String errorJson;
+
+        private ConfigurationResult(IProject project, Configuration configuration, String errorJson)
+        {
+            this.project = project;
+            this.configuration = configuration;
+            this.errorJson = errorJson;
+        }
+
+        /** @return {@code true} when the configuration resolved (no error). */
+        public boolean ok()
+        {
+            return errorJson == null;
+        }
+
+        /** @return the resolved project handle (may be {@code null} on a not-found error). */
+        public IProject project()
+        {
+            return project;
+        }
+
+        /** @return the resolved configuration, or {@code null} on error. */
+        public Configuration configuration()
+        {
+            return configuration;
+        }
+
+        /** @return the error JSON to return from {@code execute}, or {@code null} on success. */
+        public String errorJson()
+        {
+            return errorJson;
+        }
     }
 }

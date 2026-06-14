@@ -17,7 +17,6 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.bsl.model.Module;
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.AccumulationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.BusinessProcess;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
@@ -183,27 +182,15 @@ public class GetMetadataObjectsTool implements IMcpTool
     private String getMetadataObjectsInternal(String projectName, String metadataType,
                                                String nameFilter, int limit, String language)
     {
-        // Get project
-        ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.exists())
+        // Resolve the project and its configuration
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
+        if (!resolved.ok())
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return resolved.errorJson();
         }
-        IProject project = ctx.project();
-        
-        // Get configuration
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        if (configProvider == null)
-        {
-            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
-        }
-        
-        Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
-        {
-            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
-        
+        IProject project = resolved.project();
+        Configuration config = resolved.configuration();
+
         // Determine language CODE for synonyms (the synonym map is keyed by code,
         // e.g. "ru"/"en", not by the Language object's name). May be null when the
         // configuration has no languages; getSynonymForLanguage tolerates that.

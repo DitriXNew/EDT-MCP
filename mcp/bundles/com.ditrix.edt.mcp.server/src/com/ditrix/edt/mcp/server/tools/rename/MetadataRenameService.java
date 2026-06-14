@@ -24,7 +24,6 @@ import org.osgi.framework.Bundle;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -68,25 +67,14 @@ public class MetadataRenameService
     public String rename(String projectName, String objectFqn, String newName,
         boolean confirm, java.util.Set<Integer> disableIndices, int maxResults)
     {
-        // Get project
-        ProjectContext projectContext = ProjectContext.of(projectName);
-        if (!projectContext.exists())
+        // Resolve the project and its configuration
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
+        if (!resolved.ok())
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return resolved.errorJson();
         }
-        IProject project = projectContext.project();
-
-        // Get configuration
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        if (configProvider == null)
-        {
-            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
-        }
-        Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
-        {
-            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
+        IProject project = resolved.project();
+        Configuration config = resolved.configuration();
 
         // Get refactoring service
         IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();

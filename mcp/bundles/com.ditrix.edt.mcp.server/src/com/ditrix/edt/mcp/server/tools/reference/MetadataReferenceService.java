@@ -29,7 +29,6 @@ import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.common.Functions;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.mcore.FieldSource;
 import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.mcore.TypeItem;
@@ -63,26 +62,14 @@ public class MetadataReferenceService
         // Normalize Russian metadata type names: "Справочник.Номенклатура" -> "Catalog.Номенклатура"
         objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
 
-        // Get project
-        ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.exists())
+        // Resolve the project and its configuration
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
+        if (!resolved.ok())
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return resolved.errorJson();
         }
-        IProject project = ctx.project();
-
-        // Get configuration provider
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        if (configProvider == null)
-        {
-            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
-        }
-
-        Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
-        {
-            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
+        IProject project = resolved.project();
+        Configuration config = resolved.configuration();
 
         // Get BM model manager
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();

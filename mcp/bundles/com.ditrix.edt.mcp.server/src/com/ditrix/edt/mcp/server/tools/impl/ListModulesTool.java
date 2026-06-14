@@ -20,7 +20,6 @@ import org.eclipse.core.runtime.Path;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.AccumulationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.BusinessProcess;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
@@ -177,17 +176,12 @@ public class ListModulesTool implements IMcpTool
         }
 
         // For specific type filters, use EDT API
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        if (configProvider == null)
+        ProjectContext.ConfigurationResult resolved = ctx.resolveConfiguration();
+        if (!resolved.ok())
         {
-            return ToolResult.error("Configuration provider not available").toJson(); //$NON-NLS-1$
+            return resolved.errorJson();
         }
-
-        Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
-        {
-            return ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
+        Configuration config = resolved.configuration();
 
         switch (type)
         {
