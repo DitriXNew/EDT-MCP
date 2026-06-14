@@ -117,7 +117,7 @@
     "inputSchema": {
       "properties": {
         "applicationKind": {
-          "description": "'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23).",
+          "description": "'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by EDT and reported back as 'port'/'webUrl' in the result.",
           "enum": [
             "infobase",
             "standaloneServer"
@@ -144,16 +144,8 @@
           "description": "1C platform version mask to use for creation (e.g. '8.3.25'). If omitted, EDT resolves the best available installed version automatically.",
           "type": "string"
         },
-        "port": {
-          "description": "applicationKind='standaloneServer' only: the cluster/server listen port. Default 8314.",
-          "type": "integer"
-        },
         "projectName": {
           "description": "EDT configuration project to bind the new infobase to (required).",
-          "type": "string"
-        },
-        "publicationName": {
-          "description": "applicationKind='standaloneServer' only: the web publication base/path. If omitted, a sanitized infobaseName (or the project name) is used.",
           "type": "string"
         },
         "setDefault": {
@@ -202,7 +194,7 @@
           "type": "string"
         },
         "port": {
-          "description": "applicationKind='standaloneServer' only: the cluster/server port used.",
+          "description": "applicationKind='standaloneServer' only: the ACTUAL web port the server was published on (parsed from webUrl; EDT auto-allocates it). Absent if webUrl could not be resolved.",
           "type": "integer"
         },
         "project": {
@@ -214,7 +206,7 @@
           "type": "boolean"
         },
         "webUrl": {
-          "description": "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing.",
+          "description": "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing. Best-effort: absent if EDT could not resolve the URL (the server is still created).",
           "type": "string"
         }
       },
