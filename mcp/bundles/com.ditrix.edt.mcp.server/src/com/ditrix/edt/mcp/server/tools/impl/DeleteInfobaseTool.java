@@ -692,10 +692,16 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * A file infobase can be associated with SEVERAL projects at once. Returns {@code true} when ANY
-     * project OTHER than {@code currentProject} still has an infobase application backed by the SAME
-     * on-disk directory ({@code dbDir}) — in which case wiping the files would break those projects, so
-     * the caller keeps the data. Conservative: any failure to enumerate is treated as "shared" (keep).
+     * The same on-disk database can be used by SEVERAL projects at once — as a FILE infobase OR as a
+     * standalone (wst) server's served database. Returns {@code true} when ANY project OTHER than
+     * {@code currentProject} still has an application backed by the SAME on-disk directory
+     * ({@code dbDir}) — in which case wiping the files would break those projects, so the caller keeps
+     * the data. Conservative: any failure to enumerate is treated as "shared" (keep).
+     * <p>
+     * CLOSED projects are intentionally NOT skipped: {@code IApplicationManager.getApplications} resolves
+     * a project's infobases/servers from WORKSPACE-level stores (the infobase association manager and the
+     * standalone-server registry), NOT from the project's open resources (bytecode-verified on 2025.2), so
+     * a closed project that still references the same database is visible here and must be honoured.
      */
     private static boolean isSharedWithOtherProjects(IApplicationManager appManager, IProject currentProject,
             Path dbDir)
@@ -709,7 +715,7 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             for (IProject other : ProjectContext.allProjects())
             {
-                if (other == null || other.equals(currentProject) || !other.isAccessible())
+                if (other == null || other.equals(currentProject))
                 {
                     continue;
                 }
@@ -731,11 +737,9 @@ public class DeleteInfobaseTool implements IMcpTool
                 }
                 for (IApplication app : apps)
                 {
-                    if (!(app instanceof IInfobaseApplication))
-                    {
-                        continue;
-                    }
-                    Path otherDir = resolveFileInfobaseDir(((IInfobaseApplication)app).getInfobase());
+                    // Resolve EVERY co-owner kind: a FILE infobase OR a standalone (wst) server that
+                    // serves the same on-disk database — not just file infobases.
+                    Path otherDir = resolveApplicationDbDir(app);
                     if (otherDir != null && target.equals(otherDir.toAbsolutePath().normalize()))
                     {
                         Activator.logInfo("delete_infobase: database '" + dbDir //$NON-NLS-1$
@@ -756,6 +760,39 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
+     * Resolves an application's on-disk database directory for the shared-files guard: a FILE infobase
+     * via its connection string, OR a standalone (wst) server via its served-database path
+     * ({@link StandaloneServerSupport#databaseDirOf}). Returns {@code null} for any other application kind
+     * or when the path cannot be resolved.
+     */
+    private static Path resolveApplicationDbDir(IApplication app)
+    {
+        if (app instanceof IInfobaseApplication)
+        {
+            return resolveFileInfobaseDir(((IInfobaseApplication)app).getInfobase());
+        }
+        String typeId = (app != null && app.getType() != null) ? app.getType().getId() : null;
+        if (StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
+        {
+            Object module = StandaloneServerSupport.moduleOfApplication(app);
+            String dir = module != null ? StandaloneServerSupport.databaseDirOf(module) : null;
+            if (dir != null && !dir.isEmpty())
+            {
+                try
+                {
+                    return Paths.get(dir);
+                }
+                catch (RuntimeException e)
+                {
+                    Activator.logError("delete_infobase: could not parse served-DB path '" + dir //$NON-NLS-1$
+                        + "' of a standalone server while checking shared infobases", e); //$NON-NLS-1$
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * Best-effort recursive delete of an infobase database directory via EDT's
      * {@code FileUtil.deleteRecursivelyWithRetries} (3 attempts, 500 ms apart; the same primitive the
      * standalone-server delete uses). Non-fatal: a locked/undeletable directory is logged and the call
@@ -768,6 +805,10 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return false;
         }
+        // Resolve to an ABSOLUTE path first: getParent()==null is a filesystem-root test ONLY for an
+        // absolute path — a single-segment RELATIVE path ("MyInfobase") or "." also has no parent and
+        // would otherwise be wrongly refused as if it were a drive root.
+        dir = dir.toAbsolutePath().normalize();
         // SAFETY: the directory is user-supplied (create_infobase's infobaseFile) and mode='register'
         // accepts ANY folder that merely contains a 1Cv8.1CD — so a recursive delete could wipe unrelated
         // sibling files or a drive root. Refuse a filesystem root, and only delete a directory that
