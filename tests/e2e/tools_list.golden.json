@@ -798,7 +798,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Remove a FILE infobase association from a configuration project OR delete a standalone (autonomous) server application. Destructive: guarded by a confirm-preview - call without confirm to preview what would be removed (no change), then confirm=true to delete. For a file infobase: dissociates it and (deleteRegistration, default true) deregisters it from the EDT infobases list. For a standalone server (applicationKind=standaloneServer): stops it and removes the WST server with its config folder and served database. The inverse of create_infobase. Full parameters and examples: call get_tool_guide('delete_infobase').",
+    "description": "Remove a FILE infobase association from a configuration project OR delete a standalone (autonomous) server application. Destructive: guarded by a confirm-preview - call without confirm to preview what would be removed (no change), then confirm=true to delete. For a file infobase: dissociates it and (deleteRegistration, default true) deregisters it from the EDT infobases list. For a standalone server (applicationKind=standaloneServer): stops it and removes the WST server and its server config folder. By default the infobase DATABASE FILES on disk are KEPT (both kinds); pass deleteDatabaseFiles=true to also delete the database directory. The inverse of create_infobase. Full parameters and examples: call get_tool_guide('delete_infobase').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -807,6 +807,10 @@
         },
         "confirm": {
           "description": "true = perform the removal; default false = preview only (no change).",
+          "type": "boolean"
+        },
+        "deleteDatabaseFiles": {
+          "description": "true = ALSO delete the infobase database files/directory from disk (the 1Cv8.1CD directory) — IRREVERSIBLE. Default false = keep the database files on disk (the registration is removed but the data stays). Works for both a file infobase and a standalone server (deletes the served database directory).",
           "type": "boolean"
         },
         "deleteRegistration": {
@@ -844,6 +848,10 @@
         },
         "confirmationRequired": {
           "description": "true on a preview (no change made); absent/false once deleted.",
+          "type": "boolean"
+        },
+        "databaseFilesDeleted": {
+          "description": "Whether the database files on disk were actually deleted (only when deleteDatabaseFiles=true; false otherwise or if the directory could not be removed).",
           "type": "boolean"
         },
         "deleteRegistration": {
