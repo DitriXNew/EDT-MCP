@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -302,7 +303,20 @@ public class UpdateDatabaseTool implements IMcpTool
                             + "infobase: project=" + projectName + ", application=" + applicationId); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                 }
-                stateAfter = appManager.update(application, updateType, context, monitor);
+                // EDT pops a blocking "Restructure data" / «Реорганизация информации» modal
+                // (InfobaseUpdateConfirmDialog) whenever the config changes the DB structure; it
+                // hangs this unattended call. Arm the restructure matcher to auto-press its default
+                // "Accept" button around the update only — the confirm=true gate already approved the
+                // (irreversible) update, so accepting the platform's re-prompt is the correct completion.
+                LaunchUpdateDialogAutoConfirmer.arm(false, false, true);
+                try
+                {
+                    stateAfter = appManager.update(application, updateType, context, monitor);
+                }
+                finally
+                {
+                    LaunchUpdateDialogAutoConfirmer.disarm(false, false, true);
+                }
             }
 
             // Build result. terminatedClient is emitted ONLY when a client was actually terminated

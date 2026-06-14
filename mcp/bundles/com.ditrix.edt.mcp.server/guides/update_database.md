@@ -32,9 +32,9 @@ A 1C client launched from this EDT that is running against the target infobase h
 
 Pass `terminateRunningClients=false` to keep the client running; then the old manual flow applies — check `list_configurations` for `running: true` and call `terminate_launch` yourself before retrying. Externally launched clients (Designer, ad-hoc 1cv8c.exe) are invisible to both this sweep and `terminate_launch`, and must be closed by hand.
 
-## Database restructure (not controllable here)
+## Database restructure (auto-confirmed)
 
-When the update requires a database restructure (table/index changes), EDT itself decides how to confirm it: it shows its own confirmation dialog in the EDT window, or — if confirmation cannot happen — the update returns with the infobase still requiring an update. The EDT update API offers no per-call switch to auto-confirm a restructure, so this tool intentionally has no parameter for it. If the result reports a state other than `UPDATED`, confirm the restructure in the EDT UI (or use `fullUpdate=true`, which may avoid the incremental restructure path) and re-run.
+When the update changes the DB structure (new/changed objects), EDT pops a blocking **"Restructure data" / «Реорганизация информации»** confirmation dialog listing the structural changes. Because `confirm=true` has already approved this irreversible update, the tool **auto-presses that dialog's default "Accept" button** so the unattended call completes without a human click — otherwise the MCP call would hang on the modal. The EDT update API offers no per-call switch for this, so it is handled by intercepting the dialog only for the duration of this update; the auto-press is written to the EDT log. A structural restructure can include data-deleting changes (dropped attributes/objects) — that is part of applying the configuration you confirmed. Applies to both file infobases and standalone servers.
 
 ## Examples
 

@@ -127,7 +127,7 @@ public final class LaunchUpdateDialogAutoConfirmer
      * "Обновление приложения"). EDT localizes this dialog title, so both the
      * English and Russian titles must match — an English-only match never fires
      * on a Russian-locale EDT. Kept as a
-     * {@code \\uXXXX}-escaped literal (copied verbatim from EDT's own
+     * unicode-escaped literal (copied verbatim from EDT's own
      * {@code messages_ru.properties}) so it compiles identically regardless of the
      * source-file encoding the Tycho compiler picks up.
      */
@@ -144,6 +144,36 @@ public final class LaunchUpdateDialogAutoConfirmer
         new LinkedHashSet<>(Arrays.asList(APPLICATION_UPDATE_TITLE, APPLICATION_UPDATE_TITLE_RU)));
 
     /**
+     * English title of the platform's DB-restructure confirmation modal
+     * ({@code InfobaseUpdateConfirmDialog}, resource key
+     * {@code InfobaseUpdateConfirmDialog_Restructure_data}). It pops during
+     * {@code IApplicationManager.update} (the {@code update_database} tool and the
+     * pre-launch DB update) whenever the configuration changes the DB structure, lists
+     * the structural changes, and blocks the worker thread until "Accept"/"Cancel" is
+     * pressed. Its <b>default</b> button is "Accept", so the same default-button press
+     * the update modal uses confirms it.
+     */
+    static final String RESTRUCTURE_TITLE = "Restructure data"; //$NON-NLS-1$
+
+    /**
+     * Russian title of the same restructure modal ({@code messages_ru.properties}:
+     * "Реорганизация информации"). Verified verbatim from EDT's own
+     * {@code com._1c.g5.v8.dt.platform.services.ui} bundle. Kept unicode-escaped
+     * (no raw Cyrillic in source) so it compiles identically whatever encoding the Tycho
+     * compiler picks.
+     */
+    static final String RESTRUCTURE_TITLE_RU =
+        "\u0420\u0435\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0446\u0438\u044F \u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u0438"; //$NON-NLS-1$
+
+    /**
+     * Every shipped localized title of the DB-restructure confirmation modal (English /
+     * Russian — the only NL variants EDT ships). Exact whole-title compare, so no
+     * unrelated dialog is touched.
+     */
+    static final Set<String> RESTRUCTURE_TITLES = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList(RESTRUCTURE_TITLE, RESTRUCTURE_TITLE_RU)));
+
+    /**
      * English message-body prefix of EDT's "Debug session already exists" launch
      * modal (status code {@code 1003}, handler {@code DebugSessionCheckStatusHandler}).
      * The full text is "Debug session for project \"{0}\" and application \"{1}\" has
@@ -154,7 +184,7 @@ public final class LaunchUpdateDialogAutoConfirmer
 
     /**
      * Russian message-body prefix of the same modal (decodes to
-     * "Сессия отладки для проекта"). Kept {@code \\uXXXX}-escaped (no raw Cyrillic in
+     * "Сессия отладки для проекта"). Kept unicode-escaped (no raw Cyrillic in
      * source) so it compiles identically whatever encoding the Tycho compiler picks.
      */
     static final String DEBUG_SESSION_EXISTS_BODY_PREFIX_RU =
@@ -185,7 +215,7 @@ public final class LaunchUpdateDialogAutoConfirmer
 
     /**
      * Russian label of the same "keep existing and start new" button (decodes to
-     * "Сохранить старую и запустить новую"). Kept {@code \\uXXXX}-escaped (no raw
+     * "Сохранить старую и запустить новую"). Kept unicode-escaped (no raw
      * Cyrillic in source) so it compiles identically whatever encoding the Tycho
      * compiler picks. EDT localizes this button label too, so both the English
      * and Russian variants must match.
@@ -228,6 +258,16 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static int sessionArmCount;
 
+    /**
+     * Reentrant arm count for the DB-restructure TITLE matcher ("Restructure data" /
+     * "Реорганизация информации"). While {@code > 0} the listener auto-presses that
+     * modal's default "Accept" button. Armed alongside the update matcher by the
+     * back-compat {@link #arm(boolean, boolean)} (a restructure is a consequence of an
+     * update), and independently by {@code update_database} via
+     * {@link #arm(boolean, boolean, boolean)}.
+     */
+    private static int restructureArmCount;
+
     private static Display filterDisplay;
     private static Listener filter;
 
@@ -244,6 +284,18 @@ public final class LaunchUpdateDialogAutoConfirmer
     static boolean isTargetTitle(String shellTitle)
     {
         return shellTitle != null && APPLICATION_UPDATE_TITLES.contains(shellTitle);
+    }
+
+    /**
+     * Pure decision (and test seam): is the given shell title the DB-restructure
+     * confirmation modal ({@link #RESTRUCTURE_TITLES}, "Restructure data" /
+     * "Реорганизация информации") that pops during a configuration to DB update when the
+     * structure changes? Auto-confirmed via its DEFAULT button ("Accept"), like the
+     * "Application update" modal.
+     */
+    static boolean isRestructureTitle(String shellTitle)
+    {
+        return shellTitle != null && RESTRUCTURE_TITLES.contains(shellTitle);
     }
 
     /**
@@ -323,7 +375,29 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static void arm(boolean updateDialog, boolean sessionDialog)
     {
-        if (!updateDialog && !sessionDialog)
+        // A DB restructure is a consequence of the same DB update, so the existing
+        // launch callers (which arm the update matcher around their pre-launch update)
+        // get the restructure matcher for free, gated on the update flag.
+        arm(updateDialog, sessionDialog, updateDialog);
+    }
+
+    /**
+     * Arms the auto-confirmer with all three independently-selectable matchers — the
+     * "Application update" TITLE, the code-1003 "Debug session already exists" BODY,
+     * and the DB-restructure ("Restructure data" / "Реорганизация информации") TITLE.
+     * MUST be paired with {@link #disarm(boolean, boolean, boolean)} (same flags) in a
+     * {@code finally} block. {@code update_database} arms ONLY the restructure matcher
+     * ({@code arm(false, false, true)}) around its {@code IApplicationManager.update}
+     * call; the launch paths arm update+restructure together via the two-arg overload.
+     * Reentrant per matcher; no-op headless / all-false; never throws.
+     *
+     * @param updateDialog arm the "Application update" TITLE matcher
+     * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
+     * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
+     */
+    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog)
+    {
+        if (!updateDialog && !sessionDialog && !restructureDialog)
         {
             return;
         }
@@ -341,6 +415,10 @@ public final class LaunchUpdateDialogAutoConfirmer
             if (sessionDialog)
             {
                 sessionArmCount++;
+            }
+            if (restructureDialog)
+            {
+                restructureArmCount++;
             }
         }
         reconcileOnUiThread(display);
@@ -361,7 +439,21 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static void disarm(boolean updateDialog, boolean sessionDialog)
     {
-        if (!updateDialog && !sessionDialog)
+        disarm(updateDialog, sessionDialog, updateDialog);
+    }
+
+    /**
+     * Disarms the matchers armed by a matching {@link #arm(boolean, boolean, boolean)}
+     * (same flags). The underlying {@link Display} filter is removed only once ALL
+     * three matchers have no outstanding arm. Never throws.
+     *
+     * @param updateDialog release one update-matcher arm
+     * @param sessionDialog release one session-matcher arm
+     * @param restructureDialog release one restructure-matcher arm
+     */
+    public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog)
+    {
+        if (!updateDialog && !sessionDialog && !restructureDialog)
         {
             return;
         }
@@ -375,6 +467,10 @@ public final class LaunchUpdateDialogAutoConfirmer
             if (sessionDialog && sessionArmCount > 0)
             {
                 sessionArmCount--;
+            }
+            if (restructureDialog && restructureArmCount > 0)
+            {
+                restructureArmCount--;
             }
             display = filterDisplay;
         }
@@ -436,7 +532,7 @@ public final class LaunchUpdateDialogAutoConfirmer
                 filter = null;
                 filterDisplay = null;
             }
-            boolean anyArmed = updateArmCount > 0 || sessionArmCount > 0;
+            boolean anyArmed = updateArmCount > 0 || sessionArmCount > 0 || restructureArmCount > 0;
             if (anyArmed && filter == null)
             {
                 toInstall = createFilterListener();
@@ -506,17 +602,21 @@ public final class LaunchUpdateDialogAutoConfirmer
             // between events) so each branch fires only for an armed matcher.
             boolean updateArmed;
             boolean sessionArmed;
+            boolean restructureArmed;
             synchronized (LOCK)
             {
                 updateArmed = updateArmCount > 0;
                 sessionArmed = sessionArmCount > 0;
+                restructureArmed = restructureArmCount > 0;
             }
-            // The body is only read (a widget-tree walk) when the title did not
-            // already match the armed update matcher AND the session matcher is
-            // armed — otherwise it is needless work.
-            boolean needBody = sessionArmed && !(updateArmed && isTargetTitle(title));
+            // The body is only read (a widget-tree walk) when the title did not already
+            // match an armed TITLE matcher (update or restructure) AND the session
+            // matcher is armed — otherwise it is needless work.
+            boolean titleMatched =
+                (updateArmed && isTargetTitle(title)) || (restructureArmed && isRestructureTitle(title));
+            boolean needBody = sessionArmed && !titleMatched;
             String body = needBody ? readDialogBody(shell) : null;
-            if (!shouldAutoConfirm(updateArmed, sessionArmed, title, body))
+            if (!shouldAutoConfirm(updateArmed, sessionArmed, restructureArmed, title, body))
             {
                 return;
             }
@@ -549,7 +649,32 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     static boolean shouldAutoConfirm(boolean updateArmed, boolean sessionArmed, String title, String body)
     {
+        return shouldAutoConfirm(updateArmed, sessionArmed, false, title, body);
+    }
+
+    /**
+     * Pure gating decision including the DB-restructure matcher. The restructure-TITLE
+     * branch fires only when {@code restructureArmed} (e.g. {@code update_database} or a
+     * pre-launch update); it routes through {@link #pressConfirmButton}'s default-button
+     * path (presses "Accept"), like the "Application update" modal. Disjoint from the
+     * update title (distinct strings) and from the 1003 body matcher.
+     *
+     * @param updateArmed is the "Application update" TITLE matcher armed
+     * @param sessionArmed is the 1003 "Debug session already exists" BODY matcher armed
+     * @param restructureArmed is the DB-restructure TITLE matcher armed
+     * @param title the dialog shell title (may be {@code null})
+     * @param body the dialog message body (may be {@code null}; only consulted when
+     *            {@code sessionArmed})
+     * @return {@code true} when an armed matcher claims this dialog
+     */
+    static boolean shouldAutoConfirm(boolean updateArmed, boolean sessionArmed, boolean restructureArmed,
+        String title, String body)
+    {
         if (updateArmed && isTargetTitle(title))
+        {
+            return true;
+        }
+        if (restructureArmed && isRestructureTitle(title))
         {
             return true;
         }

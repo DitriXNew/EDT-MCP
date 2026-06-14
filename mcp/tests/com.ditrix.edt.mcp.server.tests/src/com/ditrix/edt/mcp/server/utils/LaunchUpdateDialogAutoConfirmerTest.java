@@ -33,7 +33,7 @@ import org.junit.Test;
 public class LaunchUpdateDialogAutoConfirmerTest
 {
     /**
-     * Russian title of the modal ("Обновление приложения"), {@code \\uXXXX}-escaped
+     * Russian title of the modal ("Обновление приложения"), unicode-escaped
      * just like the production constant so this test compiles identically whatever
      * source encoding the Tycho compiler picks for the test bundle (which has no
      * explicit encoding setting, unlike the production bundle).
@@ -63,7 +63,7 @@ public class LaunchUpdateDialogAutoConfirmerTest
     {
         // Guards against a typo in the escaped production constant: it must equal
         // the exact string EDT's messages_ru.properties renders. Both sides are
-        // \\uXXXX-escaped, so the assertion is encoding-independent; we also pin the
+        // unicode-escaped, so the assertion is encoding-independent; we also pin the
         // decoded length so a wrong escape can't accidentally still pass.
         assertEquals("the Russian title constant must equal the expected localized string",
             RUSSIAN_TITLE, LaunchUpdateDialogAutoConfirmer.APPLICATION_UPDATE_TITLE_RU);
@@ -110,7 +110,7 @@ public class LaunchUpdateDialogAutoConfirmerTest
 
     /**
      * Russian body prefix of the code-1003 "Debug session already exists" modal
-     * ("Сессия отладки для проекта"), {@code \\uXXXX}-escaped exactly like the
+     * ("Сессия отладки для проекта"), unicode-escaped exactly like the
      * production constant so it compiles identically whatever encoding the Tycho
      * compiler picks for the test bundle.
      */
@@ -286,7 +286,7 @@ public class LaunchUpdateDialogAutoConfirmerTest
 
     /**
      * Russian label of the 1003 "keep existing and start new" button
-     * ("Сохранить старую и запустить новую"), {@code \\uXXXX}-escaped exactly like the
+     * ("Сохранить старую и запустить новую"), unicode-escaped exactly like the
      * production constant so this test compiles identically whatever encoding the Tycho
      * compiler picks for the test bundle.
      */
@@ -485,5 +485,96 @@ public class LaunchUpdateDialogAutoConfirmerTest
         assertFalse("arm() must return promptly, not syncExec onto a never-pumped display",
             worker.isAlive());
         assertNull("arm() must not create a display on the calling thread", created.get());
+    }
+
+    /**
+     * Russian title of the DB-restructure modal ("Реорганизация информации"),
+     * unicode-escaped exactly like the production constant so it compiles
+     * identically whatever encoding the Tycho compiler picks for the test bundle.
+     */
+    private static final String RUSSIAN_RESTRUCTURE_TITLE =
+        "\u0420\u0435\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0446\u0438\u044F \u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u0438";
+
+    @Test
+    public void testRestructureTitleEnglishMatches()
+    {
+        assertTrue("the English restructure modal title must match",
+            LaunchUpdateDialogAutoConfirmer.isRestructureTitle("Restructure data"));
+    }
+
+    @Test
+    public void testRestructureTitleRussianMatches()
+    {
+        // EDT localizes this title — the Russian restructure title must match too, or the
+        // unattended update_database hangs on the un-dismissed modal.
+        assertTrue("the Russian restructure modal title must match",
+            LaunchUpdateDialogAutoConfirmer.isRestructureTitle(RUSSIAN_RESTRUCTURE_TITLE));
+    }
+
+    @Test
+    public void testRestructureRussianConstantDecodesCorrectly()
+    {
+        assertEquals("the Russian restructure title constant must equal the expected string",
+            RUSSIAN_RESTRUCTURE_TITLE, LaunchUpdateDialogAutoConfirmer.RESTRUCTURE_TITLE_RU);
+        assertEquals("the Russian restructure title is 'Реорганизация информации' (24 chars)",
+            24, LaunchUpdateDialogAutoConfirmer.RESTRUCTURE_TITLE_RU.length());
+    }
+
+    @Test
+    public void testRestructureTitleSetHasBothLocales()
+    {
+        assertTrue("the restructure-titles set must contain the English title",
+            LaunchUpdateDialogAutoConfirmer.RESTRUCTURE_TITLES.contains("Restructure data"));
+        assertTrue("the restructure-titles set must contain the Russian title",
+            LaunchUpdateDialogAutoConfirmer.RESTRUCTURE_TITLES.contains(RUSSIAN_RESTRUCTURE_TITLE));
+    }
+
+    @Test
+    public void testRestructureMatcherDisjointFromOthers()
+    {
+        // The restructure title is its own concern: not an update title, not a 1003 body;
+        // and the update title / 1003 body are not restructure titles.
+        assertFalse("the restructure title must not match the update matcher",
+            LaunchUpdateDialogAutoConfirmer.isTargetTitle("Restructure data"));
+        assertFalse("the update title must not match the restructure matcher",
+            LaunchUpdateDialogAutoConfirmer.isRestructureTitle("Application update"));
+        assertFalse("a null title must not match the restructure matcher",
+            LaunchUpdateDialogAutoConfirmer.isRestructureTitle(null));
+        assertFalse("the restructure title must not match the 1003 body matcher",
+            LaunchUpdateDialogAutoConfirmer.isDebugSessionExistsBody("Restructure data"));
+    }
+
+    @Test
+    public void testRestructureOnlyArmConfirmsRestructureTitleOnly()
+    {
+        // update_database arms ONLY the restructure matcher: it confirms the restructure
+        // title and ignores both the update modal title and the 1003 session body.
+        assertTrue("restructure-only arm must confirm the restructure title",
+            LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(false, false, true, "Restructure data", null));
+        assertFalse("restructure-only arm must ignore the update modal title",
+            LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(false, false, true, "Application update", null));
+        assertFalse("restructure-only arm must ignore the 1003 session body",
+            LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(false, false, true, "Question", DEBUG_SESSION_BODY));
+    }
+
+    @Test
+    public void testRestructureNotArmedIgnoresRestructureTitle()
+    {
+        // Without the restructure arm the restructure title is left untouched even if the
+        // other two matchers are armed.
+        assertFalse("an un-armed restructure matcher must leave the restructure title alone",
+            LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(true, true, false, "Restructure data", null));
+    }
+
+    @Test
+    public void testTwoArgArmAlsoArmsRestructureWhenUpdateArmed()
+    {
+        // The back-compat 2-arg arm ties the restructure matcher to the update flag — a
+        // pure no-op call here (headless), but the delegation contract is pinned by the
+        // 3-arg shouldAutoConfirm tests above; this just exercises the overload safely.
+        LaunchUpdateDialogAutoConfirmer.arm(false, false);
+        LaunchUpdateDialogAutoConfirmer.disarm(false, false);
+        LaunchUpdateDialogAutoConfirmer.arm(false, false, false);
+        LaunchUpdateDialogAutoConfirmer.disarm(false, false, false);
     }
 }
