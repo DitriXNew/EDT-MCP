@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.jobs.Job;
 import org.osgi.framework.Bundle;
@@ -44,8 +46,6 @@ import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
-import com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.IStandaloneServerService;
-import com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.StandaloneServerInfobase;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -105,6 +105,19 @@ public class CreateInfobaseTool implements IMcpTool
     /** Symbolic name of the bundle that owns the standalone-server WST service. */
     private static final String STANDALONE_SERVER_WST_CORE_BUNDLE_ID =
         "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core"; //$NON-NLS-1$
+
+    /**
+     * FQN of the standalone-server service interface. The standalone-server bundles are resolved
+     * REFLECTIVELY (not a MANIFEST Require-Bundle): they pull in a transitive dependency (snakeyaml)
+     * that a minimal headless EDT does not ship, so a hard dependency would make THIS plugin fail to
+     * resolve there. Reflection keeps the plugin loadable everywhere; the standalone-server path then
+     * fails fast with an actionable error when the feature is absent.
+     */
+    private static final String STANDALONE_SERVER_SERVICE_CLASS =
+        "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.IStandaloneServerService"; //$NON-NLS-1$
+    /** FQN of the StandaloneServerInfobase type (the Pair's second element; getInfobaseUrl's argument). */
+    private static final String STANDALONE_SERVER_INFOBASE_CLASS =
+        "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.StandaloneServerInfobase"; //$NON-NLS-1$
 
     /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
     private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
@@ -186,6 +199,8 @@ public class CreateInfobaseTool implements IMcpTool
             .stringProperty("infobaseName", "Display name of the created infobase.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("webUrl", //$NON-NLS-1$
                 "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing.") //$NON-NLS-1$
+            .integerProperty("port", //$NON-NLS-1$
+                "applicationKind='standaloneServer' only: the cluster/server port used.") //$NON-NLS-1$
             .objectArrayProperty("applications", //$NON-NLS-1$
                 "Applications bound to the project after creation (same shape as get_applications).") //$NON-NLS-1$
             .stringProperty("applicationId", //$NON-NLS-1$
@@ -532,7 +547,7 @@ public class CreateInfobaseTool implements IMcpTool
      *
      * <p>This is a fully separate path from {@link #createInfobase}: instead of the configurator
      * ({@code 1cv8}) it goes through the EDT WST standalone-server layer
-     * ({@link IStandaloneServerService#createServerWithInfobase}), which shells out to {@code ibcmd}
+     * ({@code IStandaloneServerService.createServerWithInfobase}, resolved reflectively), which shells out to {@code ibcmd}
      * to create the infobase and registers a WST {@code IServer}. The application framework then
      * surfaces an {@code IServerApplication} of type {@link #WST_SERVER_APP_TYPE} automatically via
      * the same {@code IApplicationManager.getApplications(project)} read-back we already use.
@@ -572,7 +587,7 @@ public class CreateInfobaseTool implements IMcpTool
             return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
         }
 
-        IStandaloneServerService serverService = acquireStandaloneServerService();
+        Object serverService = acquireStandaloneServerService();
         if (serverService == null)
         {
             return ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
@@ -583,16 +598,7 @@ public class CreateInfobaseTool implements IMcpTool
 
         // --- 3. Fail-fast runtime probe (BEFORE the Job, so "no runtime" fails instantly) ---
         final String versionMask = platform != null ? platform : ""; //$NON-NLS-1$
-        boolean hasRuntime;
-        try
-        {
-            hasRuntime = serverService.findRuntime(versionMask, null).isPresent();
-        }
-        catch (Exception e)
-        {
-            Activator.logError("create_infobase: standalone-server runtime probe failed", e); //$NON-NLS-1$
-            hasRuntime = false;
-        }
+        boolean hasRuntime = ssHasRuntime(serverService, versionMask);
         if (!hasRuntime)
         {
             return ToolResult.error("No standalone-server runtime registered" //$NON-NLS-1$
@@ -624,10 +630,10 @@ public class CreateInfobaseTool implements IMcpTool
         final String publicationPath = effectivePublicationPath(publicationName, infobaseName, projectName);
 
         // --- 7. Run the one-shot create in a bounded background Job (ibcmd shell-out) ---
-        final IStandaloneServerService finalService = serverService;
+        final Object finalService = serverService;
         final InfobaseReference finalIbRef = ibRef;
         final String jobInfobaseName = infobaseName;
-        final AtomicReference<Pair<?, StandaloneServerInfobase>> jobResult = new AtomicReference<>();
+        final AtomicReference<Object> jobResult = new AtomicReference<>();
         final AtomicReference<Exception> jobError = new AtomicReference<>();
 
         Job createJob = new Job("Create standalone server: " + jobInfobaseName) //$NON-NLS-1$
@@ -638,9 +644,8 @@ public class CreateInfobaseTool implements IMcpTool
             {
                 try
                 {
-                    Pair<?, StandaloneServerInfobase> pair = finalService.createServerWithInfobase(
-                        versionMask, projectName, finalIbRef, clusterPort, clusterRegistryDirectory,
-                        publicationPath, monitor);
+                    Object pair = ssCreateServerWithInfobase(finalService, versionMask, projectName,
+                        finalIbRef, clusterPort, clusterRegistryDirectory, publicationPath, monitor);
                     jobResult.set(pair);
                 }
                 catch (Exception e)
@@ -683,7 +688,7 @@ public class CreateInfobaseTool implements IMcpTool
                 + "registered and that the directory '" + infobaseDir + "' is accessible.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        Pair<?, StandaloneServerInfobase> pair = jobResult.get();
+        Pair<?, ?> pair = (jobResult.get() instanceof Pair) ? (Pair<?, ?>)jobResult.get() : null;
         if (pair == null || pair.getSecond() == null)
         {
             return ToolResult.error("Standalone-server creation returned no infobase handle.").toJson(); //$NON-NLS-1$
@@ -691,21 +696,9 @@ public class CreateInfobaseTool implements IMcpTool
 
         Activator.logInfo("create_infobase: standalone server created at " + infobaseDir); //$NON-NLS-1$
 
-        // --- 8. Resolve the web URL (best-effort) ---
-        String webUrl = null;
-        try
-        {
-            URI url = finalService.getInfobaseUrl(pair.getSecond());
-            if (url != null)
-            {
-                webUrl = url.toString();
-            }
-        }
-        catch (Exception e)
-        {
-            // Non-fatal: the server was created; only the URL lookup failed.
-            Activator.logError("create_infobase: could not resolve standalone-server web URL", e); //$NON-NLS-1$
-        }
+        // --- 8. Resolve the web URL (best-effort; ssGetInfobaseUrl returns null on any failure) ---
+        URI url = ssGetInfobaseUrl(finalService, pair.getSecond());
+        String webUrl = (url != null) ? url.toString() : null;
 
         // --- 9. Read back applications and return ---
         return buildStandaloneServerResult(projectName, infobaseDir, infobaseName, clusterPort,
@@ -713,13 +706,15 @@ public class CreateInfobaseTool implements IMcpTool
     }
 
     /**
-     * Acquires the {@link IStandaloneServerService} from the OSGi service registry (it is published
-     * via the {@code com._1c.g5.wiring.serviceProvider} wiring of the standalone-server WST bundle).
-     * Returns {@code null} if the bundle or service is unavailable so the caller can fail gracefully.
+     * Acquires the standalone-server service ({@code IStandaloneServerService}) from the OSGi service
+     * registry BY CLASS NAME (reflectively, so this plugin has no compile/bundle dependency on the
+     * standalone-server feature — see {@link #STANDALONE_SERVER_SERVICE_CLASS}). It is published via the
+     * {@code com._1c.g5.wiring.serviceProvider} wiring of the standalone-server WST bundle. Returns
+     * {@code null} (the caller fails gracefully) when the bundle or service is unavailable.
      *
-     * @return the service, or {@code null} when unavailable
+     * @return the service object (call it reflectively), or {@code null} when unavailable
      */
-    private static IStandaloneServerService acquireStandaloneServerService()
+    private static Object acquireStandaloneServerService()
     {
         try
         {
@@ -750,13 +745,82 @@ public class CreateInfobaseTool implements IMcpTool
             {
                 return null;
             }
-            ServiceReference<IStandaloneServerService> ref =
-                context.getServiceReference(IStandaloneServerService.class);
+            // Look up by class NAME (String) — no compile-time reference to the service interface.
+            ServiceReference<?> ref = context.getServiceReference(STANDALONE_SERVER_SERVICE_CLASS);
             return ref != null ? context.getService(ref) : null;
         }
-        catch (Exception e)
+        catch (Throwable t)
         {
-            Activator.logError("create_infobase: could not acquire the standalone-server service", e); //$NON-NLS-1$
+            Activator.logError("create_infobase: could not acquire the standalone-server service", t); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Reflective {@code IStandaloneServerService.findRuntime(versionMask, monitor).isPresent()} — true
+     * when a matching standalone-server runtime is registered. Any reflective/availability failure is
+     * treated as "no runtime" (the caller then fails fast).
+     */
+    private static boolean ssHasRuntime(Object service, String versionMask)
+    {
+        try
+        {
+            Method m = service.getClass().getMethod("findRuntime", String.class, IProgressMonitor.class); //$NON-NLS-1$
+            Object opt = m.invoke(service, versionMask, null);
+            return (opt instanceof Optional) && ((Optional<?>)opt).isPresent();
+        }
+        catch (Throwable t)
+        {
+            Activator.logError("create_infobase: standalone-server runtime probe failed", t); //$NON-NLS-1$
+            return false;
+        }
+    }
+
+    /**
+     * Reflective {@code IStandaloneServerService.createServerWithInfobase(...)}. Returns the resulting
+     * {@code Pair<IServer, StandaloneServerInfobase>} as an {@code Object} (cast to {@code Pair} by the
+     * caller). Unwraps and rethrows the real failure cause so the caller reports an honest error.
+     */
+    private static Object ssCreateServerWithInfobase(Object service, String versionMask,
+            String projectName, InfobaseReference ib, int clusterPort, String clusterRegistryDirectory,
+            String publicationPath, IProgressMonitor monitor) throws Exception
+    {
+        Method m = service.getClass().getMethod("createServerWithInfobase", //$NON-NLS-1$
+            String.class, String.class, InfobaseReference.class, int.class, String.class, String.class,
+            IProgressMonitor.class);
+        try
+        {
+            return m.invoke(service, versionMask, projectName, ib, clusterPort, clusterRegistryDirectory,
+                publicationPath, monitor);
+        }
+        catch (java.lang.reflect.InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
+    }
+
+    /**
+     * Reflective {@code IStandaloneServerService.getInfobaseUrl(standaloneServerInfobase)} — the web URL
+     * for HTTP testing. Returns {@code null} on any failure (non-fatal: the server is already created).
+     */
+    private static URI ssGetInfobaseUrl(Object service, Object standaloneServerInfobase)
+    {
+        try
+        {
+            Bundle bundle = Platform.getBundle(STANDALONE_SERVER_WST_CORE_BUNDLE_ID);
+            Class<?> ssInfobaseClass = bundle.loadClass(STANDALONE_SERVER_INFOBASE_CLASS);
+            Method m = service.getClass().getMethod("getInfobaseUrl", ssInfobaseClass); //$NON-NLS-1$
+            Object url = m.invoke(service, standaloneServerInfobase);
+            return (url instanceof URI) ? (URI)url : null;
+        }
+        catch (Throwable t)
+        {
+            Activator.logError("create_infobase: could not resolve standalone-server web URL", t); //$NON-NLS-1$
             return null;
         }
     }
@@ -831,8 +895,11 @@ public class CreateInfobaseTool implements IMcpTool
                         {
                             appObj.addProperty("updateState", "UNKNOWN"); //$NON-NLS-1$ //$NON-NLS-2$
                         }
-                        // The new standalone server surfaces as a wst-server application.
-                        if (newAppId == null && WST_SERVER_APP_TYPE.equals(typeId))
+                        // Identify the JUST-created standalone server by its name (a wst-server app whose
+                        // name matches the new infobase) — NOT merely the first wst-server app, which could
+                        // be a pre-existing standalone server already bound to this project.
+                        if (newAppId == null && WST_SERVER_APP_TYPE.equals(typeId)
+                            && infobaseName.equals(app.getName()))
                         {
                             newAppId = app.getId();
                         }

@@ -201,6 +201,10 @@
           "description": "Human-readable status message.",
           "type": "string"
         },
+        "port": {
+          "description": "applicationKind='standaloneServer' only: the cluster/server port used.",
+          "type": "integer"
+        },
         "project": {
           "description": "Name of the configuration project.",
           "type": "string"
