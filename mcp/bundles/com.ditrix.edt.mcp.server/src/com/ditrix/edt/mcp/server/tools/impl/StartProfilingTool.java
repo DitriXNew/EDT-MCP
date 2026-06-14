@@ -6,14 +6,11 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.eclipse.core.runtime.Platform;
 import org.eclipse.debug.core.model.IDebugTarget;
-import org.osgi.framework.Bundle;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -21,6 +18,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.ProfilingSupport;
 
 /**
  * Starts 1C performance measurement on the active
@@ -44,10 +42,6 @@ import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 public class StartProfilingTool implements IMcpTool
 {
     public static final String NAME = "start_profiling"; //$NON-NLS-1$
-
-    private static final String WIRING_BUNDLE = "com._1c.g5.wiring"; //$NON-NLS-1$
-    private static final String DEBUG_CORE_BUNDLE = "com._1c.g5.v8.dt.debug.core"; //$NON-NLS-1$
-    private static final String PROFILING_CORE_BUNDLE = "com._1c.g5.v8.dt.profiling.core"; //$NON-NLS-1$
 
     /**
      * Shared on/off state, keyed by {@code applicationId}. The EDT profiling
@@ -177,64 +171,14 @@ public class StartProfilingTool implements IMcpTool
                     + ". Start a debug session first (debug_launch or debug_yaxunit_tests).").toJson(); //$NON-NLS-1$
             }
 
-            // Check if target implements IProfileTarget (via adapter or directly)
-            Bundle debugBundle = Platform.getBundle(DEBUG_CORE_BUNDLE);
-            if (debugBundle == null)
+            // Resolve the profiling service + profile target and flip profiling on.
+            // Gated above on our shared OFF state, so this toggle deterministically
+            // switches profiling ON.
+            String toggleError = ProfilingSupport.toggleProfiling(target);
+            if (toggleError != null)
             {
-                return ToolResult.error("Debug core bundle not found").toJson(); //$NON-NLS-1$
+                return ToolResult.error(toggleError).toJson();
             }
-
-            Bundle profilingBundle = Platform.getBundle(PROFILING_CORE_BUNDLE);
-            if (profilingBundle == null)
-            {
-                return ToolResult.error("Profiling core bundle not found").toJson(); //$NON-NLS-1$
-            }
-
-            Class<?> profileTargetClass = profilingBundle.loadClass(
-                "com._1c.g5.v8.dt.profiling.core.IProfileTarget"); //$NON-NLS-1$
-
-            // Try to adapt the debug target to IProfileTarget
-            Object profileTarget = null;
-            if (profileTargetClass.isInstance(target))
-            {
-                profileTarget = target;
-            }
-            else
-            {
-                // Try Eclipse adapter mechanism
-                profileTarget = target.getAdapter(profileTargetClass);
-            }
-
-            if (profileTarget == null)
-            {
-                return ToolResult.error("Debug target does not support profiling. " //$NON-NLS-1$
-                    + "Target class: " + target.getClass().getName()).toJson(); //$NON-NLS-1$
-            }
-
-            // Get IProfilingService via ServiceAccess.get() — it manages the
-            // UUID↔target mapping needed for module resolution in results.
-            Bundle wiringBundle = Platform.getBundle(WIRING_BUNDLE);
-            if (wiringBundle == null)
-            {
-                return ToolResult.error("Wiring bundle not found").toJson(); //$NON-NLS-1$
-            }
-
-            Class<?> serviceAccessClass = wiringBundle.loadClass("com._1c.g5.wiring.ServiceAccess"); //$NON-NLS-1$
-            Class<?> profilingServiceClass = profilingBundle.loadClass(
-                "com._1c.g5.v8.dt.profiling.core.IProfilingService"); //$NON-NLS-1$
-            Method getService = serviceAccessClass.getMethod("get", Class.class); //$NON-NLS-1$
-            Object profilingService = getService.invoke(null, profilingServiceClass);
-            if (profilingService == null)
-            {
-                return ToolResult.error("IProfilingService not available").toJson(); //$NON-NLS-1$
-            }
-
-            // IProfilingService.toggleProfiling(IProfileTarget) — generates UUID
-            // internally, registers it in targets map, sends to debug server. Since
-            // we only call this when our state says profiling is OFF, this toggle
-            // deterministically switches it ON.
-            Method toggleProfiling = profilingServiceClass.getMethod("toggleProfiling", profileTargetClass); //$NON-NLS-1$
-            toggleProfiling.invoke(profilingService, profileTarget);
 
             markActive(applicationId);
 
