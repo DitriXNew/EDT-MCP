@@ -82,12 +82,6 @@ public class CreateInfobaseTool implements IMcpTool
     /** Infobase application type ID as defined in the applications.infobases plugin.xml. */
     private static final String INFOBASE_APP_TYPE = "com.e1c.g5.dt.applications.type.infobase"; //$NON-NLS-1$
 
-    /**
-     * Standalone-server (WST) application type ID as defined in the applications.wst plugin.xml.
-     * The application framework surfaces an {@code IServerApplication} of this type once a WST
-     * standalone server with a project-bound infobase module exists.
-     */
-    private static final String WST_SERVER_APP_TYPE = "com.e1c.g5.dt.applications.type.wst-server"; //$NON-NLS-1$
 
     /** {@code applicationKind} value for the standalone-server path (autonomous server). */
     private static final String KIND_STANDALONE_SERVER = "standaloneServer"; //$NON-NLS-1$
@@ -548,7 +542,7 @@ public class CreateInfobaseTool implements IMcpTool
      * ({@code 1cv8}) it goes through the EDT WST standalone-server layer
      * ({@code IStandaloneServerService.createServerWithInfobase}, resolved reflectively), which shells out to {@code ibcmd}
      * to create the infobase and registers a WST {@code IServer}. The application framework then
-     * surfaces an {@code IServerApplication} of type {@link #WST_SERVER_APP_TYPE} automatically via
+     * surfaces an {@code IServerApplication} of type {@link StandaloneServerSupport#WST_SERVER_APP_TYPE} automatically via
      * the same {@code IApplicationManager.getApplications(project)} read-back we already use.
      *
      * <p><strong>Unattended-safety:</strong> the runtime probe ({@code findRuntime}) fires BEFORE
@@ -930,7 +924,7 @@ public class CreateInfobaseTool implements IMcpTool
                         // Identify the JUST-created standalone server by its name (a wst-server app whose
                         // name matches the new infobase) — NOT merely the first wst-server app, which could
                         // be a pre-existing standalone server already bound to this project.
-                        if (newAppId == null && WST_SERVER_APP_TYPE.equals(typeId)
+                        if (newAppId == null && StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId)
                             && infobaseName.equals(app.getName()))
                         {
                             newAppId = app.getId();

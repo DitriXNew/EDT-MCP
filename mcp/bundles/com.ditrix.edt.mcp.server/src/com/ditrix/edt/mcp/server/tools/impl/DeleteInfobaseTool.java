@@ -9,8 +9,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.jobs.Job;
 
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
@@ -45,6 +50,15 @@ public class DeleteInfobaseTool implements IMcpTool
     /** Infobase application type ID. */
     private static final String INFOBASE_APP_TYPE = "com.e1c.g5.dt.applications.type.infobase"; //$NON-NLS-1$
 
+    /** Background-Job timeout for the standalone-server deletion (stop + remove). */
+    private static final long DELETE_TIMEOUT_SECONDS = 120;
+
+    /** Maximum re-poll attempts for the read-back that confirms the application is gone. */
+    private static final int READ_BACK_MAX_POLLS = 5;
+
+    /** Delay between read-back re-poll attempts (ms). */
+    private static final long READ_BACK_POLL_DELAY_MS = 300;
+
     @Override
     public String getName()
     {
@@ -54,11 +68,13 @@ public class DeleteInfobaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Remove a FILE infobase association from a configuration project (and optionally " //$NON-NLS-1$
-            + "deregister it from the global EDT infobases list). Destructive: guarded by a " //$NON-NLS-1$
-            + "confirm-preview - call without confirm to preview what would be removed (no change), " //$NON-NLS-1$
-            + "then confirm=true to delete. The inverse of create_infobase. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('delete_infobase')."; //$NON-NLS-1$
+        return "Remove a FILE infobase association from a configuration project OR delete a standalone " //$NON-NLS-1$
+            + "(autonomous) server application. Destructive: guarded by a confirm-preview - call without " //$NON-NLS-1$
+            + "confirm to preview what would be removed (no change), then confirm=true to delete. For a " //$NON-NLS-1$
+            + "file infobase: dissociates it and (deleteRegistration, default true) deregisters it from " //$NON-NLS-1$
+            + "the EDT infobases list. For a standalone server (applicationKind=standaloneServer): stops " //$NON-NLS-1$
+            + "it and removes the WST server with its config folder and served database. The inverse of " //$NON-NLS-1$
+            + "create_infobase. Full parameters and examples: call get_tool_guide('delete_infobase')."; //$NON-NLS-1$
     }
 
     @Override
@@ -89,11 +105,16 @@ public class DeleteInfobaseTool implements IMcpTool
             .stringProperty("action", "Either 'preview' (nothing changed) or 'deleted' (removed).") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("confirmationRequired", //$NON-NLS-1$
                 "true on a preview (no change made); absent/false once deleted.") //$NON-NLS-1$
+            .stringProperty("applicationKind", //$NON-NLS-1$
+                "'infobase' or 'standaloneServer' — the kind of application removed (standalone-server " //$NON-NLS-1$
+                + "deletions only).") //$NON-NLS-1$
             .stringProperty("project", "Name of the configuration project.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", "Application ID that was removed.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("infobaseName", "Display name of the removed infobase.") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("deleteRegistration", //$NON-NLS-1$
-                "Whether the infobase was (or would be) deregistered from the EDT infobases list.") //$NON-NLS-1$
+                "Whether the EDT registry entry was (or would be) removed: the global infobases-list " //$NON-NLS-1$
+                + "entry for a file infobase, or the infobases.yaml registry entry for a standalone " //$NON-NLS-1$
+                + "server.") //$NON-NLS-1$
             .stringProperty("message", "Human-readable status message.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -188,7 +209,7 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         else
         {
-            // Find by display name among the project's infobase-type applications.
+            // Find by display name among the project's infobase-type OR standalone-server applications.
             try
             {
                 List<IApplication> apps = appManager.getApplications(project);
@@ -196,9 +217,10 @@ public class DeleteInfobaseTool implements IMcpTool
                 {
                     for (IApplication app : apps)
                     {
+                        String appTypeId = app.getType() != null ? app.getType().getId() : null;
                         if (infobaseName.equals(app.getName())
-                            && app.getType() != null
-                            && INFOBASE_APP_TYPE.equals(app.getType().getId()))
+                            && (INFOBASE_APP_TYPE.equals(appTypeId)
+                                || StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(appTypeId)))
                         {
                             targetApp = app;
                             break;
@@ -218,13 +240,23 @@ public class DeleteInfobaseTool implements IMcpTool
             }
         }
 
-        // Verify it is an infobase application (not a server/web type we do not manage here).
+        // Standalone-server (wst-server) applications: the inverse of
+        // create_infobase applicationKind=standaloneServer. Handled by a dedicated path.
+        String typeId = targetApp.getType() != null ? targetApp.getType().getId() : null;
+        if (StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
+        {
+            return deleteStandaloneServer(projectName, project, appManager, targetApp,
+                deleteRegistration, confirm);
+        }
+
+        // Verify it is a file infobase application (not some other type we do not manage here).
         if (!(targetApp instanceof IInfobaseApplication))
         {
             return ToolResult.error("Application '" + targetApp.getName() //$NON-NLS-1$
                 + "' (id=" + targetApp.getId() //$NON-NLS-1$
-                + ") is not a file infobase application. This tool only removes infobase " //$NON-NLS-1$
-                + "applications of type " + INFOBASE_APP_TYPE + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                + ") is neither a file infobase (" + INFOBASE_APP_TYPE //$NON-NLS-1$
+                + ") nor a standalone server (" + StandaloneServerSupport.WST_SERVER_APP_TYPE //$NON-NLS-1$
+                + ") application; this tool cannot remove it.").toJson(); //$NON-NLS-1$
         }
         IInfobaseApplication ibApp = (IInfobaseApplication) targetApp;
         InfobaseReference ibRef = ibApp.getInfobase();
@@ -316,5 +348,257 @@ public class DeleteInfobaseTool implements IMcpTool
                 + (deleteRegistration ? " and deregistered from the EDT infobases list." //$NON-NLS-1$
                     : " (EDT infobases list entry kept).")) //$NON-NLS-1$
             .toJson();
+    }
+
+    /**
+     * Deletes a standalone (WST) server application — the inverse of
+     * {@code create_infobase applicationKind=standaloneServer}. Mirrors EDT's "Delete server" UI action
+     * via {@code IStandaloneServerService.deleteServer(...)} (resolved reflectively): it stops the server,
+     * removes the WST {@code IServer} (servers.xml) and deletes its config folder (the served database).
+     * EDT itself leaves an orphaned entry in the standalone-server {@code infobases.yaml} registry; when
+     * {@code deleteRegistration} is true we additionally clean that entry (best-effort).
+     *
+     * <p><strong>Unattended-safety:</strong> {@code deleteServer} is non-modal and monitor-driven; it runs
+     * inside a bounded background Job — never on the UI thread.
+     */
+    private String deleteStandaloneServer(String projectName, IProject project,
+            IApplicationManager appManager, IApplication targetApp, boolean deleteRegistration,
+            boolean confirm)
+    {
+        final String resolvedName = targetApp.getName();
+        final String resolvedId = targetApp.getId();
+
+        // Resolve the standalone-server service reflectively (no Require-Bundle on the optional feature).
+        Object service = StandaloneServerSupport.acquireService();
+        if (service == null)
+        {
+            return ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
+                + "standalone-server feature is missing. Cannot delete server application '" //$NON-NLS-1$
+                + resolvedName + "'.").toJson(); //$NON-NLS-1$
+        }
+
+        // Resolve the backing WST IServer: direct IServerApplication.getServer(), else a name scan.
+        Object server = StandaloneServerSupport.serverOfApplication(targetApp);
+        if (server == null)
+        {
+            server = StandaloneServerSupport.findServerByModuleName(service, resolvedName);
+        }
+        if (server == null)
+        {
+            return ToolResult.error("Could not resolve the WST server backing application '" //$NON-NLS-1$
+                + resolvedName + "' (id=" + resolvedId //$NON-NLS-1$
+                + "). It may already be deleted — re-run get_applications.").toJson(); //$NON-NLS-1$
+        }
+
+        // Capture the infobaseId BEFORE deletion (the module is gone afterwards) for the yaml cleanup.
+        Object module = StandaloneServerSupport.moduleOfApplication(targetApp);
+        final String infobaseId = module != null ? StandaloneServerSupport.infobaseIdOf(module) : null;
+
+        // --- Confirm-preview gate ---
+        if (!confirm)
+        {
+            return ToolResult.success()
+                .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("confirmationRequired", true) //$NON-NLS-1$
+                .put("applicationKind", "standaloneServer") //$NON-NLS-1$ //$NON-NLS-2$
+                .put("project", projectName) //$NON-NLS-1$
+                .put("applicationId", resolvedId) //$NON-NLS-1$
+                .put("infobaseName", resolvedName) //$NON-NLS-1$
+                .put("deleteRegistration", deleteRegistration) //$NON-NLS-1$
+                .put("message", "PREVIEW: this would delete standalone server '" + resolvedName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' (stop it, remove the WST server and its config folder INCLUDING the served " //$NON-NLS-1$
+                    + "database)" //$NON-NLS-1$
+                    + (deleteRegistration ? " AND clean its infobases.yaml registry entry" //$NON-NLS-1$
+                        : " (infobases.yaml entry kept)") //$NON-NLS-1$
+                    + " for project '" + projectName //$NON-NLS-1$
+                    + "'. This is irreversible. Re-call with confirm=true to apply.") //$NON-NLS-1$
+                .toJson();
+        }
+
+        // Capture how many applications currently carry this id, so the read-back can confirm THIS
+        // deletion via a count decrease even when a same-named twin shares the id (a degenerate case).
+        final int beforeCount = countAppsWithId(appManager, project, resolvedId);
+
+        // --- Perform deletion + registry cleanup in ONE bounded background Job. deleteServer is
+        // non-modal/monitor-driven; keeping the yaml cleanup in the same Job bounds it by one timeout
+        // and keeps it off the request thread. ---
+        final Object finalService = service;
+        final Object finalServer = server;
+        final String finalInfobaseId = infobaseId;
+        final boolean doRegistry = deleteRegistration;
+        final AtomicReference<IStatus> jobStatus = new AtomicReference<>();
+        final AtomicReference<StandaloneServerSupport.RegistryCleanup> jobCleanup =
+            new AtomicReference<>(StandaloneServerSupport.RegistryCleanup.NOT_PRESENT);
+        final AtomicReference<Exception> jobError = new AtomicReference<>();
+
+        Job deleteJob = new Job("Delete standalone server: " + resolvedName) //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                try
+                {
+                    IStatus s = StandaloneServerSupport.deleteServer(finalService, finalServer, monitor);
+                    jobStatus.set(s);
+                    // Only clean the registry once the server is actually gone — a null/non-OK status
+                    // means deleteServer did not run/succeed, so the server still exists.
+                    if (s != null && s.isOK() && doRegistry)
+                    {
+                        jobCleanup.set(
+                            StandaloneServerSupport.removeFromInfobaseRegistry(finalInfobaseId, monitor));
+                    }
+                }
+                catch (Exception e)
+                {
+                    jobError.set(e);
+                }
+                return org.eclipse.core.runtime.Status.OK_STATUS;
+            }
+        };
+        deleteJob.setUser(false);
+        deleteJob.setSystem(true);
+        deleteJob.schedule();
+
+        try
+        {
+            boolean finished = deleteJob.join(TimeUnit.SECONDS.toMillis(DELETE_TIMEOUT_SECONDS), null);
+            if (!finished)
+            {
+                // The reflective deleteServer is a blocking platform call that may not honour
+                // cancellation, so do not claim nothing changed — be honest that it may still finish.
+                deleteJob.cancel();
+                return ToolResult.error("Standalone-server deletion of '" + resolvedName //$NON-NLS-1$
+                    + "' did not finish within " + DELETE_TIMEOUT_SECONDS //$NON-NLS-1$
+                    + " seconds. It MAY STILL BE COMPLETING in the background — re-run get_applications " //$NON-NLS-1$
+                    + "to check the current state before retrying. See the EDT log for details.").toJson(); //$NON-NLS-1$
+            }
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return ToolResult.error("Standalone-server deletion was interrupted.").toJson(); //$NON-NLS-1$
+        }
+
+        if (jobError.get() != null)
+        {
+            Activator.logError("delete_infobase: standalone-server deletion failed for " //$NON-NLS-1$
+                + resolvedName, jobError.get());
+            return ToolResult.error("Standalone-server deletion failed for '" + resolvedName //$NON-NLS-1$
+                + "': " + jobError.get().getMessage()).toJson(); //$NON-NLS-1$
+        }
+        IStatus status = jobStatus.get();
+        if (status == null || !status.isOK())
+        {
+            // null = deleteServer returned a non-IStatus (reflective miss); non-OK = the platform
+            // reported a failure. Either way the server was NOT cleanly deleted — report an error.
+            String detail = status != null ? status.getMessage() : "no status returned"; //$NON-NLS-1$
+            Activator.logError("delete_infobase: deleteServer did not succeed: " + detail, null); //$NON-NLS-1$
+            return ToolResult.error("Standalone-server deletion did not complete cleanly for '" //$NON-NLS-1$
+                + resolvedName + "': " + detail).toJson(); //$NON-NLS-1$
+        }
+
+        StandaloneServerSupport.RegistryCleanup cleanup = jobCleanup.get();
+        Activator.logInfo("delete_infobase: standalone server '" + resolvedName //$NON-NLS-1$
+            + "' deleted (registryCleanup=" + cleanup + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Read-back: confirm THIS deletion via a count decrease (tolerant of same-id twins).
+        boolean removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
+
+        return ToolResult.success()
+            .put("action", "deleted") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("applicationKind", "standaloneServer") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("project", projectName) //$NON-NLS-1$
+            .put("applicationId", resolvedId) //$NON-NLS-1$
+            .put("infobaseName", resolvedName) //$NON-NLS-1$
+            .put("deleteRegistration", deleteRegistration) //$NON-NLS-1$
+            .put("message", "Standalone server '" + resolvedName //$NON-NLS-1$ //$NON-NLS-2$
+                + "' deleted from project '" + projectName //$NON-NLS-1$
+                + "' (server stopped, WST server and config folder with the database removed)" //$NON-NLS-1$
+                + (deleteRegistration ? registryNote(cleanup)
+                    : " (infobases.yaml registry entry kept).") //$NON-NLS-1$
+                + (removed ? "" : " NOTE: it may still appear in get_applications briefly.")) //$NON-NLS-1$ //$NON-NLS-2$
+            .toJson();
+    }
+
+    /** Human-readable note describing the infobases.yaml cleanup outcome (deleteRegistration=true). */
+    private static String registryNote(StandaloneServerSupport.RegistryCleanup cleanup)
+    {
+        switch (cleanup)
+        {
+            case REMOVED:
+                return " and its infobases.yaml registry entry cleaned."; //$NON-NLS-1$
+            case NOT_PRESENT:
+                return " (no stale infobases.yaml registry entry to clean)."; //$NON-NLS-1$
+            default:
+                return "; the infobases.yaml entry could not be cleaned now (cosmetic — it self-heals " //$NON-NLS-1$
+                    + "on the next EDT restart)."; //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Bounded re-poll that confirms THIS standalone-server deletion took effect, by waiting until the
+     * number of applications carrying {@code appId} drops below {@code beforeCount} (absorbs the
+     * provision-delegate listener race). Counting (rather than presence) makes it correct even when a
+     * same-named twin server shares the id: deleting one of two twins is confirmed when the count goes
+     * 2 -> 1. Returns true once the count decreased (or reached zero), false if it never did.
+     */
+    private static boolean confirmApplicationRemoved(IApplicationManager appManager, IProject project,
+            String appId, int beforeCount)
+    {
+        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
+        {
+            int now = countAppsWithId(appManager, project, appId);
+            if (now < 0)
+            {
+                // Cannot read back — do not block the (already successful) deletion result.
+                return true;
+            }
+            if (now == 0 || now < beforeCount)
+            {
+                return true;
+            }
+
+            if (poll < READ_BACK_MAX_POLLS - 1)
+            {
+                try
+                {
+                    Thread.sleep(READ_BACK_POLL_DELAY_MS);
+                }
+                catch (InterruptedException ie)
+                {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Counts the project's applications whose id equals {@code appId}. Returns -1 if the application list
+     * could not be read (the caller treats that as "cannot confirm" rather than a failure).
+     */
+    private static int countAppsWithId(IApplicationManager appManager, IProject project, String appId)
+    {
+        try
+        {
+            List<IApplication> apps = appManager.getApplications(project);
+            int count = 0;
+            if (apps != null)
+            {
+                for (IApplication a : apps)
+                {
+                    if (appId.equals(a.getId()))
+                    {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        }
+        catch (Exception e)
+        {
+            return -1;
+        }
     }
 }

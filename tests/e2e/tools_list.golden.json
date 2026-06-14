@@ -798,7 +798,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Remove a FILE infobase association from a configuration project (and optionally deregister it from the global EDT infobases list). Destructive: guarded by a confirm-preview - call without confirm to preview what would be removed (no change), then confirm=true to delete. The inverse of create_infobase. Full parameters and examples: call get_tool_guide('delete_infobase').",
+    "description": "Remove a FILE infobase association from a configuration project OR delete a standalone (autonomous) server application. Destructive: guarded by a confirm-preview - call without confirm to preview what would be removed (no change), then confirm=true to delete. For a file infobase: dissociates it and (deleteRegistration, default true) deregisters it from the EDT infobases list. For a standalone server (applicationKind=standaloneServer): stops it and removes the WST server with its config folder and served database. The inverse of create_infobase. Full parameters and examples: call get_tool_guide('delete_infobase').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -838,12 +838,16 @@
           "description": "Application ID that was removed.",
           "type": "string"
         },
+        "applicationKind": {
+          "description": "'infobase' or 'standaloneServer' — the kind of application removed (standalone-server deletions only).",
+          "type": "string"
+        },
         "confirmationRequired": {
           "description": "true on a preview (no change made); absent/false once deleted.",
           "type": "boolean"
         },
         "deleteRegistration": {
-          "description": "Whether the infobase was (or would be) deregistered from the EDT infobases list.",
+          "description": "Whether the EDT registry entry was (or would be) removed: the global infobases-list entry for a file infobase, or the infobases.yaml registry entry for a standalone server.",
           "type": "boolean"
         },
         "infobaseName": {
