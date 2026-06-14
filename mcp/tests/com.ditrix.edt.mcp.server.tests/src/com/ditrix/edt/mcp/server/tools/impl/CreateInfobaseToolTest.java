@@ -70,8 +70,10 @@ public class CreateInfobaseToolTest
     @Test
     public void testInputSchemaDeclaresStandaloneServerParameters()
     {
-        // The autonomous/standalone-server path adds applicationKind (closed enum), port, and
-        // publicationName. See IMPL-BRIEF-AS.md (issue #153 / PR #155).
+        // The autonomous/standalone-server path adds a single input: applicationKind (closed enum).
+        // port/publicationName are intentionally NOT inputs: EDT ignores a requested port/publication
+        // for a FILE-backed standalone server (auto-allocated; publication base hard-coded to "/"), so
+        // offering them as knobs would be misleading. The ACTUAL port is reported in the OUTPUT only.
         String schema = new CreateInfobaseTool().getInputSchema();
         assertNotNull(schema);
         assertTrue("schema must declare applicationKind", //$NON-NLS-1$
@@ -83,15 +85,17 @@ public class CreateInfobaseToolTest
         // The applicationKind property must be a CLOSED enum (so a client can only pick the two
         // supported kinds). The "enum" keyword must appear in the schema.
         assertTrue("applicationKind must be a closed enum", schema.contains("\"enum\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("schema must declare port", schema.contains("\"port\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("schema must declare publicationName", //$NON-NLS-1$
-            schema.contains("\"publicationName\"")); //$NON-NLS-1$
+        // port/publicationName must NOT be exposed as inputs (EDT ignores them for FILE-backed servers).
+        assertTrue("port must NOT be an input parameter", //$NON-NLS-1$
+            !schema.contains("\"port\"")); //$NON-NLS-1$
+        assertTrue("publicationName must NOT be an input parameter", //$NON-NLS-1$
+            !schema.contains("\"publicationName\"")); //$NON-NLS-1$
     }
 
     @Test
     public void testStandaloneServerParametersAreNotRequired()
     {
-        // Backward-compat: applicationKind/port/publicationName MUST be optional so existing callers
+        // Backward-compat: applicationKind MUST be optional so existing callers
         // (no applicationKind => plain file infobase) keep working byte-identically.
         String schema = new CreateInfobaseTool().getInputSchema();
         int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
@@ -102,10 +106,6 @@ public class CreateInfobaseToolTest
         String requiredBlock = schema.substring(open, close + 1);
         assertTrue("applicationKind must NOT be required", //$NON-NLS-1$
             !requiredBlock.contains("\"applicationKind\"")); //$NON-NLS-1$
-        assertTrue("port must NOT be required", //$NON-NLS-1$
-            !requiredBlock.contains("\"port\"")); //$NON-NLS-1$
-        assertTrue("publicationName must NOT be required", //$NON-NLS-1$
-            !requiredBlock.contains("\"publicationName\"")); //$NON-NLS-1$
     }
 
     @Test

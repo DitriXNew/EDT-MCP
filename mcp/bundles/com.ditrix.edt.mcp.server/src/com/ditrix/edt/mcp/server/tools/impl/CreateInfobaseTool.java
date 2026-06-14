@@ -96,9 +96,12 @@ public class CreateInfobaseTool implements IMcpTool
     private static final String KIND_INFOBASE = "infobase"; //$NON-NLS-1$
 
     /**
-     * Default cluster/server listen port for a standalone server (the value {@code generateDefaultConfig}
-     * uses). Confirmed live: a server created with this default returned a working web URL on the EDT
-     * 2025.2 stand.
+     * Port HINT passed to {@code createServerWithInfobase} for a standalone server. For a FILE-backed
+     * standalone server EDT does NOT honour a requested port: {@code generateDefaultConfig} uses this
+     * value only as the START of a free-port search ({@code allocatePort(8314, ...)}), so the ACTUAL
+     * web port is auto-allocated and may differ. The real port is read back from the resolved web URL
+     * and reported as {@code port}/{@code webUrl} in the result (verified live on EDT 2025.2: a server
+     * created with this hint was published on an auto-allocated port).
      */
     private static final int DEFAULT_STANDALONE_SERVER_PORT = 8314;
 
@@ -175,14 +178,9 @@ public class CreateInfobaseTool implements IMcpTool
                 "'infobase' (default) = a plain file infobase via the configurator; " //$NON-NLS-1$
                 + "'standaloneServer' = an autonomous (standalone) server that creates and serves a " //$NON-NLS-1$
                 + "new file infobase and exposes a web URL for HTTP testing (requires a registered 1C " //$NON-NLS-1$
-                + "standalone-server runtime, platform >= 8.3.23).", //$NON-NLS-1$
+                + "standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by " //$NON-NLS-1$
+                + "EDT and reported back as 'port'/'webUrl' in the result.", //$NON-NLS-1$
                 KIND_INFOBASE, KIND_STANDALONE_SERVER)
-            .integerProperty("port", //$NON-NLS-1$
-                "applicationKind='standaloneServer' only: the cluster/server listen port. " //$NON-NLS-1$
-                + "Default 8314.") //$NON-NLS-1$
-            .stringProperty("publicationName", //$NON-NLS-1$
-                "applicationKind='standaloneServer' only: the web publication base/path. If omitted, " //$NON-NLS-1$
-                + "a sanitized infobaseName (or the project name) is used.") //$NON-NLS-1$
             .build();
     }
 
@@ -198,9 +196,12 @@ public class CreateInfobaseTool implements IMcpTool
             .stringProperty("infobaseFile", "Path of the created infobase directory.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("infobaseName", "Display name of the created infobase.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("webUrl", //$NON-NLS-1$
-                "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing.") //$NON-NLS-1$
+                "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing. " //$NON-NLS-1$
+                + "Best-effort: absent if EDT could not resolve the URL (the server is still created).") //$NON-NLS-1$
             .integerProperty("port", //$NON-NLS-1$
-                "applicationKind='standaloneServer' only: the cluster/server port used.") //$NON-NLS-1$
+                "applicationKind='standaloneServer' only: the ACTUAL web port the server was " //$NON-NLS-1$
+                + "published on (parsed from webUrl; EDT auto-allocates it). Absent if webUrl could " //$NON-NLS-1$
+                + "not be resolved.") //$NON-NLS-1$
             .objectArrayProperty("applications", //$NON-NLS-1$
                 "Applications bound to the project after creation (same shape as get_applications).") //$NON-NLS-1$
             .stringProperty("applicationId", //$NON-NLS-1$
@@ -237,8 +238,6 @@ public class CreateInfobaseTool implements IMcpTool
         boolean setDefault = JsonUtils.extractBooleanArgument(params, "setDefault", false); //$NON-NLS-1$
         String modeStr = JsonUtils.extractStringArgument(params, "mode"); //$NON-NLS-1$
         String applicationKind = JsonUtils.extractStringArgument(params, "applicationKind"); //$NON-NLS-1$
-        String publicationName = JsonUtils.extractStringArgument(params, "publicationName"); //$NON-NLS-1$
-        int port = JsonUtils.extractIntArgument(params, "port", DEFAULT_STANDALONE_SERVER_PORT); //$NON-NLS-1$
 
         // Validate applicationKind (default 'infobase'). When absent or 'infobase' the behaviour is
         // byte-identical to the original file-infobase tool.
@@ -303,8 +302,8 @@ public class CreateInfobaseTool implements IMcpTool
                     + "applicationKind='standaloneServer'. A standalone server creates and serves a " //$NON-NLS-1$
                     + "new infobase; omit mode (or use mode='create').").toJson(); //$NON-NLS-1$
             }
-            return createStandaloneServer(projectName, infobaseDir, infobaseName, platform, port,
-                publicationName);
+            return createStandaloneServer(projectName, infobaseDir, infobaseName, platform,
+                setDefault);
         }
 
         return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register);
@@ -560,12 +559,11 @@ public class CreateInfobaseTool implements IMcpTool
      * @param infobaseDir the infobase / server working directory
      * @param infobaseName the display name (auto-generated from the directory if absent)
      * @param platform the platform version mask (may be {@code null}/empty = any)
-     * @param port the cluster/server listen port (default {@value #DEFAULT_STANDALONE_SERVER_PORT})
-     * @param publicationName the web publication base/path (defaults to a sanitized name)
+     * @param setDefault set the new server as the project's default application after creation
      * @return the tool result JSON
      */
     private String createStandaloneServer(String projectName, Path infobaseDir,
-            String infobaseName, String platform, int port, String publicationName)
+            String infobaseName, String platform, boolean setDefault)
     {
         // --- 1. Resolve project ---
         ProjectContext ctx = ProjectContext.of(projectName);
@@ -622,12 +620,15 @@ public class CreateInfobaseTool implements IMcpTool
         ibRef.setUuid(java.util.UUID.randomUUID());
 
         // --- 6. Defaults for the standalone-server-specific arguments ---
-        final int clusterPort = port; // default DEFAULT_STANDALONE_SERVER_PORT, applied in execute()
+        // EDT does NOT honour a requested port for a FILE-backed standalone server (the FILE branch of
+        // generateConfig ignores it; the port is auto-allocated from this hint). We therefore pass a
+        // fixed hint and report the ACTUAL port read back from the web URL — see DEFAULT_STANDALONE_SERVER_PORT.
+        final int clusterPort = DEFAULT_STANDALONE_SERVER_PORT;
         // Confirmed live: the given infobase directory is reused as the server working/registry dir.
         final String clusterRegistryDirectory = infobaseDir.toAbsolutePath().toString();
-        // Confirmed live: the publication path defaults to a sanitized infobase name (alnum), else the
-        // project name. Pass an explicit publicationName to disambiguate multiple unnamed servers in one project.
-        final String publicationPath = effectivePublicationPath(publicationName, infobaseName, projectName);
+        // A non-empty publication path is required by the 7-arg API; for a FILE infobase EDT ignores it
+        // (the publication base is hard-coded to "/"), so we derive a sane sanitized value internally.
+        final String publicationPath = effectivePublicationPath(infobaseName, projectName);
 
         // --- 7. Run the one-shot create in a bounded background Job (ibcmd shell-out) ---
         final Object finalService = serverService;
@@ -697,12 +698,15 @@ public class CreateInfobaseTool implements IMcpTool
         Activator.logInfo("create_infobase: standalone server created at " + infobaseDir); //$NON-NLS-1$
 
         // --- 8. Resolve the web URL (best-effort; ssGetInfobaseUrl returns null on any failure) ---
+        // The ACTUAL port is read back from the resolved URL (EDT auto-allocates it), not the hint we
+        // passed in. When the URL cannot be resolved we report no port rather than echoing a fiction.
         URI url = ssGetInfobaseUrl(finalService, pair.getSecond());
         String webUrl = (url != null) ? url.toString() : null;
+        int actualPort = (url != null) ? url.getPort() : -1;
 
         // --- 9. Read back applications and return ---
-        return buildStandaloneServerResult(projectName, infobaseDir, infobaseName, clusterPort,
-            webUrl, appManager, project);
+        return buildStandaloneServerResult(projectName, infobaseDir, infobaseName, actualPort,
+            webUrl, setDefault, appManager, project);
     }
 
     /**
@@ -826,21 +830,17 @@ public class CreateInfobaseTool implements IMcpTool
     }
 
     /**
-     * Computes the publication path for a standalone server: the explicit {@code publicationName}
-     * if given, otherwise a sanitized (alphanumeric) infobase name, falling back to the project name.
+     * Computes a non-empty publication path for the standalone-server create call: a sanitized
+     * (alphanumeric) infobase name, falling back to the project name (and finally a literal). EDT
+     * ignores this value for a FILE-backed infobase (the publication base is hard-coded to "/"), but
+     * the 7-arg API requires a non-empty string, so we always derive a sane one.
      *
-     * @param publicationName the user-provided publication name (may be {@code null}/empty)
      * @param infobaseName the infobase display name
      * @param projectName the project name (fallback)
-     * @return the publication path
+     * @return the publication path (never {@code null}/empty)
      */
-    private static String effectivePublicationPath(String publicationName, String infobaseName,
-            String projectName)
+    private static String effectivePublicationPath(String infobaseName, String projectName)
     {
-        if (publicationName != null && !publicationName.isEmpty())
-        {
-            return publicationName;
-        }
         // Sanitize the infobase name to an alnum web path; fall back to the project name.
         String sanitized = infobaseName != null ? infobaseName.replaceAll("[^A-Za-z0-9]", "") : ""; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (!sanitized.isEmpty())
@@ -857,16 +857,18 @@ public class CreateInfobaseTool implements IMcpTool
      * the file path to absorb the provision-delegate listener race.
      */
     private static String buildStandaloneServerResult(String projectName, Path infobaseDir,
-            String infobaseName, int port, String webUrl, IApplicationManager appManager,
-            IProject project)
+            String infobaseName, int actualPort, String webUrl, boolean setDefault,
+            IApplicationManager appManager, IProject project)
     {
         JsonArray appsArray = new JsonArray();
         String newAppId = null;
+        IApplication newApp = null;
 
         for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
         {
             appsArray = new JsonArray();
             newAppId = null;
+            newApp = null;
 
             try
             {
@@ -902,6 +904,7 @@ public class CreateInfobaseTool implements IMcpTool
                             && infobaseName.equals(app.getName()))
                         {
                             newAppId = app.getId();
+                            newApp = app;
                         }
                         appsArray.add(appObj);
                     }
@@ -932,15 +935,48 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
 
+        // Optionally set the new standalone server as the project's default application. A wst-server
+        // application is an ordinary IApplication, so the same setDefaultApplication API the file path
+        // uses works here too. Non-fatal: the server is already created and bound.
+        String setDefaultNote = null;
+        if (setDefault)
+        {
+            if (newApp != null)
+            {
+                try
+                {
+                    appManager.setDefaultApplication(project, newApp);
+                }
+                catch (Exception e)
+                {
+                    Activator.logError("create_infobase: setDefault failed", e); //$NON-NLS-1$
+                    setDefaultNote = "; the server was created but could not be set as default - " //$NON-NLS-1$
+                        + "set it manually or retry"; //$NON-NLS-1$
+                }
+            }
+            else
+            {
+                setDefaultNote = "; the server was created but could not be set as default yet " //$NON-NLS-1$
+                    + "(the application was not visible yet) - set it manually or retry"; //$NON-NLS-1$
+                Activator.logError("create_infobase: setDefault skipped — new server app not found yet", //$NON-NLS-1$
+                    null);
+            }
+        }
+
         ToolResult result = ToolResult.success()
             .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
             .put("applicationKind", KIND_STANDALONE_SERVER) //$NON-NLS-1$
             .put("project", projectName) //$NON-NLS-1$
             .put("infobaseFile", infobaseDir.toAbsolutePath().toString()) //$NON-NLS-1$
             .put("infobaseName", infobaseName) //$NON-NLS-1$
-            .put("port", port) //$NON-NLS-1$
             .put("applications", appsArray); //$NON-NLS-1$
 
+        // Report the ACTUAL auto-allocated port only when we could resolve it from the web URL;
+        // never echo the requested/hint port (EDT ignores it for a FILE-backed standalone server).
+        if (actualPort > 0)
+        {
+            result.put("port", actualPort); //$NON-NLS-1$
+        }
         if (webUrl != null)
         {
             result.put("webUrl", webUrl); //$NON-NLS-1$
@@ -952,9 +988,13 @@ public class CreateInfobaseTool implements IMcpTool
 
         String message = "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
             + "' created at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
-            + "' and bound to project '" + projectName + "' (port " + port + ")." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' and bound to project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            + (actualPort > 0 ? " (web port " + actualPort + ")" : "") + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + (webUrl != null ? " Web URL for HTTP testing: " + webUrl + "." : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + " Use update_database to push the configuration into the infobase."; //$NON-NLS-1$
+            + " To load the configuration, use the coordinated launch flow (debug_launch or " //$NON-NLS-1$
+            + "run_yaxunit_tests with updateBeforeLaunch=true) rather than a bare update_database, " //$NON-NLS-1$
+            + "which would start the server in RUN mode." //$NON-NLS-1$
+            + (setDefaultNote != null ? setDefaultNote : ""); //$NON-NLS-1$
         result.put("message", message); //$NON-NLS-1$
 
         return result.toJson();

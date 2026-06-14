@@ -12,25 +12,24 @@ FILE infobases only. SERVER and WEB infobases are out of scope for v1 and are re
 `applicationKind` selects what is created:
 
 - **`applicationKind='infobase'` (default)** — a plain file infobase via the 1C configurator, exactly as described above (this is the original behaviour; omitting `applicationKind` is byte-identical to before). Surfaces as `com.e1c.g5.dt.applications.type.infobase`.
-- **`applicationKind='standaloneServer'`** — an **autonomous (standalone) server** that creates *and serves* a new file infobase, binds it to the project, and exposes a **web URL for HTTP testing**. It goes through the EDT WST standalone-server layer (shelling out to `ibcmd`, not `1cv8`) and surfaces as a `com.e1c.g5.dt.applications.type.wst-server` application (its id is `"ServerApplication.<name>"`, not a UUID). It runs in a background Job (up to 120 s); `get_applications` and `update_database` work unchanged on the resulting application.
+- **`applicationKind='standaloneServer'`** — an **autonomous (standalone) server** that creates *and serves* a new file infobase, binds it to the project, and exposes a **web URL for HTTP testing**. It goes through the EDT WST standalone-server layer (shelling out to `ibcmd`, not `1cv8`) and surfaces as a `com.e1c.g5.dt.applications.type.wst-server` application (its id is `"ServerApplication.<name>"`, not a UUID). It runs in a background Job (up to 120 s); `get_applications` works unchanged on the resulting application. **To load the configuration into a standalone server, prefer the coordinated launch flow** — `debug_launch` or `run_yaxunit_tests` with `updateBeforeLaunch=true`, which updates the server application as part of a managed launch. A **bare `update_database` on a standalone-server application starts it in RUN mode** (see the `update_database` guide), so avoid it for server apps.
 
-Standalone-server-only parameters (ignored for `applicationKind='infobase'`):
-
-- **port** (integer, optional): the cluster/server listen port. Default **8314**.
-- **publicationName** (string, optional): the web publication base/path. If omitted, a sanitized (alphanumeric) `infobaseName` is used, falling back to the project name.
+No port/publication parameters are accepted: for a file-backed standalone server EDT **auto-allocates** the web port (a requested port is ignored) and the publication base is fixed. The **actual** port and the web URL are reported back in the result (`port`, `webUrl`).
 
 The standalone-server path **always creates** a new infobase (`mode='register'` is not supported with `applicationKind='standaloneServer'`).
 
 ### Prerequisites and result
 
 - Requires a **registered 1C standalone-server runtime** — a 1C:Enterprise platform **>= 8.3.23** with the standalone server (`ibsrv`/`ibcmd`), registered in EDT. The tool probes for it **before** the background Job and fails FAST with an actionable error if absent (no hang).
-- On success the result adds **`applicationKind='standaloneServer'`**, **`port`**, and **`webUrl`** (the infobase web URL — use it for HTTP testing) alongside the usual `applications`, `applicationId`, and `message` fields.
+- On success the result adds **`applicationKind='standaloneServer'`** and, **best-effort**, **`webUrl`** (the infobase web URL — use it for HTTP testing) and **`port`** (the ACTUAL auto-allocated web port, parsed from `webUrl`), alongside the usual `applications`, `applicationId`, and `message` fields. If EDT cannot resolve the web URL, `webUrl`/`port` are omitted — the server is still created and bound.
 
 ```
 # Create an autonomous (standalone) server with a web URL:
-1. create_infobase  projectName="MyProject"  infobaseFile="C:\infobases\MyAppSrv"  applicationKind="standaloneServer"  port=8314
-2. update_database  projectName="MyProject"  applicationId=<id from step 1>  confirm=true
-#    -> the result's webUrl is the HTTP endpoint to test against.
+1. create_infobase  projectName="MyProject"  infobaseFile="C:\infobases\MyAppSrv"  applicationKind="standaloneServer"
+#    -> the result's webUrl is the HTTP endpoint to test against; port is the ACTUAL auto-allocated web port.
+2. # Load the configuration via the coordinated launch flow (NOT a bare update_database, which would
+#    start the server in RUN mode):
+   debug_launch  projectName="MyProject"  applicationId=<id from step 1>  updateBeforeLaunch=true
 ```
 
 ## What it does
@@ -49,9 +48,7 @@ The standalone-server path **always creates** a new infobase (`mode='register'` 
 - **infobaseName** (optional): display name for the infobase in the EDT Infobases view. If omitted, a name is auto-generated.
 - **platform** (optional, `create` only): 1C platform version mask (e.g. `8.3.25`). If omitted, EDT resolves the best available installed version automatically.
 - **setDefault** (boolean, default false): set the infobase as the default application for the project afterwards.
-- **applicationKind** (optional, `infobase` | `standaloneServer`, default `infobase`): see "Application kind" above.
-- **port** (integer, optional, `standaloneServer` only): cluster/server listen port (default 8314).
-- **publicationName** (string, optional, `standaloneServer` only): web publication base/path (default = sanitized `infobaseName`, else project name).
+- **applicationKind** (optional, `infobase` | `standaloneServer`, default `infobase`): see "Application kind" above. The standalone-server path takes no port/publication input — EDT auto-allocates the web port and reports it back as `port`/`webUrl`.
 
 ## Result
 
