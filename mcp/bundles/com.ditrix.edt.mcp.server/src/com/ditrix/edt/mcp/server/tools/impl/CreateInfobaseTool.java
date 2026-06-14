@@ -641,6 +641,15 @@ public class CreateInfobaseTool implements IMcpTool
                 {
                     Object pair = ssCreateServerWithInfobase(finalService, versionMask, projectName,
                         finalIbRef, clusterPort, clusterRegistryDirectory, publicationPath, monitor);
+                    // createServerWithInfobase registers the server with the module's create flag = false,
+                    // so the served file infobase (1Cv8.1CD) is never physically written — the server then
+                    // fails to start ("Информационная база не обнаружена"). Materialize it now (same step
+                    // the EDT new-server wizard performs).
+                    if (pair instanceof Pair)
+                    {
+                        ssMaterializeInfobase(finalService, ((Pair<?, ?>)pair).getFirst(),
+                            ((Pair<?, ?>)pair).getSecond(), monitor);
+                    }
                     jobResult.set(pair);
                 }
                 catch (Exception e)
@@ -680,7 +689,9 @@ public class CreateInfobaseTool implements IMcpTool
                 + infobaseDir, ex);
             return ToolResult.error("Standalone-server creation failed: " + ex.getMessage() //$NON-NLS-1$
                 + ". Verify that a compatible 1C standalone-server runtime (platform >= 8.3.23) is " //$NON-NLS-1$
-                + "registered and that the directory '" + infobaseDir + "' is accessible.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                + "registered and that the directory '" + infobaseDir + "' is accessible. The server may " //$NON-NLS-1$ //$NON-NLS-2$
+                + "have been registered without its database; if so, use delete_infobase to remove it.") //$NON-NLS-1$
+                .toJson();
         }
 
         Pair<?, ?> pair = (jobResult.get() instanceof Pair) ? (Pair<?, ?>)jobResult.get() : null;
@@ -809,6 +820,102 @@ public class CreateInfobaseTool implements IMcpTool
             }
             throw new IllegalStateException(cause != null ? cause : ite);
         }
+    }
+
+    /**
+     * Physically creates the served file infobase for a standalone server that
+     * {@link #ssCreateServerWithInfobase} just registered. That call builds the {@code StandaloneServerInfobase}
+     * with {@code create=false}, so {@code ibcmd infobase create} (which writes {@code 1Cv8.1CD}) never runs and
+     * the server fails to start with "Информационная база не обнаружена". This flips {@code create=true} on the
+     * returned LIVE module — the same flag the EDT new-server wizard sets — and invokes the WST behaviour
+     * delegate's {@code createStandaloneServerInfobase} DIRECTLY (the only place that runs the create, gated by
+     * {@code isCreate()}; verified against EDT 2025.2 bytecode — no start/publish path creates the DB, and
+     * re-adding the module via {@code modifyModules} is blocked by an "already have module" guard).
+     *
+     * <p>Runs inside the create Job (with its monitor). Throws on failure so the caller reports an honest
+     * error (the server is then registered without a DB; {@code delete_infobase} can clean it up).
+     */
+    private static void ssMaterializeInfobase(Object service, Object server, Object infobase,
+            IProgressMonitor monitor) throws Exception
+    {
+        if (infobase == null)
+        {
+            throw new IllegalStateException("createServerWithInfobase returned no infobase handle; " //$NON-NLS-1$
+                + "the served infobase could not be created."); //$NON-NLS-1$
+        }
+        // Flip create=true (the flag that gates the physical creation) on the live module. setExist=false
+        // mirrors the EDT wizard's "new infobase" branch and is optional (a no-op if the API lacks it).
+        if (ssMethod(infobase.getClass(), "setCreate", 1) == null) //$NON-NLS-1$
+        {
+            throw new IllegalStateException("StandaloneServerInfobase.setCreate not found — the standalone-" //$NON-NLS-1$
+                + "server API may have changed; the served infobase could not be created."); //$NON-NLS-1$
+        }
+        ssInvoke(infobase, "setCreate", 1, Boolean.TRUE); //$NON-NLS-1$
+        ssInvoke(infobase, "setExist", 1, Boolean.FALSE); //$NON-NLS-1$
+
+        // Resolve the WST behaviour delegate for this server and run the (otherwise publish-time) create now.
+        Object delegate = ssInvoke(service, "findBehaviourDelegate", 1, server); //$NON-NLS-1$
+        if (delegate == null)
+        {
+            throw new IllegalStateException("Standalone-server behaviour delegate is not available; " //$NON-NLS-1$
+                + "the served infobase could not be created."); //$NON-NLS-1$
+        }
+        Method create = ssMethod(delegate.getClass(), "createStandaloneServerInfobase", 2); //$NON-NLS-1$
+        if (create == null)
+        {
+            throw new IllegalStateException("createStandaloneServerInfobase was not found on the standalone-" //$NON-NLS-1$
+                + "server behaviour delegate — the standalone-server API may have changed."); //$NON-NLS-1$
+        }
+        try
+        {
+            create.invoke(delegate, infobase, monitor);
+        }
+        catch (java.lang.reflect.InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
+    }
+
+    /** Reflectively invokes the first public method of {@code target} matching name + arg count. */
+    private static Object ssInvoke(Object target, String name, int argCount, Object... args)
+        throws Exception
+    {
+        Method m = ssMethod(target.getClass(), name, argCount);
+        if (m == null)
+        {
+            return null;
+        }
+        try
+        {
+            return m.invoke(target, args);
+        }
+        catch (java.lang.reflect.InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
+    }
+
+    /** First public method on {@code cls} (incl. inherited) with the given name and parameter count. */
+    private static Method ssMethod(Class<?> cls, String name, int paramCount)
+    {
+        for (Method m : cls.getMethods())
+        {
+            if (m.getName().equals(name) && m.getParameterCount() == paramCount)
+            {
+                return m;
+            }
+        }
+        return null;
     }
 
     /**

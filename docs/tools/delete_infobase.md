@@ -18,7 +18,7 @@ Removes a FILE infobase association from a configuration project, OR deletes a s
 
 **File infobase** (`applicationKind=infobase`): dissociating removes it from `get_applications` for the project (other projects that share the infobase are unaffected). With `deleteRegistration=true` (the default) it is also removed from the EDT Infobases view; the infobase **files on disk are NOT deleted** — delete the directory manually to reclaim space.
 
-**Standalone server** (`applicationKind=standaloneServer`): this mirrors EDT's "Delete server" action — it **stops the server, removes the WST server registration AND deletes its config folder, which contains the served database** (so unlike the file-infobase path, the server's data IS removed). With `deleteRegistration=true` (the default) the orphaned entry in the standalone-server `infobases.yaml` registry is also cleaned (best-effort; it otherwise self-heals on the next EDT restart). Runs in a background Job (up to 120 s), unattended-safe (no modal).
+**Standalone server** (`applicationKind=standaloneServer`): this mirrors EDT's "Delete server" action — it **stops the server and removes the WST server registration plus its server config folder** (the `Серверы/…` runtime/session data). The **served infobase database files at the `infobaseFile` path are NOT deleted** (same as the file-infobase path) — delete that directory manually to reclaim space. With `deleteRegistration=true` (the default) the orphaned entry in the standalone-server `infobases.yaml` registry is also cleaned (best-effort; it otherwise self-heals on the next EDT restart). Runs in a background Job (up to 120 s), unattended-safe (no modal).
 
 The tool is guarded by a two-phase workflow (mirroring `delete_project`):
 1. **Preview** (`confirm` omitted / false, the default): resolves the application and returns `action='preview'`, `confirmationRequired=true`, the target identifiers, `applicationKind` (for a server), and `deleteRegistration` — WITHOUT changing anything.
@@ -48,7 +48,7 @@ delete_infobase  projectName="MyProject"  applicationId="<id>"  confirm=true
 
 ## Gotchas
 
-- **File-infobase files are NOT deleted**: for `applicationKind=infobase` this tool does not delete the infobase files from disk — delete the directory manually. (For a `standaloneServer`, the server's config folder and served database ARE deleted, mirroring EDT's "Delete server".)
+- **Database files are NOT deleted**: this tool never deletes the infobase database files from disk. For `applicationKind=infobase` the file infobase stays on disk; for a `standaloneServer` the server config folder (`Серверы/…` runtime data) IS removed, but the **served database at `infobaseFile` stays** — delete those directories manually to reclaim space.
 - **applicationId vs infobaseName**: prefer `applicationId` (from `get_applications`) for precision; `infobaseName` matches by display name and may be ambiguous if two applications share a name.
 - **Supported application types**: file infobases (`com.e1c.g5.dt.applications.type.infobase`) and standalone servers (`com.e1c.g5.dt.applications.type.wst-server`). Other types are rejected.
 - **Standalone-server registry orphan**: EDT's own server deletion leaves a stale entry in `infobases.yaml`; with `deleteRegistration=true` this tool cleans it (best-effort). It is harmless if not cleaned — it self-heals on the next EDT restart.
