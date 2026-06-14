@@ -227,6 +227,55 @@ final class StandaloneServerSupport
     }
 
     /**
+     * Reflective {@code StandaloneServerInfobase.getStandaloneServerConfiguration().getDatabase()} →, for a
+     * FILE-backed standalone server, {@code FileDatabase.getConfigDirectory()} — the on-disk directory of
+     * the served database (= {@code database.path} in config.yaml = the {@code infobaseFile} that was
+     * passed to {@code create_infobase}). This is SEPARATE from the {@code Серверы/…-config} folder that
+     * {@code deleteServer} removes — {@code deleteServer} never deletes the served database, so this is how
+     * {@code deleteDatabaseFiles=true} finds the directory to remove. Must be read BEFORE {@code deleteServer}
+     * (the config is torn down after). Returns {@code null} for an RDBMS-backed server (no local directory)
+     * or on any reflective failure.
+     */
+    static String databaseDirOf(Object standaloneServerInfobaseModule)
+    {
+        try
+        {
+            Object cfg = standaloneServerInfobaseModule.getClass()
+                .getMethod("getStandaloneServerConfiguration").invoke(standaloneServerInfobaseModule); //$NON-NLS-1$
+            if (cfg == null)
+            {
+                return null;
+            }
+            Object db = cfg.getClass().getMethod("getDatabase").invoke(cfg); //$NON-NLS-1$
+            if (db == null)
+            {
+                return null;
+            }
+            // FILE database (or its create-template subclass FileCreateTemplateDatabase) carries the
+            // on-disk directory in getConfigDirectory(); an RDBMS database has no local directory.
+            boolean isFile = false;
+            for (Class<?> k = db.getClass(); k != null && !isFile; k = k.getSuperclass())
+            {
+                if ("FileDatabase".equals(k.getSimpleName())) //$NON-NLS-1$
+                {
+                    isFile = true;
+                }
+            }
+            if (!isFile)
+            {
+                return null;
+            }
+            Object dir = db.getClass().getMethod("getConfigDirectory").invoke(db); //$NON-NLS-1$
+            return (dir instanceof String) ? (String)dir : null;
+        }
+        catch (Throwable t)
+        {
+            Activator.logError("delete_infobase: could not read standalone-server database directory", t); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
      * Fallback lookup: scans {@code IStandaloneServerService.getServers()} for the {@code IServer} whose
      * module display name equals {@code appName}. Used when {@link #serverOfApplication} fails.
      *

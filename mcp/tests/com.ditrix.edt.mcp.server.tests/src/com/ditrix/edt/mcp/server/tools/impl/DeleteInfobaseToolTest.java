@@ -66,6 +66,8 @@ public class DeleteInfobaseToolTest
         assertTrue("schema must declare infobaseName", schema.contains("\"infobaseName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("schema must declare deleteRegistration", //$NON-NLS-1$
             schema.contains("\"deleteRegistration\"")); //$NON-NLS-1$
+        assertTrue("schema must declare deleteDatabaseFiles", //$NON-NLS-1$
+            schema.contains("\"deleteDatabaseFiles\"")); //$NON-NLS-1$
         assertTrue("schema must declare the confirm gate", schema.contains("\"confirm\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -89,6 +91,8 @@ public class DeleteInfobaseToolTest
                 !requiredBlock.contains("\"infobaseName\"")); //$NON-NLS-1$
             assertTrue("deleteRegistration must NOT be required", //$NON-NLS-1$
                 !requiredBlock.contains("\"deleteRegistration\"")); //$NON-NLS-1$
+            assertTrue("deleteDatabaseFiles must NOT be required", //$NON-NLS-1$
+                !requiredBlock.contains("\"deleteDatabaseFiles\"")); //$NON-NLS-1$
             assertTrue("confirm must NOT be required", //$NON-NLS-1$
                 !requiredBlock.contains("\"confirm\"")); //$NON-NLS-1$
         }
@@ -106,6 +110,8 @@ public class DeleteInfobaseToolTest
         assertTrue("outputSchema must declare infobaseName", schema.contains("\"infobaseName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare deleteRegistration", //$NON-NLS-1$
             schema.contains("\"deleteRegistration\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare databaseFilesDeleted", //$NON-NLS-1$
+            schema.contains("\"databaseFilesDeleted\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare applicationKind (standalone-server removals)", //$NON-NLS-1$
             schema.contains("\"applicationKind\"")); //$NON-NLS-1$
     }
