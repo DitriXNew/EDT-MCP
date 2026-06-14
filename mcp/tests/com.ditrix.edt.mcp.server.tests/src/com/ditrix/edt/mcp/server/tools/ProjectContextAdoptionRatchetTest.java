@@ -57,7 +57,6 @@ public class ProjectContextAdoptionRatchetTest
      * {@code ProjectContext}, delete them from here until the set is EMPTY.
      */
     private static final Set<String> KNOWN_DIRECT_WORKSPACE_ACCESS = new HashSet<>(Arrays.asList(
-        "ExportConfigurationToXmlTool", //$NON-NLS-1$
         "GetConfigurationPropertiesTool", //$NON-NLS-1$
         "GetModuleStructureTool", //$NON-NLS-1$
         "ImportConfigurationFromXmlTool", //$NON-NLS-1$

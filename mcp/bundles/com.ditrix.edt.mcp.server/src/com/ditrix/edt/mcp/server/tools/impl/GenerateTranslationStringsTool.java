@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -23,6 +22,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
@@ -244,23 +244,9 @@ public class GenerateTranslationStringsTool implements IMcpTool
                 .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
                 .wrapContent("Translation strings generated."); //$NON-NLS-1$
         }
-        catch (InvocationTargetException e)
-        {
-            // Unwrap the real exception thrown by the LanguageTool API
-            // (typically com.e1c.langtool.v8.dt.cli.api.TranslationCliApiException).
-            Throwable cause = e.getCause() != null ? e.getCause() : e;
-            Activator.logError("LanguageTool invocation failed", cause); //$NON-NLS-1$
-            return ToolResult.error("LanguageTool failed: " + cause.getMessage()).toJson(); //$NON-NLS-1$
-        }
-        catch (NoSuchMethodException | IllegalAccessException e)
-        {
-            Activator.logError("LanguageTool API mismatch (method signature changed?)", e); //$NON-NLS-1$
-            return ToolResult.error("LanguageTool API mismatch: " + e.getMessage()).toJson(); //$NON-NLS-1$
-        }
         catch (Exception e)
         {
-            Activator.logError("Unexpected error running LanguageTool", e); //$NON-NLS-1$
-            return ToolResult.error(e.getMessage()).toJson();
+            return CliReflectionErrors.toErrorJson(e, "LanguageTool", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 

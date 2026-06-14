@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,7 +23,9 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 
 /**
  * Tool that wraps the EDT "Import → Configuration from XML Files" action.
@@ -110,7 +111,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             // the AI agent gets a clear error instead of an opaque API
             // exception.
             Path importPath = Paths.get(importPathStr).toAbsolutePath().normalize();
-            boolean outsideWorkspace = isOutsideWorkspace(importPath);
+            boolean outsideWorkspace = WorkspacePaths.isOutsideWorkspace(importPath);
             if (outsideWorkspace)
             {
                 Activator.logWarning("import_configuration_from_xml: importPath is OUTSIDE the EDT workspace: " //$NON-NLS-1$
@@ -199,46 +200,9 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
 
             return fm.wrapContent(body.toString());
         }
-        catch (InvocationTargetException e)
-        {
-            Throwable cause = e.getCause() != null ? e.getCause() : e;
-            Activator.logError("import_configuration_from_xml failed", cause); //$NON-NLS-1$
-            return ToolResult.error("Import failed: " + cause.getMessage()).toJson(); //$NON-NLS-1$
-        }
-        catch (NoSuchMethodException | IllegalAccessException e)
-        {
-            Activator.logError("CLI API mismatch", e); //$NON-NLS-1$
-            return ToolResult.error("CLI API mismatch: " + e.getMessage()).toJson(); //$NON-NLS-1$
-        }
         catch (Exception e)
         {
-            Activator.logError("Unexpected error in import_configuration_from_xml", e); //$NON-NLS-1$
-            return ToolResult.error(e.getMessage()).toJson();
-        }
-    }
-
-    /**
-     * Returns true if {@code path} is not under the Eclipse workspace root.
-     * Used to flag (not block) configuration imports from external locations.
-     * Deliberately fails OPEN (returns false on any uncertainty): this is an
-     * advisory-only check, so a false negative merely omits a warning and never
-     * rejects a legitimate import.
-     */
-    private static boolean isOutsideWorkspace(Path path)
-    {
-        try
-        {
-            org.eclipse.core.runtime.IPath loc = ResourcesPlugin.getWorkspace().getRoot().getLocation();
-            if (loc == null)
-            {
-                return false;
-            }
-            Path wsRoot = loc.toFile().toPath().toAbsolutePath().normalize();
-            return !path.startsWith(wsRoot);
-        }
-        catch (Exception e)
-        {
-            return false; // cannot determine — do not flag
+            return CliReflectionErrors.toErrorJson(e, "Import", "CLI"); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 }
