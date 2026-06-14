@@ -52,6 +52,7 @@ public final class ToolAnnotationClassifier
         "update_database", //$NON-NLS-1$
         "rename_metadata_object", //$NON-NLS-1$
         "delete_project", //$NON-NLS-1$
+        "delete_launch_config", //$NON-NLS-1$
         "delete_infobase" //$NON-NLS-1$
     );
 

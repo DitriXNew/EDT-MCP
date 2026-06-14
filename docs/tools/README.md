@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**65 tools.**
+**70 tools.**
 
 ## Core
 
@@ -30,7 +30,9 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | Tool | Description |
 |------|-------------|
 | [`adopt_metadata_object`](adopt_metadata_object.md) | Adopt a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can… |
+| [`create_launch_config`](create_launch_config.md) | Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_la… |
 | [`create_metadata`](create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
+| [`delete_launch_config`](delete_launch_config.md) | Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no chan… |
 | [`delete_metadata`](delete_metadata.md) | Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name' or a FORM member - item / attribute / command / handler) addressed… |
 | [`get_configuration_properties`](get_configuration_properties.md) | Get 1C:Enterprise configuration properties (name, synonym, comment, script variant, compatibility mode, etc.) |
 | [`get_subsystem_content`](get_subsystem_content.md) | Get one 1C subsystem's content: properties, its metadata objects (Type/Name/Synonym/FQN) and child subsystems, identified by FQN (e.g. 'Subsystem.Sales.Subsy… |
@@ -127,6 +129,9 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | Tool | Description |
 |------|-------------|
 | [`clean_project`](clean_project.md) | Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. |
+| [`create_infobase`](create_infobase.md) | Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create'… |
+| [`create_project`](create_project.md) | Create a NEW 1C project in the EDT workspace. projectKind selects the kind: 'configuration' (standalone), 'extension' (bound to a base configuration), or 'ex… |
+| [`delete_infobase`](delete_infobase.md) | Remove a FILE infobase association from a configuration project (and optionally deregister it from the global EDT infobases list). Destructive: guarded by a… |
 | [`delete_project`](delete_project.md) | Remove an EDT project from the workspace, optionally deleting its files from disk (deleteContent). Destructive: guarded by a confirm-preview - call without c… |
 | [`export_configuration_to_xml`](export_configuration_to_xml.md) | Export an EDT configuration project to XML files (EDT menu: Export -> Configuration to XML Files). Equivalent of 1C platform DumpConfigToFiles. |
 | [`get_check_description`](get_check_description.md) | Get detailed description of an EDT check by its ID. Returns markdown content with check explanation, examples, and how to fix. Accepts the symbolic check id… |

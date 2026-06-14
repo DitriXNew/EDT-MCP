@@ -552,6 +552,20 @@ def test_create_form_event_handler():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_event_handler_by_russian_name_on_english_config():
+    # Issue #157 remark: configurations also exist in ENGLISH — event names must resolve in BOTH script
+    # variants. TestConfiguration is an English config; binding by the RUSSIAN event name 'ПриОткрытии'
+    # (== OnOpen) must still resolve, because createHandler matches the platform event by name OR nameRu.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Handler.ПриОткрытии",
+        "properties": [{"name": "procedure", "value": "RuNameOnOpen"}]})
+    assert_ok(r, "bind a handler addressed by the RUSSIAN event name on an ENGLISH config")
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    poll_diff_contains("RuNameOnOpen",
+                       ctx="the handler bound via the Russian event name must land in the .form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_handler_calltype_rejected_on_base_config():
     # callType (extension event interception) is only valid in a configuration EXTENSION; on the base
     # TestConfiguration it must be rejected with an actionable error that names the project and points
