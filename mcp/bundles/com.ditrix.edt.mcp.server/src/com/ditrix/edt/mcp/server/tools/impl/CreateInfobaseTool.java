@@ -697,6 +697,15 @@ public class CreateInfobaseTool implements IMcpTool
 
         Activator.logInfo("create_infobase: standalone server created at " + infobaseDir); //$NON-NLS-1$
 
+        // Use the name EDT actually assigned to the StandaloneServerInfobase (read back from the create
+        // result), NOT the requested name, for the application read-back match and the reported
+        // infobaseName. On EDT 2025.2 the name is set verbatim — there is no de-duplication
+        // (suggestNewApplicationName does not exist in the 2025.2 platform jars), so this equals the
+        // requested name; reading the actual value future-proofs the read-back / applicationId / reported
+        // name against any platform that de-duplicates a colliding name. Falls back to the requested name.
+        String actualName = ssGetInfobaseName(pair.getSecond());
+        String effectiveName = (actualName != null && !actualName.isEmpty()) ? actualName : infobaseName;
+
         // --- 8. Resolve the web URL (best-effort; ssGetInfobaseUrl returns null on any failure) ---
         // The ACTUAL port is read back from the resolved URL (EDT auto-allocates it), not the hint we
         // passed in. When the URL cannot be resolved we report no port rather than echoing a fiction.
@@ -705,7 +714,7 @@ public class CreateInfobaseTool implements IMcpTool
         int actualPort = (url != null) ? url.getPort() : -1;
 
         // --- 9. Read back applications and return ---
-        return buildStandaloneServerResult(projectName, infobaseDir, infobaseName, actualPort,
+        return buildStandaloneServerResult(projectName, infobaseDir, effectiveName, actualPort,
             webUrl, setDefault, appManager, project);
     }
 
@@ -825,6 +834,27 @@ public class CreateInfobaseTool implements IMcpTool
         catch (Throwable t)
         {
             Activator.logError("create_infobase: could not resolve standalone-server web URL", t); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Reflective {@code StandaloneServerInfobase.getName()} — the name EDT actually assigned to the new
+     * standalone-server infobase (read back from the create result). Used for the application read-back
+     * match and the reported {@code infobaseName} so they reflect what EDT stored, not what was
+     * requested. Returns {@code null} on any failure (the caller then falls back to the requested name).
+     */
+    private static String ssGetInfobaseName(Object standaloneServerInfobase)
+    {
+        try
+        {
+            Method m = standaloneServerInfobase.getClass().getMethod("getName"); //$NON-NLS-1$
+            Object name = m.invoke(standaloneServerInfobase);
+            return (name instanceof String) ? (String)name : null;
+        }
+        catch (Throwable t)
+        {
+            Activator.logError("create_infobase: could not read standalone-server infobase name", t); //$NON-NLS-1$
             return null;
         }
     }
