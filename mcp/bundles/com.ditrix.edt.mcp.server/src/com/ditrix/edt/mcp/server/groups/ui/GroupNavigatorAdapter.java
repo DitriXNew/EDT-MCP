@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.EObjectFqnNavigator;
 
 /**
  * Navigator adapter for virtual folder groups.
@@ -159,90 +160,12 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
                 }
 
                 // Otherwise resolve nested object
-                return resolveNestedObject((EObject) topObject, parts, 2);
+                return EObjectFqnNavigator.resolveNestedObject((EObject) topObject, parts, 2);
             });
         } catch (Exception e) {
             Activator.logError("Failed to resolve FQN: " + fqn, e);
             return null;
         }
-    }
-    
-    /**
-     * Resolves nested objects from a parent by navigating the FQN parts.
-     * 
-     * @param parent the parent EObject
-     * @param parts the FQN parts
-     * @param startIndex the index to start from (skip top-level type and name)
-     * @return the resolved nested EObject or null
-     */
-    private EObject resolveNestedObject(EObject parent, String[] parts, int startIndex) {
-        EObject current = parent;
-        
-        for (int i = startIndex; i < parts.length; i += 2) { // Skip by 2 (SubTypeName.SubName)
-            if (i + 1 >= parts.length) {
-                break;
-            }
-            
-            String subTypeName = parts[i];
-            String subName = parts[i + 1];
-            
-            // Try to find the child by navigating containment references
-            EObject child = findChildByTypeAndName(current, subTypeName, subName);
-            if (child == null) {
-                return null;
-            }
-            current = child;
-        }
-        
-        return current;
-    }
-    
-    /**
-     * Finds a child EObject by type and name.
-     */
-    private EObject findChildByTypeAndName(EObject parent, String typeName, String name) {
-        // Try to find in all containment references
-        for (org.eclipse.emf.ecore.EReference ref : parent.eClass().getEAllContainments()) {
-            Object value = parent.eGet(ref);
-            if (value instanceof java.util.Collection<?> collection) {
-                for (Object item : collection) {
-                    if (item instanceof EObject child) {
-                        if (matchesTypeAndName(child, typeName, name)) {
-                            return child;
-                        }
-                    }
-                }
-            } else if (value instanceof EObject child) {
-                if (matchesTypeAndName(child, typeName, name)) {
-                    return child;
-                }
-            }
-        }
-        return null;
-    }
-    
-    /**
-     * Checks if an EObject matches the given type and name.
-     */
-    private boolean matchesTypeAndName(EObject obj, String typeName, String name) {
-        String objTypeName = obj.eClass().getName();
-        if (!objTypeName.equals(typeName) && !objTypeName.endsWith(typeName)) {
-            return false;
-        }
-        
-        // Try to get name
-        try {
-            for (java.lang.reflect.Method m : obj.getClass().getMethods()) {
-                if ("getName".equals(m.getName()) && m.getParameterCount() == 0) {
-                    Object objName = m.invoke(obj);
-                    return name.equals(objName);
-                }
-            }
-        } catch (Exception e) {
-            // Ignore
-        }
-        
-        return false;
     }
     
     @Override
