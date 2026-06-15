@@ -112,33 +112,8 @@ public final class GuideRenderer
      */
     private static void appendParameters(StringBuilder sb, String inputSchema)
     {
-        JsonObject properties = null;
-        JsonArray required = null;
-        try
-        {
-            if (inputSchema != null && !inputSchema.isEmpty())
-            {
-                JsonElement parsed = JsonParser.parseString(inputSchema);
-                if (parsed != null && parsed.isJsonObject())
-                {
-                    JsonObject root = parsed.getAsJsonObject();
-                    if (root.has(PROPERTIES) && root.get(PROPERTIES).isJsonObject())
-                    {
-                        properties = root.getAsJsonObject(PROPERTIES);
-                    }
-                    if (root.has(REQUIRED) && root.get(REQUIRED).isJsonArray())
-                    {
-                        required = root.getAsJsonArray(REQUIRED);
-                    }
-                }
-            }
-        }
-        catch (RuntimeException e)
-        {
-            // Malformed schema: skip the table gracefully, never throw.
-            properties = null;
-            required = null;
-        }
+        ParsedSchema schema = parseSchema(inputSchema);
+        JsonObject properties = schema.properties;
 
         if (properties == null || properties.size() == 0)
         {
@@ -149,18 +124,81 @@ public final class GuideRenderer
         sb.append(MarkdownUtils.tableHeader("Parameter", "Required", "Type", "Description")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         for (Map.Entry<String, JsonElement> entry : properties.entrySet())
         {
-            String name = entry.getKey();
-            JsonObject prop = entry.getValue().isJsonObject() ? entry.getValue().getAsJsonObject() : new JsonObject();
-
-            String requiredCell = isRequired(required, name) ? "yes" : "—"; //$NON-NLS-1$ //$NON-NLS-2$
-            String type = prop.has("type") && prop.get("type").isJsonPrimitive() //$NON-NLS-1$ //$NON-NLS-2$
-                ? prop.get("type").getAsString() : ""; //$NON-NLS-1$ //$NON-NLS-2$
-            String typeCell = appendEnum(type, prop);
-            String descriptionCell = prop.has(DESCRIPTION) && prop.get(DESCRIPTION).isJsonPrimitive()
-                ? prop.get(DESCRIPTION).getAsString() : ""; //$NON-NLS-1$
-
-            sb.append(MarkdownUtils.tableRow(name, requiredCell, typeCell, descriptionCell));
+            sb.append(renderParameterRow(entry, schema.required));
         }
+    }
+
+    /**
+     * Holds the {@code properties} object and {@code required} array parsed from an input schema.
+     * Either field may be {@code null} when absent or when the schema is malformed.
+     */
+    private static final class ParsedSchema
+    {
+        private JsonObject properties;
+        private JsonArray required;
+    }
+
+    /**
+     * Defensively parses the JSON {@code inputSchema}, extracting its {@code properties} object and
+     * {@code required} array. Any malformed schema is swallowed and an empty result is returned (the
+     * method never throws).
+     *
+     * @param inputSchema the tool's input schema as a JSON string (may be {@code null}/empty)
+     * @return the parsed properties/required pair; fields are {@code null} when absent or on error
+     */
+    private static ParsedSchema parseSchema(String inputSchema)
+    {
+        ParsedSchema result = new ParsedSchema();
+        try
+        {
+            if (inputSchema != null && !inputSchema.isEmpty())
+            {
+                JsonElement parsed = JsonParser.parseString(inputSchema);
+                if (parsed != null && parsed.isJsonObject())
+                {
+                    JsonObject root = parsed.getAsJsonObject();
+                    if (root.has(PROPERTIES) && root.get(PROPERTIES).isJsonObject())
+                    {
+                        result.properties = root.getAsJsonObject(PROPERTIES);
+                    }
+                    if (root.has(REQUIRED) && root.get(REQUIRED).isJsonArray())
+                    {
+                        result.required = root.getAsJsonArray(REQUIRED);
+                    }
+                }
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // Malformed schema: skip the table gracefully, never throw.
+            result.properties = null;
+            result.required = null;
+        }
+
+        return result;
+    }
+
+    /**
+     * Renders a single parameter row (Parameter, Required, Type, Description) for one
+     * {@code properties} entry, resolving its required flag against {@code required}.
+     *
+     * @param entry the property entry (name to schema)
+     * @param required the schema's required array (may be {@code null})
+     * @return the rendered Markdown table row
+     */
+    private static String renderParameterRow(Map.Entry<String, JsonElement> entry, JsonArray required)
+    {
+        String name = entry.getKey();
+        JsonObject prop = entry.getValue().isJsonObject() ? entry.getValue().getAsJsonObject() : new JsonObject();
+
+        String requiredCell = isRequired(required, name) ? "yes" : "—"; //$NON-NLS-1$ //$NON-NLS-2$
+        String type = prop.has("type") && prop.get("type").isJsonPrimitive() //$NON-NLS-1$ //$NON-NLS-2$
+            ? prop.get("type").getAsString() : ""; //$NON-NLS-1$ //$NON-NLS-2$
+        String typeCell = appendEnum(type, prop);
+        String descriptionCell = prop.has(DESCRIPTION) && prop.get(DESCRIPTION).isJsonPrimitive()
+            ? prop.get(DESCRIPTION).getAsString() : ""; //$NON-NLS-1$
+
+        return MarkdownUtils.tableRow(name, requiredCell, typeCell, descriptionCell);
     }
 
     /**

@@ -400,47 +400,66 @@ public class PlatformDocumentationService
     {
         if (projectName == null || projectName.isEmpty())
         {
-            // Try to get from first available project
-            IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
-            if (v8pm != null)
-            {
-                java.util.Iterator<IV8Project> it = v8pm.getProjects().iterator();
-                if (it.hasNext())
-                {
-                    return it.next().getVersion();
-                }
-            }
-            return null;
+            return firstProjectVersion();
         }
 
         try
         {
             ProjectContext ctx = ProjectContext.of(projectName);
-            IProject project = ctx.project();
             if (ctx.exists())
             {
-                IDtProjectManager dtpm = Activator.getDefault().getDtProjectManager();
-                if (dtpm != null)
-                {
-                    IDtProject dtProject = dtpm.getDtProject(project);
-                    if (dtProject != null)
-                    {
-                        IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
-                        if (v8pm != null)
-                        {
-                            IV8Project v8Project = v8pm.getProject(dtProject);
-                            if (v8Project != null)
-                            {
-                                return v8Project.getVersion();
-                            }
-                        }
-                    }
-                }
+                return versionForContext(ctx);
             }
         }
         catch (Exception e)
         {
             Activator.logError("Error getting project version", e); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Returns the platform version of the first available project, or {@code null} when
+     * there is none. Used as the fallback when no project name is supplied.
+     */
+    private Version firstProjectVersion()
+    {
+        IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
+        if (v8pm != null)
+        {
+            java.util.Iterator<IV8Project> it = v8pm.getProjects().iterator();
+            if (it.hasNext())
+            {
+                return it.next().getVersion();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves the platform version for an existing project context by walking
+     * {@code IProject -> IDtProject -> IV8Project}, returning {@code null} when any link in
+     * the chain is unavailable.
+     */
+    private Version versionForContext(ProjectContext ctx)
+    {
+        IProject project = ctx.project();
+        IDtProjectManager dtpm = Activator.getDefault().getDtProjectManager();
+        if (dtpm != null)
+        {
+            IDtProject dtProject = dtpm.getDtProject(project);
+            if (dtProject != null)
+            {
+                IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
+                if (v8pm != null)
+                {
+                    IV8Project v8Project = v8pm.getProject(dtProject);
+                    if (v8Project != null)
+                    {
+                        return v8Project.getVersion();
+                    }
+                }
+            }
         }
         return null;
     }
@@ -518,6 +537,24 @@ public class PlatformDocumentationService
 
         // Parameter sets (overloads) - use getParamSet() not getParamSets()
         EList<ParamSet> paramSets = method.getParamSet();
+        appendMethodParamSets(sb, paramSets, useRussian);
+
+        // Return type - on method level, not ParamSet
+        EList<TypeItem> retValTypes = method.getRetValType();
+        if (retValTypes != null && !retValTypes.isEmpty())
+        {
+            sb.append("**Returns:** ").append(joinTypeNames(retValTypes, useRussian)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        sb.append("\n"); //$NON-NLS-1$
+    }
+
+    /**
+     * Appends the parameter sets (overloads) of a method, prefixing each with an
+     * "Overload N" heading when more than one set is present.
+     */
+    private void appendMethodParamSets(StringBuilder sb, EList<ParamSet> paramSets, boolean useRussian)
+    {
         if (paramSets != null && !paramSets.isEmpty())
         {
             for (int i = 0; i < paramSets.size(); i++)
@@ -530,25 +567,24 @@ public class PlatformDocumentationService
                 appendParamSetDocumentation(sb, ps, useRussian);
             }
         }
+    }
 
-        // Return type - on method level, not ParamSet
-        EList<TypeItem> retValTypes = method.getRetValType();
-        if (retValTypes != null && !retValTypes.isEmpty())
+    /**
+     * Joins the localized names of the given type items with " | ", skipping items whose
+     * name is {@code null}.
+     */
+    private String joinTypeNames(EList<TypeItem> typeItems, boolean useRussian)
+    {
+        List<String> typeNames = new ArrayList<>();
+        for (TypeItem typeItem : typeItems)
         {
-            sb.append("**Returns:** "); //$NON-NLS-1$
-            List<String> typeNames = new ArrayList<>();
-            for (TypeItem typeItem : retValTypes)
+            String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
+            if (typeName != null)
             {
-                String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
-                if (typeName != null)
-                {
-                    typeNames.add(typeName);
-                }
+                typeNames.add(typeName);
             }
-            sb.append(String.join(" | ", typeNames)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
-
-        sb.append("\n"); //$NON-NLS-1$
+        return String.join(" | ", typeNames); //$NON-NLS-1$
     }
 
     /**
@@ -823,6 +859,28 @@ public class PlatformDocumentationService
     {
         StringBuilder sb = new StringBuilder();
 
+        appendBuiltinMethodHeader(sb, method, useRussian);
+
+        // Parameter sets (overloads)
+        EList<ParamSet> paramSets = method.getParamSet();
+        appendBuiltinParamSets(sb, paramSets, useRussian);
+
+        // Return type
+        EList<TypeItem> retValTypes = method.getRetValType();
+        if (retValTypes != null && !retValTypes.isEmpty())
+        {
+            sb.append("## Return Type\n\n"); //$NON-NLS-1$
+            sb.append("**Returns:** ").append(joinTypeNames(retValTypes, useRussian)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Appends the title, category and return/procedure flag header of a built-in method.
+     */
+    private void appendBuiltinMethodHeader(StringBuilder sb, Method method, boolean useRussian)
+    {
         // Method header
         String displayName = useRussian ? method.getNameRu() : method.getName();
         String altName = useRussian ? method.getName() : method.getNameRu();
@@ -845,9 +903,15 @@ public class PlatformDocumentationService
         {
             sb.append("*Procedure (no return value)*\n\n"); //$NON-NLS-1$
         }
+    }
 
-        // Parameter sets (overloads)
-        EList<ParamSet> paramSets = method.getParamSet();
+    /**
+     * Appends the "Parameters" section of a built-in method, rendering one block per
+     * overload (with an "Overload N" heading when there are several) or a "No parameters"
+     * note when the method has none.
+     */
+    private void appendBuiltinParamSets(StringBuilder sb, EList<ParamSet> paramSets, boolean useRussian)
+    {
         if (paramSets != null && !paramSets.isEmpty())
         {
             sb.append("## Parameters\n\n"); //$NON-NLS-1$
@@ -866,24 +930,5 @@ public class PlatformDocumentationService
         {
             sb.append("## Parameters\n\n*No parameters*\n\n"); //$NON-NLS-1$
         }
-
-        // Return type
-        EList<TypeItem> retValTypes = method.getRetValType();
-        if (retValTypes != null && !retValTypes.isEmpty())
-        {
-            sb.append("## Return Type\n\n"); //$NON-NLS-1$
-            List<String> typeNames = new ArrayList<>();
-            for (TypeItem typeItem : retValTypes)
-            {
-                String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
-                if (typeName != null)
-                {
-                    typeNames.add(typeName);
-                }
-            }
-            sb.append("**Returns:** ").append(String.join(" | ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        }
-
-        return sb.toString();
     }
 }

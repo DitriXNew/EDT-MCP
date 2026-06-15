@@ -207,75 +207,19 @@ public class CreateLaunchConfigTool implements IMcpTool
         IProject project = ctx.project();
 
         // ── 4. Reject non-configuration projects ───────────────────────────────
-        try
+        String natureErr = checkConfigurationNature(project, projectName);
+        if (natureErr != null)
         {
-            if (!project.hasNature(V8_CONFIGURATION_NATURE))
-            {
-                return ToolResult.error("Not a V8 configuration project: '" + projectName //$NON-NLS-1$
-                    + "'. A runtime-client launch configuration requires a V8ConfigurationNature " //$NON-NLS-1$
-                    + "project (e.g. use list_projects and look for type='configuration').").toJson(); //$NON-NLS-1$
-            }
-        }
-        catch (CoreException e)
-        {
-            Activator.logError("Error checking project nature for: " + projectName, e); //$NON-NLS-1$
-            return ToolResult.error("Cannot check project nature for '" + projectName //$NON-NLS-1$
-                + "': " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return natureErr;
         }
 
         // ── 5. Resolve application id ──────────────────────────────────────────
-        String effectiveApplicationId;
-        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
-        if (appManager == null)
+        AppIdResolution appIdResolution = resolveApplicationId(project, projectName, applicationIdParam);
+        if (appIdResolution.error != null)
         {
-            return ToolResult.error("IApplicationManager service is not available. " //$NON-NLS-1$
-                + "EDT may still be starting up — retry in a moment.").toJson(); //$NON-NLS-1$
+            return appIdResolution.error;
         }
-
-        if (applicationIdParam != null && !applicationIdParam.isEmpty())
-        {
-            // Caller supplied an explicit id — validate it exists for this project.
-            // Distinguish "not found" (empty Optional) from a transient service failure
-            // (exception while EDT is mid-index) so the diagnosis is not misleading.
-            try
-            {
-                Optional<IApplication> appOpt = appManager.getApplication(project, applicationIdParam);
-                if (!appOpt.isPresent())
-                {
-                    return buildAppNotFoundError(projectName, applicationIdParam);
-                }
-                effectiveApplicationId = applicationIdParam;
-            }
-            catch (ApplicationException e)
-            {
-                Activator.logError("Error resolving application for: " + projectName, e); //$NON-NLS-1$
-                return ToolResult.error("Could not resolve application '" + applicationIdParam //$NON-NLS-1$
-                    + "' for project '" + projectName + "': " + e.getMessage() //$NON-NLS-1$ //$NON-NLS-2$
-                    + ". The project may still be indexing — retry in a moment.").toJson(); //$NON-NLS-1$
-            }
-        }
-        else
-        {
-            // Resolve the project's default application.
-            try
-            {
-                Optional<IApplication> defaultApp = appManager.getDefaultApplication(project);
-                if (!defaultApp.isPresent())
-                {
-                    return ToolResult.error("Project '" + projectName //$NON-NLS-1$
-                        + "' has no applications (infobases). Create an infobase first " //$NON-NLS-1$
-                        + "(Window -> Preferences -> EDT -> Applications or the 1C Administrator " //$NON-NLS-1$
-                        + "console), then retry. Use get_applications to check available applications.").toJson(); //$NON-NLS-1$
-                }
-                effectiveApplicationId = defaultApp.get().getId();
-            }
-            catch (ApplicationException e)
-            {
-                Activator.logError("Error resolving default application for: " + projectName, e); //$NON-NLS-1$
-                return ToolResult.error("Cannot resolve default application for '" + projectName //$NON-NLS-1$
-                    + "': " + e.getMessage() + ". Use get_applications to list available applications.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-        }
+        String effectiveApplicationId = appIdResolution.applicationId;
 
         // ── 6. Acquire launch manager and type ────────────────────────────────
         ILaunchManager lm = LaunchConfigUtils.getLaunchManager();
@@ -421,5 +365,120 @@ public class CreateLaunchConfigTool implements IMcpTool
             + "' was not found for project '" + projectName //$NON-NLS-1$
             + "'. Use get_applications(projectName='" + projectName //$NON-NLS-1$
             + "') to see the valid application IDs for this project.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Rejects a project that is not a V8 configuration project (a runtime-client launch config requires
+     * {@code V8ConfigurationNature}). Returns a JSON error to reject, or {@code null} to proceed. The
+     * nature check is a read-only query; a {@link CoreException} is logged and surfaced as an error
+     * exactly as in the original inline block.
+     */
+    private static String checkConfigurationNature(IProject project, String projectName)
+    {
+        try
+        {
+            if (!project.hasNature(V8_CONFIGURATION_NATURE))
+            {
+                return ToolResult.error("Not a V8 configuration project: '" + projectName //$NON-NLS-1$
+                    + "'. A runtime-client launch configuration requires a V8ConfigurationNature " //$NON-NLS-1$
+                    + "project (e.g. use list_projects and look for type='configuration').").toJson(); //$NON-NLS-1$
+            }
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Error checking project nature for: " + projectName, e); //$NON-NLS-1$
+            return ToolResult.error("Cannot check project nature for '" + projectName //$NON-NLS-1$
+                + "': " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Resolves the effective application (infobase) id for the config: validates the caller-supplied
+     * {@code applicationIdParam} against the project when present, otherwise resolves the project's
+     * default application. Read-only (no config is created here); the resolution distinguishes
+     * "not found" (an empty {@link Optional}) from a transient {@link ApplicationException} (EDT
+     * mid-index) with the same messages as the original inline block. Returns an
+     * {@link AppIdResolution} carrying either an error JSON string or the resolved id.
+     */
+    private static AppIdResolution resolveApplicationId(IProject project, String projectName,
+        String applicationIdParam)
+    {
+        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
+        if (appManager == null)
+        {
+            return AppIdResolution.error(ToolResult.error("IApplicationManager service is not available. " //$NON-NLS-1$
+                + "EDT may still be starting up — retry in a moment.").toJson()); //$NON-NLS-1$
+        }
+
+        if (applicationIdParam != null && !applicationIdParam.isEmpty())
+        {
+            // Caller supplied an explicit id — validate it exists for this project.
+            // Distinguish "not found" (empty Optional) from a transient service failure
+            // (exception while EDT is mid-index) so the diagnosis is not misleading.
+            try
+            {
+                Optional<IApplication> appOpt = appManager.getApplication(project, applicationIdParam);
+                if (!appOpt.isPresent())
+                {
+                    return AppIdResolution.error(buildAppNotFoundError(projectName, applicationIdParam));
+                }
+                return AppIdResolution.id(applicationIdParam);
+            }
+            catch (ApplicationException e)
+            {
+                Activator.logError("Error resolving application for: " + projectName, e); //$NON-NLS-1$
+                return AppIdResolution.error(ToolResult.error("Could not resolve application '" //$NON-NLS-1$
+                    + applicationIdParam
+                    + "' for project '" + projectName + "': " + e.getMessage() //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". The project may still be indexing — retry in a moment.").toJson()); //$NON-NLS-1$
+            }
+        }
+        // Resolve the project's default application.
+        try
+        {
+            Optional<IApplication> defaultApp = appManager.getDefaultApplication(project);
+            if (!defaultApp.isPresent())
+            {
+                return AppIdResolution.error(ToolResult.error("Project '" + projectName //$NON-NLS-1$
+                    + "' has no applications (infobases). Create an infobase first " //$NON-NLS-1$
+                    + "(Window -> Preferences -> EDT -> Applications or the 1C Administrator " //$NON-NLS-1$
+                    + "console), then retry. Use get_applications to check available applications.").toJson()); //$NON-NLS-1$
+            }
+            return AppIdResolution.id(defaultApp.get().getId());
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error resolving default application for: " + projectName, e); //$NON-NLS-1$
+            return AppIdResolution.error(ToolResult.error("Cannot resolve default application for '" //$NON-NLS-1$
+                + projectName
+                + "': " + e.getMessage() + ". Use get_applications to list available applications.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * Outcome of {@link #resolveApplicationId}: exactly one of {@link #error} (a JSON error string to
+     * return) or {@link #applicationId} (the resolved id) is non-null.
+     */
+    private static final class AppIdResolution
+    {
+        private final String error;
+        private final String applicationId;
+
+        private AppIdResolution(String error, String applicationId)
+        {
+            this.error = error;
+            this.applicationId = applicationId;
+        }
+
+        static AppIdResolution error(String error)
+        {
+            return new AppIdResolution(error, null);
+        }
+
+        static AppIdResolution id(String applicationId)
+        {
+            return new AppIdResolution(null, applicationId);
+        }
     }
 }

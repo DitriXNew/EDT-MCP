@@ -246,24 +246,8 @@ public class UpdateDatabaseTool implements IMcpTool
             // application exists, not already being updated) has run, so the preview is trustworthy.
             if (!confirm)
             {
-                return ToolResult.success()
-                    .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
-                    .put("confirmationRequired", true) //$NON-NLS-1$
-                    .put(McpKeys.PROJECT, projectName)
-                    .put(McpKeys.APPLICATION_ID, applicationId)
-                    .put(KEY_APPLICATION_NAME, application.getName())
-                    .put(KEY_UPDATE_TYPE, updateType.name())
-                    .put(KEY_STATE_BEFORE, stateBefore.name())
-                    .put("willTerminateRunningClients", terminateRunningClients) //$NON-NLS-1$
-                    .put(McpKeys.MESSAGE, "PREVIEW: this would apply a " + updateType.name() //$NON-NLS-1$
-                        + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
-                        + "' (project " + projectName + "). This mutates the infobase and is " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "IRREVERSIBLE." //$NON-NLS-1$
-                        + (terminateRunningClients
-                            ? " It will first terminate any 1C client this EDT launched on the infobase." //$NON-NLS-1$
-                            : "") //$NON-NLS-1$
-                        + " Re-call with confirm=true to apply it.") //$NON-NLS-1$
-                    .toJson();
+                return buildPreviewResult(projectName, applicationId, application, updateType,
+                    stateBefore, terminateRunningClients);
             }
 
             // Create execution context with the active Shell so EDT can parent
@@ -318,62 +302,13 @@ public class UpdateDatabaseTool implements IMcpTool
                 }
             }
 
-            // Build result. terminatedClient is emitted ONLY when a client was actually terminated
-            // (truthful; "swept but none / not confirmed" and opt-out are indistinguishable by
-            // absence — the confirmationRequired idiom).
-            ToolResult result = ToolResult.success()
-                .put(McpKeys.ACTION, "updated") //$NON-NLS-1$
-                .put(McpKeys.PROJECT, projectName)
-                .put(McpKeys.APPLICATION_ID, applicationId)
-                .put(KEY_APPLICATION_NAME, application.getName())
-                .put(KEY_UPDATE_TYPE, updateType.name())
-                .put(KEY_STATE_BEFORE, stateBefore.name())
-                .put("stateAfter", stateAfter.name()); //$NON-NLS-1$
-            if (terminatedClient)
-            {
-                result.put(KEY_TERMINATED_CLIENT, true);
-            }
-            
-            // Add status message based on result
-            if (stateAfter == ApplicationUpdateState.UPDATED)
-            {
-                result.put(McpKeys.MESSAGE, "Database updated successfully"); //$NON-NLS-1$
-            }
-            else if (stateAfter == ApplicationUpdateState.BEING_UPDATED)
-            {
-                result.put(McpKeys.MESSAGE, "Update in progress"); //$NON-NLS-1$
-            }
-            else
-            {
-                result.put(McpKeys.MESSAGE, "Update completed with state: " + stateAfter.name()); //$NON-NLS-1$
-            }
-            
-            return result.toJson();
+            return buildUpdatedResult(projectName, applicationId, application, updateType,
+                stateBefore, stateAfter, terminatedClient);
         }
         catch (ApplicationException e)
         {
             Activator.logError("Error updating database for application: " + applicationId, e); //$NON-NLS-1$
-            
-            // The common failure is the exclusive lock: name a 1C client that still holds the
-            // infobase (an MCP-owned sibling launch is exempt from the sweep, or a client outlived
-            // the terminate window) so the agent can act instead of seeing a bare failure.
-            ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
-                + e.getMessage() + describeInfobaseHolder(applicationId));
-            errorResult.put(McpKeys.APPLICATION_ID, applicationId);
-            errorResult.put(McpKeys.PROJECT, projectName);
-            if (terminatedClient)
-            {
-                errorResult.put(KEY_TERMINATED_CLIENT, true);
-            }
-
-            // Try to get additional error details
-            if (e.getCause() != null)
-            {
-                errorResult.put("causeMessage", e.getCause().getMessage()); //$NON-NLS-1$
-                errorResult.put("causeType", e.getCause().getClass().getSimpleName()); //$NON-NLS-1$
-            }
-            
-            return errorResult.toJson();
+            return buildApplicationErrorResult(e, projectName, applicationId, terminatedClient);
         }
         catch (Exception e)
         {
@@ -385,6 +320,102 @@ public class UpdateDatabaseTool implements IMcpTool
             }
             return errorResult.toJson();
         }
+    }
+
+    /**
+     * Builds the confirm-preview JSON (no infobase change): resolves and reports the exact
+     * IRREVERSIBLE action that confirm=true would apply. Side-effect-free.
+     */
+    private static String buildPreviewResult(String projectName, String applicationId,
+            IApplication application, ApplicationUpdateType updateType,
+            ApplicationUpdateState stateBefore, boolean terminateRunningClients)
+    {
+        return ToolResult.success()
+            .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
+            .put("confirmationRequired", true) //$NON-NLS-1$
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, applicationId)
+            .put(KEY_APPLICATION_NAME, application.getName())
+            .put(KEY_UPDATE_TYPE, updateType.name())
+            .put(KEY_STATE_BEFORE, stateBefore.name())
+            .put("willTerminateRunningClients", terminateRunningClients) //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, "PREVIEW: this would apply a " + updateType.name() //$NON-NLS-1$
+                + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
+                + "' (project " + projectName + "). This mutates the infobase and is " //$NON-NLS-1$ //$NON-NLS-2$
+                + "IRREVERSIBLE." //$NON-NLS-1$
+                + (terminateRunningClients
+                    ? " It will first terminate any 1C client this EDT launched on the infobase." //$NON-NLS-1$
+                    : "") //$NON-NLS-1$
+                + " Re-call with confirm=true to apply it.") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * Builds the success JSON after an applied update. terminatedClient is emitted ONLY when a
+     * client was actually terminated (truthful; "swept but none / not confirmed" and opt-out are
+     * indistinguishable by absence — the confirmationRequired idiom). Side-effect-free.
+     */
+    private static String buildUpdatedResult(String projectName, String applicationId,
+            IApplication application, ApplicationUpdateType updateType,
+            ApplicationUpdateState stateBefore, ApplicationUpdateState stateAfter,
+            boolean terminatedClient)
+    {
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, "updated") //$NON-NLS-1$
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, applicationId)
+            .put(KEY_APPLICATION_NAME, application.getName())
+            .put(KEY_UPDATE_TYPE, updateType.name())
+            .put(KEY_STATE_BEFORE, stateBefore.name())
+            .put("stateAfter", stateAfter.name()); //$NON-NLS-1$
+        if (terminatedClient)
+        {
+            result.put(KEY_TERMINATED_CLIENT, true);
+        }
+
+        // Add status message based on result
+        if (stateAfter == ApplicationUpdateState.UPDATED)
+        {
+            result.put(McpKeys.MESSAGE, "Database updated successfully"); //$NON-NLS-1$
+        }
+        else if (stateAfter == ApplicationUpdateState.BEING_UPDATED)
+        {
+            result.put(McpKeys.MESSAGE, "Update in progress"); //$NON-NLS-1$
+        }
+        else
+        {
+            result.put(McpKeys.MESSAGE, "Update completed with state: " + stateAfter.name()); //$NON-NLS-1$
+        }
+
+        return result.toJson();
+    }
+
+    /**
+     * Builds the JSON for an {@link ApplicationException} failure. The common failure is the
+     * exclusive lock: name a 1C client that still holds the infobase (an MCP-owned sibling launch
+     * is exempt from the sweep, or a client outlived the terminate window) so the agent can act
+     * instead of seeing a bare failure. Side-effect-free (the error is already logged by the caller).
+     */
+    private static String buildApplicationErrorResult(ApplicationException e, String projectName,
+            String applicationId, boolean terminatedClient)
+    {
+        ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
+            + e.getMessage() + describeInfobaseHolder(applicationId));
+        errorResult.put(McpKeys.APPLICATION_ID, applicationId);
+        errorResult.put(McpKeys.PROJECT, projectName);
+        if (terminatedClient)
+        {
+            errorResult.put(KEY_TERMINATED_CLIENT, true);
+        }
+
+        // Try to get additional error details
+        if (e.getCause() != null)
+        {
+            errorResult.put("causeMessage", e.getCause().getMessage()); //$NON-NLS-1$
+            errorResult.put("causeType", e.getCause().getClass().getSimpleName()); //$NON-NLS-1$
+        }
+
+        return errorResult.toJson();
     }
 
     /**

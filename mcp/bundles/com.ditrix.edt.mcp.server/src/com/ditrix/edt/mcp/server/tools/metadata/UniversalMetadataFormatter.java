@@ -151,87 +151,108 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     {
         for (EStructuralFeature feature : mdObject.eClass().getEAllStructuralFeatures())
         {
-            if (!(feature instanceof EReference))
+            Collection<?> collection = eligibleContainmentCollection(feature, mdObject);
+            if (collection == null || collection.isEmpty())
             {
                 continue;
             }
-            
-            EReference ref = (EReference) feature;
-            
-            // Only process containment many-valued references
-            if (!ref.isContainment() || !ref.isMany())
-            {
-                continue;
-            }
-            
-            // Skip derived, transient, volatile
-            if (ref.isDerived() || ref.isTransient() || ref.isVolatile())
-            {
-                continue;
-            }
-            
-            if (!mdObject.eIsSet(ref))
-            {
-                continue;
-            }
-            
-            Object value = mdObject.eGet(ref);
-            if (!(value instanceof Collection))
-            {
-                continue;
-            }
-            
-            Collection<?> collection = (Collection<?>) value;
-            if (collection.isEmpty())
-            {
-                continue;
-            }
-            
-            String collectionName = formatFeatureName(ref.getName());
-            
+
+            String collectionName = formatFeatureName(((EReference) feature).getName());
+
             // Special handling for known collection types
             Object firstItem = collection.iterator().next();
-            
-            if (firstItem instanceof BasicForm)
-            {
-                formatFormsCollection(sb, collectionName, collection, language);
-            }
-            else if (firstItem instanceof BasicCommand)
-            {
-                formatCommandsCollection(sb, collectionName, collection, language);
-            }
-            else if (firstItem instanceof StandardAttribute)
-            {
-                // StandardAttributes are now formatted via formatStandardAttributes() method
-                // Skip them here to avoid duplication
-            }
-            else if (firstItem instanceof CharacteristicsDescription)
-            {
-                formatCharacteristicsCollection(sb, collectionName, collection);
-            }
-            else if (firstItem instanceof BasicTabularSection)
-            {
-                // Tabular Sections - format with extended details
-                formatTabularSectionsExtended(sb, collectionName, collection, full, language);
-            }
-            else if (firstItem instanceof BasicFeature)
-            {
-                // Attributes - format with extended properties
-                formatAttributesCollection(sb, collectionName, collection, full, language);
-            }
-            else if (firstItem instanceof java.util.Map.Entry)
-            {
-                // Handle EMap collections like Synonym, ObjectPresentation
-                formatMapEntryCollection(sb, collectionName, collection);
-            }
-            else if (firstItem instanceof MdObject)
-            {
-                formatMdObjectCollection(sb, collectionName, collection, full, language);
-            }
-            else if (firstItem instanceof EObject)
-            {
-                formatEObjectCollection(sb, collectionName, collection);
-            }
+
+            dispatchContainmentCollection(sb, collectionName, collection, firstItem, full, language);
+        }
+    }
+
+    /**
+     * Returns the containment-collection value of {@code feature} on {@code mdObject} when the
+     * feature is a non-derived, non-transient, non-volatile, set, many-valued containment
+     * {@link EReference} whose value is a {@link Collection}; otherwise returns {@code null}.
+     * Mirrors the original skip guards (each {@code null} return matches a {@code continue}).
+     */
+    private static Collection<?> eligibleContainmentCollection(EStructuralFeature feature, MdObject mdObject)
+    {
+        if (!(feature instanceof EReference))
+        {
+            return null;
+        }
+
+        EReference ref = (EReference) feature;
+
+        // Only process containment many-valued references
+        if (!ref.isContainment() || !ref.isMany())
+        {
+            return null;
+        }
+
+        // Skip derived, transient, volatile
+        if (ref.isDerived() || ref.isTransient() || ref.isVolatile())
+        {
+            return null;
+        }
+
+        if (!mdObject.eIsSet(ref))
+        {
+            return null;
+        }
+
+        Object value = mdObject.eGet(ref);
+        if (!(value instanceof Collection))
+        {
+            return null;
+        }
+
+        return (Collection<?>) value;
+    }
+
+    /**
+     * Dispatches a non-empty containment collection to the matching type-specific formatter, based on
+     * the runtime type of its first element ({@code firstItem}). Preserves the original if/else-if order.
+     */
+    private void dispatchContainmentCollection(StringBuilder sb, String collectionName, Collection<?> collection,
+        Object firstItem, boolean full, String language)
+    {
+        if (firstItem instanceof BasicForm)
+        {
+            formatFormsCollection(sb, collectionName, collection, language);
+        }
+        else if (firstItem instanceof BasicCommand)
+        {
+            formatCommandsCollection(sb, collectionName, collection, language);
+        }
+        else if (firstItem instanceof StandardAttribute)
+        {
+            // StandardAttributes are now formatted via formatStandardAttributes() method
+            // Skip them here to avoid duplication
+        }
+        else if (firstItem instanceof CharacteristicsDescription)
+        {
+            formatCharacteristicsCollection(sb, collectionName, collection);
+        }
+        else if (firstItem instanceof BasicTabularSection)
+        {
+            // Tabular Sections - format with extended details
+            formatTabularSectionsExtended(sb, collectionName, collection, full, language);
+        }
+        else if (firstItem instanceof BasicFeature)
+        {
+            // Attributes - format with extended properties
+            formatAttributesCollection(sb, collectionName, collection, full, language);
+        }
+        else if (firstItem instanceof java.util.Map.Entry)
+        {
+            // Handle EMap collections like Synonym, ObjectPresentation
+            formatMapEntryCollection(sb, collectionName, collection);
+        }
+        else if (firstItem instanceof MdObject)
+        {
+            formatMdObjectCollection(sb, collectionName, collection, full, language);
+        }
+        else if (firstItem instanceof EObject)
+        {
+            formatEObjectCollection(sb, collectionName, collection);
         }
     }
     
@@ -469,91 +490,123 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     private void formatTabularSectionsExtended(StringBuilder sb, String name, Collection<?> items, boolean full, String language)
     {
         addSectionHeader(sb, name);
-        
+
         for (Object item : items)
         {
             if (item instanceof BasicTabularSection)
             {
-                BasicTabularSection ts = (BasicTabularSection) item;
-                
-                // Sub-header for this tabular section
-                sb.append("\n#### ").append(ts.getName()).append("\n\n");
-                
-                // Properties table for the TS itself
-                startTable(sb, "Property", VALUE_TOKEN);
-                addPropertyRow(sb, "Name", ts.getName());
-                addPropertyRow(sb, SYNONYM_TOKEN, getSynonym(ts.getSynonym(), language));
-                
-                String comment = ts.getComment();
-                if (comment != null && !comment.isEmpty())
+                formatTabularSection(sb, (BasicTabularSection) item, full, language);
+            }
+        }
+    }
+
+    /**
+     * Renders a single tabular section: its sub-header, the properties table (Name, Synonym, Comment,
+     * Tool Tip, Fill Checking, and the reflective Use / Line Number Length rows) and its attributes.
+     */
+    private void formatTabularSection(StringBuilder sb, BasicTabularSection ts, boolean full, String language)
+    {
+        // Sub-header for this tabular section
+        sb.append("\n#### ").append(ts.getName()).append("\n\n");
+
+        // Properties table for the TS itself
+        startTable(sb, "Property", VALUE_TOKEN);
+        addPropertyRow(sb, "Name", ts.getName());
+        addPropertyRow(sb, SYNONYM_TOKEN, getSynonym(ts.getSynonym(), language));
+
+        String comment = ts.getComment();
+        if (comment != null && !comment.isEmpty())
+        {
+            addPropertyRow(sb, "Comment", comment);
+        }
+
+        // Tool Tip
+        String toolTip = getSynonym(ts.getToolTip(), language);
+        if (toolTip != null && !toolTip.isEmpty())
+        {
+            addPropertyRow(sb, "Tool Tip", toolTip);
+        }
+
+        // Fill Checking
+        addPropertyRow(sb, "Fill Checking", formatEnum(ts.getFillChecking()));
+
+        formatTabularSectionUse(sb, ts);
+        formatTabularSectionLineNumberLength(sb, ts);
+        formatTabularSectionAttributes(sb, ts, full, language);
+    }
+
+    /**
+     * Adds the "Use" row of a tabular section, read reflectively (available in
+     * HierarchicalDbObjectTabularSection). No-op when the getter is absent or returns {@code null}.
+     */
+    private void formatTabularSectionUse(StringBuilder sb, BasicTabularSection ts)
+    {
+        // Use (via reflection, available in HierarchicalDbObjectTabularSection)
+        try
+        {
+            java.lang.reflect.Method method = ts.getClass().getMethod("getUse");
+            Object use = method.invoke(ts);
+            if (use != null)
+            {
+                addPropertyRow(sb, "Use", formatEnum(use));
+            }
+        }
+        catch (Exception e)
+        {
+            // Method doesn't exist - skip
+        }
+    }
+
+    /**
+     * Adds the "Line Number Length" row of a tabular section, read reflectively. No-op when the getter
+     * is absent or returns {@code null}.
+     */
+    private void formatTabularSectionLineNumberLength(StringBuilder sb, BasicTabularSection ts)
+    {
+        // LineNumberLength (via reflection)
+        try
+        {
+            java.lang.reflect.Method method = ts.getClass().getMethod("getLineNumberLength");
+            Object lineNumLen = method.invoke(ts);
+            if (lineNumLen != null)
+            {
+                addPropertyRow(sb, "Line Number Length", lineNumLen.toString());
+            }
+        }
+        catch (Exception e)
+        {
+            // Method doesn't exist - skip
+        }
+    }
+
+    /**
+     * Renders the attributes of a tabular section, obtained via EMF reflection on the
+     * {@code attributes} feature. No-op when the feature is absent or its collection is empty.
+     */
+    private void formatTabularSectionAttributes(StringBuilder sb, BasicTabularSection ts, boolean full, String language)
+    {
+        // Get attributes collection via EMF reflection
+        try
+        {
+            EObject eObj = (EObject) ts;
+            EStructuralFeature attrFeature = eObj.eClass().getEStructuralFeature("attributes");
+            if (attrFeature != null)
+            {
+                Object attrValue = eObj.eGet(attrFeature);
+                if (attrValue instanceof Collection && !((Collection<?>) attrValue).isEmpty())
                 {
-                    addPropertyRow(sb, "Comment", comment);
-                }
-                
-                // Tool Tip
-                String toolTip = getSynonym(ts.getToolTip(), language);
-                if (toolTip != null && !toolTip.isEmpty())
-                {
-                    addPropertyRow(sb, "Tool Tip", toolTip);
-                }
-                
-                // Fill Checking
-                addPropertyRow(sb, "Fill Checking", formatEnum(ts.getFillChecking()));
-                
-                // Use (via reflection, available in HierarchicalDbObjectTabularSection)
-                try
-                {
-                    java.lang.reflect.Method method = ts.getClass().getMethod("getUse");
-                    Object use = method.invoke(ts);
-                    if (use != null)
-                    {
-                        addPropertyRow(sb, "Use", formatEnum(use));
-                    }
-                }
-                catch (Exception e)
-                {
-                    // Method doesn't exist - skip
-                }
-                
-                // LineNumberLength (via reflection)
-                try
-                {
-                    java.lang.reflect.Method method = ts.getClass().getMethod("getLineNumberLength");
-                    Object lineNumLen = method.invoke(ts);
-                    if (lineNumLen != null)
-                    {
-                        addPropertyRow(sb, "Line Number Length", lineNumLen.toString());
-                    }
-                }
-                catch (Exception e)
-                {
-                    // Method doesn't exist - skip
-                }
-                
-                // Get attributes collection via EMF reflection
-                try
-                {
-                    EObject eObj = (EObject) ts;
-                    EStructuralFeature attrFeature = eObj.eClass().getEStructuralFeature("attributes");
-                    if (attrFeature != null)
-                    {
-                        Object attrValue = eObj.eGet(attrFeature);
-                        if (attrValue instanceof Collection && !((Collection<?>) attrValue).isEmpty())
-                        {
-                            Collection<?> attributes = (Collection<?>) attrValue;
-                            
-                            // Format attributes of this tabular section
-                            sb.append("\n**Attributes:**\n\n");
-                            formatAttributesCollection(sb, "", attributes, full, language);
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    // Error getting attributes - skip
-                    System.err.println("Error formatting tabular section attributes: " + e.getMessage());
+                    Collection<?> attributes = (Collection<?>) attrValue;
+
+                    // Format attributes of this tabular section
+                    sb.append("\n**Attributes:**\n\n");
+                    formatAttributesCollection(sb, "", attributes, full, language);
                 }
             }
+        }
+        catch (Exception e)
+        {
+            // Error getting attributes - skip
+            System.err.println("Error formatting tabular section attributes: " + e.getMessage());
         }
     }
     

@@ -104,34 +104,7 @@ public class EnableToolsetTool implements IMcpTool
             List<String> applied = new ArrayList<>();
             List<String> invalid = new ArrayList<>();
             List<String> ignored = new ArrayList<>();
-            for (String raw : requested)
-            {
-                String id = raw == null ? null : raw.trim();
-                if (id == null || id.isEmpty())
-                {
-                    continue;
-                }
-                if (!Toolsets.exists(id))
-                {
-                    invalid.add(id);
-                    continue;
-                }
-                if (Toolsets.CORE.equals(id))
-                {
-                    // Core is always visible; toggling it is meaningless, not an error.
-                    ignored.add(id);
-                    continue;
-                }
-                if (disable)
-                {
-                    state.disable(id);
-                }
-                else
-                {
-                    state.enable(id);
-                }
-                applied.add(id);
-            }
+            categorizeToolsets(requested, disable, state, applied, invalid, ignored);
 
             // All requested ids were invalid (none applied, none ignored-as-core) -> a clear error
             // that names the bad values and points at the discovery tool.
@@ -156,15 +129,7 @@ public class EnableToolsetTool implements IMcpTool
             }
             result.put("progressiveDisclosure", pd); //$NON-NLS-1$
 
-            List<String> visible = new ArrayList<>();
-            for (Toolset ts : Toolsets.all())
-            {
-                if (!pd || state.isVisible(ts.getId()))
-                {
-                    visible.add(ts.getId());
-                }
-            }
-            result.put("visibleToolsets", visible); //$NON-NLS-1$
+            result.put("visibleToolsets", collectVisibleToolsets(pd, state)); //$NON-NLS-1$
 
             result.put("note", pd //$NON-NLS-1$
                 ? "Re-request tools/list to see the updated tool set." //$NON-NLS-1$
@@ -186,5 +151,62 @@ public class EnableToolsetTool implements IMcpTool
             Activator.logError("Error in enable_toolset", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
         }
+    }
+
+    /**
+     * Classifies each requested id and applies the toggle: blank ids are skipped, unknown ids go to
+     * {@code invalid}, the always-visible {@code core} toolset goes to {@code ignored}, and every other
+     * valid id is enabled / disabled on {@code state} and recorded in {@code applied}. Populates the
+     * three supplied lists in place (no list is reassigned); preserves the original per-id ordering and
+     * the early-skip semantics exactly.
+     */
+    private static void categorizeToolsets(List<String> requested, boolean disable, ToolsetState state,
+        List<String> applied, List<String> invalid, List<String> ignored)
+    {
+        for (String raw : requested)
+        {
+            String id = raw == null ? null : raw.trim();
+            if (id == null || id.isEmpty())
+            {
+                continue;
+            }
+            if (!Toolsets.exists(id))
+            {
+                invalid.add(id);
+                continue;
+            }
+            if (Toolsets.CORE.equals(id))
+            {
+                // Core is always visible; toggling it is meaningless, not an error.
+                ignored.add(id);
+                continue;
+            }
+            if (disable)
+            {
+                state.disable(id);
+            }
+            else
+            {
+                state.enable(id);
+            }
+            applied.add(id);
+        }
+    }
+
+    /**
+     * The toolset ids visible in {@code tools/list} after the change: every toolset when progressive
+     * disclosure is off, otherwise only the ones {@code state} reports visible. Read-only.
+     */
+    private static List<String> collectVisibleToolsets(boolean pd, ToolsetState state)
+    {
+        List<String> visible = new ArrayList<>();
+        for (Toolset ts : Toolsets.all())
+        {
+            if (!pd || state.isVisible(ts.getId()))
+            {
+                visible.add(ts.getId());
+            }
+        }
+        return visible;
     }
 }

@@ -442,14 +442,7 @@ public class FormLayoutSnapshotService
         {
             if ("categoriesHolder".equals(feature.getName())) //$NON-NLS-1$
             {
-                if (fullMode)
-                {
-                    Object categories = convertCategoriesHolder(object.eGet(feature, false));
-                    if (categories != null)
-                    {
-                        properties.put("categories", categories); //$NON-NLS-1$
-                    }
-                }
+                collectCategoriesHolder(properties, object, feature, fullMode);
                 continue;
             }
             if (!fullMode && !DISPLAY_PROPERTY_NAMES.contains(feature.getName()))
@@ -465,15 +458,42 @@ public class FormLayoutSnapshotService
                 continue;
             }
 
-            Object value = object.eGet(feature, false);
-            Object converted = "border".equals(feature.getName()) //$NON-NLS-1$
-                ? convertBorderValue(value) : convertFeatureValue(value);
-            if (converted != null)
-            {
-                properties.put(feature.getName(), converted);
-            }
+            collectConvertedFeature(properties, object, feature);
         }
         return properties;
+    }
+
+    /**
+     * Handles the {@code categoriesHolder} feature: in full mode, converts it and adds a
+     * {@code categories} entry to {@code properties} when the conversion is non-null. No-op otherwise.
+     * Mirrors the original inline branch (the enclosing {@code continue} stays in the caller).
+     */
+    private void collectCategoriesHolder(Map<String, Object> properties, EObject object,
+        EStructuralFeature feature, boolean fullMode)
+    {
+        if (fullMode)
+        {
+            Object categories = convertCategoriesHolder(object.eGet(feature, false));
+            if (categories != null)
+            {
+                properties.put("categories", categories); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /**
+     * Reads, converts and (when the result is non-null) stores a single feature value into
+     * {@code properties}. Uses the border-specific converter for the {@code border} feature.
+     */
+    private void collectConvertedFeature(Map<String, Object> properties, EObject object, EStructuralFeature feature)
+    {
+        Object value = object.eGet(feature, false);
+        Object converted = "border".equals(feature.getName()) //$NON-NLS-1$
+            ? convertBorderValue(value) : convertFeatureValue(value);
+        if (converted != null)
+        {
+            properties.put(feature.getName(), converted);
+        }
     }
 
     private String dumpYaml(Map<String, Object> result)

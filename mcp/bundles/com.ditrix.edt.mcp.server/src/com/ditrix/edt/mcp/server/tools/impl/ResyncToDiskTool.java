@@ -604,19 +604,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         boolean removedAny = false;
         for (EReference ref : cfg.eClass().getEAllReferences())
         {
-            if (!ref.isMany())
-            {
-                // Single-valued references are not the "lost reference at position N"
-                // collections the md-reference-intergrity check reports; skip them.
-                continue;
-            }
-            if (ref.isDerived() || ref.isTransient() || ref.isVolatile() || !ref.isChangeable())
-            {
-                // Derived/computed collections are not the persisted Configuration.mdo
-                // registrations and may be unmodifiable - never the dangling source.
-                continue;
-            }
-            if (!isMdObjectReference(ref))
+            if (!isCandidateReference(ref))
             {
                 continue;
             }
@@ -628,25 +616,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                 continue;
             }
             EList<EObject> list = (EList<EObject>)value;
-            // Walk a snapshot of positions so the reported position matches the
-            // original .mdo layout even as earlier entries are removed.
-            List<EObject> dangling = new ArrayList<>();
-            int position = 0;
-            for (EObject element : list)
-            {
-                if (element != null && isDanglingReference(element, tx))
-                {
-                    result.found++;
-                    String lostFqn = proxyFqnOf(element);
-                    Map<String, Object> entry = new LinkedHashMap<>();
-                    entry.put("field", ref.getName()); //$NON-NLS-1$
-                    entry.put("lostFqn", lostFqn != null ? lostFqn : "(unknown)"); //$NON-NLS-1$ //$NON-NLS-2$
-                    entry.put("position", Integer.valueOf(position)); //$NON-NLS-1$
-                    result.details.add(entry);
-                    dangling.add(element);
-                }
-                position++;
-            }
+            List<EObject> dangling = collectDangling(list, ref, tx, result);
             if (remove && !dangling.isEmpty())
             {
                 list.removeAll(dangling);
@@ -654,6 +624,63 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             }
         }
         return removedAny;
+    }
+
+    /**
+     * Decides whether a Configuration reference is a candidate "lost reference at
+     * position N" collection the md-reference-integrity check reports, i.e. a
+     * many-valued, persisted, changeable {@link MdObject} reference. Single-valued,
+     * derived/transient/volatile/unmodifiable and non-{@code MdObject} references
+     * are never the dangling source and are skipped.
+     */
+    private static boolean isCandidateReference(EReference ref)
+    {
+        if (!ref.isMany())
+        {
+            // Single-valued references are not the "lost reference at position N"
+            // collections the md-reference-intergrity check reports; skip them.
+            return false;
+        }
+        if (ref.isDerived() || ref.isTransient() || ref.isVolatile() || !ref.isChangeable())
+        {
+            // Derived/computed collections are not the persisted Configuration.mdo
+            // registrations and may be unmodifiable - never the dangling source.
+            return false;
+        }
+        return isMdObjectReference(ref);
+    }
+
+    /**
+     * Scans a single many-valued reference's {@code list} for dangling proxies,
+     * recording each into {@code result} (incrementing {@code result.found} and
+     * appending a {field, lostFqn, position} detail entry), and returns the dangling
+     * elements in encounter order. Positions are taken from a snapshot walk so the
+     * reported position matches the original .mdo layout even when the caller later
+     * removes earlier entries. Does not mutate {@code list}.
+     */
+    private static List<EObject> collectDangling(EList<EObject> list, EReference ref,
+        IBmTransaction tx, DanglingResult result)
+    {
+        // Walk a snapshot of positions so the reported position matches the
+        // original .mdo layout even as earlier entries are removed.
+        List<EObject> dangling = new ArrayList<>();
+        int position = 0;
+        for (EObject element : list)
+        {
+            if (element != null && isDanglingReference(element, tx))
+            {
+                result.found++;
+                String lostFqn = proxyFqnOf(element);
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("field", ref.getName()); //$NON-NLS-1$
+                entry.put("lostFqn", lostFqn != null ? lostFqn : "(unknown)"); //$NON-NLS-1$ //$NON-NLS-2$
+                entry.put("position", Integer.valueOf(position)); //$NON-NLS-1$
+                result.details.add(entry);
+                dangling.add(element);
+            }
+            position++;
+        }
+        return dangling;
     }
 
     /**

@@ -103,46 +103,9 @@ public class GetProblemSummaryTool implements IMcpTool
             // Get all markers
             Stream<Marker> markerStream = markerManager.markers();
             final String filterProject = projectName;
-            
-            markerStream.forEach(marker -> {
-                IProject markerProject = marker.getProject();
-                if (markerProject == null)
-                {
-                    return;
-                }
-                
-                String markerProjectName = markerProject.getName();
-                
-                // Filter by project if specified
-                if (filterProject != null && !filterProject.isEmpty() && 
-                    !markerProjectName.equals(filterProject))
-                {
-                    return;
-                }
-                
-                MarkerSeverity severity = marker.getSeverity();
-                if (severity == null)
-                {
-                    severity = MarkerSeverity.NONE;
-                }
-                
-                // Update project summary
-                projectSummaries.computeIfAbsent(markerProjectName, k -> {
-                    Map<MarkerSeverity, Integer> map = new HashMap<>();
-                    for (MarkerSeverity sev : MarkerSeverity.values())
-                    {
-                        map.put(sev, 0);
-                    }
-                    return map;
-                });
-                
-                Map<MarkerSeverity, Integer> projectCounts = projectSummaries.get(markerProjectName);
-                projectCounts.put(severity, projectCounts.get(severity) + 1);
-                
-                // Update totals
-                totals.put(severity, totals.get(severity) + 1);
-            });
-            
+
+            markerStream.forEach(marker -> accumulateMarker(marker, filterProject, projectSummaries, totals));
+
             // Calculate total
             int grandTotal = totals.values().stream().mapToInt(Integer::intValue).sum();
             
@@ -150,55 +113,10 @@ public class GetProblemSummaryTool implements IMcpTool
             md.append("## Problem Summary\n\n"); //$NON-NLS-1$
             
             // Totals section
-            md.append("### Overall Totals\n\n"); //$NON-NLS-1$
-            md.append("| Severity | Count |\n"); //$NON-NLS-1$
-            md.append("|----------|-------|\n"); //$NON-NLS-1$
-            
-            for (MarkerSeverity sev : MarkerSeverity.values())
-            {
-                if (sev == MarkerSeverity.NONE && totals.get(sev) == 0)
-                {
-                    continue; // Skip NONE if empty
-                }
-                md.append("| ").append(sev.name()).append(" | ").append(totals.get(sev)).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            }
-            md.append("| **TOTAL** | **").append(grandTotal).append("** |\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            
+            appendOverallTotals(md, totals, grandTotal);
+
             // Projects section
-            if (!projectSummaries.isEmpty())
-            {
-                md.append("### By Project\n\n"); //$NON-NLS-1$
-                md.append("| Project | Errors | Blocker | Critical | Major | Minor | Trivial | Total |\n"); //$NON-NLS-1$
-                md.append("|---------|--------|---------|----------|-------|-------|---------|-------|\n"); //$NON-NLS-1$
-                
-                for (Map.Entry<String, Map<MarkerSeverity, Integer>> entry : projectSummaries.entrySet())
-                {
-                    Map<MarkerSeverity, Integer> counts = entry.getValue();
-                    int projectTotal = sumDisplayedSeverities(counts);
-                    
-                    md.append("| "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(entry.getKey()));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(counts.getOrDefault(MarkerSeverity.ERRORS, 0));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(counts.getOrDefault(MarkerSeverity.BLOCKER, 0));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(counts.getOrDefault(MarkerSeverity.CRITICAL, 0));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(counts.getOrDefault(MarkerSeverity.MAJOR, 0));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(counts.getOrDefault(MarkerSeverity.MINOR, 0));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(counts.getOrDefault(MarkerSeverity.TRIVIAL, 0));
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(projectTotal);
-                    md.append(" |\n"); //$NON-NLS-1$
-                }
-            }
-            else
-            {
-                md.append("*No problems found.*\n"); //$NON-NLS-1$
-            }
+            appendByProjectSection(md, projectSummaries);
         }
         catch (Exception e)
         {
@@ -207,6 +125,129 @@ public class GetProblemSummaryTool implements IMcpTool
         }
         
         return md.toString();
+    }
+
+    /**
+     * Folds a single marker into the running counters: skips markers without a
+     * project, applies the optional project filter, normalises a missing severity
+     * to {@link MarkerSeverity#NONE}, then increments both the per-project map and
+     * the overall totals (lazily initialising the per-project entry on first sight).
+     *
+     * @param marker the marker to fold in
+     * @param filterProject project name to keep (others skipped); {@code null}/empty keeps all
+     * @param projectSummaries projectName -&gt; (severity -&gt; count); mutated in place
+     * @param totals severity -&gt; count overall; mutated in place
+     */
+    private static void accumulateMarker(Marker marker, String filterProject,
+        Map<String, Map<MarkerSeverity, Integer>> projectSummaries, Map<MarkerSeverity, Integer> totals)
+    {
+        IProject markerProject = marker.getProject();
+        if (markerProject == null)
+        {
+            return;
+        }
+
+        String markerProjectName = markerProject.getName();
+
+        // Filter by project if specified
+        if (filterProject != null && !filterProject.isEmpty() &&
+            !markerProjectName.equals(filterProject))
+        {
+            return;
+        }
+
+        MarkerSeverity severity = marker.getSeverity();
+        if (severity == null)
+        {
+            severity = MarkerSeverity.NONE;
+        }
+
+        // Update project summary
+        projectSummaries.computeIfAbsent(markerProjectName, k -> {
+            Map<MarkerSeverity, Integer> map = new HashMap<>();
+            for (MarkerSeverity sev : MarkerSeverity.values())
+            {
+                map.put(sev, 0);
+            }
+            return map;
+        });
+
+        Map<MarkerSeverity, Integer> projectCounts = projectSummaries.get(markerProjectName);
+        projectCounts.put(severity, projectCounts.get(severity) + 1);
+
+        // Update totals
+        totals.put(severity, totals.get(severity) + 1);
+    }
+
+    /**
+     * Appends the "Overall Totals" table, one row per severity (NONE skipped when zero)
+     * plus a TOTAL row, to {@code md}.
+     *
+     * @param md destination buffer (appended to)
+     * @param totals severity -&gt; count overall
+     * @param grandTotal the precomputed grand total across all severities
+     */
+    private static void appendOverallTotals(StringBuilder md, Map<MarkerSeverity, Integer> totals, int grandTotal)
+    {
+        md.append("### Overall Totals\n\n"); //$NON-NLS-1$
+        md.append("| Severity | Count |\n"); //$NON-NLS-1$
+        md.append("|----------|-------|\n"); //$NON-NLS-1$
+
+        for (MarkerSeverity sev : MarkerSeverity.values())
+        {
+            if (sev == MarkerSeverity.NONE && totals.get(sev) == 0)
+            {
+                continue; // Skip NONE if empty
+            }
+            md.append("| ").append(sev.name()).append(" | ").append(totals.get(sev)).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        md.append("| **TOTAL** | **").append(grandTotal).append("** |\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Appends the "By Project" table (one row per project) to {@code md}, or a
+     * "No problems found" line when there are no project summaries.
+     *
+     * @param md destination buffer (appended to)
+     * @param projectSummaries projectName -&gt; (severity -&gt; count)
+     */
+    private static void appendByProjectSection(StringBuilder md,
+        Map<String, Map<MarkerSeverity, Integer>> projectSummaries)
+    {
+        if (!projectSummaries.isEmpty())
+        {
+            md.append("### By Project\n\n"); //$NON-NLS-1$
+            md.append("| Project | Errors | Blocker | Critical | Major | Minor | Trivial | Total |\n"); //$NON-NLS-1$
+            md.append("|---------|--------|---------|----------|-------|-------|---------|-------|\n"); //$NON-NLS-1$
+
+            for (Map.Entry<String, Map<MarkerSeverity, Integer>> entry : projectSummaries.entrySet())
+            {
+                Map<MarkerSeverity, Integer> counts = entry.getValue();
+                int projectTotal = sumDisplayedSeverities(counts);
+
+                md.append("| "); //$NON-NLS-1$
+                md.append(MarkdownUtils.escapeForTable(entry.getKey()));
+                md.append(" | "); //$NON-NLS-1$
+                md.append(counts.getOrDefault(MarkerSeverity.ERRORS, 0));
+                md.append(" | "); //$NON-NLS-1$
+                md.append(counts.getOrDefault(MarkerSeverity.BLOCKER, 0));
+                md.append(" | "); //$NON-NLS-1$
+                md.append(counts.getOrDefault(MarkerSeverity.CRITICAL, 0));
+                md.append(" | "); //$NON-NLS-1$
+                md.append(counts.getOrDefault(MarkerSeverity.MAJOR, 0));
+                md.append(" | "); //$NON-NLS-1$
+                md.append(counts.getOrDefault(MarkerSeverity.MINOR, 0));
+                md.append(" | "); //$NON-NLS-1$
+                md.append(counts.getOrDefault(MarkerSeverity.TRIVIAL, 0));
+                md.append(" | "); //$NON-NLS-1$
+                md.append(projectTotal);
+                md.append(" |\n"); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            md.append("*No problems found.*\n"); //$NON-NLS-1$
+        }
     }
 
     /**

@@ -432,59 +432,27 @@ public class DeleteInfobaseTool implements IMcpTool
         final String resolvedName = targetApp.getName();
         final String resolvedId = targetApp.getId();
 
-        // Resolve the standalone-server service reflectively (no Require-Bundle on the optional feature).
-        Object service = StandaloneServerSupport.acquireService();
-        if (service == null)
+        // Resolve the standalone-server service, backing WST server, infobaseId and served-DB
+        // directory (read-only: acquires services and reads paths; deletes nothing). On a
+        // missing service/server it carries an error payload the caller returns as-is.
+        DeletionContext deletionCtx = resolveDeletionContext(targetApp, appManager, project,
+            resolvedName, resolvedId, deleteDatabaseFiles);
+        if (deletionCtx.error != null)
         {
-            return ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
-                + "standalone-server feature is missing. Cannot delete server application '" //$NON-NLS-1$
-                + resolvedName + "'.").toJson(); //$NON-NLS-1$
+            return deletionCtx.error;
         }
-
-        // Resolve the backing WST IServer: direct IServerApplication.getServer(), else a name scan.
-        Object server = StandaloneServerSupport.serverOfApplication(targetApp);
-        if (server == null)
-        {
-            server = StandaloneServerSupport.findServerByModuleName(service, resolvedName);
-        }
-        if (server == null)
-        {
-            return ToolResult.error("Could not resolve the WST server backing application '" //$NON-NLS-1$
-                + resolvedName + "' (id=" + resolvedId //$NON-NLS-1$
-                + "). It may already be deleted — re-run get_applications.").toJson(); //$NON-NLS-1$
-        }
-
-        // Capture the infobaseId AND the served-DB directory (database.path) BEFORE deletion — the
-        // module/config is torn down by deleteServer. The infobaseId drives the yaml cleanup; the DB
-        // directory is used only when deleteDatabaseFiles=true (deleteServer itself never deletes it).
-        Object module = StandaloneServerSupport.moduleOfApplication(targetApp);
-        final String infobaseId = module != null ? StandaloneServerSupport.infobaseIdOf(module) : null;
-        final String dbDirStr = module != null ? StandaloneServerSupport.databaseDirOf(module) : null;
-        final Path dbDir = (dbDirStr != null && !dbDirStr.isEmpty()) ? Paths.get(dbDirStr) : null;
-        // A server's served DB is normally dedicated, but EDT does not forbid another project from
-        // registering the same directory as a FILE infobase — so apply the same shared-files guard.
-        final boolean dbSharedWithOthers = deleteDatabaseFiles && dbDir != null
-            && isSharedWithOtherProjects(appManager, project, dbDir);
+        Object service = deletionCtx.service;
+        Object server = deletionCtx.server;
+        final String infobaseId = deletionCtx.infobaseId;
+        final Path dbDir = deletionCtx.dbDir;
+        final boolean dbSharedWithOthers = deletionCtx.dbSharedWithOthers;
 
         // --- Confirm-preview gate ---
-        if (!confirm)
+        String preview = buildStandaloneServerPreview(confirm, projectName, resolvedId, resolvedName,
+            deleteRegistration, deleteDatabaseFiles, dbDir, dbSharedWithOthers);
+        if (preview != null)
         {
-            return ToolResult.success()
-                .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
-                .put(KEY_CONFIRMATION_REQUIRED, true)
-                .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
-                .put(McpKeys.PROJECT, projectName)
-                .put(McpKeys.APPLICATION_ID, resolvedId)
-                .put(KEY_INFOBASE_NAME, resolvedName)
-                .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-                .put(McpKeys.MESSAGE, "PREVIEW: this would delete standalone server '" + resolvedName //$NON-NLS-1$
-                    + "' (stop it, remove the WST server and its server config folder)" //$NON-NLS-1$
-                    + (deleteRegistration ? " AND clean its infobases.yaml registry entry" //$NON-NLS-1$
-                        : " (infobases.yaml entry kept)") //$NON-NLS-1$
-                    + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
-                    + " for project '" + projectName //$NON-NLS-1$
-                    + "'. This is irreversible. Re-call with confirm=true to apply.") //$NON-NLS-1$
-                .toJson();
+            return preview;
         }
 
         // Capture how many applications currently carry this id, so the read-back can confirm THIS
@@ -551,22 +519,10 @@ public class DeleteInfobaseTool implements IMcpTool
             return ToolResult.error("Standalone-server deletion was interrupted.").toJson(); //$NON-NLS-1$
         }
 
-        if (jobError.get() != null)
+        String outcomeError = checkDeletionOutcome(jobError.get(), jobStatus.get(), resolvedName);
+        if (outcomeError != null)
         {
-            Activator.logError("delete_infobase: standalone-server deletion failed for " //$NON-NLS-1$
-                + resolvedName, jobError.get());
-            return ToolResult.error("Standalone-server deletion failed for '" + resolvedName //$NON-NLS-1$
-                + "': " + jobError.get().getMessage()).toJson(); //$NON-NLS-1$
-        }
-        IStatus status = jobStatus.get();
-        if (status == null || !status.isOK())
-        {
-            // null = deleteServer returned a non-IStatus (reflective miss); non-OK = the platform
-            // reported a failure. Either way the server was NOT cleanly deleted — report an error.
-            String detail = status != null ? status.getMessage() : "no status returned"; //$NON-NLS-1$
-            Activator.logError("delete_infobase: deleteServer did not succeed: " + detail, null); //$NON-NLS-1$
-            return ToolResult.error("Standalone-server deletion did not complete cleanly for '" //$NON-NLS-1$
-                + resolvedName + "': " + detail).toJson(); //$NON-NLS-1$
+            return outcomeError;
         }
 
         StandaloneServerSupport.RegistryCleanup cleanup = jobCleanup.get();
@@ -584,6 +540,151 @@ public class DeleteInfobaseTool implements IMcpTool
         // Read-back: confirm THIS deletion via a count decrease (tolerant of same-id twins).
         boolean removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
 
+        return buildDeletedResult(projectName, resolvedId, resolvedName, deleteRegistration,
+            deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers, cleanup, removed);
+    }
+
+    /**
+     * Resolves the standalone-server service, its backing WST server, the served-DB
+     * directory and the shared-files guard (read-only — acquires services and reads paths,
+     * deletes nothing). On a missing service or unresolvable server the returned context
+     * carries an {@code error} JSON payload that the caller should return as-is.
+     *
+     * @param targetApp the application being deleted
+     * @param appManager the application manager (for the shared-files guard)
+     * @param project the owning project
+     * @param resolvedName the application name (for error messages)
+     * @param resolvedId the application id (for error messages)
+     * @param deleteDatabaseFiles whether the caller intends to delete the served DB files
+     *     (the shared-files guard is only computed when true)
+     * @return a {@link DeletionContext}; its {@code error} is non-null only on a resolution
+     *     failure
+     */
+    private DeletionContext resolveDeletionContext(IApplication targetApp,
+        IApplicationManager appManager, IProject project, String resolvedName, String resolvedId,
+        boolean deleteDatabaseFiles)
+    {
+        DeletionContext ctx = new DeletionContext();
+
+        // Resolve the standalone-server service reflectively (no Require-Bundle on the optional feature).
+        Object service = StandaloneServerSupport.acquireService();
+        if (service == null)
+        {
+            ctx.error = ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
+                + "standalone-server feature is missing. Cannot delete server application '" //$NON-NLS-1$
+                + resolvedName + "'.").toJson(); //$NON-NLS-1$
+            return ctx;
+        }
+
+        // Resolve the backing WST IServer: direct IServerApplication.getServer(), else a name scan.
+        Object server = StandaloneServerSupport.serverOfApplication(targetApp);
+        if (server == null)
+        {
+            server = StandaloneServerSupport.findServerByModuleName(service, resolvedName);
+        }
+        if (server == null)
+        {
+            ctx.error = ToolResult.error("Could not resolve the WST server backing application '" //$NON-NLS-1$
+                + resolvedName + "' (id=" + resolvedId //$NON-NLS-1$
+                + "). It may already be deleted — re-run get_applications.").toJson(); //$NON-NLS-1$
+            return ctx;
+        }
+
+        // Capture the infobaseId AND the served-DB directory (database.path) BEFORE deletion — the
+        // module/config is torn down by deleteServer. The infobaseId drives the yaml cleanup; the DB
+        // directory is used only when deleteDatabaseFiles=true (deleteServer itself never deletes it).
+        Object module = StandaloneServerSupport.moduleOfApplication(targetApp);
+        final String infobaseId = module != null ? StandaloneServerSupport.infobaseIdOf(module) : null;
+        final String dbDirStr = module != null ? StandaloneServerSupport.databaseDirOf(module) : null;
+        final Path dbDir = (dbDirStr != null && !dbDirStr.isEmpty()) ? Paths.get(dbDirStr) : null;
+        // A server's served DB is normally dedicated, but EDT does not forbid another project from
+        // registering the same directory as a FILE infobase — so apply the same shared-files guard.
+        final boolean dbSharedWithOthers = deleteDatabaseFiles && dbDir != null
+            && isSharedWithOtherProjects(appManager, project, dbDir);
+
+        ctx.service = service;
+        ctx.server = server;
+        ctx.infobaseId = infobaseId;
+        ctx.dbDir = dbDir;
+        ctx.dbSharedWithOthers = dbSharedWithOthers;
+        return ctx;
+    }
+
+    /**
+     * Builds the confirm-preview payload for a standalone-server deletion (pure string
+     * building — no side effects). Returns {@code null} when {@code confirm} is true, so
+     * the caller proceeds to the real deletion.
+     *
+     * @return the preview JSON payload, or {@code null} when {@code confirm} is true
+     */
+    private String buildStandaloneServerPreview(boolean confirm, String projectName, String resolvedId,
+        String resolvedName, boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir,
+        boolean dbSharedWithOthers)
+    {
+        if (confirm)
+        {
+            return null;
+        }
+        return ToolResult.success()
+            .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
+            .put(KEY_CONFIRMATION_REQUIRED, true)
+            .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, resolvedId)
+            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+            .put(McpKeys.MESSAGE, "PREVIEW: this would delete standalone server '" + resolvedName //$NON-NLS-1$
+                + "' (stop it, remove the WST server and its server config folder)" //$NON-NLS-1$
+                + (deleteRegistration ? " AND clean its infobases.yaml registry entry" //$NON-NLS-1$
+                    : " (infobases.yaml entry kept)") //$NON-NLS-1$
+                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
+                + " for project '" + projectName //$NON-NLS-1$
+                + "'. This is irreversible. Re-call with confirm=true to apply.") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * Inspects the background deletion Job's outcome (read-only — only reads the captured
+     * error/status and logs). Returns an error JSON payload when the Job threw or the
+     * platform reported a non-OK / missing status, or {@code null} when the server was
+     * cleanly deleted.
+     *
+     * @param jobError the exception the Job captured, if any
+     * @param status the {@link IStatus} the Job captured, if any
+     * @param resolvedName the application name (for messages)
+     * @return an error payload, or {@code null} when the deletion succeeded cleanly
+     */
+    private String checkDeletionOutcome(Exception jobError, IStatus status, String resolvedName)
+    {
+        if (jobError != null)
+        {
+            Activator.logError("delete_infobase: standalone-server deletion failed for " //$NON-NLS-1$
+                + resolvedName, jobError);
+            return ToolResult.error("Standalone-server deletion failed for '" + resolvedName //$NON-NLS-1$
+                + "': " + jobError.getMessage()).toJson(); //$NON-NLS-1$
+        }
+        if (status == null || !status.isOK())
+        {
+            // null = deleteServer returned a non-IStatus (reflective miss); non-OK = the platform
+            // reported a failure. Either way the server was NOT cleanly deleted — report an error.
+            String detail = status != null ? status.getMessage() : "no status returned"; //$NON-NLS-1$
+            Activator.logError("delete_infobase: deleteServer did not succeed: " + detail, null); //$NON-NLS-1$
+            return ToolResult.error("Standalone-server deletion did not complete cleanly for '" //$NON-NLS-1$
+                + resolvedName + "': " + detail).toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Builds the success payload for a completed standalone-server deletion (pure string
+     * building — no side effects).
+     *
+     * @return the success JSON payload
+     */
+    private String buildDeletedResult(String projectName, String resolvedId, String resolvedName,
+        boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir, boolean dbFilesDeleted,
+        boolean dbSharedWithOthers, StandaloneServerSupport.RegistryCleanup cleanup, boolean removed)
+    {
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
@@ -600,6 +701,21 @@ public class DeleteInfobaseTool implements IMcpTool
                 + databaseResultNote(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers)
                 + (removed ? "" : " NOTE: it may still appear in get_applications briefly.")) //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
+    }
+
+    /**
+     * Holder for {@link #resolveDeletionContext}: the resolved service, WST server,
+     * infobaseId, served-DB directory and shared-files guard, or an {@code error} payload
+     * the caller returns as-is.
+     */
+    private static class DeletionContext
+    {
+        Object service;
+        Object server;
+        String infobaseId;
+        Path dbDir;
+        boolean dbSharedWithOthers;
+        String error;
     }
 
     /** Human-readable note describing the infobases.yaml cleanup outcome (deleteRegistration=true). */

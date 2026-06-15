@@ -404,31 +404,37 @@ public class MetadataReferenceService
                 TypeItem typeItem = getTypeItem(type);
                 if (typeItem instanceof IBmObject)
                 {
-                    Collection<IBmCrossReference> refs = engine.getBackReferences((IBmObject) typeItem);
-                    for (IBmCrossReference ref : refs)
-                    {
-                        if (references.size() >= limit * 10)
-                        {
-                            break;
-                        }
-
-                        IBmObject sourceObject = ref.getObject();
-                        if (sourceObject == null || isInternalReference(ref))
-                        {
-                            continue;
-                        }
-
-                        String category = getCategoryFromObject(sourceObject);
-                        String sourcePath = getFullReferencePath(sourceObject, ref);
-                        if (sourcePath == null)
-                        {
-                            continue;
-                        }
-                        String feature = "Type: " + (ref.getFeature() != null ? ref.getFeature().getName() : ""); //$NON-NLS-1$ //$NON-NLS-2$
-
-                        addReference(new ReferenceInfo(category, sourcePath, feature));
-                    }
+                    collectTypeItemBackReferences(engine, (IBmObject) typeItem);
                 }
+            }
+        }
+
+        /** Collects the (non-internal) back references of a single produced-type item, tagged "Type: ...". */
+        private void collectTypeItemBackReferences(IBmEngine engine, IBmObject typeItem)
+        {
+            Collection<IBmCrossReference> refs = engine.getBackReferences(typeItem);
+            for (IBmCrossReference ref : refs)
+            {
+                if (references.size() >= limit * 10)
+                {
+                    break;
+                }
+
+                IBmObject sourceObject = ref.getObject();
+                if (sourceObject == null || isInternalReference(ref))
+                {
+                    continue;
+                }
+
+                String category = getCategoryFromObject(sourceObject);
+                String sourcePath = getFullReferencePath(sourceObject, ref);
+                if (sourcePath == null)
+                {
+                    continue;
+                }
+                String feature = "Type: " + (ref.getFeature() != null ? ref.getFeature().getName() : ""); //$NON-NLS-1$ //$NON-NLS-2$
+
+                addReference(new ReferenceInfo(category, sourcePath, feature));
             }
         }
 

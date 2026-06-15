@@ -155,33 +155,9 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
         if (groupService == null) {
             return;
         }
-        
-        List<TreePath> treePaths = new ArrayList<>();
-        
-        for (Iterator<?> it = lastNonEmptySelection.iterator(); it.hasNext();) {
-            Object element = it.next();
-            
-            if (element instanceof EObject eObject) {
-                IProject project = TagUtils.extractProject(eObject);
-                String fqn = TagUtils.extractFqn(eObject);
-                
-                if (project != null && fqn != null) {
-                    Group group = groupService.findGroupForObject(project, fqn);
-                    
-                    if (group != null) {
-                        // Find the GroupNavigatorAdapter for this group
-                        GroupNavigatorAdapter groupAdapter = findOrCreateGroupAdapter(project, group);
-                        
-                        if (groupAdapter != null) {
-                            // Create TreePath: groupAdapter -> element
-                            TreePath path = new TreePath(new Object[] { groupAdapter, element });
-                            treePaths.add(path);
-                        }
-                    }
-                }
-            }
-        }
-        
+
+        List<TreePath> treePaths = collectGroupedTreePaths(groupService);
+
         if (!treePaths.isEmpty()) {
             TreeSelection treeSelection = new TreeSelection(treePaths.toArray(new TreePath[0]));
             viewer.setSelection(treeSelection, true);
@@ -191,6 +167,45 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
         }
     }
     
+    /**
+     * Builds the {@link TreePath}s for every element of {@link #lastNonEmptySelection}
+     * that resolves to an object inside a group, routing each through its
+     * {@link GroupNavigatorAdapter}. Elements that are not {@link EObject}s, carry no
+     * project/fqn, are not grouped, or whose adapter cannot be located are skipped.
+     *
+     * @param groupService the (non-{@code null}) group service to resolve groups with
+     * @return the collected tree paths (possibly empty, never {@code null})
+     */
+    private List<TreePath> collectGroupedTreePaths(IGroupService groupService) {
+        List<TreePath> treePaths = new ArrayList<>();
+
+        for (Iterator<?> it = lastNonEmptySelection.iterator(); it.hasNext();) {
+            Object element = it.next();
+
+            if (element instanceof EObject eObject) {
+                IProject project = TagUtils.extractProject(eObject);
+                String fqn = TagUtils.extractFqn(eObject);
+
+                if (project != null && fqn != null) {
+                    Group group = groupService.findGroupForObject(project, fqn);
+
+                    if (group != null) {
+                        // Find the GroupNavigatorAdapter for this group
+                        GroupNavigatorAdapter groupAdapter = findOrCreateGroupAdapter(project, group);
+
+                        if (groupAdapter != null) {
+                            // Create TreePath: groupAdapter -> element
+                            TreePath path = new TreePath(new Object[] { groupAdapter, element });
+                            treePaths.add(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        return treePaths;
+    }
+
     /**
      * Finds GroupNavigatorAdapter for the given group by traversing the tree structure.
      * Uses the ContentProvider to navigate through the tree hierarchy.
