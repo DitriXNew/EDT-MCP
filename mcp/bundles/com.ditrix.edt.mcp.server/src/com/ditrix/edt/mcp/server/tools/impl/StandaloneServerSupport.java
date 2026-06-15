@@ -107,16 +107,7 @@ final class StandaloneServerSupport
             BundleContext context = bundle.getBundleContext();
             if (context == null)
             {
-                try
-                {
-                    bundle.start(Bundle.START_TRANSIENT);
-                    context = bundle.getBundleContext();
-                }
-                catch (Exception startEx)
-                {
-                    Activator.logError("standalone-server: could not start the standalone-server bundle", //$NON-NLS-1$
-                        startEx);
-                }
+                context = startAndGetContext(bundle);
             }
             if (context == null)
             {
@@ -128,6 +119,29 @@ final class StandaloneServerSupport
         catch (Throwable t)
         {
             Activator.logError("standalone-server: could not acquire the standalone-server service", t); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Transiently starts the given bundle and returns its (now hopefully available) {@link BundleContext}.
+     * A start failure is logged and swallowed (best-effort): the returned context may still be {@code null},
+     * which the caller already handles by failing gracefully.
+     *
+     * @param bundle the standalone-server bundle whose context was not yet available
+     * @return the bundle context after the start attempt, or {@code null} when it is still unavailable
+     */
+    private static BundleContext startAndGetContext(Bundle bundle)
+    {
+        try
+        {
+            bundle.start(Bundle.START_TRANSIENT);
+            return bundle.getBundleContext();
+        }
+        catch (Exception startEx)
+        {
+            Activator.logError("standalone-server: could not start the standalone-server bundle", //$NON-NLS-1$
+                startEx);
             return null;
         }
     }

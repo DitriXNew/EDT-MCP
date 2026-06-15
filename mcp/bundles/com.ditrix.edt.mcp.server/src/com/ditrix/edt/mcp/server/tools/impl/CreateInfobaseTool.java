@@ -764,15 +764,10 @@ public class CreateInfobaseTool implements IMcpTool
             if (context == null)
             {
                 // The bundle is not active yet — start it transiently so its services register.
-                try
+                if (startBundleTransiently(bundle,
+                    "create_infobase: could not start standalone-server bundle")) //$NON-NLS-1$
                 {
-                    bundle.start(Bundle.START_TRANSIENT);
                     context = bundle.getBundleContext();
-                }
-                catch (Exception startEx)
-                {
-                    Activator.logError("create_infobase: could not start standalone-server bundle", //$NON-NLS-1$
-                        startEx);
                 }
             }
             if (context == null)
@@ -787,6 +782,29 @@ public class CreateInfobaseTool implements IMcpTool
         {
             Activator.logError("create_infobase: could not acquire the standalone-server service", t); //$NON-NLS-1$
             return null;
+        }
+    }
+
+    /**
+     * Starts {@code bundle} transiently (so its services register / its activator runs) and reports
+     * whether the start succeeded. On failure {@code errorMessage} is logged and {@code false} is
+     * returned; the caller decides how to proceed.
+     *
+     * @param bundle       the bundle to start (must not be {@code null})
+     * @param errorMessage message logged when the start throws
+     * @return {@code true} when the bundle started without error, {@code false} otherwise
+     */
+    private static boolean startBundleTransiently(Bundle bundle, String errorMessage)
+    {
+        try
+        {
+            bundle.start(Bundle.START_TRANSIENT);
+            return true;
+        }
+        catch (Exception startEx)
+        {
+            Activator.logError(errorMessage, startEx);
+            return false;
         }
     }
 
@@ -1032,18 +1050,7 @@ public class CreateInfobaseTool implements IMcpTool
                         {
                             appObj.addProperty("type", typeId); //$NON-NLS-1$
                         }
-                        try
-                        {
-                            ApplicationUpdateState updateState = appManager.getUpdateState(app);
-                            if (updateState != null)
-                            {
-                                appObj.addProperty(KEY_UPDATE_STATE, updateState.name());
-                            }
-                        }
-                        catch (ApplicationException e)
-                        {
-                            appObj.addProperty(KEY_UPDATE_STATE, "UNKNOWN"); //$NON-NLS-1$
-                        }
+                        addUpdateState(appObj, appManager, app);
                         // Identify the JUST-created standalone server by its name (a wst-server app whose
                         // name matches the new infobase) — NOT merely the first wst-server app, which could
                         // be a pre-existing standalone server already bound to this project.
@@ -1148,6 +1155,28 @@ public class CreateInfobaseTool implements IMcpTool
     }
 
     /**
+     * Adds the application's update state to {@code appObj} under {@link #KEY_UPDATE_STATE}.
+     * On {@link ApplicationException} (state could not be read) the value is recorded as
+     * {@code "UNKNOWN"}; a {@code null} state is omitted.
+     */
+    private static void addUpdateState(JsonObject appObj, IApplicationManager appManager,
+            IApplication app)
+    {
+        try
+        {
+            ApplicationUpdateState updateState = appManager.getUpdateState(app);
+            if (updateState != null)
+            {
+                appObj.addProperty(KEY_UPDATE_STATE, updateState.name());
+            }
+        }
+        catch (ApplicationException e)
+        {
+            appObj.addProperty(KEY_UPDATE_STATE, "UNKNOWN"); //$NON-NLS-1$
+        }
+    }
+
+    /**
      * Attempts to resolve an {@link IInfobaseCreationOperation} instance from the
      * ps-core Guice injector via reflection.
      *
@@ -1183,15 +1212,8 @@ public class CreateInfobaseTool implements IMcpTool
             if (coreInstance == null)
             {
                 // Bundle not active yet — start it transiently and retry once.
-                try
-                {
-                    psCoreBundle.start(Bundle.START_TRANSIENT);
-                }
-                catch (Exception startEx)
-                {
-                    Activator.logError("create_infobase: could not start platform-services.core bundle", //$NON-NLS-1$
-                        startEx);
-                }
+                startBundleTransiently(psCoreBundle,
+                    "create_infobase: could not start platform-services.core bundle"); //$NON-NLS-1$
                 coreInstance = getDefault.invoke(null);
                 if (coreInstance == null)
                 {
@@ -1279,18 +1301,7 @@ public class CreateInfobaseTool implements IMcpTool
                         {
                             appObj.addProperty("type", app.getType().getId()); //$NON-NLS-1$
                         }
-                        try
-                        {
-                            ApplicationUpdateState updateState = appManager.getUpdateState(app);
-                            if (updateState != null)
-                            {
-                                appObj.addProperty(KEY_UPDATE_STATE, updateState.name());
-                            }
-                        }
-                        catch (ApplicationException e)
-                        {
-                            appObj.addProperty(KEY_UPDATE_STATE, "UNKNOWN"); //$NON-NLS-1$
-                        }
+                        addUpdateState(appObj, appManager, app);
                         // Identify the newly created application by matching the infobase reference.
                         if (newAppId == null
                             && app instanceof IInfobaseApplication

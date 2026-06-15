@@ -99,48 +99,14 @@ public class ListProjectsTool implements IMcpTool
                     // EDT project check and natures
                     String edtStatus = "-"; //$NON-NLS-1$
                     String naturesStr = "-"; //$NON-NLS-1$
-                    
+
                     if (project.isOpen())
                     {
-                        try
-                        {
-                            boolean isEdtProject = project.hasNature("com._1c.g5.v8.dt.core.V8ConfigurationNature") || //$NON-NLS-1$
-                                                   project.hasNature("com._1c.g5.v8.dt.core.V8ExtensionNature"); //$NON-NLS-1$
-                            edtStatus = isEdtProject ? "Yes" : "No"; //$NON-NLS-1$ //$NON-NLS-2$
-                            
-                            String[] natures = project.getDescription().getNatureIds();
-                            if (natures.length > 0)
-                            {
-                                // Show abbreviated natures
-                                StringBuilder naturesBuilder = new StringBuilder();
-                                for (int i = 0; i < Math.min(natures.length, 3); i++)
-                                {
-                                    if (i > 0)
-                                    {
-                                        naturesBuilder.append(", "); //$NON-NLS-1$
-                                    }
-                                    // Get short nature name
-                                    String nature = natures[i];
-                                    int lastDot = nature.lastIndexOf('.');
-                                    naturesBuilder.append(lastDot > 0 ? nature.substring(lastDot + 1) : nature);
-                                }
-                                if (natures.length > 3)
-                                {
-                                    naturesBuilder.append("...+").append(natures.length - 3); //$NON-NLS-1$
-                                }
-                                naturesStr = naturesBuilder.toString();
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            // Per-project failure is non-fatal (the row still lists
-                            // the project with "-" placeholders), but log it at WARNING
-                            // so a swallowed failure leaves a traceable server-side line.
-                            Log.warning("list_projects: failed to read nature/state for project '" //$NON-NLS-1$
-                                + project.getName() + "': " + e.getMessage()); //$NON-NLS-1$
-                        }
+                        String[] edtAndNatures = readEdtStatusAndNatures(project);
+                        edtStatus = edtAndNatures[0];
+                        naturesStr = edtAndNatures[1];
                     }
-                    
+
                     md.append(edtStatus);
                     md.append(" | "); //$NON-NLS-1$
                     md.append(MarkdownUtils.escapeForTable(naturesStr));
@@ -153,7 +119,60 @@ public class ListProjectsTool implements IMcpTool
             Activator.logError("Failed to list projects", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
         }
-        
+
         return md.toString();
+    }
+
+    /**
+     * Reads the EDT-project flag and an abbreviated nature list for an open project.
+     * Returns a two-element array {@code [edtStatus, naturesStr]}. A per-project failure
+     * is non-fatal: it is logged at WARNING and the corresponding "-" placeholders are
+     * returned so the project row still renders.
+     *
+     * @param project the open project to inspect
+     * @return {@code [edtStatus, naturesStr]}
+     */
+    private static String[] readEdtStatusAndNatures(IProject project)
+    {
+        String edtStatus = "-"; //$NON-NLS-1$
+        String naturesStr = "-"; //$NON-NLS-1$
+        try
+        {
+            boolean isEdtProject = project.hasNature("com._1c.g5.v8.dt.core.V8ConfigurationNature") || //$NON-NLS-1$
+                                   project.hasNature("com._1c.g5.v8.dt.core.V8ExtensionNature"); //$NON-NLS-1$
+            edtStatus = isEdtProject ? "Yes" : "No"; //$NON-NLS-1$ //$NON-NLS-2$
+
+            String[] natures = project.getDescription().getNatureIds();
+            if (natures.length > 0)
+            {
+                // Show abbreviated natures
+                StringBuilder naturesBuilder = new StringBuilder();
+                for (int i = 0; i < Math.min(natures.length, 3); i++)
+                {
+                    if (i > 0)
+                    {
+                        naturesBuilder.append(", "); //$NON-NLS-1$
+                    }
+                    // Get short nature name
+                    String nature = natures[i];
+                    int lastDot = nature.lastIndexOf('.');
+                    naturesBuilder.append(lastDot > 0 ? nature.substring(lastDot + 1) : nature);
+                }
+                if (natures.length > 3)
+                {
+                    naturesBuilder.append("...+").append(natures.length - 3); //$NON-NLS-1$
+                }
+                naturesStr = naturesBuilder.toString();
+            }
+        }
+        catch (Exception e)
+        {
+            // Per-project failure is non-fatal (the row still lists
+            // the project with "-" placeholders), but log it at WARNING
+            // so a swallowed failure leaves a traceable server-side line.
+            Log.warning("list_projects: failed to read nature/state for project '" //$NON-NLS-1$
+                + project.getName() + "': " + e.getMessage()); //$NON-NLS-1$
+        }
+        return new String[] { edtStatus, naturesStr };
     }
 }

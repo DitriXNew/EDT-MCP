@@ -508,17 +508,8 @@ public class TagSearchFilter extends ViewerFilter {
             }
             
             // Get the model object name (Attribute, EnumValue, TabularSection, etc.)
-            String modelObjectName = null;
-            try {
-                var method = element.getClass().getMethod("getModelObjectName");
-                Object result = method.invoke(element);
-                if (result != null) {
-                    modelObjectName = result.toString();
-                }
-            } catch (NoSuchMethodException e) {
-                // Ignore
-            }
-            
+            String modelObjectName = readModelObjectName(element);
+
             if (modelObjectName == null) {
                 return null;
             }
@@ -555,7 +546,30 @@ public class TagSearchFilter extends ViewerFilter {
             return null;
         }
     }
-    
+
+    /**
+     * Reflectively reads the {@code getModelObjectName()} value of a folder element
+     * (e.g. "Attribute", "EnumValue", "TabularSection").
+     *
+     * @param element the folder element
+     * @return the model object name, or {@code null} if the element has no such method
+     *         or returns {@code null}
+     * @throws ReflectiveOperationException if the reflective invocation fails (other than
+     *         the no-such-method case, which is treated as "not a nested folder")
+     */
+    private String readModelObjectName(Object element) throws ReflectiveOperationException {
+        try {
+            var method = element.getClass().getMethod("getModelObjectName");
+            Object result = method.invoke(element);
+            if (result != null) {
+                return result.toString();
+            }
+        } catch (NoSuchMethodException e) {
+            // Ignore
+        }
+        return null;
+    }
+
     /**
      * Maps a model object name (from getModelObjectName) to the FQN type prefix.
      * For example:

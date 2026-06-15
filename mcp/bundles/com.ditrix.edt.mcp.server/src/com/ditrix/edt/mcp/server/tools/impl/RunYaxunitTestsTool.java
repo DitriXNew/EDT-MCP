@@ -392,20 +392,10 @@ public class RunYaxunitTestsTool implements IMcpTool
 
             if (applicationId != null && !applicationId.isEmpty())
             {
-                try
+                String appError = validateApplicationExists(appManager, project, applicationId);
+                if (appError != null)
                 {
-                    Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
-                    if (!appOpt.isPresent())
-                    {
-                        return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
-                                + ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
-                    }
-                }
-                catch (ApplicationException e)
-                {
-                    Activator.logError("Error checking application", e); //$NON-NLS-1$
-                    return ToolResult.error("Failed to validate application: " + applicationId //$NON-NLS-1$
-                            + " (" + e.getMessage() + ")").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                    return appError;
                 }
             }
 
@@ -1008,6 +998,32 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /**
+     * Validates that the given application exists for the project. Returns {@code null} when the
+     * application resolves, or a JSON error string (identical to the previous inline handling) when
+     * the application is not found or the lookup throws.
+     */
+    private String validateApplicationExists(IApplicationManager appManager, IProject project,
+            String applicationId)
+    {
+        try
+        {
+            Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+            if (!appOpt.isPresent())
+            {
+                return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
+                        + ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
+            }
+            return null;
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error checking application", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to validate application: " + applicationId //$NON-NLS-1$
+                    + " (" + e.getMessage() + ")").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
      * Parses the JUnit XML, formats it as Markdown and writes report.md next to junit.xml so
      * that the user can open the report manually from disk. Returns the Markdown content for
      * the MCP response, with an extra footer pointing at the on-disk file.
@@ -1020,16 +1036,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             String markdown = JUnitMarkdownFormatter.format(results);
 
             Path reportFile = junitXml.toPath().resolveSibling("report.md"); //$NON-NLS-1$
-            boolean reportWritten = false;
-            try
-            {
-                Files.write(reportFile, markdown.getBytes(StandardCharsets.UTF_8));
-                reportWritten = Files.exists(reportFile);
-            }
-            catch (IOException io)
-            {
-                Activator.logError("Failed to write Markdown report to " + reportFile, io); //$NON-NLS-1$
-            }
+            boolean reportWritten = writeReportFile(reportFile, markdown);
 
             if (reportWritten)
             {
@@ -1041,6 +1048,25 @@ public class RunYaxunitTestsTool implements IMcpTool
         {
             Activator.logError("Error parsing JUnit XML: " + junitXml, e); //$NON-NLS-1$
             return ToolResult.error("Failed to parse test results: " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Writes the Markdown report to {@code reportFile}. Returns {@code true} if the file
+     * was written and exists afterwards; a failed write is logged and returns {@code false}
+     * (the report content is still returned to the caller without the on-disk footer).
+     */
+    private boolean writeReportFile(Path reportFile, String markdown)
+    {
+        try
+        {
+            Files.write(reportFile, markdown.getBytes(StandardCharsets.UTF_8));
+            return Files.exists(reportFile);
+        }
+        catch (IOException io)
+        {
+            Activator.logError("Failed to write Markdown report to " + reportFile, io); //$NON-NLS-1$
+            return false;
         }
     }
 

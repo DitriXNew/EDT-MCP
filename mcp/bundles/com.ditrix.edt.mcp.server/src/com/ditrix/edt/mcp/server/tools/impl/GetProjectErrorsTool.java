@@ -157,6 +157,29 @@ public class GetProjectErrorsTool implements IMcpTool
      *        marker collection, model reads and transaction boundaries are identical.
      * @return Markdown formatted string with error details
      */
+    /**
+     * Parses a severity filter name into a {@link MarkerSeverity}. Returns {@code null} for a
+     * null/empty input or an unrecognized name, in which case all severities are shown.
+     *
+     * @param severity the severity name (case-insensitive), may be {@code null}
+     * @return the parsed {@link MarkerSeverity}, or {@code null} to apply no severity filter
+     */
+    private static MarkerSeverity parseSeverityFilter(String severity)
+    {
+        if (severity != null && !severity.isEmpty())
+        {
+            try
+            {
+                return MarkerSeverity.valueOf(severity.toUpperCase());
+            }
+            catch (IllegalArgumentException e)
+            {
+                // Invalid severity, will show all
+            }
+        }
+        return null;
+    }
+
     public static String getProjectErrors(String projectName, String severity, String checkId, List<String> objects, int limit, boolean detailed)
     {
         try
@@ -172,19 +195,7 @@ public class GetProjectErrorsTool implements IMcpTool
             IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
 
             // Parse severity filter
-            MarkerSeverity severityFilter = null;
-            if (severity != null && !severity.isEmpty())
-            {
-                try
-                {
-                    severityFilter = MarkerSeverity.valueOf(severity.toUpperCase());
-                }
-                catch (IllegalArgumentException e)
-                {
-                    // Invalid severity, will show all
-                }
-            }
-            final MarkerSeverity finalSeverityFilter = severityFilter;
+            final MarkerSeverity finalSeverityFilter = parseSeverityFilter(severity);
             final String finalCheckId = checkId;
             
             // Validate project if specified

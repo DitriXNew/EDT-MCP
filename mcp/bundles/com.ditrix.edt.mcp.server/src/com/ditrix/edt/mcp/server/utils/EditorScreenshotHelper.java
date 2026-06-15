@@ -139,16 +139,7 @@ public final class EditorScreenshotHelper
 
             if (nativeRender && !bufferedBefore)
             {
-                try
-                {
-                    Field bufferedField = serviceClass.getDeclaredField(bufferedFlagField);
-                    bufferedField.setAccessible(true);
-                    bufferedField.setBoolean(null, true);
-                }
-                catch (Exception e)
-                {
-                    ReflectionUtils.forceStaticFinalBoolean(serviceClass, bufferedFlagField, true);
-                }
+                forceBufferedRenderFlag(serviceClass, bufferedFlagField);
             }
 
             boolean bufferedAfter = (Boolean)isBufferedRenderMethod.invoke(null);
@@ -161,6 +152,27 @@ public final class EditorScreenshotHelper
         catch (Exception e)
         {
             Activator.logWarning("Failed to ensure buffered native render mode: " + e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Forces the static buffered-render flag field to {@code true}, first via a plain reflective
+     * field set and, if that fails, via {@link ReflectionUtils#forceStaticFinalBoolean}.
+     *
+     * @param serviceClass the native render service class declaring the flag
+     * @param bufferedFlagField the name of the static boolean flag field
+     */
+    private static void forceBufferedRenderFlag(Class<?> serviceClass, String bufferedFlagField)
+    {
+        try
+        {
+            Field bufferedField = serviceClass.getDeclaredField(bufferedFlagField);
+            bufferedField.setAccessible(true);
+            bufferedField.setBoolean(null, true);
+        }
+        catch (Exception e)
+        {
+            ReflectionUtils.forceStaticFinalBoolean(serviceClass, bufferedFlagField, true);
         }
     }
 
