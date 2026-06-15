@@ -316,7 +316,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
             }
 
             Object value = eObject.eGet(feature);
-            String valueStr = formatDynamicValue(value, feature, language);
+            String valueStr = formatDynamicValue(value, language);
 
             // Show all properties, even empty ones - use empty string for null/empty values
             if (valueStr == null || valueStr.equals(DASH))
@@ -418,7 +418,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
             for (EAttribute attr : simpleAttributes)
             {
                 Object value = eObject.eGet(attr);
-                String valueStr = formatDynamicValue(value, attr, language);
+                String valueStr = formatDynamicValue(value, language);
                 if (valueStr != null && !valueStr.isEmpty() && !valueStr.equals(DASH))
                 {
                     addPropertyRow(sb, formatFeatureName(attr.getName()), valueStr);
@@ -434,7 +434,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
             for (EReference ref : singleReferences)
             {
                 Object value = eObject.eGet(ref);
-                String valueStr = formatDynamicValue(value, ref, language);
+                String valueStr = formatDynamicValue(value, language);
                 if (valueStr != null && !valueStr.isEmpty() && !valueStr.equals(DASH))
                 {
                     addPropertyRow(sb, formatFeatureName(ref.getName()), valueStr);
@@ -550,7 +550,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
     /**
      * Format a dynamic value based on its type.
      */
-    protected String formatDynamicValue(Object value, EStructuralFeature feature, String language)
+    protected String formatDynamicValue(Object value, String language)
     {
         if (value == null)
         {

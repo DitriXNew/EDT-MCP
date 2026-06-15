@@ -103,7 +103,6 @@ public class SymbolInfoService
         final IFile targetFile = file;
         final int targetLine = line;
         final int targetColumn = column;
-        final String targetFilePath = filePath;
 
         AtomicReference<String> resultRef = new AtomicReference<>();
 
@@ -112,7 +111,7 @@ public class SymbolInfoService
         display.syncExec(() -> {
             try
             {
-                String result = executeOnUiThread(targetFile, targetLine, targetColumn, targetFilePath);
+                String result = executeOnUiThread(targetFile, targetLine, targetColumn);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -163,7 +162,7 @@ public class SymbolInfoService
     /**
      * Executes symbol info retrieval on UI thread.
      */
-    private String executeOnUiThread(IFile file, int line, int column, String filePath) throws Exception
+    private String executeOnUiThread(IFile file, int line, int column) throws Exception
     {
         IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
         if (window == null)

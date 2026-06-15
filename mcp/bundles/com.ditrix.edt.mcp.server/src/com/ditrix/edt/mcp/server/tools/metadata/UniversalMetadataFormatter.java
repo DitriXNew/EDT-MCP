@@ -201,7 +201,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
             }
             else if (firstItem instanceof CharacteristicsDescription)
             {
-                formatCharacteristicsCollection(sb, collectionName, collection, language);
+                formatCharacteristicsCollection(sb, collectionName, collection);
             }
             else if (firstItem instanceof BasicTabularSection)
             {
@@ -216,7 +216,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
             else if (firstItem instanceof java.util.Map.Entry)
             {
                 // Handle EMap collections like Synonym, ObjectPresentation
-                formatMapEntryCollection(sb, collectionName, collection, language);
+                formatMapEntryCollection(sb, collectionName, collection);
             }
             else if (firstItem instanceof MdObject)
             {
@@ -224,7 +224,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
             }
             else if (firstItem instanceof EObject)
             {
-                formatEObjectCollection(sb, collectionName, collection, full, language);
+                formatEObjectCollection(sb, collectionName, collection);
             }
         }
     }
@@ -555,7 +555,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
      * Format a collection of characteristics descriptions as a single table.
      * Shows all properties of each CharacteristicsDescription using EMF reflection.
      */
-    private void formatCharacteristicsCollection(StringBuilder sb, String name, Collection<?> items, String language)
+    private void formatCharacteristicsCollection(StringBuilder sb, String name, Collection<?> items)
     {
         addSectionHeader(sb, name);
         startTable(sb, "Index", "Characteristic Types", "Key Field", "Types Filter Field", "Types Filter Value", "Characteristic Values", "Object Field", "Type Field", "Value Field"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
@@ -623,7 +623,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
      * Displays as Language/Value table.
      */
     @SuppressWarnings("rawtypes")
-    private void formatMapEntryCollection(StringBuilder sb, String name, Collection<?> items, String language)
+    private void formatMapEntryCollection(StringBuilder sb, String name, Collection<?> items)
     {
         addSectionHeader(sb, name);
         startTable(sb, "Language", VALUE_TOKEN); //$NON-NLS-1$
@@ -706,11 +706,10 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     /**
      * Format a collection of EObjects that are not MdObjects.
      */
-    private void formatEObjectCollection(StringBuilder sb, String name, Collection<?> items, 
-            boolean full, String language)
+    private void formatEObjectCollection(StringBuilder sb, String name, Collection<?> items)
     {
         addSectionHeader(sb, name);
-        
+
         boolean first = true;
         for (Object item : items)
         {

@@ -86,7 +86,7 @@ public class YamlGroupRepository implements IGroupRepository {
             }
             
             // Cleanup orphaned FQNs (objects that might have been deleted)
-            cleanupOrphanedFqns(project, storage);
+            cleanupOrphanedFqns(storage);
             
             return storage;
             
@@ -149,7 +149,7 @@ public class YamlGroupRepository implements IGroupRepository {
             IFile groupsFile = project.getFile(GROUPS_PATH);
             
             // Use file locking for concurrent access protection
-            return saveWithLock(project, groupsFile, content);
+            return saveWithLock(groupsFile, content);
             
         } catch (CoreException e) {
             Activator.logError("Failed to save groups for project " + project.getName(), e);
@@ -171,7 +171,7 @@ public class YamlGroupRepository implements IGroupRepository {
     /**
      * Saves content with file lock for concurrent access protection.
      */
-    private boolean saveWithLock(IProject project, IFile groupsFile, byte[] content) {
+    private boolean saveWithLock(IFile groupsFile, byte[] content) {
         Path filePath = groupsFile.getLocation() != null 
             ? groupsFile.getLocation().toFile().toPath() 
             : null;
@@ -249,7 +249,7 @@ public class YamlGroupRepository implements IGroupRepository {
      * Cleans up orphaned FQNs (metadata objects that no longer exist).
      * This is called during load to ensure storage consistency.
      */
-    private void cleanupOrphanedFqns(IProject project, GroupStorage storage) {
+    private void cleanupOrphanedFqns(GroupStorage storage) {
         // Note: Full orphan detection requires BM access which should be done lazily
         // Here we just clean obviously invalid FQNs (empty, null)
         for (Group group : storage.getGroups()) {

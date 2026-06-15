@@ -214,11 +214,11 @@ public class GoToDefinitionTool implements IMcpTool
         MdObject mdObject = findMdObjectByFqn(config, firstPart, secondPart);
         if (mdObject != null)
         {
-            return formatMetadataDefinition(project, projectName, config, mdObject, firstPart, secondPart);
+            return formatMetadataDefinition(project, projectName, mdObject, firstPart);
         }
 
         // 3. Nothing found — provide suggestions
-        return buildNotFoundResponse(project, config, firstPart, secondPart);
+        return buildNotFoundResponse(config, firstPart, secondPart);
     }
 
     /**
@@ -463,8 +463,8 @@ public class GoToDefinitionTool implements IMcpTool
      * Formats a metadata object definition result.
      * Includes the object type, available modules, and module paths.
      */
-    private String formatMetadataDefinition(IProject project, String projectName, Configuration config,
-                                             MdObject mdObject, String typeName, String objectName)
+    private String formatMetadataDefinition(IProject project, String projectName,
+                                             MdObject mdObject, String typeName)
     {
         String collectionFolder = getCollectionFolder(typeName);
 
@@ -565,7 +565,7 @@ public class GoToDefinitionTool implements IMcpTool
      * If firstPart is a recognized metadata type, shows similar objects of that type.
      * Otherwise, shows similar common modules.
      */
-    private String buildNotFoundResponse(IProject project, Configuration config,
+    private String buildNotFoundResponse(Configuration config,
                                           String firstPart, String secondPart)
     {
         StringBuilder sb = new StringBuilder();
