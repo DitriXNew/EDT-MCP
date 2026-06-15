@@ -381,7 +381,7 @@ public final class MetadataPropertyIntrospector
             String target = referenceTargetTypeName(feature);
             return target != null ? Collections.singletonList(target) : null;
         }
-        return null;
+        return Collections.emptyList();
     }
 
     private static List<String> enumLiterals(EStructuralFeature feature)

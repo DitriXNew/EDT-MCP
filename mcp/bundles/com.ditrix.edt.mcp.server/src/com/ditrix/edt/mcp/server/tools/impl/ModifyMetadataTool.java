@@ -1170,7 +1170,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     Object map = target.eGet(feature);
                     if (!(map instanceof EMap))
                     {
-                        throw new RuntimeException("Localized feature '" + feature.getName() //$NON-NLS-1$
+                        throw new IllegalStateException("Localized feature '" + feature.getName() //$NON-NLS-1$
                             + "' is not a map"); //$NON-NLS-1$
                     }
                     ((EMap<String, String>)map).put(localizedLanguage, localizedValue);
@@ -1218,7 +1218,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             EObject t = (EObject)tx.getObjectById(bmId);
             if (t == null)
             {
-                throw new RuntimeException("Reference target is no longer in the transaction"); //$NON-NLS-1$
+                throw new IllegalStateException("Reference target is no longer in the transaction"); //$NON-NLS-1$
             }
             return t;
         }
