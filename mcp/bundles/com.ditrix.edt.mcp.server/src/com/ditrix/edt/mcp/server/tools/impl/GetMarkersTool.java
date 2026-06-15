@@ -128,8 +128,8 @@ public class GetMarkersTool implements IMcpTool
                 + "(or omit markerKind to list both).").toJson(); //$NON-NLS-1$
         }
 
-        boolean includeBookmarks = !hasKind || KEY_BOOKMARK.equals(markerKind.toLowerCase());
-        boolean includeTasks = !hasKind || "task".equals(markerKind.toLowerCase()); //$NON-NLS-1$
+        boolean includeBookmarks = !hasKind || KEY_BOOKMARK.equalsIgnoreCase(markerKind);
+        boolean includeTasks = !hasKind || "task".equalsIgnoreCase(markerKind); //$NON-NLS-1$
 
         int defaultLimit = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, McpKeys.LIMIT, 100);

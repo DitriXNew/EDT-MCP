@@ -546,17 +546,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         removed.add(head);
         removed.addAll(data.descendants);
 
+        String memberWord = handler ? KEY_HANDLER : KEY_MEMBER;
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_PREVIEW)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put(KEY_REFACTORING_TITLE, "Delete form " + (handler ? KEY_HANDLER : KEY_MEMBER) + " " + ref.name) //$NON-NLS-1$ //$NON-NLS-2$
+            .put(KEY_REFACTORING_TITLE, "Delete form " + memberWord + " " + ref.name) //$NON-NLS-1$ //$NON-NLS-2$
             .put(KEY_ITEMS, removed)
             .put(KEY_BLOCKING, false);
         return putBlockingReferences(result, Collections.emptyList())
             .put(McpKeys.MESSAGE, "Preview: deleting '" + ref.name + "' (" + data.type + ") from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ref.formPath + " would remove " //$NON-NLS-1$
                 + (data.descendants.isEmpty()
-                    ? "the " + (handler ? KEY_HANDLER : KEY_MEMBER) + " itself." //$NON-NLS-1$ //$NON-NLS-2$
+                    ? "the " + memberWord + " itself." //$NON-NLS-1$ //$NON-NLS-2$
                     : "it and its " + data.descendants.size() + " contained item(s).") //$NON-NLS-1$ //$NON-NLS-2$
                 + " Cross-references to it (a field's dataPath, a button's command) are NOT rewritten - " //$NON-NLS-1$
                 + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
