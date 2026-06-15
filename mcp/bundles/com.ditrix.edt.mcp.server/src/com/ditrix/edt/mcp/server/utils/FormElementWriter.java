@@ -664,7 +664,7 @@ public final class FormElementWriter
         EObject txMdForm = (EObject)tx.getObjectById(ctx.mdFormBmId);
         if (txMdForm == null)
         {
-            throw new RuntimeException("Form object not found in transaction"); //$NON-NLS-1$
+            throw new IllegalStateException("Form object not found in transaction"); //$NON-NLS-1$
         }
         return txMdForm;
     }
@@ -768,12 +768,12 @@ public final class FormElementWriter
         EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature(KEY_FORMS);
         if (formsFeature == null || !(formsFeature.getEType() instanceof EClass))
         {
-            throw new RuntimeException("Object type '" + owner.eClass().getName() //$NON-NLS-1$
+            throw new IllegalArgumentException("Object type '" + owner.eClass().getName() //$NON-NLS-1$
                 + "' does not support forms."); //$NON-NLS-1$
         }
         if (findOwnedFormByName(owner, formsFeature, formName) != null)
         {
-            throw new RuntimeException("Form already exists: " + formName); //$NON-NLS-1$
+            throw new IllegalStateException("Form already exists: " + formName); //$NON-NLS-1$
         }
         EClass mdFormEClass = (EClass)formsFeature.getEType();
 
@@ -781,7 +781,7 @@ public final class FormElementWriter
         BasicForm mdForm = (BasicForm)mdFactory.create(mdFormEClass, version);
         if (mdForm == null)
         {
-            throw new RuntimeException("Factory returned null for form type: " + mdFormEClass.getName()); //$NON-NLS-1$
+            throw new IllegalStateException("Factory returned null for form type: " + mdFormEClass.getName()); //$NON-NLS-1$
         }
         mdForm.setName(formName);
         mdForm.setUuid(UUID.randomUUID());
@@ -812,7 +812,7 @@ public final class FormElementWriter
             MdClassPackage.Literals.BASIC_FORM__FORM);
         if (contentFqn == null || contentFqn.isEmpty())
         {
-            throw new RuntimeException("Could not generate the content-form FQN for: " + formName); //$NON-NLS-1$
+            throw new IllegalStateException("Could not generate the content-form FQN for: " + formName); //$NON-NLS-1$
         }
         tx.attachTopObject((IBmObject)content, contentFqn);
 
@@ -892,7 +892,7 @@ public final class FormElementWriter
         EClassifier concrete = formPkg != null ? formPkg.getEClassifier("Form") : null; //$NON-NLS-1$
         if (!(concrete instanceof EClass))
         {
-            throw new RuntimeException("The form model EPackage (" + FORM_PACKAGE_NS_URI //$NON-NLS-1$
+            throw new IllegalStateException("The form model EPackage (" + FORM_PACKAGE_NS_URI //$NON-NLS-1$
                 + ") is not available in this platform."); //$NON-NLS-1$
         }
         return (EClass)concrete;
@@ -1017,11 +1017,11 @@ public final class FormElementWriter
                 }
                 catch (ReflectiveOperationException e)
                 {
-                    throw new RuntimeException("Failed to set default object form", e); //$NON-NLS-1$
+                    throw new IllegalStateException("Failed to set default object form", e); //$NON-NLS-1$
                 }
             }
         }
-        throw new RuntimeException("Owner type '" + owner.eClass().getName() //$NON-NLS-1$
+        throw new IllegalArgumentException("Owner type '" + owner.eClass().getName() //$NON-NLS-1$
             + "' has no compatible setDefaultObjectForm(...) method; create the form without " //$NON-NLS-1$
             + "setAsDefault and assign it manually."); //$NON-NLS-1$
     }
@@ -1235,7 +1235,7 @@ public final class FormElementWriter
         EObject item = findUniqueItem(formModel, itemName);
         if (item == null)
         {
-            throw new RuntimeException("Form item not found: '" + itemName //$NON-NLS-1$
+            throw new IllegalArgumentException("Form item not found: '" + itemName //$NON-NLS-1$
                 + "'. Use get_metadata_details on the form to inspect its items."); //$NON-NLS-1$
         }
         String err;
@@ -1245,7 +1245,7 @@ public final class FormElementWriter
             EObject container = item.eContainer();
             if (container == null)
             {
-                throw new RuntimeException("Form item '" + itemName //$NON-NLS-1$
+                throw new IllegalStateException("Form item '" + itemName //$NON-NLS-1$
                     + "' has no parent container and cannot be moved."); //$NON-NLS-1$
             }
             err = moveItemInto(formModel, item, container, containerLabel(formModel, container),
@@ -1257,7 +1257,7 @@ public final class FormElementWriter
         }
         if (err != null)
         {
-            throw new RuntimeException(err);
+            throw new IllegalArgumentException(err);
         }
         return destinationOf(formModel, item);
     }
@@ -1378,14 +1378,14 @@ public final class FormElementWriter
             int idx = Integer.parseInt(position.trim());
             if (idx < 0)
             {
-                throw new RuntimeException("Invalid position index '" + position //$NON-NLS-1$
+                throw new IllegalArgumentException("Invalid position index '" + position //$NON-NLS-1$
                     + "': must be zero or positive."); //$NON-NLS-1$
             }
             return idx;
         }
         catch (NumberFormatException e)
         {
-            throw new RuntimeException("Invalid position '" + position //$NON-NLS-1$
+            throw new IllegalArgumentException("Invalid position '" + position //$NON-NLS-1$
                 + "'. Expected an integer index, 'first', 'last', 'before:<name>' or 'after:<name>'."); //$NON-NLS-1$
         }
     }
@@ -1395,12 +1395,12 @@ public final class FormElementWriter
     {
         if (sibling.isEmpty())
         {
-            throw new RuntimeException("Position reference is missing a sibling name " //$NON-NLS-1$
+            throw new IllegalArgumentException("Position reference is missing a sibling name " //$NON-NLS-1$
                 + "(use 'before:<name>' or 'after:<name>')."); //$NON-NLS-1$
         }
         if (sibling.equalsIgnoreCase(movedName))
         {
-            throw new RuntimeException("Position cannot reference the moved item itself: '" //$NON-NLS-1$
+            throw new IllegalArgumentException("Position cannot reference the moved item itself: '" //$NON-NLS-1$
                 + sibling + "'."); //$NON-NLS-1$
         }
         for (int i = 0; i < destNames.size(); i++)
@@ -1410,7 +1410,7 @@ public final class FormElementWriter
                 return i;
             }
         }
-        throw new RuntimeException("Sibling '" + sibling //$NON-NLS-1$
+        throw new IllegalArgumentException("Sibling '" + sibling //$NON-NLS-1$
             + "' not found in the destination container."); //$NON-NLS-1$
     }
 
@@ -1455,7 +1455,7 @@ public final class FormElementWriter
         collectItemsByName(formModel, name, (EClass)formItem, matches);
         if (matches.size() > 1)
         {
-            throw new RuntimeException("Form item name '" + name //$NON-NLS-1$
+            throw new IllegalArgumentException("Form item name '" + name //$NON-NLS-1$
                 + "' is ambiguous (it matches more than one item)."); //$NON-NLS-1$
         }
         return matches.isEmpty() ? null : matches.get(0);
@@ -2876,7 +2876,7 @@ public final class FormElementWriter
         EStructuralFeature feature = container.eClass().getEStructuralFeature(featureName);
         if (!(feature instanceof EReference) || !feature.isMany())
         {
-            throw new RuntimeException("Form feature '" + featureName + "' is not a list"); //$NON-NLS-1$ //$NON-NLS-2$
+            throw new IllegalArgumentException("Form feature '" + featureName + "' is not a list"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         ((EList<EObject>)container.eGet(feature)).add(element);
     }

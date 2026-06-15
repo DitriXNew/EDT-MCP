@@ -670,7 +670,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         bind, titleLanguage, titleText, russianAutoNames, createdKind);
                     if (err != null)
                     {
-                        throw new RuntimeException(err);
+                        throw new IllegalStateException(err);
                     }
                 });
         }
@@ -950,7 +950,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
                     if (container == null)
                     {
-                        throw new RuntimeException(commandOwner
+                        throw new IllegalStateException(commandOwner
                             ? "Form command not found: " + ref.itemName //$NON-NLS-1$
                                 + ". Create the command first, then add the handler." //$NON-NLS-1$
                             : "Form item not found: " + ref.itemName //$NON-NLS-1$
@@ -960,7 +960,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         langCode, fCallType, createdKind);
                     if (err != null)
                     {
-                        throw new RuntimeException(err);
+                        throw new IllegalStateException(err);
                     }
                 });
         }
@@ -1103,7 +1103,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         Object value = owner.eGet(feature);
         if (!(value instanceof EList))
         {
-            throw new RuntimeException("Containment feature '" + feature.getName() + "' is not a list"); //$NON-NLS-1$ //$NON-NLS-2$
+            throw new IllegalStateException("Containment feature '" + feature.getName() + "' is not a list"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         ((EList<EObject>)value).add(child);
     }
@@ -1114,7 +1114,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         Object collection = cfg.eGet(cfg.eClass().getEStructuralFeature(refName));
         if (!(collection instanceof EList))
         {
-            throw new RuntimeException("Configuration feature '" + refName + "' is not a list"); //$NON-NLS-1$ //$NON-NLS-2$
+            throw new IllegalStateException("Configuration feature '" + refName + "' is not a list"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         ((EList<MdObject>)collection).add(newObject);
     }

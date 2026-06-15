@@ -150,24 +150,7 @@ public class GetApplicationsTool implements IMcpTool
                 }
                 
                 // Add update state
-                try
-                {
-                    ApplicationUpdateState updateState = appManager.getUpdateState(app);
-                    if (updateState != null)
-                    {
-                        appObj.addProperty("updateState", updateState.name()); //$NON-NLS-1$
-                        
-                        // Add human-readable description
-                        String stateDescription = getUpdateStateDescription(updateState);
-                        appObj.addProperty("updateStateDescription", stateDescription); //$NON-NLS-1$
-                    }
-                }
-                catch (ApplicationException e)
-                {
-                    Activator.logError("Error getting update state for application: " + app.getId(), e); //$NON-NLS-1$
-                    appObj.addProperty("updateState", "ERROR"); //$NON-NLS-1$ //$NON-NLS-2$
-                    appObj.addProperty("updateStateError", e.getMessage()); //$NON-NLS-1$
-                }
+                addUpdateState(appManager, app, appObj);
                 
                 // Add required version if present
                 app.getRequiredVersion().ifPresent(version -> 
@@ -177,19 +160,7 @@ public class GetApplicationsTool implements IMcpTool
             }
             
             // Get default application
-            String defaultAppId = null;
-            try
-            {
-                IApplication defaultApp = appManager.getDefaultApplication(project).orElse(null);
-                if (defaultApp != null)
-                {
-                    defaultAppId = defaultApp.getId();
-                }
-            }
-            catch (ApplicationException e)
-            {
-                Activator.logError("Error getting default application", e); //$NON-NLS-1$
-            }
+            String defaultAppId = resolveDefaultApplicationId(appManager, project);
             
             ToolResult result = ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
@@ -211,8 +182,64 @@ public class GetApplicationsTool implements IMcpTool
     }
     
     /**
+     * Adds the update-state properties for a single application to its JSON object.
+     * On error the state is reported as {@code "ERROR"} together with the error message,
+     * preserving the original inline behaviour.
+     *
+     * @param appManager the application manager
+     * @param app the application whose update state is read
+     * @param appObj the JSON object to populate
+     */
+    private void addUpdateState(IApplicationManager appManager, IApplication app, JsonObject appObj)
+    {
+        try
+        {
+            ApplicationUpdateState updateState = appManager.getUpdateState(app);
+            if (updateState != null)
+            {
+                appObj.addProperty("updateState", updateState.name()); //$NON-NLS-1$
+
+                // Add human-readable description
+                String stateDescription = getUpdateStateDescription(updateState);
+                appObj.addProperty("updateStateDescription", stateDescription); //$NON-NLS-1$
+            }
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error getting update state for application: " + app.getId(), e); //$NON-NLS-1$
+            appObj.addProperty("updateState", "ERROR"); //$NON-NLS-1$ //$NON-NLS-2$
+            appObj.addProperty("updateStateError", e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Resolves the id of the project's default application, or {@code null} when there is no
+     * default application or it could not be determined.
+     *
+     * @param appManager the application manager
+     * @param project the project
+     * @return the default application id, or {@code null}
+     */
+    private String resolveDefaultApplicationId(IApplicationManager appManager, IProject project)
+    {
+        try
+        {
+            IApplication defaultApp = appManager.getDefaultApplication(project).orElse(null);
+            if (defaultApp != null)
+            {
+                return defaultApp.getId();
+            }
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error getting default application", e); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
      * Returns human-readable description for update state.
-     * 
+     *
      * @param state the update state
      * @return description string
      */

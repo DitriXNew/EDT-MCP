@@ -221,19 +221,9 @@ public final class LaunchConfigUtils
         {
             for (ILaunchConfiguration config : launchManager.getLaunchConfigurations(configType))
             {
-                try
+                if (matchesProjectAndApplication(config, projectName, applicationId))
                 {
-                    String configProject = config.getAttribute(ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-                    String configAppId = config.getAttribute(ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
-
-                    if (projectName.equals(configProject) && applicationId.equals(configAppId))
-                    {
-                        return config;
-                    }
-                }
-                catch (CoreException e)
-                {
-                    Activator.logError("Error reading launch configuration: " + config.getName(), e); //$NON-NLS-1$
+                    return config;
                 }
             }
         }
@@ -243,6 +233,33 @@ public final class LaunchConfigUtils
         }
 
         return null;
+    }
+
+    /**
+     * Tells whether {@code config}'s {@code project + applicationId} attributes match the given
+     * pair exactly. A {@link CoreException} while reading the attributes is logged and treated as
+     * "no match" (so the caller skips this configuration and continues searching).
+     *
+     * @param config        launch configuration to inspect
+     * @param projectName   target project name
+     * @param applicationId target application id
+     * @return {@code true} when both attributes match, {@code false} otherwise (including on read error)
+     */
+    private static boolean matchesProjectAndApplication(ILaunchConfiguration config,
+            String projectName, String applicationId)
+    {
+        try
+        {
+            String configProject = config.getAttribute(ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String configAppId = config.getAttribute(ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+
+            return projectName.equals(configProject) && applicationId.equals(configAppId);
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Error reading launch configuration: " + config.getName(), e); //$NON-NLS-1$
+            return false;
+        }
     }
 
     /**

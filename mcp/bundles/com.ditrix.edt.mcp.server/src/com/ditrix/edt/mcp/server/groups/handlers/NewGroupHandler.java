@@ -189,17 +189,8 @@ public class NewGroupHandler extends AbstractHandler {
     private String getCollectionPath(Object adapter) {
         try {
             // Get the model object name (e.g., "Attribute", "CommonModule")
-            String modelObjectName = null;
-            try {
-                Method getModelObjectNameMethod = adapter.getClass().getMethod("getModelObjectName");
-                Object result = getModelObjectNameMethod.invoke(adapter);
-                if (result instanceof String) {
-                    modelObjectName = (String) result;
-                }
-            } catch (NoSuchMethodException e) {
-                // Method doesn't exist
-            }
-            
+            String modelObjectName = invokeGetModelObjectName(adapter);
+
             if (modelObjectName == null) {
                 // Fallback: try using IWorkbenchAdapter label
                 if (adapter instanceof IWorkbenchAdapter workbenchAdapter) {
@@ -216,18 +207,12 @@ public class NewGroupHandler extends AbstractHandler {
             
             // Check if this is a nested collection (has parent EObject)
             // We only support top-level collections for groups
-            try {
-                Method getParentMethod = adapter.getClass().getMethod("getParent", Object.class);
-                Object parent = getParentMethod.invoke(adapter, adapter);
-                if (parent instanceof EObject) {
-                    // This is a nested collection (e.g., Catalog.Products.Attribute)
-                    // We don't support groups for nested collections
-                    return null;
-                }
-            } catch (NoSuchMethodException e) {
-                // Method doesn't exist - this is fine, proceed with simple path
+            if (isNestedCollection(adapter)) {
+                // This is a nested collection (e.g., Catalog.Products.Attribute)
+                // We don't support groups for nested collections
+                return null;
             }
-            
+
             // Return simple collection type name (e.g., "CommonModule", "Catalog")
             return modelObjectName;
             
@@ -237,7 +222,42 @@ public class NewGroupHandler extends AbstractHandler {
         
         return null;
     }
-    
+
+    /**
+     * Reflectively invokes {@code getModelObjectName()} on the adapter.
+     * Returns the model object name (e.g. "CommonModule", "Catalog"), or
+     * {@code null} when the method is absent or does not return a String.
+     */
+    private String invokeGetModelObjectName(Object adapter) throws Exception {
+        try {
+            Method getModelObjectNameMethod = adapter.getClass().getMethod("getModelObjectName");
+            Object result = getModelObjectNameMethod.invoke(adapter);
+            if (result instanceof String) {
+                return (String) result;
+            }
+        } catch (NoSuchMethodException e) {
+            // Method doesn't exist
+        }
+        return null;
+    }
+
+    /**
+     * Determines whether the adapter represents a nested collection (i.e. its
+     * parent is an {@link EObject}, like Catalog.Products.Attribute). When the
+     * reflective {@code getParent(Object)} method is absent this is treated as a
+     * top-level collection (returns {@code false}).
+     */
+    private boolean isNestedCollection(Object adapter) throws Exception {
+        try {
+            Method getParentMethod = adapter.getClass().getMethod("getParent", Object.class);
+            Object parent = getParentMethod.invoke(adapter, adapter);
+            return parent instanceof EObject;
+        } catch (NoSuchMethodException e) {
+            // Method doesn't exist - this is fine, proceed with simple path
+            return false;
+        }
+    }
+
     /**
      * Gets the project from a navigator adapter.
      */
