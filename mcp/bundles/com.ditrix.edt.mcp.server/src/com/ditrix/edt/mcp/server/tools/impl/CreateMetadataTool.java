@@ -37,6 +37,7 @@ import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -71,6 +72,52 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Quoted, comma-separated list of CommonModule kinds for schema hints. */
     private static final String COMMON_MODULE_KINDS = CommonModuleKind.quotedList();
 
+    /** Schema / param key: extension event call type. */
+    private static final String KEY_CALL_TYPE = "callType"; //$NON-NLS-1$
+
+    /** Schema / param key: stale-intent precondition guard. */
+    private static final String KEY_EXPECTED_NOT_EXISTS = "expectedNotExists"; //$NON-NLS-1$
+
+    /** Schema / param key: register the new form as the owner's default form. */
+    private static final String KEY_SET_AS_DEFAULT = "setAsDefault"; //$NON-NLS-1$
+
+    /** Schema / param key: CommonModule kind selector. */
+    private static final String KEY_COMMON_MODULE_KIND = "commonModuleKind"; //$NON-NLS-1$
+
+    /** Schema / param key: XDTOPackage target namespace. */
+    private static final String KEY_TARGET_NAMESPACE = "targetNamespace"; //$NON-NLS-1$
+
+    /** Output key: whether the change was exported to disk. */
+    private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
+
+    /** Property / output key: the synonym display name. */
+    private static final String KEY_SYNONYM = "synonym"; //$NON-NLS-1$
+
+    /** Property / output key: the language code. */
+    private static final String KEY_LANGUAGE = "language"; //$NON-NLS-1$
+
+    /** Property entry key: the property value. */
+    private static final String KEY_VALUE = "value"; //$NON-NLS-1$
+
+    /** Output value: the action a successful create reports. */
+    private static final String VAL_CREATED = "created"; //$NON-NLS-1$
+
+    /** Error: required EDT services are not available. */
+    private static final String ERR_SERVICES_UNAVAILABLE = "Required EDT services not available"; //$NON-NLS-1$
+
+    /** Error prefix: could not resolve the V8 project. */
+    private static final String ERR_NO_V8_PROJECT = "Could not resolve V8 project for: "; //$NON-NLS-1$
+
+    /** Error prefix: BM model not available for the project. */
+    private static final String ERR_NO_BM_MODEL = "BM model not available for project: "; //$NON-NLS-1$
+
+    /** Error: a properties entry is missing a non-empty name. */
+    private static final String ERR_PROPERTY_NEEDS_NAME =
+        "Each entry in 'properties' needs a non-empty 'name'."; //$NON-NLS-1$
+
+    /** Error prefix: a property name is not supported. */
+    private static final String ERR_PROPERTY_PREFIX = "Property '"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -91,7 +138,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required).", true) //$NON-NLS-1$
             .stringProperty("fqn", //$NON-NLS-1$
                 "Full-name FQN of the node to create (required). Top object: 'Type.Name' " //$NON-NLS-1$
@@ -102,7 +149,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "Optional properties to apply at creation, as [{name, value, language?}]. This " //$NON-NLS-1$
                 + "version applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
                 + "property names are rejected (set them via modify_metadata).") //$NON-NLS-1$
-            .booleanProperty("expectedNotExists", //$NON-NLS-1$
+            .booleanProperty(KEY_EXPECTED_NOT_EXISTS,
                 "Optional stale-intent guard (default false): assert the node does not yet exist for " //$NON-NLS-1$
                 + "a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
@@ -110,11 +157,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "FQN segment) and in any synonym / comment value (default true). 'ё' in a Name is " //$NON-NLS-1$
                 + "flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input " //$NON-NLS-1$
                 + "stores a compliant name. Set false to keep 'ё' exactly as supplied.") //$NON-NLS-1$
-            .booleanProperty("setAsDefault", //$NON-NLS-1$
+            .booleanProperty(KEY_SET_AS_DEFAULT,
                 "Form OBJECT create only (FQN 'Type.Object.Form.FormName'). When true, registers the " //$NON-NLS-1$
                 + "new form as the owner's default object form (default: false). Ignored for other " //$NON-NLS-1$
                 + "create kinds.") //$NON-NLS-1$
-            .enumProperty("callType", //$NON-NLS-1$
+            .enumProperty(KEY_CALL_TYPE,
                 "Form event handler ONLY (item-level '...Form.F.<ItemKind>.Item.Handler.<Event>' or " //$NON-NLS-1$
                 + "form-level '...Form.F.Handler.<Event>'), in a " //$NON-NLS-1$
                 + "configuration EXTENSION project. Selects EXTENSION event interception: binds a " //$NON-NLS-1$
@@ -124,7 +171,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "handler procedure itself is added separately via write_module_source. Rejected on a " //$NON-NLS-1$
                 + "base configuration or a non-handler FQN.", //$NON-NLS-1$
                 "Before", "After", "Instead") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .enumProperty("commonModuleKind", //$NON-NLS-1$
+            .enumProperty(KEY_COMMON_MODULE_KIND,
                 "CommonModule top-object only. Selects a standards-compliant flag combination the " //$NON-NLS-1$
                 + "common-module-type validator accepts (no warning), instead of a bare module: " //$NON-NLS-1$
                 + COMMON_MODULE_KINDS + ". Defaults to 'Server'. Ignored for other types. Combine " //$NON-NLS-1$
@@ -146,7 +193,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "'DuringRequest' or 'DuringSession'. 'DuringSession' yields a cached module accepted " //$NON-NLS-1$
                 + "by the common-module-type validator. Ignored for other types.", //$NON-NLS-1$
                 "DontUse", "DuringRequest", "DuringSession") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .stringProperty("targetNamespace", //$NON-NLS-1$
+            .stringProperty(KEY_TARGET_NAMESPACE,
                 "XDTOPackage top-object only. URI namespace for the new package; a non-empty " //$NON-NLS-1$
                 + "namespace is required for the package to be valid. Defaults to " //$NON-NLS-1$
                 + "'http://example.org/<Name>' when omitted. Create-time-only. Ignored for other " //$NON-NLS-1$
@@ -159,43 +206,43 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the node was created", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "'created' on success") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.ACTION, "'created' on success") //$NON-NLS-1$
             .stringProperty("fqn", "Normalized full-name FQN of the created node") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("kind", "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Programmatic name of the created node") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("persisted", "Whether the change was exported to disk") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("synonym", "Display name written, when a synonym property was provided") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("language", "Language code the synonym was written for") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
+            .stringProperty(KEY_SYNONYM, "Display name written, when a synonym property was provided") //$NON-NLS-1$
+            .stringProperty(KEY_LANGUAGE, "Language code the synonym was written for") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Fields whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
-            .stringProperty("commonModuleKind", //$NON-NLS-1$
+            .stringProperty(KEY_COMMON_MODULE_KIND,
                 "Resolved CommonModule kind, when a CommonModule was created") //$NON-NLS-1$
-            .stringProperty("targetNamespace", //$NON-NLS-1$
+            .stringProperty(KEY_TARGET_NAMESPACE,
                 "XDTO namespace written, when an XDTOPackage was created") //$NON-NLS-1$
-            .booleanProperty("setAsDefault", //$NON-NLS-1$
+            .booleanProperty(KEY_SET_AS_DEFAULT,
                 "Whether the new form was registered as the owner's default object form " //$NON-NLS-1$
                 + "(form-object create only)") //$NON-NLS-1$
-            .stringProperty("callType", //$NON-NLS-1$
+            .stringProperty(KEY_CALL_TYPE,
                 "Extension event call type written (Before/After/Instead), when an extension event " //$NON-NLS-1$
                 + "handler (form:EventHandlerExtension) was created") //$NON-NLS-1$
-            .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
             .build();
     }
 
     @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, "projectName", "fqn"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
         }
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
-        boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, "expectedNotExists", false); //$NON-NLS-1$
+        boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, KEY_EXPECTED_NOT_EXISTS, false);
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
-        String callType = JsonUtils.extractStringArgument(params, "callType"); //$NON-NLS-1$
+        String callType = JsonUtils.extractStringArgument(params, KEY_CALL_TYPE);
 
         // Normalize 'ё'->'е' at the PARSE step, BEFORE identifier validation, so a Name carrying the
         // letter 'ё' (which the 1C standard mdo-ru-name-unallowed-letter rejects) is stored compliant.
@@ -336,18 +383,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (v8ProjectManager == null || factory == null || bmModelManager == null)
         {
-            return ToolResult.error("Required EDT services not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
         }
         IV8Project v8Project = v8ProjectManager.getProject(project);
         if (v8Project == null)
         {
-            return ToolResult.error("Could not resolve V8 project for: " + projectName).toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
         }
         final Version version = v8Project.getVersion();
         IBmModel bmModel = bmModelManager.getModel(project);
         if (bmModel == null)
         {
-            return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
         }
         if (!(config instanceof IBmObject))
         {
@@ -419,17 +466,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
         if (bmModelManager == null || factory == null || v8ProjectManager == null)
         {
-            return ToolResult.error("Required EDT services not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
         }
         IBmModel bmModel = bmModelManager.getModel(project);
         if (bmModel == null)
         {
-            return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
         }
         IV8Project v8Project = v8ProjectManager.getProject(project);
         if (v8Project == null)
         {
-            return ToolResult.error("Could not resolve V8 project for: " + projectName).toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
         }
         final Version version = v8Project.getVersion();
 
@@ -546,16 +593,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             String pName = asString(prop.get("name")); //$NON-NLS-1$
             if (pName == null || pName.isEmpty())
             {
-                return ToolResult.error("Each entry in 'properties' needs a non-empty 'name'.").toJson(); //$NON-NLS-1$
+                return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
             switch (pName.toLowerCase())
             {
                 case "title": //$NON-NLS-1$
-                    titleVal = normReport.apply("title", asString(prop.get("value"))); //$NON-NLS-1$ //$NON-NLS-2$
-                    titleLang = asString(prop.get("language")); //$NON-NLS-1$
+                    titleVal = normReport.apply("title", asString(prop.get(KEY_VALUE))); //$NON-NLS-1$
+                    titleLang = asString(prop.get(KEY_LANGUAGE));
                     break;
                 case "parent": //$NON-NLS-1$
-                    parentName = asString(prop.get("value")); //$NON-NLS-1$
+                    parentName = asString(prop.get(KEY_VALUE));
                     break;
                 case "type": //$NON-NLS-1$
                     if (kind != FormElementWriter.Kind.GROUP)
@@ -564,15 +611,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                             + "a form Group (the group kind, e.g. Popup or Pages). Set other " //$NON-NLS-1$
                             + "elements' types via modify_metadata.").toJson(); //$NON-NLS-1$
                     }
-                    bindTarget = asString(prop.get("value")); //$NON-NLS-1$
+                    bindTarget = asString(prop.get(KEY_VALUE));
                     break;
                 case "datapath": //$NON-NLS-1$
                 case "attribute": //$NON-NLS-1$
                 case "command": //$NON-NLS-1$
-                    bindTarget = asString(prop.get("value")); //$NON-NLS-1$
+                    bindTarget = asString(prop.get(KEY_VALUE));
                     break;
                 default:
-                    return ToolResult.error("Property '" + pName + "' is not supported for a form " //$NON-NLS-1$ //$NON-NLS-2$
+                    return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' is not supported for a form " //$NON-NLS-1$
                         + "element. This version applies: title (with optional language), parent " //$NON-NLS-1$
                         + "(nest a visual item), dataPath/attribute (a Field's bound attribute), " //$NON-NLS-1$
                         + "command (a Button's bound command), type (a Group's kind). Set other " //$NON-NLS-1$
@@ -639,13 +686,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
 
         ToolResult formResult = ToolResult.success()
-            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_CREATED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put("kind", createdKind[0] != null ? createdKind[0] : fKind.name()) //$NON-NLS-1$
             .put("name", ref.name) //$NON-NLS-1$
-            .put("persisted", persisted); //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted);
         normReport.addTo(formResult);
-        return formResult.put("message", "Created " + normFqn).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        return formResult.put(McpKeys.MESSAGE, "Created " + normFqn).toJson(); //$NON-NLS-1$
     }
 
     // ---- form-OBJECT creation (the BasicForm mdo + its renderable content Form) ------------------
@@ -676,8 +723,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return propErr;
         }
-        boolean setAsDefault = JsonUtils.extractBooleanArgument(params, "setAsDefault", false); //$NON-NLS-1$
-        boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, "expectedNotExists", false); //$NON-NLS-1$
+        boolean setAsDefault = JsonUtils.extractBooleanArgument(params, KEY_SET_AS_DEFAULT, false);
+        boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, KEY_EXPECTED_NOT_EXISTS, false);
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -731,7 +778,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (v8ProjectManager == null || mdFactory == null || bmModelManager == null)
         {
-            return ToolResult.error("Required EDT services not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
         }
         if (fqnGenerator == null)
         {
@@ -741,13 +788,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IV8Project v8Project = v8ProjectManager.getProject(project);
         if (v8Project == null)
         {
-            return ToolResult.error("Could not resolve V8 project for: " + projectName).toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
         }
         final Version version = v8Project.getVersion();
         IBmModel bmModel = bmModelManager.getModel(project);
         if (bmModel == null)
         {
-            return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
         }
 
         final long ownerBmId = ((IBmObject)owner).bmGetId();
@@ -795,18 +842,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(project, dirty);
 
         ToolResult result = ToolResult.success()
-            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_CREATED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put("kind", "Form") //$NON-NLS-1$ //$NON-NLS-2$
             .put("name", formName) //$NON-NLS-1$
-            .put("persisted", persisted) //$NON-NLS-1$
-            .put("setAsDefault", setAsDefault); //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted)
+            .put(KEY_SET_AS_DEFAULT, setAsDefault);
         if (props.synonym != null && !props.synonym.isEmpty() && synonymLanguage != null)
         {
-            result.put("synonym", props.synonym).put("language", synonymLanguage); //$NON-NLS-1$ //$NON-NLS-2$
+            result.put(KEY_SYNONYM, props.synonym).put(KEY_LANGUAGE, synonymLanguage);
         }
         normReport.addTo(result);
-        return result.put("message", "Created form " + normFqn //$NON-NLS-1$ //$NON-NLS-2$
+        return result.put(McpKeys.MESSAGE, "Created form " + normFqn //$NON-NLS-1$
             + ". Add structure with create_metadata on a form-member FQN " //$NON-NLS-1$
             + "(e.g. " + normFqn + ".Attribute.<Name>).").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -829,16 +876,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             String pName = asString(prop.get("name")); //$NON-NLS-1$
             if (pName == null || pName.isEmpty())
             {
-                return ToolResult.error("Each entry in 'properties' needs a non-empty 'name'.").toJson(); //$NON-NLS-1$
+                return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
             switch (pName.toLowerCase())
             {
                 case "procedure": //$NON-NLS-1$
                 case "handler": //$NON-NLS-1$
-                    procName = asString(prop.get("value")); //$NON-NLS-1$
+                    procName = asString(prop.get(KEY_VALUE));
                     break;
                 default:
-                    return ToolResult.error("Property '" + pName + "' is not supported for a form " //$NON-NLS-1$ //$NON-NLS-2$
+                    return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' is not supported for a form " //$NON-NLS-1$
                         + "handler. Use 'procedure' (the BSL handler procedure name; defaults to the " //$NON-NLS-1$
                         + "event name).").toJson(); //$NON-NLS-1$
             }
@@ -942,15 +989,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             message = "Created handler for event '" + eventName + "' on " + location; //$NON-NLS-1$ //$NON-NLS-2$
         }
         ToolResult result = ToolResult.success()
-            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_CREATED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put("kind", createdKind[0] != null ? createdKind[0] : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
             .put("name", eventName) //$NON-NLS-1$
-            .put("persisted", persisted) //$NON-NLS-1$
-            .put("message", message); //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, message);
         if (extensionHandler)
         {
-            result.put("callType", callType); //$NON-NLS-1$
+            result.put(KEY_CALL_TYPE, callType);
         }
         return result.toJson();
     }
@@ -995,20 +1042,20 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             String name = asString(prop.get("name")); //$NON-NLS-1$
             if (name == null || name.isEmpty())
             {
-                return ToolResult.error("Each entry in 'properties' needs a non-empty 'name'.").toJson(); //$NON-NLS-1$
+                return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
-            String value = asString(prop.get("value")); //$NON-NLS-1$
+            String value = asString(prop.get(KEY_VALUE));
             switch (name.toLowerCase())
             {
-                case "synonym": //$NON-NLS-1$
-                    out.synonym = normReport.apply("synonym", value); //$NON-NLS-1$
-                    out.language = asString(prop.get("language")); //$NON-NLS-1$
+                case KEY_SYNONYM:
+                    out.synonym = normReport.apply(KEY_SYNONYM, value);
+                    out.language = asString(prop.get(KEY_LANGUAGE));
                     break;
                 case "comment": //$NON-NLS-1$
                     out.comment = normReport.apply("comment", value); //$NON-NLS-1$
                     break;
                 default:
-                    return ToolResult.error("Property '" + name + "' is not supported yet in " //$NON-NLS-1$ //$NON-NLS-2$
+                    return ToolResult.error(ERR_PROPERTY_PREFIX + name + "' is not supported yet in " //$NON-NLS-1$
                         + "create_metadata. This version applies only: synonym, comment. Set other " //$NON-NLS-1$
                         + "properties (including type) via modify_metadata.").toJson(); //$NON-NLS-1$
             }
@@ -1083,29 +1130,29 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         String synonymLanguage, TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
     {
         ToolResult result = ToolResult.success()
-            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_CREATED)
             .put("fqn", fqn) //$NON-NLS-1$
             .put("kind", kind != null ? kind.getName() : null) //$NON-NLS-1$
             .put("name", name) //$NON-NLS-1$
-            .put("persisted", persisted); //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted);
         if (props.synonym != null && !props.synonym.isEmpty() && synonymLanguage != null)
         {
-            result.put("synonym", props.synonym).put("language", synonymLanguage); //$NON-NLS-1$ //$NON-NLS-2$
+            result.put(KEY_SYNONYM, props.synonym).put(KEY_LANGUAGE, synonymLanguage);
         }
         if (typeSpecific != null)
         {
             if (typeSpecific.commonModuleFlags != null)
             {
-                result.put("commonModuleKind", typeSpecific.commonModuleFlags.kind.token()); //$NON-NLS-1$
+                result.put(KEY_COMMON_MODULE_KIND, typeSpecific.commonModuleFlags.kind.token());
             }
             if (typeSpecific.xdtoNamespace != null)
             {
-                result.put("targetNamespace", typeSpecific.xdtoNamespace); //$NON-NLS-1$
+                result.put(KEY_TARGET_NAMESPACE, typeSpecific.xdtoNamespace);
             }
         }
         normReport.addTo(result);
         return result
-            .put("message", "Created " + fqn) //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "Created " + fqn) //$NON-NLS-1$
             .toJson();
     }
 
@@ -1213,7 +1260,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             }
             if (TYPE_XDTO_PACKAGE.equals(target.topLevelType))
             {
-                String requested = JsonUtils.extractStringArgument(params, "targetNamespace"); //$NON-NLS-1$
+                String requested = JsonUtils.extractStringArgument(params, KEY_TARGET_NAMESPACE);
                 String ns = (requested != null && !requested.trim().isEmpty())
                     ? requested.trim()
                     : "http://example.org/" + target.childName; //$NON-NLS-1$
@@ -1342,7 +1389,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
          */
         static CommonModuleFlags resolve(Map<String, String> params)
         {
-            String kindToken = JsonUtils.extractStringArgument(params, "commonModuleKind"); //$NON-NLS-1$
+            String kindToken = JsonUtils.extractStringArgument(params, KEY_COMMON_MODULE_KIND);
             CommonModuleKind kind;
             if (kindToken == null || kindToken.trim().isEmpty())
             {

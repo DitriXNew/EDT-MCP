@@ -43,6 +43,7 @@ import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
@@ -105,6 +106,69 @@ public class CreateProjectTool implements IMcpTool
     /** Eclipse nature id for configuration projects. */
     private static final String NATURE_CONFIGURATION = "com._1c.g5.v8.dt.core.V8ConfigurationNature"; //$NON-NLS-1$
 
+    /** Parameter/output key: the kind of project to create. */
+    private static final String KEY_PROJECT_KIND = "projectKind"; //$NON-NLS-1$
+
+    /** projectKind value: standalone configuration. */
+    private static final String KIND_CONFIGURATION = "configuration"; //$NON-NLS-1$
+
+    /** projectKind value: external data processors/reports project. */
+    private static final String KIND_EXTERNAL_OBJECTS = "externalObjects"; //$NON-NLS-1$
+
+    /** projectKind value: configuration extension. */
+    private static final String KIND_EXTENSION = "extension"; //$NON-NLS-1$
+
+    /** Parameter/output key: platform version string. */
+    private static final String KEY_VERSION = "version"; //$NON-NLS-1$
+
+    /** Parameter/output key: extension name prefix. */
+    private static final String KEY_PREFIX = "prefix"; //$NON-NLS-1$
+
+    /** Parameter/output key: extension purpose. */
+    private static final String KEY_PURPOSE = "purpose"; //$NON-NLS-1$
+
+    /** Parameter/output key: script variant. */
+    private static final String KEY_SCRIPT_VARIANT = "scriptVariant"; //$NON-NLS-1$
+
+    /** scriptVariant value: English. */
+    private static final String SCRIPT_ENGLISH = "English"; //$NON-NLS-1$
+
+    /** scriptVariant value: Russian. */
+    private static final String SCRIPT_RUSSIAN = "Russian"; //$NON-NLS-1$
+
+    /** Output key: name of the base configuration project. */
+    private static final String KEY_BASE_PROJECT = "baseProject"; //$NON-NLS-1$
+
+    /** Output key: project lifecycle state. */
+    private static final String KEY_STATE = "state"; //$NON-NLS-1$
+
+    /** Output key: v8codestyle preference application result. */
+    private static final String KEY_CODESTYLE = "codestyle"; //$NON-NLS-1$
+
+    /** Output key: note when the synonym could not be applied. */
+    private static final String KEY_SYNONYM_NOTE = "synonymNote"; //$NON-NLS-1$
+
+    /** Output key: note when the scriptVariant could not be applied. */
+    private static final String KEY_SCRIPT_VARIANT_NOTE = "scriptVariantNote"; //$NON-NLS-1$
+
+    /** action/state value: created. */
+    private static final String VAL_CREATED = "created"; //$NON-NLS-1$
+
+    /** Error prefix: project already exists in workspace. */
+    private static final String ERR_PROJECT_EXISTS_PREFIX = "Project already exists in workspace: "; //$NON-NLS-1$
+
+    /** Error suffix: choose a different name. */
+    private static final String ERR_PROJECT_EXISTS_SUFFIX = ". Choose a different name or projectName."; //$NON-NLS-1$
+
+    /** Regex matching any non-alphanumeric character. */
+    private static final String RE_NON_ALNUM = "[^A-Za-z0-9]"; //$NON-NLS-1$
+
+    /** Log/Job name prefix for project creation. */
+    private static final String LOG_PREFIX = "create_project: "; //$NON-NLS-1$
+
+    /** Message suffix: creation completed past the wait window. */
+    private static final String MSG_WAIT_WINDOW_SUFFIX = "s wait window; project now exists)."; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -127,13 +191,13 @@ public class CreateProjectTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .enumProperty("projectKind", //$NON-NLS-1$
+            .enumProperty(KEY_PROJECT_KIND,
                 "Kind of project to create (required): " //$NON-NLS-1$
                     + "'configuration' = standalone 1C configuration; " //$NON-NLS-1$
                     + "'extension' = configuration extension bound to a base project; " //$NON-NLS-1$
                     + "'externalObjects' = external data processors/reports project.", //$NON-NLS-1$
                 true,
-                "configuration", "extension", "externalObjects") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                KIND_CONFIGURATION, KIND_EXTENSION, KIND_EXTERNAL_OBJECTS)
             .stringProperty("name", //$NON-NLS-1$
                 "Name of the new Configuration object (required). " //$NON-NLS-1$
                     + "For configuration/extension: the programmatic Configuration name. " //$NON-NLS-1$
@@ -146,7 +210,7 @@ public class CreateProjectTool implements IMcpTool
                 "EDT workspace project name to create. " //$NON-NLS-1$
                     + "Default: extension -> '<baseProjectName>.<name>'; " //$NON-NLS-1$
                     + "configuration/externalObjects -> 'name'.") //$NON-NLS-1$
-            .stringProperty("version", //$NON-NLS-1$
+            .stringProperty(KEY_VERSION,
                 "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; " //$NON-NLS-1$
                     + "for extension: REJECTED — version is always inherited from the base configuration). " //$NON-NLS-1$
                     + "Default: Version.LATEST when omitted.") //$NON-NLS-1$
@@ -154,11 +218,11 @@ public class CreateProjectTool implements IMcpTool
                 "Name of the BASE configuration EDT project (required for extension; " //$NON-NLS-1$
                     + "REJECTED for configuration and externalObjects). " //$NON-NLS-1$
                     + "Must be an existing, open V8 configuration project. Use list_projects to find it.") //$NON-NLS-1$
-            .stringProperty("prefix", //$NON-NLS-1$
+            .stringProperty(KEY_PREFIX,
                 "NamePrefix for the extension (extension only; REJECTED for other kinds). " //$NON-NLS-1$
                     + "Default: empty string. The wizard generates a value like 'Ext1_'; " //$NON-NLS-1$
                     + "pass an explicit value or omit for empty.") //$NON-NLS-1$
-            .enumProperty("purpose", //$NON-NLS-1$
+            .enumProperty(KEY_PURPOSE,
                 "Extension purpose (extension only; REJECTED for other kinds). " //$NON-NLS-1$
                     + "Default: Customization. " //$NON-NLS-1$
                     + "Customization = user adaptation; AddOn = add-on functionality; Patch = hotfix.", //$NON-NLS-1$
@@ -173,16 +237,16 @@ public class CreateProjectTool implements IMcpTool
             .stringProperty("comment", //$NON-NLS-1$
                 "Optional free-text comment set on the Configuration " //$NON-NLS-1$
                     + "(configuration and extension only; REJECTED for externalObjects).") //$NON-NLS-1$
-            .enumProperty("scriptVariant", //$NON-NLS-1$
+            .enumProperty(KEY_SCRIPT_VARIANT,
                 "Script variant (Russian or English). " //$NON-NLS-1$
                     + "configuration: sets the Configuration scriptVariant and default Language code (default Russian). " //$NON-NLS-1$
                     + "externalObjects: applied post-create via setScriptVariant (non-fatal on failure). " //$NON-NLS-1$
                     + "extension: REJECTED — scriptVariant is always inherited from the base configuration.", //$NON-NLS-1$
-                "Russian", "English") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("standardChecks", //$NON-NLS-1$
+                SCRIPT_RUSSIAN, SCRIPT_ENGLISH)
+            .booleanProperty(PREF_STANDARD_CHECKS,
                 "Enable 1C:Standards BSL checks for the new project (default true). " //$NON-NLS-1$
                     + "Applied to all kinds only when com.e1c.v8codestyle is installed; ignored otherwise.") //$NON-NLS-1$
-            .booleanProperty("commonChecks", //$NON-NLS-1$
+            .booleanProperty(PREF_COMMON_CHECKS,
                 "Enable common (project-level) BSL checks for the new project (default true). " //$NON-NLS-1$
                     + "Applied to all kinds only when com.e1c.v8codestyle is installed; ignored otherwise.") //$NON-NLS-1$
             .booleanProperty("autoSortTopObjects", //$NON-NLS-1$
@@ -196,26 +260,26 @@ public class CreateProjectTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the project was created", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "'created' on success") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("project", //$NON-NLS-1$
+            .stringProperty(McpKeys.ACTION, "'created' on success") //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT,
                 "EDT workspace project name of the created project (round-trip key for sibling tools)") //$NON-NLS-1$
-            .stringProperty("projectKind", "Kind of project created: configuration, extension, or externalObjects") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_PROJECT_KIND, "Kind of project created: configuration, extension, or externalObjects") //$NON-NLS-1$
             .stringProperty("name", //$NON-NLS-1$
                 "Configuration name (configuration/extension) or the supplied identifier (externalObjects).") //$NON-NLS-1$
-            .stringProperty("baseProject", //$NON-NLS-1$
+            .stringProperty(KEY_BASE_PROJECT,
                 "Name of the base configuration project it extends (extension only, conditional)") //$NON-NLS-1$
-            .stringProperty("prefix", "NamePrefix applied (extension only, conditional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("purpose", "ConfigurationExtensionPurpose value applied (extension only, conditional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("scriptVariant", "ScriptVariant applied or inherited") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("version", "Platform version string used for project creation") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("state", "'ready' when lifecycle STARTED was reached, 'created' otherwise") //$NON-NLS-1$ //$NON-NLS-2$
-            .objectProperty("codestyle", //$NON-NLS-1$
+            .stringProperty(KEY_PREFIX, "NamePrefix applied (extension only, conditional)") //$NON-NLS-1$
+            .stringProperty(KEY_PURPOSE, "ConfigurationExtensionPurpose value applied (extension only, conditional)") //$NON-NLS-1$
+            .stringProperty(KEY_SCRIPT_VARIANT, "ScriptVariant applied or inherited") //$NON-NLS-1$
+            .stringProperty(KEY_VERSION, "Platform version string used for project creation") //$NON-NLS-1$
+            .stringProperty(KEY_STATE, "'ready' when lifecycle STARTED was reached, 'created' otherwise") //$NON-NLS-1$
+            .objectProperty(KEY_CODESTYLE,
                 "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}") //$NON-NLS-1$
-            .stringProperty("synonymNote", //$NON-NLS-1$
+            .stringProperty(KEY_SYNONYM_NOTE,
                 "Present only when the synonym could not be applied (no resolvable language code).") //$NON-NLS-1$
-            .stringProperty("scriptVariantNote", //$NON-NLS-1$
+            .stringProperty(KEY_SCRIPT_VARIANT_NOTE,
                 "Present only when a requested scriptVariant could not be applied (externalObjects).") //$NON-NLS-1$
-            .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
             .build();
     }
 
@@ -229,32 +293,32 @@ public class CreateProjectTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         // 1. Validate required parameters
-        String argErr = JsonUtils.requireArguments(params, "projectKind", "name"); //$NON-NLS-1$ //$NON-NLS-2$
+        String argErr = JsonUtils.requireArguments(params, KEY_PROJECT_KIND, "name"); //$NON-NLS-1$
         if (argErr != null)
         {
             return argErr;
         }
 
-        String projectKind = JsonUtils.extractStringArgument(params, "projectKind"); //$NON-NLS-1$
+        String projectKind = JsonUtils.extractStringArgument(params, KEY_PROJECT_KIND);
         String configName = JsonUtils.extractStringArgument(params, "name"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String versionStr = JsonUtils.extractStringArgument(params, "version"); //$NON-NLS-1$
+        String versionStr = JsonUtils.extractStringArgument(params, KEY_VERSION);
         String baseProjectName = JsonUtils.extractStringArgument(params, "baseProjectName"); //$NON-NLS-1$
-        String prefix = JsonUtils.extractStringArgument(params, "prefix"); //$NON-NLS-1$
+        String prefix = JsonUtils.extractStringArgument(params, KEY_PREFIX);
         String synonym = JsonUtils.extractStringArgument(params, "synonym"); //$NON-NLS-1$
         String comment = JsonUtils.extractStringArgument(params, "comment"); //$NON-NLS-1$
-        String purposeStr = JsonUtils.extractStringArgument(params, "purpose"); //$NON-NLS-1$
+        String purposeStr = JsonUtils.extractStringArgument(params, KEY_PURPOSE);
         String compatModeStr = JsonUtils.extractStringArgument(params, "compatibilityMode"); //$NON-NLS-1$
-        String scriptVariantStr = JsonUtils.extractStringArgument(params, "scriptVariant"); //$NON-NLS-1$
-        boolean standardChecks = JsonUtils.extractBooleanArgument(params, "standardChecks", true); //$NON-NLS-1$
-        boolean commonChecks = JsonUtils.extractBooleanArgument(params, "commonChecks", true); //$NON-NLS-1$
+        String scriptVariantStr = JsonUtils.extractStringArgument(params, KEY_SCRIPT_VARIANT);
+        boolean standardChecks = JsonUtils.extractBooleanArgument(params, PREF_STANDARD_CHECKS, true);
+        boolean commonChecks = JsonUtils.extractBooleanArgument(params, PREF_COMMON_CHECKS, true);
         // autoSortTopObjects is read to satisfy schema parity; not yet applied (see class-level doc)
         JsonUtils.extractBooleanArgument(params, "autoSortTopObjects", true); //$NON-NLS-1$
 
         // 2. Validate projectKind
-        boolean isConfiguration = "configuration".equals(projectKind); //$NON-NLS-1$
-        boolean isExtension = "extension".equals(projectKind); //$NON-NLS-1$
-        boolean isExternalObjects = "externalObjects".equals(projectKind); //$NON-NLS-1$
+        boolean isConfiguration = KIND_CONFIGURATION.equals(projectKind);
+        boolean isExtension = KIND_EXTENSION.equals(projectKind);
+        boolean isExternalObjects = KIND_EXTERNAL_OBJECTS.equals(projectKind);
 
         if (!isConfiguration && !isExtension && !isExternalObjects)
         {
@@ -307,8 +371,8 @@ public class CreateProjectTool implements IMcpTool
         // Strict scriptVariant validation: must be exactly "Russian" or "English" (case-insensitive)
         // when supplied for configuration or externalObjects.
         if (!isExtension && scriptVariantStr != null && !scriptVariantStr.isEmpty()
-            && !"Russian".equalsIgnoreCase(scriptVariantStr) //$NON-NLS-1$
-            && !"English".equalsIgnoreCase(scriptVariantStr)) //$NON-NLS-1$
+            && !SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
+            && !SCRIPT_ENGLISH.equalsIgnoreCase(scriptVariantStr))
         {
             return ToolResult.error("Invalid scriptVariant value: '" + scriptVariantStr //$NON-NLS-1$
                 + "'. Allowed values: 'Russian', 'English'.").toJson(); //$NON-NLS-1$
@@ -394,8 +458,8 @@ public class CreateProjectTool implements IMcpTool
         // Check the new project name does not already exist
         if (ProjectContext.of(effectiveProjectName).exists())
         {
-            return ToolResult.error("Project already exists in workspace: " + effectiveProjectName //$NON-NLS-1$
-                + ". Choose a different name or projectName.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
+                + ERR_PROJECT_EXISTS_SUFFIX).toJson();
         }
 
         // Validate the base project
@@ -423,7 +487,7 @@ public class CreateProjectTool implements IMcpTool
         }
         catch (Exception e)
         {
-            Activator.logError("create_project: error checking nature for " + baseProjectName, e); //$NON-NLS-1$
+            Activator.logError(LOG_PREFIX + "error checking nature for " + baseProjectName, e); //$NON-NLS-1$
             return ToolResult.error("Failed to inspect base project nature: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
 
@@ -502,18 +566,18 @@ public class CreateProjectTool implements IMcpTool
             compatMode = CompatibilityMode.get(compatModeStr);
             if (compatMode == null)
             {
-                String normalizedInput = compatModeStr.replaceAll("[^A-Za-z0-9]", "").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+                String normalizedInput = compatModeStr.replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
                 for (CompatibilityMode candidate : CompatibilityMode.VALUES)
                 {
                     String normalizedCandidate = candidate.getLiteral()
-                        .replaceAll("[^A-Za-z0-9]", "").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+                        .replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
                     if (normalizedInput.equals(normalizedCandidate))
                     {
                         compatMode = candidate;
                         break;
                     }
                     String normalizedName = candidate.getName()
-                        .replaceAll("[^A-Za-z0-9]", "").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+                        .replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
                     if (normalizedInput.equals(normalizedName))
                     {
                         compatMode = candidate;
@@ -591,7 +655,7 @@ public class CreateProjectTool implements IMcpTool
         final Configuration finalConfig = config;
         final IProject finalBaseIProject = baseIProject;
 
-        Job createJob = new Job("create_project: " + finalEffectiveProjectName) //$NON-NLS-1$
+        Job createJob = new Job(LOG_PREFIX + finalEffectiveProjectName)
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
@@ -612,30 +676,30 @@ public class CreateProjectTool implements IMcpTool
         final ScriptVariant finalScriptVariant = scriptVariant;
         final ConfigurationExtensionPurpose finalPurpose = purpose;
 
-        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, "extension"); //$NON-NLS-1$
+        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, KIND_EXTENSION);
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full extension response
             ToolResult slowResult = ToolResult.success()
-                .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("project", finalEffectiveProjectName) //$NON-NLS-1$
-                .put("projectKind", "extension") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, VAL_CREATED)
+                .put(McpKeys.PROJECT, finalEffectiveProjectName)
+                .put(KEY_PROJECT_KIND, KIND_EXTENSION)
                 .put("name", configName) //$NON-NLS-1$
-                .put("baseProject", baseProjectName) //$NON-NLS-1$
-                .put("prefix", prefix) //$NON-NLS-1$
-                .put("purpose", finalPurpose.getLiteral()) //$NON-NLS-1$
-                .put("scriptVariant", finalScriptVariant.getLiteral()) //$NON-NLS-1$
-                .put("version", version.toString()) //$NON-NLS-1$
-                .put("state", "created") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("codestyle", slowPathCodestyleMap()) //$NON-NLS-1$
-                .put("message", "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
+                .put(KEY_BASE_PROJECT, baseProjectName)
+                .put(KEY_PREFIX, prefix)
+                .put(KEY_PURPOSE, finalPurpose.getLiteral())
+                .put(KEY_SCRIPT_VARIANT, finalScriptVariant.getLiteral())
+                .put(KEY_VERSION, version.toString())
+                .put(KEY_STATE, VAL_CREATED)
+                .put(KEY_CODESTYLE, slowPathCodestyleMap())
+                .put(McpKeys.MESSAGE, "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$
                     + "' created and bound to '" + baseProjectName //$NON-NLS-1$
                     + "' (creation completed past the " //$NON-NLS-1$
-                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists)."); //$NON-NLS-1$
+                    + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
             // Mirror the normal success path: report when the synonym could not be applied.
             if (!synonymApplied)
             {
-                slowResult.put("synonymNote", //$NON-NLS-1$
+                slowResult.put(KEY_SYNONYM_NOTE,
                     "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
                         + "the base configuration or the new extension configuration."); //$NON-NLS-1$
             }
@@ -654,32 +718,32 @@ public class CreateProjectTool implements IMcpTool
                 + errorHolder[0].getMessage()).toJson();
         }
 
-        Activator.logInfo("create_project: created extension '" + finalEffectiveProjectName //$NON-NLS-1$
+        Activator.logInfo(LOG_PREFIX + "created extension '" + finalEffectiveProjectName //$NON-NLS-1$
             + "' extending '" + baseProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
 
         // Wait for lifecycle STARTED
-        String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], "extension"); //$NON-NLS-1$
+        String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], KIND_EXTENSION);
 
         // Apply v8codestyle preferences
         Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
 
         ToolResult result = ToolResult.success()
-            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
-            .put("project", finalEffectiveProjectName) //$NON-NLS-1$
-            .put("projectKind", "extension") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put(McpKeys.PROJECT, finalEffectiveProjectName)
+            .put(KEY_PROJECT_KIND, KIND_EXTENSION)
             .put("name", configName) //$NON-NLS-1$
-            .put("baseProject", baseProjectName) //$NON-NLS-1$
-            .put("prefix", prefix) //$NON-NLS-1$
-            .put("purpose", finalPurpose.getLiteral()) //$NON-NLS-1$
-            .put("scriptVariant", finalScriptVariant.getLiteral()) //$NON-NLS-1$
-            .put("version", version.toString()) //$NON-NLS-1$
-            .put("state", projectState) //$NON-NLS-1$
-            .put("codestyle", codestyleMap) //$NON-NLS-1$
-            .put("message", "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
+            .put(KEY_BASE_PROJECT, baseProjectName)
+            .put(KEY_PREFIX, prefix)
+            .put(KEY_PURPOSE, finalPurpose.getLiteral())
+            .put(KEY_SCRIPT_VARIANT, finalScriptVariant.getLiteral())
+            .put(KEY_VERSION, version.toString())
+            .put(KEY_STATE, projectState)
+            .put(KEY_CODESTYLE, codestyleMap)
+            .put(McpKeys.MESSAGE, "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$
                 + "' created and bound to '" + baseProjectName + "'."); //$NON-NLS-1$ //$NON-NLS-2$
         if (!synonymApplied)
         {
-            result.put("synonymNote", //$NON-NLS-1$
+            result.put(KEY_SYNONYM_NOTE,
                 "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
                     + "the base configuration or the new extension configuration."); //$NON-NLS-1$
         }
@@ -697,8 +761,8 @@ public class CreateProjectTool implements IMcpTool
         // Check the new project name does not already exist
         if (ProjectContext.of(effectiveProjectName).exists())
         {
-            return ToolResult.error("Project already exists in workspace: " + effectiveProjectName //$NON-NLS-1$
-                + ". Choose a different name or projectName.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
+                + ERR_PROJECT_EXISTS_SUFFIX).toJson();
         }
 
         // Parse version
@@ -731,10 +795,10 @@ public class CreateProjectTool implements IMcpTool
 
         // Resolve scriptVariant
         boolean isRussian = scriptVariantStr == null || scriptVariantStr.isEmpty()
-            || "Russian".equalsIgnoreCase(scriptVariantStr); //$NON-NLS-1$
+            || SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr);
         ScriptVariant scriptVariant = isRussian ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
         String langCode = isRussian ? "ru" : "en"; //$NON-NLS-1$ //$NON-NLS-2$
-        String langName = isRussian ? "Russian" : "English"; //$NON-NLS-1$ //$NON-NLS-2$
+        String langName = isRussian ? SCRIPT_RUSSIAN : SCRIPT_ENGLISH;
 
         // Build Configuration model object (NOT inside a BM transaction)
         Configuration config = (Configuration) factory.create(MdClassPackage.Literals.CONFIGURATION, version);
@@ -803,7 +867,7 @@ public class CreateProjectTool implements IMcpTool
         final Version finalVersion = version;
         final Configuration finalConfig = config;
 
-        Job createJob = new Job("create_project: " + finalEffectiveProjectName) //$NON-NLS-1$
+        Job createJob = new Job(LOG_PREFIX + finalEffectiveProjectName)
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
@@ -823,26 +887,26 @@ public class CreateProjectTool implements IMcpTool
 
         final ScriptVariant finalScriptVariant = scriptVariant;
 
-        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, "configuration"); //$NON-NLS-1$
+        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, KIND_CONFIGURATION);
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full configuration response
             ToolResult slowResult = ToolResult.success()
-                .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("project", finalEffectiveProjectName) //$NON-NLS-1$
-                .put("projectKind", "configuration") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, VAL_CREATED)
+                .put(McpKeys.PROJECT, finalEffectiveProjectName)
+                .put(KEY_PROJECT_KIND, KIND_CONFIGURATION)
                 .put("name", configName) //$NON-NLS-1$
-                .put("scriptVariant", finalScriptVariant.getLiteral()) //$NON-NLS-1$
-                .put("version", finalVersion.toString()) //$NON-NLS-1$
-                .put("state", "created") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("codestyle", slowPathCodestyleMap()) //$NON-NLS-1$
-                .put("message", "Configuration project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
+                .put(KEY_SCRIPT_VARIANT, finalScriptVariant.getLiteral())
+                .put(KEY_VERSION, finalVersion.toString())
+                .put(KEY_STATE, VAL_CREATED)
+                .put(KEY_CODESTYLE, slowPathCodestyleMap())
+                .put(McpKeys.MESSAGE, "Configuration project '" + finalEffectiveProjectName //$NON-NLS-1$
                     + "' created (creation completed past the " //$NON-NLS-1$
-                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists)."); //$NON-NLS-1$
+                    + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
             // Mirror the normal success path: report when the synonym could not be applied.
             if (!synonymApplied)
             {
-                slowResult.put("synonymNote", //$NON-NLS-1$
+                slowResult.put(KEY_SYNONYM_NOTE,
                     "Synonym was not applied: synonym map was not available on the new Configuration."); //$NON-NLS-1$
             }
             return slowResult.toJson();
@@ -859,27 +923,27 @@ public class CreateProjectTool implements IMcpTool
                 + errorHolder[0].getMessage()).toJson();
         }
 
-        Activator.logInfo("create_project: created configuration '" + finalEffectiveProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+        Activator.logInfo(LOG_PREFIX + "created configuration '" + finalEffectiveProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
 
         // Wait for lifecycle STARTED
-        String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], "configuration"); //$NON-NLS-1$
+        String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], KIND_CONFIGURATION);
 
         // Apply v8codestyle preferences
         Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
 
         ToolResult result = ToolResult.success()
-            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
-            .put("project", finalEffectiveProjectName) //$NON-NLS-1$
-            .put("projectKind", "configuration") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put(McpKeys.PROJECT, finalEffectiveProjectName)
+            .put(KEY_PROJECT_KIND, KIND_CONFIGURATION)
             .put("name", configName) //$NON-NLS-1$
-            .put("scriptVariant", finalScriptVariant.getLiteral()) //$NON-NLS-1$
-            .put("version", finalVersion.toString()) //$NON-NLS-1$
-            .put("state", projectState) //$NON-NLS-1$
-            .put("codestyle", codestyleMap) //$NON-NLS-1$
-            .put("message", "Configuration project '" + finalEffectiveProjectName + "' created."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .put(KEY_SCRIPT_VARIANT, finalScriptVariant.getLiteral())
+            .put(KEY_VERSION, finalVersion.toString())
+            .put(KEY_STATE, projectState)
+            .put(KEY_CODESTYLE, codestyleMap)
+            .put(McpKeys.MESSAGE, "Configuration project '" + finalEffectiveProjectName + "' created."); //$NON-NLS-1$ //$NON-NLS-2$
         if (!synonymApplied)
         {
-            result.put("synonymNote", //$NON-NLS-1$
+            result.put(KEY_SYNONYM_NOTE,
                 "Synonym was not applied: synonym map was not available on the new Configuration."); //$NON-NLS-1$
         }
         return result.toJson();
@@ -896,8 +960,8 @@ public class CreateProjectTool implements IMcpTool
         // Check the new project name does not already exist
         if (ProjectContext.of(effectiveProjectName).exists())
         {
-            return ToolResult.error("Project already exists in workspace: " + effectiveProjectName //$NON-NLS-1$
-                + ". Choose a different name or projectName.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
+                + ERR_PROJECT_EXISTS_SUFFIX).toJson();
         }
 
         // Parse version
@@ -927,7 +991,7 @@ public class CreateProjectTool implements IMcpTool
         final String finalEffectiveProjectName = effectiveProjectName;
         final Version finalVersion = version;
 
-        Job createJob = new Job("create_project: " + finalEffectiveProjectName) //$NON-NLS-1$
+        Job createJob = new Job(LOG_PREFIX + finalEffectiveProjectName)
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
@@ -946,30 +1010,30 @@ public class CreateProjectTool implements IMcpTool
             }
         };
 
-        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, "externalObjects"); //$NON-NLS-1$
+        CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, KIND_EXTERNAL_OBJECTS);
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full externalObjects response
             ToolResult slowResult = ToolResult.success()
-                .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("project", finalEffectiveProjectName) //$NON-NLS-1$
-                .put("projectKind", "externalObjects") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, VAL_CREATED)
+                .put(McpKeys.PROJECT, finalEffectiveProjectName)
+                .put(KEY_PROJECT_KIND, KIND_EXTERNAL_OBJECTS)
                 .put("name", configName) //$NON-NLS-1$
-                .put("version", finalVersion.toString()) //$NON-NLS-1$
-                .put("state", "created") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("codestyle", slowPathCodestyleMap()) //$NON-NLS-1$
-                .put("message", "External objects project '" + finalEffectiveProjectName //$NON-NLS-1$ //$NON-NLS-2$
+                .put(KEY_VERSION, finalVersion.toString())
+                .put(KEY_STATE, VAL_CREATED)
+                .put(KEY_CODESTYLE, slowPathCodestyleMap())
+                .put(McpKeys.MESSAGE, "External objects project '" + finalEffectiveProjectName //$NON-NLS-1$
                     + "' created (creation completed past the " //$NON-NLS-1$
-                    + (CREATE_TIMEOUT_MS / 1000) + "s wait window; project now exists)."); //$NON-NLS-1$
+                    + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
             if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
             {
                 // Emit canonical literal (normalized from user input casing)
-                ScriptVariant slowSv = "Russian".equalsIgnoreCase(scriptVariantStr) //$NON-NLS-1$
+                ScriptVariant slowSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
                     ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
-                slowResult.put("scriptVariant", slowSv.getLiteral()); //$NON-NLS-1$
+                slowResult.put(KEY_SCRIPT_VARIANT, slowSv.getLiteral());
                 String slowScriptNote =
                     "setScriptVariant skipped: creation exceeded the wait window; set the project preferences manually if needed."; //$NON-NLS-1$
-                slowResult.put("scriptVariantNote", slowScriptNote); //$NON-NLS-1$
+                slowResult.put(KEY_SCRIPT_VARIANT_NOTE, slowScriptNote);
             }
             return slowResult.toJson();
         }
@@ -985,10 +1049,10 @@ public class CreateProjectTool implements IMcpTool
                 + errorHolder[0].getMessage()).toJson();
         }
 
-        Activator.logInfo("create_project: created externalObjects '" + finalEffectiveProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+        Activator.logInfo(LOG_PREFIX + "created externalObjects '" + finalEffectiveProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
 
         // Wait for lifecycle STARTED
-        String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], "externalObjects"); //$NON-NLS-1$
+        String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], KIND_EXTERNAL_OBJECTS);
 
         // Post-create: apply scriptVariant if supplied (non-fatal on failure)
         // Input is guaranteed "Russian" or "English" (case-insensitive) by the shared validation above.
@@ -996,7 +1060,7 @@ public class CreateProjectTool implements IMcpTool
         ScriptVariant requestedSv = null;
         if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
         {
-            requestedSv = "Russian".equalsIgnoreCase(scriptVariantStr) //$NON-NLS-1$
+            requestedSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
                 ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
             try
             {
@@ -1034,22 +1098,22 @@ public class CreateProjectTool implements IMcpTool
             message = message + " " + scriptVariantNote; //$NON-NLS-1$
         }
         ToolResult result = ToolResult.success()
-            .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
-            .put("project", finalEffectiveProjectName) //$NON-NLS-1$
-            .put("projectKind", "externalObjects") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put(McpKeys.PROJECT, finalEffectiveProjectName)
+            .put(KEY_PROJECT_KIND, KIND_EXTERNAL_OBJECTS)
             .put("name", configName) //$NON-NLS-1$
-            .put("version", finalVersion.toString()) //$NON-NLS-1$
-            .put("state", projectState) //$NON-NLS-1$
-            .put("codestyle", codestyleMap) //$NON-NLS-1$
-            .put("message", message); //$NON-NLS-1$
+            .put(KEY_VERSION, finalVersion.toString())
+            .put(KEY_STATE, projectState)
+            .put(KEY_CODESTYLE, codestyleMap)
+            .put(McpKeys.MESSAGE, message);
         if (requestedSv != null)
         {
             // Emit the canonical ScriptVariant literal (normalized from user input casing)
-            result.put("scriptVariant", requestedSv.getLiteral()); //$NON-NLS-1$
+            result.put(KEY_SCRIPT_VARIANT, requestedSv.getLiteral());
         }
         if (scriptVariantNote != null)
         {
-            result.put("scriptVariantNote", scriptVariantNote); //$NON-NLS-1$
+            result.put(KEY_SCRIPT_VARIANT_NOTE, scriptVariantNote);
         }
         return result.toJson();
     }
@@ -1179,9 +1243,9 @@ public class CreateProjectTool implements IMcpTool
         }
         catch (Exception e)
         {
-            Activator.logError("create_project: lifecycle wait error (" + kindLabel + ")", e); //$NON-NLS-1$ //$NON-NLS-2$
+            Activator.logError(LOG_PREFIX + "lifecycle wait error (" + kindLabel + ")", e); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return "created"; //$NON-NLS-1$
+        return VAL_CREATED;
     }
 
     /**
@@ -1218,7 +1282,7 @@ public class CreateProjectTool implements IMcpTool
             }
             catch (BackingStoreException e)
             {
-                Activator.logError("create_project: failed to write v8codestyle prefs", e); //$NON-NLS-1$
+                Activator.logError(LOG_PREFIX + "failed to write v8codestyle prefs", e); //$NON-NLS-1$
                 codestyleNote = "v8codestyle prefs write failed: " + e.getMessage(); //$NON-NLS-1$
             }
         }

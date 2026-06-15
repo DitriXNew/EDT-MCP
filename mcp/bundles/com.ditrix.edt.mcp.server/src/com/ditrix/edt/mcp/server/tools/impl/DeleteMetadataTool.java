@@ -33,6 +33,7 @@ import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -52,6 +53,27 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "delete_metadata"; //$NON-NLS-1$
+
+    /** Output key: title of the delete refactoring (preview). */
+    private static final String KEY_REFACTORING_TITLE = "refactoringTitle"; //$NON-NLS-1$
+
+    /** Output key: metadata items the deletion would remove (preview). */
+    private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
+
+    /** Output key: whether the listed blocking references block the delete. */
+    private static final String KEY_BLOCKING = "blocking"; //$NON-NLS-1$
+
+    /** Output value of 'action' for a preview-only response. */
+    private static final String VAL_PREVIEW = "preview"; //$NON-NLS-1$
+
+    /** Output value of 'action' for an executed (performed) deletion. */
+    private static final String VAL_EXECUTED = "executed"; //$NON-NLS-1$
+
+    /** FQN kind token / label for a form event handler. */
+    private static final String KEY_HANDLER = "handler"; //$NON-NLS-1$
+
+    /** Label for a form member (non-handler). */
+    private static final String KEY_MEMBER = "member"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -77,7 +99,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required).", true) //$NON-NLS-1$
             .stringProperty("fqn", //$NON-NLS-1$
                 "Full-name FQN of the node to delete (required), e.g. 'Catalog.Products' or " //$NON-NLS-1$
@@ -98,11 +120,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the request succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "Either 'preview', 'executed' or 'blocked'") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.ACTION, "Either 'preview', 'executed' or 'blocked'") //$NON-NLS-1$
             .stringProperty("fqn", "FQN of the node targeted for deletion") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("refactoringTitle", "Title of the delete refactoring (preview)") //$NON-NLS-1$ //$NON-NLS-2$
-            .objectArrayProperty("items", "Metadata items the deletion would remove (preview)") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("blocking", "Whether the listed blockingReferences BLOCK the delete (the " //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_REFACTORING_TITLE, "Title of the delete refactoring (preview)") //$NON-NLS-1$
+            .objectArrayProperty(KEY_ITEMS, "Metadata items the deletion would remove (preview)") //$NON-NLS-1$
+            .booleanProperty(KEY_BLOCKING, "Whether the listed blockingReferences BLOCK the delete (the " //$NON-NLS-1$
                 + "refactoring cannot auto-clean them; a confirm=true delete is refused unless force=true)") //$NON-NLS-1$
             .objectArrayProperty("blockingReferences", "Incoming references the refactoring cannot " //$NON-NLS-1$ //$NON-NLS-2$
                 + "auto-clean: listed in the preview, the reason a delete is refused " //$NON-NLS-1$
@@ -113,19 +135,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .integerProperty("affectedReferencesCount", "Deprecated alias of blockingReferencesCount " //$NON-NLS-1$ //$NON-NLS-2$
                 + "(the same count), kept for one release for wire compatibility") //$NON-NLS-1$
             .booleanProperty("forced", "Whether the delete was forced past blocking references") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("message", "Human-readable description of the result") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable description of the result") //$NON-NLS-1$
             .build();
     }
 
     @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, "projectName", "fqn"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
         }
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
@@ -234,13 +256,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // and emitted under the blocking* fields (and their legacy affected* aliases) shared with
         // action='blocked' / 'executed'.
         ToolResult result = ToolResult.success()
-            .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_PREVIEW)
             .put("fqn", fqn) //$NON-NLS-1$
-            .put("refactoringTitle", title) //$NON-NLS-1$
-            .put("items", allItems) //$NON-NLS-1$
-            .put("blocking", hasBlocking); //$NON-NLS-1$
+            .put(KEY_REFACTORING_TITLE, title)
+            .put(KEY_ITEMS, allItems)
+            .put(KEY_BLOCKING, hasBlocking);
         return putBlockingReferences(result, blocking)
-            .put("message", message) //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, message)
             .toJson();
     }
 
@@ -257,9 +279,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     + blocking.size() + " object(s) that the refactoring cannot auto-clean. Remove the " //$NON-NLS-1$
                     + "references first, or call again with force=true to delete anyway (the references " //$NON-NLS-1$
                     + "will be left dangling).") //$NON-NLS-1$
-                .put("action", "blocked") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, "blocked") //$NON-NLS-1$
                 .put("fqn", fqn) //$NON-NLS-1$
-                .put("blocking", true); //$NON-NLS-1$
+                .put(KEY_BLOCKING, true);
             return putBlockingReferences(blocked, blocking).toJson();
         }
 
@@ -267,18 +289,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             refactoring.perform();
             ToolResult result = ToolResult.success()
-                .put("action", "executed") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, VAL_EXECUTED)
                 .put("fqn", fqn) //$NON-NLS-1$
                 .put("forced", force); //$NON-NLS-1$
             if (!blocking.isEmpty())
             {
                 putBlockingReferences(result, blocking)
-                    .put("message", "Delete refactoring completed (forced). " + blocking.size() //$NON-NLS-1$ //$NON-NLS-2$
+                    .put(McpKeys.MESSAGE, "Delete refactoring completed (forced). " + blocking.size() //$NON-NLS-1$
                         + " incoming reference(s) were left dangling."); //$NON-NLS-1$
             }
             else
             {
-                result.put("message", "Delete refactoring completed successfully."); //$NON-NLS-1$ //$NON-NLS-2$
+                result.put(McpKeys.MESSAGE, "Delete refactoring completed successfully."); //$NON-NLS-1$
             }
             return result.toJson();
         }
@@ -525,16 +547,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         removed.addAll(data.descendants);
 
         ToolResult result = ToolResult.success()
-            .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_PREVIEW)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("refactoringTitle", "Delete form " + (handler ? "handler" : "member") + " " + ref.name) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            .put("items", removed) //$NON-NLS-1$
-            .put("blocking", false); //$NON-NLS-1$
+            .put(KEY_REFACTORING_TITLE, "Delete form " + (handler ? KEY_HANDLER : KEY_MEMBER) + " " + ref.name) //$NON-NLS-1$ //$NON-NLS-2$
+            .put(KEY_ITEMS, removed)
+            .put(KEY_BLOCKING, false);
         return putBlockingReferences(result, Collections.emptyList())
-            .put("message", "Preview: deleting '" + ref.name + "' (" + data.type + ") from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .put(McpKeys.MESSAGE, "Preview: deleting '" + ref.name + "' (" + data.type + ") from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ref.formPath + " would remove " //$NON-NLS-1$
                 + (data.descendants.isEmpty()
-                    ? "the " + (handler ? "handler" : "member") + " itself." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    ? "the " + (handler ? KEY_HANDLER : KEY_MEMBER) + " itself." //$NON-NLS-1$ //$NON-NLS-2$
                     : "it and its " + data.descendants.size() + " contained item(s).") //$NON-NLS-1$ //$NON-NLS-2$
                 + " Cross-references to it (a field's dataPath, a button's command) are NOT rewritten - " //$NON-NLS-1$
                 + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
@@ -562,9 +584,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             });
 
         return ToolResult.success()
-            .put("action", "executed") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_EXECUTED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("message", "Deleted form " + (handler ? "handler" : "member") + " '" + ref.name //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .put(McpKeys.MESSAGE, "Deleted form " + (handler ? KEY_HANDLER : KEY_MEMBER) + " '" + ref.name //$NON-NLS-1$ //$NON-NLS-2$
                 + "' (" + capturedType[0] + ") from " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
                 + (persisted ? " and persisted to disk." //$NON-NLS-1$
                     : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
@@ -618,13 +640,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // md-refactoring service), so unlike top-object previews NO incoming-reference scan
             // runs here — the message says so to keep the preview honest (deep scan is follow-up).
             ToolResult preview = ToolResult.success()
-                .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, VAL_PREVIEW)
                 .put("fqn", normFqn) //$NON-NLS-1$
-                .put("refactoringTitle", "Delete form " + ref.formName) //$NON-NLS-1$ //$NON-NLS-2$
-                .put("items", Collections.singletonList(formItem(ref.formName, mdForm.eClass().getName()))) //$NON-NLS-1$
-                .put("blocking", false); //$NON-NLS-1$
+                .put(KEY_REFACTORING_TITLE, "Delete form " + ref.formName) //$NON-NLS-1$
+                .put(KEY_ITEMS, Collections.singletonList(formItem(ref.formName, mdForm.eClass().getName())))
+                .put(KEY_BLOCKING, false);
             return putBlockingReferences(preview, Collections.emptyList())
-                .put("message", "Preview: deleting form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.MESSAGE, "Preview: deleting form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
                     + " would remove the form and its content Form.form. Cross-references to it " //$NON-NLS-1$
                     + "(a default-form setting) are cleared on the owner. Note: incoming references " //$NON-NLS-1$
                     + "from OTHER top objects (e.g. BSL code opening this form by name) are NOT " //$NON-NLS-1$
@@ -695,9 +717,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             deleteFormResourceFolder(project, ref.ownerType, ownerNameOnDisk, formNameOnDisk);
 
         return ToolResult.success()
-            .put("action", "executed") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_EXECUTED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("message", "Deleted form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "Deleted form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
                 + (persisted ? " and persisted to disk." //$NON-NLS-1$
                     : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
                         + "it).") //$NON-NLS-1$
@@ -835,7 +857,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     private static void collectItemDescendants(EObject item, List<Map<String, Object>> out)
     {
-        for (EObject child : FormStructureReader.getReferenceList(item, "items")) //$NON-NLS-1$
+        for (EObject child : FormStructureReader.getReferenceList(item, KEY_ITEMS))
         {
             Map<String, Object> entry = new java.util.LinkedHashMap<>();
             entry.put("name", FormStructureReader.nameOf(child)); //$NON-NLS-1$

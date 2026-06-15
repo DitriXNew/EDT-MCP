@@ -29,6 +29,7 @@ import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -52,6 +53,24 @@ public class DeleteInfobaseTool implements IMcpTool
 {
     /** MCP tool name. */
     public static final String NAME = "delete_infobase"; //$NON-NLS-1$
+
+    /** Output key: confirmation-required flag (true on a preview). */
+    private static final String KEY_CONFIRMATION_REQUIRED = "confirmationRequired"; //$NON-NLS-1$
+
+    /** Output key: the kind of application removed. */
+    private static final String KEY_APPLICATION_KIND = "applicationKind"; //$NON-NLS-1$
+
+    /** Output key: whether the database files on disk were deleted. */
+    private static final String KEY_DATABASE_FILES_DELETED = "databaseFilesDeleted"; //$NON-NLS-1$
+
+    /** Output value for {@link McpKeys#ACTION}: the infobase was removed. */
+    private static final String VAL_DELETED = "deleted"; //$NON-NLS-1$
+
+    /** Output key: display name of the infobase. */
+    private static final String KEY_INFOBASE_NAME = "infobaseName"; //$NON-NLS-1$
+
+    /** Output key: whether the EDT registry entry was (or would be) removed. */
+    private static final String KEY_DELETE_REGISTRATION = "deleteRegistration"; //$NON-NLS-1$
 
     /** Infobase application type ID. */
     private static final String INFOBASE_APP_TYPE = "com.e1c.g5.dt.applications.type.infobase"; //$NON-NLS-1$
@@ -89,15 +108,15 @@ public class DeleteInfobaseTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT configuration project the infobase is bound to (required).", true) //$NON-NLS-1$
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID from get_applications. Either applicationId or infobaseName " //$NON-NLS-1$
                 + "is required.") //$NON-NLS-1$
-            .stringProperty("infobaseName", //$NON-NLS-1$
+            .stringProperty(KEY_INFOBASE_NAME,
                 "Display name of the infobase to remove. Either applicationId or infobaseName " //$NON-NLS-1$
                 + "is required.") //$NON-NLS-1$
-            .booleanProperty("deleteRegistration", //$NON-NLS-1$
+            .booleanProperty(KEY_DELETE_REGISTRATION,
                 "true = also deregister the infobase from the global EDT infobases list " //$NON-NLS-1$
                 + "(equivalent to 'Delete' in the Infobases view); default true.") //$NON-NLS-1$
             .booleanProperty("deleteDatabaseFiles", //$NON-NLS-1$
@@ -115,23 +134,23 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "Either 'preview' (nothing changed) or 'deleted' (removed).") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("confirmationRequired", //$NON-NLS-1$
+            .stringProperty(McpKeys.ACTION, "Either 'preview' (nothing changed) or 'deleted' (removed).") //$NON-NLS-1$
+            .booleanProperty(KEY_CONFIRMATION_REQUIRED,
                 "true on a preview (no change made); absent/false once deleted.") //$NON-NLS-1$
-            .stringProperty("applicationKind", //$NON-NLS-1$
+            .stringProperty(KEY_APPLICATION_KIND,
                 "'infobase' or 'standaloneServer' — the kind of application removed (standalone-server " //$NON-NLS-1$
                 + "deletions only).") //$NON-NLS-1$
-            .stringProperty("project", "Name of the configuration project.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application ID that was removed.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("infobaseName", "Display name of the removed infobase.") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("deleteRegistration", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT, "Name of the configuration project.") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application ID that was removed.") //$NON-NLS-1$
+            .stringProperty(KEY_INFOBASE_NAME, "Display name of the removed infobase.") //$NON-NLS-1$
+            .booleanProperty(KEY_DELETE_REGISTRATION,
                 "Whether the EDT registry entry was (or would be) removed: the global infobases-list " //$NON-NLS-1$
                 + "entry for a file infobase, or the infobases.yaml registry entry for a standalone " //$NON-NLS-1$
                 + "server.") //$NON-NLS-1$
-            .booleanProperty("databaseFilesDeleted", //$NON-NLS-1$
+            .booleanProperty(KEY_DATABASE_FILES_DELETED,
                 "Whether the database files on disk were actually deleted (only when " //$NON-NLS-1$
                 + "deleteDatabaseFiles=true; false otherwise or if the directory could not be removed).") //$NON-NLS-1$
-            .stringProperty("message", "Human-readable status message.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
             .build();
     }
 
@@ -144,17 +163,17 @@ public class DeleteInfobaseTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
-        String infobaseName = JsonUtils.extractStringArgument(params, "infobaseName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
+        String infobaseName = JsonUtils.extractStringArgument(params, KEY_INFOBASE_NAME);
         boolean deleteRegistration =
-            JsonUtils.extractBooleanArgument(params, "deleteRegistration", true); //$NON-NLS-1$
+            JsonUtils.extractBooleanArgument(params, KEY_DELETE_REGISTRATION, true);
         boolean deleteDatabaseFiles =
             JsonUtils.extractBooleanArgument(params, "deleteDatabaseFiles", false); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
@@ -292,13 +311,13 @@ public class DeleteInfobaseTool implements IMcpTool
         if (!confirm)
         {
             return ToolResult.success()
-                .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("confirmationRequired", true) //$NON-NLS-1$
-                .put("project", projectName) //$NON-NLS-1$
-                .put("applicationId", resolvedId) //$NON-NLS-1$
-                .put("infobaseName", resolvedName) //$NON-NLS-1$
-                .put("deleteRegistration", deleteRegistration) //$NON-NLS-1$
-                .put("message", "PREVIEW: this would dissociate infobase '" + resolvedName //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
+                .put(KEY_CONFIRMATION_REQUIRED, true)
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, resolvedId)
+                .put(KEY_INFOBASE_NAME, resolvedName)
+                .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+                .put(McpKeys.MESSAGE, "PREVIEW: this would dissociate infobase '" + resolvedName //$NON-NLS-1$
                     + "' from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                     + (deleteRegistration
                         ? " AND deregister it from the EDT infobases list" //$NON-NLS-1$
@@ -348,13 +367,13 @@ public class DeleteInfobaseTool implements IMcpTool
                     // delete the database files here even if requested — deregistration failed, so the
                     // safe choice is to leave the data and say so explicitly (schema-consistent).
                     return ToolResult.success()
-                        .put("action", "deleted") //$NON-NLS-1$ //$NON-NLS-2$
-                        .put("project", projectName) //$NON-NLS-1$
-                        .put("applicationId", resolvedId) //$NON-NLS-1$
-                        .put("infobaseName", resolvedName) //$NON-NLS-1$
-                        .put("deleteRegistration", false) //$NON-NLS-1$
-                        .put("databaseFilesDeleted", false) //$NON-NLS-1$
-                        .put("message", "Infobase '" + resolvedName //$NON-NLS-1$ //$NON-NLS-2$
+                        .put(McpKeys.ACTION, VAL_DELETED)
+                        .put(McpKeys.PROJECT, projectName)
+                        .put(McpKeys.APPLICATION_ID, resolvedId)
+                        .put(KEY_INFOBASE_NAME, resolvedName)
+                        .put(KEY_DELETE_REGISTRATION, false)
+                        .put(KEY_DATABASE_FILES_DELETED, false)
+                        .put(McpKeys.MESSAGE, "Infobase '" + resolvedName //$NON-NLS-1$
                             + "' was dissociated from project '" + projectName //$NON-NLS-1$
                             + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
                             + e.getMessage()
@@ -381,13 +400,13 @@ public class DeleteInfobaseTool implements IMcpTool
             + " (dbFilesDeleted=" + dbFilesDeleted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
         return ToolResult.success()
-            .put("action", "deleted") //$NON-NLS-1$ //$NON-NLS-2$
-            .put("project", projectName) //$NON-NLS-1$
-            .put("applicationId", resolvedId) //$NON-NLS-1$
-            .put("infobaseName", resolvedName) //$NON-NLS-1$
-            .put("deleteRegistration", deleteRegistration) //$NON-NLS-1$
-            .put("databaseFilesDeleted", dbFilesDeleted) //$NON-NLS-1$
-            .put("message", "Infobase '" + resolvedName //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_DELETED)
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, resolvedId)
+            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+            .put(KEY_DATABASE_FILES_DELETED, dbFilesDeleted)
+            .put(McpKeys.MESSAGE, "Infobase '" + resolvedName //$NON-NLS-1$
                 + "' removed from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteRegistration ? " and deregistered from the EDT infobases list." //$NON-NLS-1$
                     : " (EDT infobases list entry kept).") //$NON-NLS-1$
@@ -451,14 +470,14 @@ public class DeleteInfobaseTool implements IMcpTool
         if (!confirm)
         {
             return ToolResult.success()
-                .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("confirmationRequired", true) //$NON-NLS-1$
-                .put("applicationKind", "standaloneServer") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("project", projectName) //$NON-NLS-1$
-                .put("applicationId", resolvedId) //$NON-NLS-1$
-                .put("infobaseName", resolvedName) //$NON-NLS-1$
-                .put("deleteRegistration", deleteRegistration) //$NON-NLS-1$
-                .put("message", "PREVIEW: this would delete standalone server '" + resolvedName //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
+                .put(KEY_CONFIRMATION_REQUIRED, true)
+                .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, resolvedId)
+                .put(KEY_INFOBASE_NAME, resolvedName)
+                .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+                .put(McpKeys.MESSAGE, "PREVIEW: this would delete standalone server '" + resolvedName //$NON-NLS-1$
                     + "' (stop it, remove the WST server and its server config folder)" //$NON-NLS-1$
                     + (deleteRegistration ? " AND clean its infobases.yaml registry entry" //$NON-NLS-1$
                         : " (infobases.yaml entry kept)") //$NON-NLS-1$
@@ -566,14 +585,14 @@ public class DeleteInfobaseTool implements IMcpTool
         boolean removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
 
         return ToolResult.success()
-            .put("action", "deleted") //$NON-NLS-1$ //$NON-NLS-2$
-            .put("applicationKind", "standaloneServer") //$NON-NLS-1$ //$NON-NLS-2$
-            .put("project", projectName) //$NON-NLS-1$
-            .put("applicationId", resolvedId) //$NON-NLS-1$
-            .put("infobaseName", resolvedName) //$NON-NLS-1$
-            .put("deleteRegistration", deleteRegistration) //$NON-NLS-1$
-            .put("databaseFilesDeleted", dbFilesDeleted) //$NON-NLS-1$
-            .put("message", "Standalone server '" + resolvedName //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_DELETED)
+            .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, resolvedId)
+            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+            .put(KEY_DATABASE_FILES_DELETED, dbFilesDeleted)
+            .put(McpKeys.MESSAGE, "Standalone server '" + resolvedName //$NON-NLS-1$
                 + "' deleted from project '" + projectName //$NON-NLS-1$
                 + "' (server stopped, WST server and its server config folder removed)" //$NON-NLS-1$
                 + (deleteRegistration ? registryNote(cleanup)
