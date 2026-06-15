@@ -13,9 +13,11 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -39,12 +41,14 @@ import com.google.gson.JsonParser;
  * {@code requireArgument(s)} / direct {@code params.get(...)}), cross-checked against
  * the property names parsed from the live {@code getInputSchema()}.
  * <p>
- * Convention assumption: params are read with a STRING-LITERAL key (verified: every
- * {@code tools/impl} accessor today passes a literal — no constant-key, {@code
- * getOrDefault}, key-iteration, or {@code readParam(...)} helper). If a future tool
- * reads a declared param through a non-literal key, the {@code declared -> read}
- * direction will flag it as "unread" — that is a signal to make the read explicit (a
- * literal key) or model the new idiom here, NOT to loosen the test.
+ * Convention assumption: params are read with a key that is either a STRING LITERAL
+ * or a {@code String} CONSTANT — a shared {@code McpKeys.*} key or a tool-local
+ * {@code static final String}. Constant keys are resolved back to their literal value
+ * (from {@code McpKeys.java} plus the tool's own source) before scanning, so the
+ * parity guarantee stays strict. Other non-literal idioms ({@code getOrDefault},
+ * key-iteration, a {@code readParam(...)} helper) are still unmodelled: the
+ * {@code declared -> read} direction will flag such a read as "unread" — that is a
+ * signal to make the read explicit or model the new idiom here, NOT to loosen the test.
  */
 public class SchemaExecuteParamParityTest
 {
@@ -63,6 +67,10 @@ public class SchemaExecuteParamParityTest
 
     private static final Pattern QUOTED = Pattern.compile("\"([a-zA-Z][a-zA-Z0-9]*)\""); //$NON-NLS-1$
 
+    /** A {@code [modifier] static final String NAME = "value"} constant definition. */
+    private static final Pattern STRING_CONSTANT = Pattern.compile(
+        "static\\s+final\\s+String\\s+(\\w+)\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*+)\""); //$NON-NLS-1$
+
     @After
     public void tearDown()
     {
@@ -73,6 +81,7 @@ public class SchemaExecuteParamParityTest
     public void everyKeyReadInExecuteIsDeclaredInTheSchema()
     {
         File implDir = locateToolsImplSourceDir();
+        String sharedKeys = readSharedKeysSource(implDir);
         McpToolRegistry registry = McpToolRegistry.getInstance();
         BuiltInToolRegistrar.registerAll(registry);
 
@@ -90,7 +99,7 @@ public class SchemaExecuteParamParityTest
                 continue; // tools whose key handling lives elsewhere are out of scope
             }
             Set<String> declared = declaredProperties(tool);
-            Set<String> read = readKeys(source);
+            Set<String> read = readKeys(source, parseStringConstants(sharedKeys + "\n" + source)); //$NON-NLS-1$
             for (String key : read)
             {
                 if (!declared.contains(key))
@@ -108,6 +117,7 @@ public class SchemaExecuteParamParityTest
     public void everyDeclaredPropertyIsReadInExecute()
     {
         File implDir = locateToolsImplSourceDir();
+        String sharedKeys = readSharedKeysSource(implDir);
         McpToolRegistry registry = McpToolRegistry.getInstance();
         BuiltInToolRegistrar.registerAll(registry);
 
@@ -125,7 +135,7 @@ public class SchemaExecuteParamParityTest
                 continue;
             }
             Set<String> declared = declaredProperties(tool);
-            Set<String> read = readKeys(source);
+            Set<String> read = readKeys(source, parseStringConstants(sharedKeys + "\n" + source)); //$NON-NLS-1$
             for (String prop : declared)
             {
                 // An orphaned/typo'd schema property: declared but the code never reads
@@ -165,7 +175,7 @@ public class SchemaExecuteParamParityTest
         return names;
     }
 
-    private static Set<String> readKeys(String rawSource)
+    private static Set<String> readKeys(String rawSource, Map<String, String> constants)
     {
         // Strip line comments first: accessor calls are routinely split as
         // `extractBooleanArgument(params, //$NON-NLS-1$\n "key", default)`, so the
@@ -174,6 +184,15 @@ public class SchemaExecuteParamParityTest
         // //...EOL cannot drop or invent a key (it may truncate an unrelated string
         // literal, which is irrelevant to key extraction).
         String source = rawSource.replaceAll("//[^\\n]*", ""); //$NON-NLS-1$
+        // Model the constant-key idiom: a param read through a String constant
+        // (a shared McpKeys.* key or a tool-local KEY_*) is rewritten to the
+        // constant's literal value so the literal-key patterns below see it.
+        for (Map.Entry<String, String> e : constants.entrySet())
+        {
+            String literal = Matcher.quoteReplacement("\"" + e.getValue() + "\""); //$NON-NLS-1$ //$NON-NLS-2$
+            source = source.replaceAll("McpKeys\\s*\\.\\s*" + e.getKey() + "\\b", literal); //$NON-NLS-1$ //$NON-NLS-2$
+            source = source.replaceAll("\\b" + e.getKey() + "\\b", literal); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         Set<String> keys = new LinkedHashSet<>();
         Matcher m = SINGLE_KEY.matcher(source);
         while (m.find())
@@ -195,6 +214,41 @@ public class SchemaExecuteParamParityTest
             }
         }
         return keys;
+    }
+
+    /** Parses every {@code static final String NAME = "value"} definition out of the given source. */
+    private static Map<String, String> parseStringConstants(String source)
+    {
+        Map<String, String> consts = new HashMap<>();
+        Matcher m = STRING_CONSTANT.matcher(source);
+        while (m.find())
+        {
+            consts.put(m.group(1), m.group(2));
+        }
+        return consts;
+    }
+
+    /**
+     * Reads the shared {@code protocol/McpKeys.java} source (sibling of {@code tools/impl})
+     * so canonical {@code McpKeys.*} param keys resolve to their literal values. Returns ""
+     * if absent (then only tool-local constants resolve).
+     */
+    private static String readSharedKeysSource(File implDir)
+    {
+        File serverDir = implDir.getParentFile().getParentFile(); // .../server/tools/impl -> .../server
+        File f = new File(serverDir, "protocol/McpKeys.java"); //$NON-NLS-1$
+        if (!f.isFile())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        try
+        {
+            return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+        }
+        catch (Exception e)
+        {
+            return ""; //$NON-NLS-1$
+        }
     }
 
     private static String readSource(File implDir, Class<?> cls)
