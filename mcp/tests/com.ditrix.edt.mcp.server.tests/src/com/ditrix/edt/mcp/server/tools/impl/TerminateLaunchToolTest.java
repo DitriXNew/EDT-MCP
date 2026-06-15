@@ -10,9 +10,12 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
+import org.eclipse.debug.core.ILaunch;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -149,6 +152,78 @@ public class TerminateLaunchToolTest
         assertEquals("terminate-all-myproject.md", tool.getResultFileName(params));
     }
 
+    @Test
+    public void testFileNameForProjectPlusApplicationId()
+    {
+        // projectName + applicationId mode: both parts are sanitised/lowercased and
+        // joined, so parallel calls against different IBs do not collide.
+        TerminateLaunchTool tool = new TerminateLaunchTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "My Proj");
+        params.put("applicationId", "App.42");
+        String name = tool.getResultFileName(params);
+        assertEquals("terminate-my-proj-app.42.md", name);
+    }
+
+    @Test
+    public void testFileNameTruncatesLongApplicationId()
+    {
+        // Long UUID-style applicationIds are truncated to 16 sanitised chars to keep
+        // the result-file path short.
+        TerminateLaunchTool tool = new TerminateLaunchTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "Proj");
+        params.put("applicationId", "0123456789abcdef0123456789abcdef"); // 32 chars
+        String name = tool.getResultFileName(params);
+        // 16-char truncated tail, then the .md suffix.
+        assertEquals("terminate-proj-0123456789abcdef.md", name);
+    }
+
+    @Test
+    public void testFileNameDefaultFallback()
+    {
+        // applicationId WITHOUT projectName matches no naming branch (it is not a valid
+        // selection) and must fall back to the generic terminate-launch.md.
+        TerminateLaunchTool tool = new TerminateLaunchTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("applicationId", "orphan-app-id");
+        assertEquals("terminate-launch.md", tool.getResultFileName(params));
+    }
+
+    @Test
+    public void testFileNameDefaultFallbackForEmptyParams()
+    {
+        // No selection params at all → generic default file name.
+        TerminateLaunchTool tool = new TerminateLaunchTool();
+        assertEquals("terminate-launch.md",
+            tool.getResultFileName(new HashMap<String, String>()));
+    }
+
+    @Test
+    public void testFileNameAllModeIgnoresBlankProject()
+    {
+        // A blank projectName must NOT produce "terminate-all-.md"; the empty-name
+        // guard falls through to the plain all-mode file name.
+        TerminateLaunchTool tool = new TerminateLaunchTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("all", "true");
+        params.put("projectName", "");
+        assertEquals("terminate-all.md", tool.getResultFileName(params));
+    }
+
+    @Test
+    public void testFileNameByConfigNameIgnoresOtherParams()
+    {
+        // launchConfigurationName wins over all other selection params for naming.
+        TerminateLaunchTool tool = new TerminateLaunchTool();
+        Map<String, String> params = new HashMap<>();
+        params.put("launchConfigurationName", "OnlyMe");
+        params.put("projectName", "Proj");
+        params.put("applicationId", "app");
+        params.put("all", "true");
+        assertEquals("terminate-onlyme.md", tool.getResultFileName(params));
+    }
+
     // === validateSelection — error messages from execute() ===
 
     @Test
@@ -243,5 +318,57 @@ public class TerminateLaunchToolTest
         assertTrue(result.contains("\"success\":false"));
         assertTrue("must report mutual exclusivity",
             result.contains("mutually exclusive"));
+    }
+
+    // === selectStaleTerminated — EDT-free guard branches ===
+    // This helper is package-private specifically for unit testing. Its data-driven
+    // matching path needs live ILaunch/ILaunchConfiguration instances (off-limits
+    // here), but the early guards — a null snapshot and an empty snapshot — are pure
+    // and exercise the method's contract that it never throws and returns a fresh,
+    // empty, mutable list when there is nothing to evict.
+
+    @Test
+    public void testSelectStaleTerminatedNullSnapshotReturnsEmpty()
+    {
+        List<ILaunch> selected = new ArrayList<>();
+        List<ILaunch> stale = TerminateLaunchTool.selectStaleTerminated(
+            null, selected, "Cfg", "Proj", "app", false, true, false, false);
+        assertNotNull("must never return null", stale);
+        assertTrue("a null snapshot yields nothing to evict", stale.isEmpty());
+    }
+
+    @Test
+    public void testSelectStaleTerminatedEmptySnapshotReturnsEmpty()
+    {
+        // An empty manager snapshot loops zero times and returns an empty result.
+        // new ILaunch[0] allocates an array but constructs no ILaunch instance.
+        List<ILaunch> stale = TerminateLaunchTool.selectStaleTerminated(
+            new ILaunch[0], new ArrayList<ILaunch>(), null, null, null, true, false, false,
+            false);
+        assertNotNull("must never return null", stale);
+        assertTrue("an empty snapshot yields nothing to evict", stale.isEmpty());
+    }
+
+    @Test
+    public void testSelectStaleTerminatedToleratesNullAlreadySelected()
+    {
+        // The identity-skip helper must tolerate a null already-selected list; with a
+        // null/empty snapshot the method short-circuits before ever consulting it.
+        List<ILaunch> stale = TerminateLaunchTool.selectStaleTerminated(
+            null, null, "Cfg", null, null, false, true, false, false);
+        assertNotNull(stale);
+        assertTrue(stale.isEmpty());
+    }
+
+    @Test
+    public void testSelectStaleTerminatedReturnsMutableList()
+    {
+        // Callers append to the returned list (targets.addAll then mutate), so it must
+        // be a fresh mutable list, not an immutable/shared singleton.
+        List<ILaunch> stale = TerminateLaunchTool.selectStaleTerminated(
+            new ILaunch[0], new ArrayList<ILaunch>(), null, "Proj", null, true, false, false,
+            false);
+        stale.clear(); // must not throw on an unmodifiable list
+        assertTrue(stale.isEmpty());
     }
 }

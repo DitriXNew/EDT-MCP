@@ -177,6 +177,114 @@ public class EditorScreenshotHelperTest
                 "Catalog.Products.Attribute.Name", "Catalog.Products.Attribute.Name")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testFqnMatchEmptyStringIsNullSafe()
+    {
+        // An empty FQN/path hits the isEmpty() guard (distinct from the null guard) and must never
+        // canonicalize to a key, so it cannot be accepted as the requested form.
+        assertFalse("an empty actual FQN must not match", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath("", "CommonForm.MyForm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("an empty requested path must not match", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath("CommonForm.MyForm", "")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("two empty strings must not match", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath("", "")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFqnMatchesContentFormSymmetric()
+    {
+        // canonicalization is applied to BOTH sides, so the content-form FQN (trailing .Form) matches
+        // the requested MD-form path regardless of which argument carries the extra segment.
+        assertTrue("content-form FQN as the requested path must match the actual MD-form FQN", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Catalog.Products.Forms.ItemForm", "Catalog.Products.Form.ItemForm.Form")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("common content-form FQN on the requested side must match the common MD-form", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "CommonForm.MyForm", "CommonForm.MyForm.Form")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFqnMatchesUnknownMetadataTypeFallsBackToRawSegment()
+    {
+        // When the leading type segment is not a recognized metadata type, toEnglishSingular returns
+        // null and canonicalization falls back to the raw segment (lower-cased). Such an FQN must
+        // still match itself (object form and common form), and the raw fallback is case-insensitive.
+        assertTrue("an unknown object-form type must match itself via the raw-segment fallback", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Widget.Gadget.Form.MainForm", "Widget.Gadget.Forms.MainForm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the unknown-type fallback must be case-insensitive", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Widget.Gadget.Form.MainForm", "WIDGET.Gadget.forms.MainForm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an unknown common-form type must match itself via the raw-segment fallback", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Widget.MyForm", "widget.MyForm")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Two genuinely different unknown types must not be conflated.
+        assertFalse("different unknown types must not match", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Widget.Gadget.Form.MainForm", "Gizmo.Gadget.Forms.MainForm")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFqnMatchesRussianFormsSeparator()
+    {
+        // The owner/forms separator of an object form may itself be Russian (Форма / Формы), not only
+        // the type segment. isFormsSeparator (FormElementWriter.isFormToken) must accept those so a
+        // Russian-separated FQN matches the English-separated requested path.
+        assertTrue("Russian singular form separator must match the English request", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Catalog.Products.Форма.ItemForm", "Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("Russian plural form separator must match the English request", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Catalog.Products.Формы.ItemForm", "Catalog.Products.Form.ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFqnMatchesRussianContentFormSeparator()
+    {
+        // The trailing content-form segment appended to the representation's content-form FQN may be
+        // the Russian singular Форма. isContentFormSeparator must strip it so the content FQN still
+        // matches the requested MD-form path (object and common form).
+        assertTrue("a Russian trailing content separator must be stripped for an object form", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Catalog.Products.Form.ItemForm.Форма", "Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a Russian trailing content separator must be stripped for a common form", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "CommonForm.MyForm.Форма", "CommonForm.MyForm")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFqnContentStripOnlyWhenRemainderIsValidFormShape()
+    {
+        // A trailing ".Form" is stripped as a content separator only when the remainder is a valid
+        // form shape. A 5-part FQN whose remaining 4 parts lack a forms separator is NOT a content
+        // form: after stripping, canonicalFormFqnFromParts returns null, so it must not match itself.
+        assertFalse("a 5-part .Form tail with a non-form remainder must not match", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Catalog.Products.Attribute.Name.Form", "Catalog.Products.Attribute.Name.Form")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFqnThreePartShapeNeverMatches()
+    {
+        // A 3-part FQN whose last segment is not a content separator is an unrecognized shape (neither
+        // a 2-part common form nor a 4-part object form), so it canonicalizes to null and never matches.
+        assertFalse("a 3-part non-content FQN must not match itself", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath(
+                "Catalog.Products.ItemForm", "Catalog.Products.ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFqnFormNamedFormIsNotContentStripped()
+    {
+        // A two-segment "Owner.Form" path must be treated as a 2-part common form named "Form", NOT as
+        // a content-form whose ".Form" tail is stripped (stripping requires a 3- or 5-part length).
+        // It must match itself and must NOT collapse to a bare single owner segment.
+        assertTrue("a 2-part path ending in Form is a common form and matches itself", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath("CommonForm.Form", "CommonForm.Form")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a 2-part Owner.Form must not collapse to the bare owner segment", //$NON-NLS-1$
+            EditorScreenshotHelper.fqnMatchesFormPath("CommonForm.Form", "CommonForm")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ==================== ensureRenderedFormImage force-refresh (stale-screenshot fix) ====================
     //
     // These tests cover the runtime-free decision logic of the force-refresh mode with a fake

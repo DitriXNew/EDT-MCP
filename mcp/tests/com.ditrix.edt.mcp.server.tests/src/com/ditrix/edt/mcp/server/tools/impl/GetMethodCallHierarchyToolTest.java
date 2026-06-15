@@ -149,4 +149,84 @@ public class GetMethodCallHierarchyToolTest
         assertNull(GetMethodCallHierarchyTool.extractModuleName(null));
         assertNull(GetMethodCallHierarchyTool.extractModuleName("Module.bsl")); //$NON-NLS-1$
     }
+
+    // ==================== getResultFileName (pure, no live workbench) ====================
+
+    @Test
+    public void testResultFileNameWithMethodAndDirection()
+    {
+        // methodName + an explicit direction → "call-hierarchy-<method>-<direction>.md",
+        // with the method name lower-cased and the direction appended verbatim.
+        Map<String, String> params = new HashMap<>();
+        params.put("methodName", "DoWork"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("direction", "callees"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("call-hierarchy-dowork-callees.md", //$NON-NLS-1$
+            new GetMethodCallHierarchyTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameWithMethodDefaultsDirectionToCallers()
+    {
+        // methodName present but NO direction argument → the direction segment
+        // defaults to "callers" (the (direction != null ? direction : KEY_CALLERS) branch).
+        Map<String, String> params = new HashMap<>();
+        params.put("methodName", "Calculate"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("call-hierarchy-calculate-callers.md", //$NON-NLS-1$
+            new GetMethodCallHierarchyTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameLowercasesMethodName()
+    {
+        // The method-name segment is always lower-cased, so a mixed-case ru/en spelling
+        // produces a stable, case-insensitive file name.
+        Map<String, String> params = new HashMap<>();
+        params.put("methodName", "ПолучитьДанные"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("direction", "callers"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("call-hierarchy-получитьданные-callers.md", //$NON-NLS-1$
+            new GetMethodCallHierarchyTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameEmptyDirectionIsAppendedVerbatim()
+    {
+        // The direction segment guards on null, NOT on emptiness: an explicitly empty
+        // direction is appended as-is (it does not fall back to "callers"). Pins the
+        // exact (direction != null ? direction : KEY_CALLERS) semantics.
+        Map<String, String> params = new HashMap<>();
+        params.put("methodName", "DoWork"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("direction", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("call-hierarchy-dowork-.md", //$NON-NLS-1$
+            new GetMethodCallHierarchyTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameDefaultWhenMethodNameMissing()
+    {
+        // No methodName argument → the generic fallback file name (the direction is
+        // irrelevant when there is no method to name).
+        Map<String, String> params = new HashMap<>();
+        params.put("direction", "callees"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("call-hierarchy.md", //$NON-NLS-1$
+            new GetMethodCallHierarchyTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameDefaultWhenMethodNameEmpty()
+    {
+        // An explicitly empty methodName also falls back to the generic name
+        // (the !methodName.isEmpty() guard).
+        Map<String, String> params = new HashMap<>();
+        params.put("methodName", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("call-hierarchy.md", //$NON-NLS-1$
+            new GetMethodCallHierarchyTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameDefaultWhenParamsEmpty()
+    {
+        // The no-arguments case (neither methodName nor direction) returns the constant fallback.
+        assertEquals("call-hierarchy.md", //$NON-NLS-1$
+            new GetMethodCallHierarchyTool().getResultFileName(new HashMap<>()));
+    }
 }

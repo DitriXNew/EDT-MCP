@@ -152,4 +152,123 @@ public class GoToDefinitionToolTest
         assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
         assertFalse(result.contains("symbol is required")); //$NON-NLS-1$
     }
+
+    /**
+     * Blank (empty-string) projectName is treated as missing by the required-argument
+     * guard, exactly like an absent key.
+     */
+    @Test
+    public void testBlankProjectNameIsMissing()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("symbol", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GoToDefinitionTool().execute(params);
+        assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
+    }
+
+    /**
+     * Blank symbol is treated as missing — projectName is present, so the symbol
+     * sentinel fires (the symbol guard is the second one checked).
+     */
+    @Test
+    public void testBlankSymbolIsMissing()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("symbol", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GoToDefinitionTool().execute(params);
+        assertTrue(result.contains("symbol is required")); //$NON-NLS-1$
+    }
+
+    /**
+     * A bare method name WITH a blank modulePath is still rejected — an empty
+     * modulePath does not satisfy the "module context required" rule.
+     */
+    @Test
+    public void testBareMethodWithBlankModulePathIsRejected()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("symbol", "MyMethod"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GoToDefinitionTool().execute(params);
+        assertTrue(result.contains("modulePath is required")); //$NON-NLS-1$
+    }
+
+    // ==================== getResultFileName (pure, no workbench) ====================
+
+    /**
+     * A qualified two-part symbol is turned into a per-symbol result filename:
+     * the dot becomes a dash and the whole name is lower-cased.
+     */
+    @Test
+    public void testResultFileNameForQualifiedSymbol()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("symbol", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("definition-catalog-products.md", //$NON-NLS-1$
+            new GoToDefinitionTool().getResultFileName(params));
+    }
+
+    /**
+     * A bare (single-part) symbol still produces a per-symbol filename — no dot,
+     * so nothing to replace, just the lower-cased name.
+     */
+    @Test
+    public void testResultFileNameForBareSymbol()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("symbol", "MyMethod"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("definition-mymethod.md", //$NON-NLS-1$
+            new GoToDefinitionTool().getResultFileName(params));
+    }
+
+    /**
+     * The result filename is lower-cased even for an already-mixed-case symbol,
+     * and every dot is replaced (not just the first).
+     */
+    @Test
+    public void testResultFileNameLowercasesAndReplacesEveryDot()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("symbol", "InformationRegister.Rates.RecordSet"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("definition-informationregister-rates-recordset.md", //$NON-NLS-1$
+            new GoToDefinitionTool().getResultFileName(params));
+    }
+
+    /**
+     * With no symbol argument the generic fallback filename is used (the per-symbol
+     * branch is guarded by a non-empty check).
+     */
+    @Test
+    public void testResultFileNameFallbackWhenSymbolMissing()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("definition.md", new GoToDefinitionTool().getResultFileName(params)); //$NON-NLS-1$
+    }
+
+    /**
+     * An empty-string symbol also takes the fallback branch (the guard rejects both
+     * null and empty), so it does not yield "definition-.md".
+     */
+    @Test
+    public void testResultFileNameFallbackWhenSymbolBlank()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("symbol", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("definition.md", new GoToDefinitionTool().getResultFileName(params)); //$NON-NLS-1$
+    }
+
+    /**
+     * An empty params map (no symbol key) falls back to the generic filename
+     * without throwing.
+     */
+    @Test
+    public void testResultFileNameWithEmptyParams()
+    {
+        assertEquals("definition.md", //$NON-NLS-1$
+            new GoToDefinitionTool().getResultFileName(new HashMap<>()));
+    }
 }

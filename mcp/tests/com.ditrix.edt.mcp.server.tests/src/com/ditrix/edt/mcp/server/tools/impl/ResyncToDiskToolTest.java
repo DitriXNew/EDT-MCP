@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
@@ -17,7 +18,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.Test;
@@ -25,18 +28,25 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
 /**
- * Lightweight contract tests for {@link ResyncToDiskTool}: tool metadata, JSON input/output
- * schema, the documented response-format policy, plus the headless-testable decision cores -
- * which FQNs the export takes ({@code selectExportFqns}), the commit-honest dangling-removal
- * reporting ({@code runRemovalWriteTask}) and the missing-{@code .mdo} filesystem checks -
- * without needing the Eclipse/EDT runtime.
+ * Lightweight contract tests for {@link ResyncToDiskTool}: tool metadata, the bundled
+ * {@code get_tool_guide} body, JSON input/output schema (incl. input/output field separation),
+ * the documented response-format policy, plus the headless-testable decision cores - which FQNs
+ * the export takes ({@code selectExportFqns}), the {@code DanglingResult} report/commit-count
+ * semantics, the commit-honest dangling-removal reporting ({@code runRemovalWriteTask}) and the
+ * missing-{@code .mdo} filesystem checks ({@code findMissingMdoFiles} /
+ * {@code findMissingMdoFilesWithWait}) - without needing the Eclipse/EDT runtime.
  * <p>
- * The {@code execute()} path walks the live BM model, force-exports {@code .mdo} files to disk
- * and (only with {@code cleanDanglingReferences=true}) mutates the {@code Configuration}, so it
- * needs a live workbench and BM model; the real repair behaviour (delete a {@code .mdo} and
- * restore it) is covered by the E2E suite. Fabricating a genuinely dangling Configuration
- * reference through public tools is not possible headless, so the REMOVAL outcome reporting is
- * pinned here at the unit level instead (see the {@code runRemovalWriteTask} tests).
+ * {@code execute()} is NOT exercised here: it is {@code final} on
+ * {@link com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool} and immediately calls
+ * {@code ProjectStateChecker.buildingErrorOrNull(...)} then
+ * {@code PlatformUI.getWorkbench().getDisplay()} BEFORE any subclass arg-validation, so it cannot
+ * run headlessly - the {@code projectName is required} guard lives in {@code executeOnUiThread},
+ * which only runs on the SWT UI thread. The {@code execute()} path then walks the live BM model,
+ * force-exports {@code .mdo} files and (only with {@code cleanDanglingReferences=true}) mutates the
+ * {@code Configuration}, so the real repair behaviour (delete a {@code .mdo} and restore it) is
+ * covered by the E2E suite. Fabricating a genuinely dangling Configuration reference through public
+ * tools is not possible headless, so the REMOVAL outcome reporting is pinned here at the unit level
+ * instead (see the {@code runRemovalWriteTask} tests).
  */
 public class ResyncToDiskToolTest
 {
@@ -118,6 +128,68 @@ public class ResyncToDiskToolTest
         // The request flags are echoed back so a caller can verify what actually ran.
         assertTrue(schema.contains("\"fullExport\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"revalidate\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"cleanDanglingReferences\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReportOnlyOutputFieldsAreNotInputParameters()
+    {
+        // The dangling-scan report fields are AUTO-COMPUTED outputs, never inputs. A future
+        // edit must not accidentally turn one into an input the tool would then ignore.
+        ResyncToDiskTool tool = new ResyncToDiskTool();
+        String input = tool.getInputSchema();
+        assertFalse("danglingFound is an output, not an input parameter", //$NON-NLS-1$
+            input.contains("\"danglingFound\"")); //$NON-NLS-1$
+        assertFalse("missingBefore is an output, not an input parameter", //$NON-NLS-1$
+            input.contains("\"missingBefore\"")); //$NON-NLS-1$
+        assertFalse("objectsExported is an output, not an input parameter", //$NON-NLS-1$
+            input.contains("\"objectsExported\"")); //$NON-NLS-1$
+        // ...and they ARE declared on the output side.
+        String output = tool.getOutputSchema();
+        assertTrue(output.contains("\"danglingFound\"")); //$NON-NLS-1$
+        assertTrue(output.contains("\"objectsExported\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResultFileNameDefaultsToToolNameMarkdown()
+    {
+        // resync_to_disk does not override getResultFileName, so the IMcpTool default
+        // (toolName + ".md") applies regardless of params.
+        ResyncToDiskTool tool = new ResyncToDiskTool();
+        assertEquals("resync_to_disk.md", tool.getResultFileName(Collections.emptyMap())); //$NON-NLS-1$
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "Whatever"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the result file name must not depend on the params", //$NON-NLS-1$
+            "resync_to_disk.md", tool.getResultFileName(params)); //$NON-NLS-1$
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // getGuide(): the on-demand how-to. resync_to_disk does NOT override it, so the IMcpTool
+    // default loads guides/resync_to_disk.md via GuideLoader (resolves through the OSGi bundle
+    // active under Tycho Surefire). This pins that the guide resource is actually PACKAGED and
+    // keyed off the tool name, and that it documents the destructive opt-in and the report fields.
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    public void testGuideIsPackagedAndNonEmpty()
+    {
+        String guide = new ResyncToDiskTool().getGuide();
+        assertNotNull("getGuide() must never return null", guide); //$NON-NLS-1$
+        assertFalse("the bundled guides/resync_to_disk.md must be packaged and load non-empty", //$NON-NLS-1$
+            guide.isEmpty());
+    }
+
+    @Test
+    public void testGuideDocumentsTheDestructiveDanglingOptIn()
+    {
+        String guide = new ResyncToDiskTool().getGuide();
+        assertTrue("guide must document the cleanDanglingReferences opt-in", //$NON-NLS-1$
+            guide.contains("cleanDanglingReferences")); //$NON-NLS-1$
+        assertTrue("guide must warn the opt-in is destructive", //$NON-NLS-1$
+            guide.toLowerCase().contains("destructive")); //$NON-NLS-1$
+        assertTrue("guide must document the fullExport refresh", guide.contains("fullExport")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must document the missingBefore desync report", //$NON-NLS-1$
+            guide.contains("missingBefore")); //$NON-NLS-1$
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -150,6 +222,27 @@ public class ResyncToDiskToolTest
         List<String> missing = Arrays.asList("Catalog.B"); //$NON-NLS-1$
         assertEquals("fullExport=true must opt back in to the export-everything refresh", //$NON-NLS-1$
             all, ResyncToDiskTool.selectExportFqns(true, all, missing));
+    }
+
+    @Test
+    public void testSelectExportFqnsDefaultReturnsTheMissingListItself()
+    {
+        // The default branch must hand back the missing subset as-is (no copy/filter): the
+        // caller exports exactly the objects integrity-checked as missing, nothing more.
+        List<String> all = Arrays.asList("Catalog.A", "Catalog.B"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> missing = Arrays.asList("Catalog.B"); //$NON-NLS-1$
+        assertSame("default must reuse the missing list, not derive a new one", //$NON-NLS-1$
+            missing, ResyncToDiskTool.selectExportFqns(false, all, missing));
+    }
+
+    @Test
+    public void testSelectExportFqnsFullExportEvenWhenNothingMissing()
+    {
+        // fullExport=true is a deliberate full refresh: it exports every object even on an
+        // in-sync project (empty missing set), unlike the default no-op.
+        List<String> all = Arrays.asList("Catalog.A", "Document.C"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("fullExport=true must export all even with an empty missing set", //$NON-NLS-1$
+            all, ResyncToDiskTool.selectExportFqns(true, all, Collections.emptyList()));
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -204,6 +297,43 @@ public class ResyncToDiskToolTest
         assertNull(result.warning);
     }
 
+    @Test
+    public void testFreshDanglingResultIsAnEmptyCleanReport()
+    {
+        // A just-constructed result (the clean-project / scan-skipped baseline) must report
+        // nothing found, nothing removed, no warning - so an in-sync run shows danglingFound 0.
+        ResyncToDiskTool.DanglingResult result = new ResyncToDiskTool.DanglingResult();
+        assertEquals("a fresh result must have found nothing", 0, result.found); //$NON-NLS-1$
+        assertFalse("a fresh result must claim no removal", result.removedFromModel); //$NON-NLS-1$
+        assertEquals("a fresh result must report 0 removed", 0, result.removedCount()); //$NON-NLS-1$
+        assertNotNull("details must be a live (empty) list, never null", result.details); //$NON-NLS-1$
+        assertTrue(result.details.isEmpty());
+        assertNull("a fresh result must carry no warning", result.warning); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRemovedCountIsZeroWhenFoundButNotCommitted()
+    {
+        // removedCount() gates on the COMMIT flag, not on `found`: entries were observed
+        // (found > 0) but the removal was not committed, so the reported count stays 0 -
+        // a report-only scan never over-claims a removal.
+        ResyncToDiskTool.DanglingResult result = new ResyncToDiskTool.DanglingResult();
+        result.found = 5;
+        // removedFromModel left at its default false (no committed write).
+        assertEquals("found entries that were not committed must report 0 removed", //$NON-NLS-1$
+            0, result.removedCount());
+    }
+
+    @Test
+    public void testRemovedCountEqualsFoundOnlyWhenCommitted()
+    {
+        ResyncToDiskTool.DanglingResult result = new ResyncToDiskTool.DanglingResult();
+        result.found = 4;
+        result.removedFromModel = true;
+        assertEquals("a committed removal reports exactly the found count", //$NON-NLS-1$
+            4, result.removedCount());
+    }
+
     // ---------------------------------------------------------------------------------------------
     // The post-export integrity check must reflect REAL on-disk state. The force-export
     // flushes the .mdo asynchronously, so stillMissing is computed with a short bounded wait that
@@ -252,6 +382,82 @@ public class ResyncToDiskToolTest
             List<String> missing =
                 ResyncToDiskTool.findMissingMdoFiles(projectRoot, Arrays.asList("Catalog.Foo")); //$NON-NLS-1$
             assertTrue("a present .mdo must not be reported as missing", missing.isEmpty()); //$NON-NLS-1$
+        }
+        finally
+        {
+            deleteRecursively(projectRoot);
+        }
+    }
+
+    @Test
+    public void testFindMissingMdoFilesEmptyInputIsEmpty() throws IOException
+    {
+        File projectRoot = Files.createTempDirectory("resync-empty").toFile(); //$NON-NLS-1$
+        try
+        {
+            assertTrue("no FQNs in means no missing FQNs out", //$NON-NLS-1$
+                ResyncToDiskTool.findMissingMdoFiles(projectRoot, Collections.emptyList()).isEmpty());
+        }
+        finally
+        {
+            deleteRecursively(projectRoot);
+        }
+    }
+
+    @Test
+    public void testFindMissingMdoFilesPartitionsPresentFromAbsent() throws IOException
+    {
+        File projectRoot = Files.createTempDirectory("resync-mixed").toFile(); //$NON-NLS-1$
+        try
+        {
+            // Foo exists on disk; Bar does not - only Bar must be reported, in input order.
+            touch(new File(projectRoot, "src/Catalogs/Foo/Foo.mdo")); //$NON-NLS-1$
+            List<String> missing = ResyncToDiskTool.findMissingMdoFiles(projectRoot,
+                Arrays.asList("Catalog.Foo", "Document.Bar")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(1, missing.size());
+            assertEquals("only the absent .mdo is reported missing", //$NON-NLS-1$
+                "Document.Bar", missing.get(0)); //$NON-NLS-1$
+        }
+        finally
+        {
+            deleteRecursively(projectRoot);
+        }
+    }
+
+    @Test
+    public void testFindMissingMdoFilesSkipsFqnWithNoTypeDirectoryLayout() throws IOException
+    {
+        File projectRoot = Files.createTempDirectory("resync-skip").toFile(); //$NON-NLS-1$
+        try
+        {
+            // "Configuration" is dotless -> MetadataPathResolver.resolveTopObjectMdoPath returns
+            // null (no src/<TypeDir>/<Name>/<Name>.mdo layout), so it must be SKIPPED, never
+            // reported as a missing desync even though no such file exists on disk.
+            List<String> missing = ResyncToDiskTool.findMissingMdoFiles(projectRoot,
+                Arrays.asList("Configuration", "Catalog.Foo")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals("the dotless/no-layout FQN must be skipped, only the real desync reported", //$NON-NLS-1$
+                Arrays.asList("Catalog.Foo"), missing); //$NON-NLS-1$
+        }
+        finally
+        {
+            deleteRecursively(projectRoot);
+        }
+    }
+
+    @Test
+    public void testBoundedWaitEmptyInputReturnsImmediatelyEmpty() throws IOException
+    {
+        File projectRoot = Files.createTempDirectory("resync-wait-empty").toFile(); //$NON-NLS-1$
+        try
+        {
+            // Nothing to wait for: an empty FQN set must return at once without paying the budget.
+            long start = System.currentTimeMillis();
+            List<String> missing = ResyncToDiskTool.findMissingMdoFilesWithWait(projectRoot,
+                Collections.emptyList(), 5000L, 100L);
+            long elapsed = System.currentTimeMillis() - start;
+            assertTrue("an empty input must yield an empty still-missing set", missing.isEmpty()); //$NON-NLS-1$
+            assertTrue("an empty input must not spend the wait budget (elapsed=" //$NON-NLS-1$
+                + elapsed + "ms)", elapsed < 1000L); //$NON-NLS-1$
         }
         finally
         {

@@ -239,4 +239,195 @@ public class DeleteMetadataToolTest
         // An unknown type cannot be mapped to a directory - no path, no blind delete.
         assertNull(DeleteMetadataTool.formResourceFolderPath("Bogus", "X", "Y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
+
+    /**
+     * The TYPE token is bilingual: a Russian type token resolves to the SAME English {@code src/}
+     * directory (the folder layout is language-neutral), while the owner / form NAME segments pass
+     * through verbatim - so a form addressed in Russian deletes the exact same on-disk folder.
+     */
+    @Test
+    public void testFormResourceFolderPathAcceptsRussianTypeToken()
+    {
+        // "Справочник" (Catalog, singular) -> Catalogs directory; the Cyrillic name parts are verbatim.
+        assertEquals("src/Catalogs/Товары/Forms/Форма", //$NON-NLS-1$
+            DeleteMetadataTool.formResourceFolderPath(
+                "Справочник", //$NON-NLS-1$
+                "Товары", "Форма")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The folder mapping is not Catalog/Document-specific: any object family with an own {@code src/}
+     * type directory resolves (here an InformationRegister, whose directory is the plural form).
+     */
+    @Test
+    public void testFormResourceFolderPathResolvesOtherObjectFamilies()
+    {
+        assertEquals("src/InformationRegisters/Prices/Forms/ListForm", //$NON-NLS-1$
+            DeleteMetadataTool.formResourceFolderPath("InformationRegister", "Prices", "ListForm")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // The plural type token resolves to the same directory as the singular one.
+        assertEquals("src/InformationRegisters/Prices/Forms/ListForm", //$NON-NLS-1$
+            DeleteMetadataTool.formResourceFolderPath("InformationRegisters", "Prices", "ListForm")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * A null or empty type token has no directory mapping, so no path is produced - the delete must
+     * never invent a folder to remove from a blank type.
+     */
+    @Test
+    public void testFormResourceFolderPathNullForBlankType()
+    {
+        assertNull(DeleteMetadataTool.formResourceFolderPath(null, "Products", "ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(DeleteMetadataTool.formResourceFolderPath("", "Products", "ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    // ---- putBlockingReferences: the single shared emitter feeding every response branch -----------
+
+    /**
+     * The shared emitter must count and emit MULTIPLE blocking references in order, under both the
+     * canonical {@code blocking*} keys and the legacy {@code affected*} aliases - the count equals the
+     * list size and the two arrays are element-for-element identical, so a caller reading either name
+     * sees the same N referencers in the same order.
+     */
+    @Test
+    public void testPutBlockingReferencesEmitsMultipleInOrder()
+    {
+        List<Map<String, Object>> blocking = new ArrayList<>();
+        blocking.add(reference("Catalog.Products", "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        blocking.add(reference("Document.Order", "registerRecords")); //$NON-NLS-1$ //$NON-NLS-2$
+        blocking.add(reference("Report.Sales", "dataSource")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String json = DeleteMetadataTool.putBlockingReferences(ToolResult.success(), blocking).toJson();
+        JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+
+        assertEquals(3, obj.get("blockingReferencesCount").getAsInt()); //$NON-NLS-1$
+        assertEquals("count and aliases must agree for N>1", //$NON-NLS-1$
+            obj.get("blockingReferencesCount"), obj.get("affectedReferencesCount")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the alias array must mirror the canonical array exactly (order included)", //$NON-NLS-1$
+            obj.get("blockingReferences"), obj.get("affectedReferences")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Order is preserved: the second referencer is the one inserted second.
+        assertEquals("Document.Order", obj.get("blockingReferences").getAsJsonArray() //$NON-NLS-1$ //$NON-NLS-2$
+            .get(1).getAsJsonObject().get("referencingObject").getAsString()); //$NON-NLS-1$
+    }
+
+    /**
+     * The emitter copies every field of a reference map verbatim into the JSON - the
+     * {@code referencingObject} / {@code reference} (feature) / {@code targetObject} a
+     * {@code CleanReferenceProblem} carries all survive, under both the canonical and the alias keys.
+     */
+    @Test
+    public void testPutBlockingReferencesPreservesAllFields()
+    {
+        List<Map<String, Object>> blocking = new ArrayList<>();
+        Map<String, Object> ref = new LinkedHashMap<>();
+        ref.put("problemType", "CleanReferenceProblem"); //$NON-NLS-1$ //$NON-NLS-2$
+        ref.put("referencingObject", "Document.Order"); //$NON-NLS-1$ //$NON-NLS-2$
+        ref.put("reference", "type"); //$NON-NLS-1$ //$NON-NLS-2$
+        ref.put("targetObject", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        blocking.add(ref);
+
+        String json = DeleteMetadataTool.putBlockingReferences(ToolResult.success(), blocking).toJson();
+        JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+
+        JsonObject canonical = obj.get("blockingReferences").getAsJsonArray() //$NON-NLS-1$
+            .get(0).getAsJsonObject();
+        assertEquals("CleanReferenceProblem", canonical.get("problemType").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("type", canonical.get("reference").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Catalog.Products", canonical.get("targetObject").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        // The legacy alias carries the SAME field set (it is the same list object).
+        assertEquals(obj.get("blockingReferences"), obj.get("affectedReferences")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The emitter never drops the success flag the caller set on the result: emitting the
+     * blocking-reference block onto a {@code ToolResult.success()} leaves {@code success=true} - the
+     * preview / forced-execute branches rely on this (only the blocked branch flips success).
+     */
+    @Test
+    public void testPutBlockingReferencesKeepsSuccessFlag()
+    {
+        String json = DeleteMetadataTool
+            .putBlockingReferences(ToolResult.success(), new ArrayList<>()).toJson();
+        JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+        assertTrue("success must remain true after emitting an empty blocking block", //$NON-NLS-1$
+            obj.get("success").getAsBoolean()); //$NON-NLS-1$
+    }
+
+    // ---- additional metadata / schema facets ------------------------------------------------------
+
+    /**
+     * The description must advertise the full two-phase contract a caller keys off: the preview gate,
+     * the confirm step, the blocked outcome, and the force override that overrides it.
+     */
+    @Test
+    public void testDescriptionDocumentsTwoPhaseAndBlocking()
+    {
+        String desc = new DeleteMetadataTool().getDescription().toLowerCase();
+        assertTrue("description must mention the preview phase", desc.contains("preview")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description must mention confirm", desc.contains("confirm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description must mention the blocked path", desc.contains("blocked")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description must mention dangling references left by force", //$NON-NLS-1$
+            desc.contains("dangling")); //$NON-NLS-1$
+    }
+
+    /**
+     * The output schema must declare the full preview/blocked envelope a caller now receives, beyond
+     * the blocking* / affected* aliases already pinned above: action, fqn, refactoringTitle, items,
+     * the blocking flag, the blocking count and the human message.
+     */
+    @Test
+    public void testOutputSchemaDeclaresPreviewEnvelope()
+    {
+        String schema = new DeleteMetadataTool().getOutputSchema();
+        assertNotNull(schema);
+        assertTrue("outputSchema must declare action", schema.contains("\"action\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare fqn", schema.contains("\"fqn\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare refactoringTitle", //$NON-NLS-1$
+            schema.contains("\"refactoringTitle\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare items", schema.contains("\"items\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare the blocking flag", schema.contains("\"blocking\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare blockingReferencesCount", //$NON-NLS-1$
+            schema.contains("\"blockingReferencesCount\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare message", schema.contains("\"message\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The output schema's {@code action} field must name all three terminal actions a caller can
+     * receive - {@code preview}, {@code executed} and {@code blocked} - so an agent can branch on them.
+     */
+    @Test
+    public void testOutputSchemaActionNamesAllThreeOutcomes()
+    {
+        String schema = new DeleteMetadataTool().getOutputSchema();
+        assertTrue("action must name 'preview'", schema.contains("preview")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("action must name 'executed'", schema.contains("executed")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("action must name 'blocked'", schema.contains("blocked")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The guide must document the reference-blocking + force override (the safety mechanism reviewers
+     * check) and the two cross-model delete surfaces this tool also handles - form objects and form
+     * members - so a caller knows a 4-part / 6+-part form FQN is deletable too.
+     */
+    @Test
+    public void testGuideDocumentsForceAndFormSurfaces()
+    {
+        String guide = new DeleteMetadataTool().getGuide();
+        assertNotNull(guide);
+        assertTrue("guide must document the force override", guide.contains("force=true")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must document the blocked outcome", guide.contains("action='blocked'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must document the form object surface", guide.contains("Form object")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must document the form members surface", guide.contains("Form members")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must note the deprecated affected* aliases", //$NON-NLS-1$
+            guide.contains("affectedReferences")); //$NON-NLS-1$
+    }
+
+    /** A {problemType, referencingObject, reference} blocking-reference map for the emitter tests. */
+    private static Map<String, Object> reference(String referencingObject, String feature)
+    {
+        Map<String, Object> ref = new LinkedHashMap<>();
+        ref.put("problemType", "CleanReferenceProblem"); //$NON-NLS-1$ //$NON-NLS-2$
+        ref.put("referencingObject", referencingObject); //$NON-NLS-1$
+        ref.put("reference", feature); //$NON-NLS-1$
+        return ref;
+    }
 }

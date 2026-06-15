@@ -316,4 +316,170 @@ public class BslModuleUtilsTest
 
         assertSame("must return the conventional src/ handle when nothing matches", srcFile, result); //$NON-NLS-1$
     }
+
+    // ========== looksLikeAbsolutePath ==========
+
+    @Test
+    public void testLooksLikeAbsolutePathNullIsFalse()
+    {
+        assertFalse(BslModuleUtils.looksLikeAbsolutePath(null));
+    }
+
+    @Test
+    public void testLooksLikeAbsolutePathEmptyIsFalse()
+    {
+        assertFalse(BslModuleUtils.looksLikeAbsolutePath("")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLooksLikeAbsolutePathForwardSlashIsTrue()
+    {
+        assertTrue(BslModuleUtils.looksLikeAbsolutePath("/home/user/Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLooksLikeAbsolutePathBackslashIsTrue()
+    {
+        assertTrue(BslModuleUtils.looksLikeAbsolutePath("\\\\server\\share\\Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLooksLikeAbsolutePathWindowsDriveIsTrue()
+    {
+        assertTrue(BslModuleUtils.looksLikeAbsolutePath("C:\\projects\\Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLooksLikeAbsolutePathRelativeIsFalse()
+    {
+        assertFalse(BslModuleUtils.looksLikeAbsolutePath("CommonModules/Foo/Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLooksLikeAbsolutePathSingleCharIsFalse()
+    {
+        // length < 2 and not starting with a slash → cannot be a drive prefix
+        assertFalse(BslModuleUtils.looksLikeAbsolutePath("C")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLooksLikeAbsolutePathColonAsSecondCharIsTrue()
+    {
+        // the heuristic only inspects the second char for a colon (drive-like)
+        assertTrue(BslModuleUtils.looksLikeAbsolutePath("z:")); //$NON-NLS-1$
+    }
+
+    // ========== extractModulePath ==========
+
+    @Test
+    public void testExtractModulePathNullReturnsUnknown()
+    {
+        assertEquals("Unknown module", BslModuleUtils.extractModulePath(null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtractModulePathStripsSrcPrefix()
+    {
+        assertEquals("CommonModules/Foo/Module.bsl", //$NON-NLS-1$
+            BslModuleUtils.extractModulePath("MyProject/src/CommonModules/Foo/Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtractModulePathReturnsAsIsWhenNoSrcMarker()
+    {
+        // no "/src/" segment → the path is returned unchanged
+        assertEquals("CommonModules/Foo/Module.bsl", //$NON-NLS-1$
+            BslModuleUtils.extractModulePath("CommonModules/Foo/Module.bsl")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtractModulePathUsesFirstSrcMarker()
+    {
+        // indexOf finds the first "/src/"; the remainder (including a later src/) is kept
+        assertEquals("a/src/b/Module.bsl", //$NON-NLS-1$
+            BslModuleUtils.extractModulePath("Proj/src/a/src/b/Module.bsl")); //$NON-NLS-1$
+    }
+
+    // ========== findRegionForLine ==========
+
+    @Test
+    public void testFindRegionNullLinesIsNull()
+    {
+        assertNull(BslModuleUtils.findRegionForLine(null, 1));
+    }
+
+    @Test
+    public void testFindRegionTargetLineBelowOneIsNull()
+    {
+        List<String> lines = List.of(
+            "#Region Public",               // 1 //$NON-NLS-1$
+            "#EndRegion");                  // 2 //$NON-NLS-1$
+        assertNull(BslModuleUtils.findRegionForLine(lines, 0));
+    }
+
+    @Test
+    public void testFindRegionCodeLineInsideSingleRegion()
+    {
+        List<String> lines = List.of(
+            "#Region Public",               // 1 //$NON-NLS-1$
+            "Procedure A() EndProcedure",   // 2 //$NON-NLS-1$
+            "#EndRegion");                  // 3 //$NON-NLS-1$
+        assertEquals("Public", BslModuleUtils.findRegionForLine(lines, 2)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindRegionReturnsInnermostWhenNested()
+    {
+        List<String> lines = List.of(
+            "#Region Outer",                // 1 //$NON-NLS-1$
+            "#Region Inner",                // 2 //$NON-NLS-1$
+            "SomeCode();",                  // 3 //$NON-NLS-1$
+            "#EndRegion",                   // 4 //$NON-NLS-1$
+            "#EndRegion");                  // 5 //$NON-NLS-1$
+        assertEquals("Inner", BslModuleUtils.findRegionForLine(lines, 3)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindRegionAfterInnerClosedReturnsOuter()
+    {
+        List<String> lines = List.of(
+            "#Region Outer",                // 1 //$NON-NLS-1$
+            "#Region Inner",                // 2 //$NON-NLS-1$
+            "#EndRegion",                   // 3 (closes Inner) //$NON-NLS-1$
+            "Code();",                      // 4 //$NON-NLS-1$
+            "#EndRegion");                  // 5 //$NON-NLS-1$
+        assertEquals("Outer", BslModuleUtils.findRegionForLine(lines, 4)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindRegionLineOutsideAnyRegionIsNull()
+    {
+        List<String> lines = List.of(
+            "Procedure A() EndProcedure",   // 1 (before any region) //$NON-NLS-1$
+            "#Region Public",               // 2 //$NON-NLS-1$
+            "#EndRegion");                  // 3 //$NON-NLS-1$
+        assertNull(BslModuleUtils.findRegionForLine(lines, 1));
+    }
+
+    @Test
+    public void testFindRegionTargetOnRegionStartLine()
+    {
+        List<String> lines = List.of(
+            "#Region Outer",                // 1 //$NON-NLS-1$
+            "#Region Inner",                // 2 (the region-start line itself) //$NON-NLS-1$
+            "#EndRegion",                   // 3 //$NON-NLS-1$
+            "#EndRegion");                  // 4 //$NON-NLS-1$
+        assertEquals("Inner", BslModuleUtils.findRegionForLine(lines, 2)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindRegionRussianDirectivesAndIndentation()
+    {
+        List<String> lines = List.of(
+            "  #Область ПрограммныйИнтерфейс", // 1 #Область ПрограммныйИнтерфейс //$NON-NLS-1$
+            "Code();",                      // 2 //$NON-NLS-1$
+            "  #КонецОбласти"); // 3 #КонецОбласти //$NON-NLS-1$
+        assertEquals("ПрограммныйИнтерфейс", //$NON-NLS-1$
+            BslModuleUtils.findRegionForLine(lines, 2));
+    }
 }

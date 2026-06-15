@@ -746,4 +746,204 @@ public class DebugLaunchToolTest
         assertTrue("guide must document the coordinated launch flow performing the update",
             guide.contains("coordinated launch flow")); //$NON-NLS-1$
     }
+
+    // ==================== extractRestartIfRunning — full default/override matrix ====================
+    //
+    // extractRestartIfRunning is the pure (no-EDT) seam execute() reads. The two
+    // headline branches (absent->false, "true"->true) are pinned above; these add the
+    // remaining JsonUtils.extractBooleanArgument outcomes so the flag's parsing can't
+    // silently change: the OTHER truthy tokens, the explicit-false tokens, an empty
+    // value (falls back to the default), and an unrecognized token (also the default).
+
+    @Test
+    public void testExtractRestartIfRunningAlternateTruthyTokensAreTrue()
+    {
+        // "1" and "yes" are JsonUtils' other truthy spellings — they must flip the flag
+        // exactly like "true", so a non-canonical client value still restarts.
+        Map<String, String> one = new HashMap<>();
+        one.put("restartIfRunning", "1"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("restartIfRunning=1 must be true",
+            DebugLaunchTool.extractRestartIfRunning(one));
+        Map<String, String> yes = new HashMap<>();
+        yes.put("restartIfRunning", "YES"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("restartIfRunning=YES (case-insensitive) must be true",
+            DebugLaunchTool.extractRestartIfRunning(yes));
+    }
+
+    @Test
+    public void testExtractRestartIfRunningExplicitFalseTokensAreFalse()
+    {
+        // The explicit-false spellings must stay false (not flip to the true side).
+        Map<String, String> f = new HashMap<>();
+        f.put("restartIfRunning", "false"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("restartIfRunning=false must be false",
+            DebugLaunchTool.extractRestartIfRunning(f));
+        Map<String, String> zero = new HashMap<>();
+        zero.put("restartIfRunning", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("restartIfRunning=0 must be false",
+            DebugLaunchTool.extractRestartIfRunning(zero));
+        Map<String, String> no = new HashMap<>();
+        no.put("restartIfRunning", "no"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("restartIfRunning=no must be false",
+            DebugLaunchTool.extractRestartIfRunning(no));
+    }
+
+    @Test
+    public void testExtractRestartIfRunningEmptyAndGarbageFallBackToDefault()
+    {
+        // An empty value and an unrecognized token both fall back to the documented
+        // default (false) — the safe non-destructive choice, never an accidental restart.
+        Map<String, String> empty = new HashMap<>();
+        empty.put("restartIfRunning", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("empty restartIfRunning must fall back to the false default",
+            DebugLaunchTool.extractRestartIfRunning(empty));
+        Map<String, String> garbage = new HashMap<>();
+        garbage.put("restartIfRunning", "maybe"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("unrecognized restartIfRunning token must fall back to the false default",
+            DebugLaunchTool.extractRestartIfRunning(garbage));
+    }
+
+    // ==================== execute() early-validation — empty-value branches ====================
+    //
+    // execute()'s required-argument guards test (value == null || value.isEmpty()), so a
+    // present-but-EMPTY value is a distinct branch from a missing key — and an empty
+    // launchConfigurationName must NOT enter mode 1 (the guard is also
+    // !configName.isEmpty()), so it falls through to mode 2's projectName guard. All
+    // three checks return BEFORE the first ProjectStateChecker/workspace access, so no
+    // live workbench is needed.
+
+    @Test
+    public void testEmptyProjectNameIsRequiredError()
+    {
+        // projectName present as "" (no launchConfigurationName) must hit the same
+        // "projectName is required" guard as a missing key, not slip past it.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new DebugLaunchTool().execute(params);
+        assertTrue("empty projectName must produce 'projectName is required'",
+            result.contains("projectName is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEmptyLaunchConfigurationNameFallsThroughToProjectMode()
+    {
+        // launchConfigurationName="" must NOT enter the by-name mode (whose first
+        // statement touches the live launch manager); with no projectName it falls
+        // through to the project+application guard and reports projectName required.
+        Map<String, String> params = new HashMap<>();
+        params.put("launchConfigurationName", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new DebugLaunchTool().execute(params);
+        assertTrue("empty launchConfigurationName must fall through to the projectName guard",
+            result.contains("projectName is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEmptyApplicationIdIsRequiredError()
+    {
+        // projectName present, no launchConfigurationName, applicationId present as ""
+        // must hit the "applicationId is required" guard (the .isEmpty() half) before
+        // any workspace access.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationId", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new DebugLaunchTool().execute(params);
+        assertTrue("empty applicationId must produce 'applicationId is required'",
+            result.contains("applicationId is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingProjectNameErrorSteersToLaunchConfigurationName()
+    {
+        // The projectName-required error must keep advertising the alternative
+        // (launchConfigurationName) so the caller can recover without guessing.
+        Map<String, String> params = new HashMap<>();
+        String result = new DebugLaunchTool().execute(params);
+        assertTrue("projectName error must mention the launchConfigurationName alternative",
+            result.contains("launchConfigurationName")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingApplicationIdErrorSteersToGetApplications()
+    {
+        // The applicationId-required error must point the caller at get_applications
+        // (the discovery source) and at the launchConfigurationName alternative.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new DebugLaunchTool().execute(params);
+        assertTrue("applicationId error must steer to get_applications",
+            result.contains("get_applications")); //$NON-NLS-1$
+        assertTrue("applicationId error must mention the launchConfigurationName alternative",
+            result.contains("launchConfigurationName")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEarlyValidationErrorsAreSuccessFalseJson()
+    {
+        // The early-validation errors are well-formed error JSON: parseable and
+        // success:false — the wire shape every MCP client keys off.
+        JsonObject obj = JsonParser.parseString(new DebugLaunchTool().execute(new HashMap<>()))
+            .getAsJsonObject();
+        assertTrue("error result must carry success:false", obj.has("success")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a validation failure must be success:false", obj.get("success").getAsBoolean()); //$NON-NLS-1$
+    }
+
+    // ==================== AlreadyRunningContext.buildAlreadyRunning — pure JSON shaping ====================
+    //
+    // The alreadyRunning payload builder is pure (Gson only) — exercise its branches
+    // without mocking any debug type. The set-all and unset-optional cases are pinned
+    // above; these add the EMPTY-STRING optional omissions, a null/empty applicationId,
+    // and the "run" mode value, so the omit-when-blank contract is fully covered.
+
+    @Test
+    public void testBuildAlreadyRunningOmitsEmptyStringOptionalFields()
+    {
+        // Optional identity fields set to "" (not just null) must be omitted too — the
+        // guard is (field != null && !field.isEmpty()). project="" must drop, and a "run"
+        // mode flows straight through to the mode field.
+        AlreadyRunningContext ctx = new AlreadyRunningContext("m"); //$NON-NLS-1$
+        ctx.launchConfiguration = ""; //$NON-NLS-1$
+        ctx.configurationType = ""; //$NON-NLS-1$
+        ctx.project = ""; //$NON-NLS-1$
+        JsonObject obj = JsonParser.parseString(
+            ctx.buildAlreadyRunning("run", "the-app").toJson()).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("empty launchConfiguration must be omitted", obj.has("launchConfiguration")); //$NON-NLS-1$
+        assertFalse("empty configurationType must be omitted", obj.has("configurationType")); //$NON-NLS-1$
+        assertFalse("empty project must be omitted", obj.has("project")); //$NON-NLS-1$
+        assertEquals("run", obj.get("mode").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the-app", obj.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testBuildAlreadyRunningOmitsNullAndEmptyApplicationId()
+    {
+        // applicationId is itself optional in the payload: a null or "" id is omitted,
+        // while the always-present alreadyRunning/mode/message stay.
+        AlreadyRunningContext ctx = new AlreadyRunningContext("the message"); //$NON-NLS-1$
+        JsonObject nullId = JsonParser.parseString(
+            ctx.buildAlreadyRunning("debug", null).toJson()).getAsJsonObject(); //$NON-NLS-1$
+        assertFalse("null applicationId must be omitted", nullId.has("applicationId")); //$NON-NLS-1$
+        assertTrue(nullId.get("alreadyRunning").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("debug", nullId.get("mode").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the message", nullId.get("message").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject emptyId = JsonParser.parseString(
+            ctx.buildAlreadyRunning("debug", "").toJson()).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("empty applicationId must be omitted", emptyId.has("applicationId")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBuildAlreadyRunningAlwaysCarriesCoreFieldsAndNoLaunchingStatus()
+    {
+        // The minimal payload (no optional identity fields supplied) still carries the
+        // three invariants — alreadyRunning:true, mode, message — and NEVER the
+        // status:"launching" field (that belongs only to the fresh-launch path).
+        AlreadyRunningContext ctx = new AlreadyRunningContext("running"); //$NON-NLS-1$
+        JsonObject obj = JsonParser.parseString(
+            ctx.buildAlreadyRunning("debug", "a").toJson()).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("alreadyRunning must be true", obj.get("alreadyRunning").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("success must be true on a short-circuit", obj.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("the alreadyRunning short-circuit must never carry status:launching",
+            obj.has("status")); //$NON-NLS-1$
+        assertFalse("attach must be omitted when unset", obj.has("attach")); //$NON-NLS-1$
+    }
 }

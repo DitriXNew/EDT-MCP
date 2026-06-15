@@ -22,7 +22,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 /**
  * Tests for {@link GetModuleStructureTool}.
  * <p>
- * Covers tool metadata, the input schema, and the projectName/modulePath
+ * Covers tool metadata, the input schema, the {@link GetModuleStructureTool#getResultFileName}
+ * name slugging, the pure region-marker helpers, and the projectName/modulePath
  * required-argument validation that returns before the first
  * {@code PlatformUI.getWorkbench()} call. Parsing the module structure needs a
  * live workbench and is covered by the E2E suite.
@@ -75,6 +76,59 @@ public class GetModuleStructureToolTest
         assertTrue(schema.contains("\"concise\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"detailed\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"enum\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSchemaDeclaresOptionalBooleanFlags()
+    {
+        // The two optional boolean toggles must be present in the schema
+        // (schema<->execute parity: execute() reads includeVariables/includeComments).
+        String schema = new GetModuleStructureTool().getInputSchema();
+        assertNotNull(schema);
+        assertTrue(schema.contains("\"includeVariables\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"includeComments\"")); //$NON-NLS-1$
+    }
+
+    // ==================== getResultFileName (pure, no live workbench) ====================
+
+    @Test
+    public void testResultFileNameWithModulePath()
+    {
+        // A modulePath produces a slugged "structure-<path>.md" name with the
+        // path separators replaced by '-' and the whole thing lower-cased.
+        Map<String, String> params = new HashMap<>();
+        params.put("modulePath", "CommonModules/MyModule/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        String name = new GetModuleStructureTool().getResultFileName(params);
+        assertEquals("structure-commonmodules-mymodule-module.bsl.md", name); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResultFileNameReplacesBackslashesAndLowercases()
+    {
+        // Windows-style backslash separators and upper-case characters must both
+        // be normalised (covers the '\\' replacement and toLowerCase branches).
+        Map<String, String> params = new HashMap<>();
+        params.put("modulePath", "Catalogs\\Goods\\Forms\\ItemForm\\Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        String name = new GetModuleStructureTool().getResultFileName(params);
+        assertEquals("structure-catalogs-goods-forms-itemform-module.bsl.md", name); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResultFileNameDefaultWhenModulePathMissing()
+    {
+        // No modulePath argument → the generic fallback file name.
+        assertEquals("module-structure.md", //$NON-NLS-1$
+            new GetModuleStructureTool().getResultFileName(new HashMap<>()));
+    }
+
+    @Test
+    public void testResultFileNameDefaultWhenModulePathEmpty()
+    {
+        // An explicitly empty modulePath also falls back to the generic name.
+        Map<String, String> params = new HashMap<>();
+        params.put("modulePath", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("module-structure.md", //$NON-NLS-1$
+            new GetModuleStructureTool().getResultFileName(params));
     }
 
     // ==================== Argument validation (no live workbench needed) ====================
@@ -153,9 +207,25 @@ public class GetModuleStructureToolTest
         assertEquals(5, GetModuleStructureTool.computeRegionEndLine(null, 5));
         // start line beyond EOF → returns the start line unchanged.
         assertEquals(3, GetModuleStructureTool.computeRegionEndLine(List.of("a", "b"), 3)); //$NON-NLS-1$ //$NON-NLS-2$
+        // start line below 1 → returns the start line unchanged (lower guard).
+        assertEquals(0, GetModuleStructureTool.computeRegionEndLine(List.of("a", "b"), 0)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(-2, GetModuleStructureTool.computeRegionEndLine(List.of("a", "b"), -2)); //$NON-NLS-1$ //$NON-NLS-2$
         // unterminated region → returns the start line unchanged.
         List<String> noEnd = List.of("#Region X", "Procedure A() EndProcedure"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(1, GetModuleStructureTool.computeRegionEndLine(noEnd, 1));
+    }
+
+    @Test
+    public void testComputeRegionEndLineIgnoresPlainCodeLines()
+    {
+        // Lines that are neither #Region nor #EndRegion must not affect the
+        // depth counter — the end marker is still matched correctly.
+        List<String> lines = List.of(
+            "#Region Service",              // 1 //$NON-NLS-1$
+            "X = 1;",                       // 2 (plain code) //$NON-NLS-1$
+            "Y = ConfigureRegion();",       // 3 (substring 'Region' but not a marker) //$NON-NLS-1$
+            "#EndRegion");                  // 4 //$NON-NLS-1$
+        assertEquals(4, GetModuleStructureTool.computeRegionEndLine(lines, 1));
     }
 
     @Test
@@ -171,5 +241,18 @@ public class GetModuleStructureToolTest
         assertTrue(GetModuleStructureTool.isRegionEnd("#endregion")); //$NON-NLS-1$
         assertTrue(GetModuleStructureTool.isRegionEnd(RU_END_REGION));
         assertFalse(GetModuleStructureTool.isRegionEnd("#Region Foo")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRegionMarkersRejectPlainAndEmptyLines()
+    {
+        // A plain code line and an empty line are neither a start nor an end
+        // marker (the markers are matched on the trimmed line via startsWith).
+        assertFalse(GetModuleStructureTool.isRegionStart("Procedure A() EndProcedure")); //$NON-NLS-1$
+        assertFalse(GetModuleStructureTool.isRegionStart("")); //$NON-NLS-1$
+        assertFalse(GetModuleStructureTool.isRegionEnd("X = 1;")); //$NON-NLS-1$
+        assertFalse(GetModuleStructureTool.isRegionEnd("")); //$NON-NLS-1$
+        // A name that merely contains 'Region' as a substring is not a marker.
+        assertFalse(GetModuleStructureTool.isRegionStart("Y = ConfigureRegion();")); //$NON-NLS-1$
     }
 }

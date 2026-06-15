@@ -171,6 +171,56 @@ public class AbstractMetadataFormatterTest
             out.contains("face='Arial'") && out.contains("height=12") && out.contains("bold")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
+    // ==================== formatType — TypeDescription rendering (S2) ====================
+
+    @Test
+    public void testFormatTypeNullDescriptionReturnsDash()
+    {
+        // A null TypeDescription (an unset attribute type) must render as a dash, never NPE.
+        assertEquals("-", f.formatType(null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatTypeEmptyDescriptionReturnsDash()
+    {
+        // A TypeDescription with no type items (e.g. a freshly-created, untyped attribute)
+        // has nothing to name, so it renders as a dash rather than an empty string.
+        com._1c.g5.v8.dt.mcore.TypeDescription td =
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createTypeDescription();
+        assertEquals("-", f.formatType(td)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatTypeSingleTypeReturnsItsName()
+    {
+        // McoreUtil.getTypeName returns getName() directly for a non-proxy (in-memory) TypeItem,
+        // so a single named Type renders as exactly that name.
+        com._1c.g5.v8.dt.mcore.TypeDescription td =
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createTypeDescription();
+        td.getTypes().add(newType("String")); //$NON-NLS-1$
+        assertEquals("String", f.formatType(td)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatTypeMultipleTypesJoinedByComma()
+    {
+        // A composite type (several TypeItems) is rendered as the names joined by ", ",
+        // in the order they appear in the description.
+        com._1c.g5.v8.dt.mcore.TypeDescription td =
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createTypeDescription();
+        td.getTypes().add(newType("String")); //$NON-NLS-1$
+        td.getTypes().add(newType("Number")); //$NON-NLS-1$
+        assertEquals("String, Number", f.formatType(td)); //$NON-NLS-1$
+    }
+
+    /** Creates an in-memory, non-proxy {@link com._1c.g5.v8.dt.mcore.Type} with the given name. */
+    private static com._1c.g5.v8.dt.mcore.TypeItem newType(String name)
+    {
+        com._1c.g5.v8.dt.mcore.Type type = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createType();
+        type.setName(name);
+        return type;
+    }
+
     // ==================== pure markdown/cell helpers ====================
 
     @Test

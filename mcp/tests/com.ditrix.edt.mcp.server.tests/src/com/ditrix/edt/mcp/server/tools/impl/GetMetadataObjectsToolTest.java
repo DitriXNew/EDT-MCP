@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.HashMap;
@@ -20,13 +21,18 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 /**
  * Tests for {@link GetMetadataObjectsTool}.
  * <p>
- * Covers tool metadata, the input schema, and the projectName required-argument
- * validation that returns before the first {@code PlatformUI.getWorkbench()}
- * call. Enumerating metadata needs a live configuration and is covered by the
- * E2E suite.
+ * Covers tool metadata (name/constant, response type, description, input schema,
+ * output schema, result file name, guide) and the {@code projectName}
+ * required-argument validation in {@code execute(Map)} that returns BEFORE the
+ * first {@code PlatformUI.getWorkbench().getDisplay()} call. Everything past that
+ * call (project/configuration resolution, the metadataType switch including the
+ * "Unknown metadata type" branch, collection and formatting) needs a live EDT
+ * workspace and is covered by the E2E suite.
  */
 public class GetMetadataObjectsToolTest
 {
+    // ==================== Metadata: name / response type ====================
+
     @Test
     public void testName()
     {
@@ -45,6 +51,8 @@ public class GetMetadataObjectsToolTest
         assertEquals(ResponseType.MARKDOWN, new GetMetadataObjectsTool().getResponseType());
     }
 
+    // ==================== Metadata: description ====================
+
     @Test
     public void testDescriptionNotEmpty()
     {
@@ -52,6 +60,20 @@ public class GetMetadataObjectsToolTest
         assertNotNull(desc);
         assertTrue(desc.length() > 0);
     }
+
+    @Test
+    public void testDescriptionSteersToGuideAndSiblingTool()
+    {
+        // The lean description must point at the on-demand guide for the full parameter
+        // set and at get_metadata_details for the single-object drill-down.
+        String desc = new GetMetadataObjectsTool().getDescription();
+        assertTrue("description must steer to the on-demand guide", //$NON-NLS-1$
+            desc.contains("get_tool_guide('get_metadata_objects')")); //$NON-NLS-1$
+        assertTrue("description must point at get_metadata_details for one object", //$NON-NLS-1$
+            desc.contains("get_metadata_details")); //$NON-NLS-1$
+    }
+
+    // ==================== Metadata: input schema ====================
 
     @Test
     public void testSchemaDeclaresParameters()
@@ -62,6 +84,79 @@ public class GetMetadataObjectsToolTest
         assertTrue(schema.contains("\"metadataType\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"nameFilter\"")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testSchemaDeclaresLimitAndLanguageParameters()
+    {
+        String schema = new GetMetadataObjectsTool().getInputSchema();
+        assertTrue("schema must declare the limit parameter", schema.contains("\"limit\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("schema must declare the language parameter", //$NON-NLS-1$
+            schema.contains("\"language\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testProjectNameIsRequiredInSchema()
+    {
+        // projectName is the only required parameter; the optional filters must NOT be
+        // in the required array.
+        String schema = new GetMetadataObjectsTool().getInputSchema();
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue("schema must declare a required array", requiredIdx >= 0); //$NON-NLS-1$
+        int open = schema.indexOf('[', requiredIdx);
+        int close = schema.indexOf(']', open);
+        assertTrue("required array must be well-formed", open >= 0 && close > open); //$NON-NLS-1$
+        String requiredBlock = schema.substring(open, close + 1);
+        assertTrue("projectName must be required", requiredBlock.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("metadataType must NOT be required", //$NON-NLS-1$
+            !requiredBlock.contains("\"metadataType\"")); //$NON-NLS-1$
+        assertTrue("nameFilter must NOT be required", !requiredBlock.contains("\"nameFilter\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("limit must NOT be required", !requiredBlock.contains("\"limit\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("language must NOT be required", !requiredBlock.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== Metadata: output schema ====================
+
+    @Test
+    public void testOutputSchemaIsNullForMarkdownTool()
+    {
+        // This is a MARKDOWN tool: it returns content, not structuredContent, so it must
+        // inherit the IMcpTool default null output schema (over-declaring one would lie to
+        // clients about a structured envelope that never arrives).
+        assertNull("markdown tool must not declare an output schema", //$NON-NLS-1$
+            new GetMetadataObjectsTool().getOutputSchema());
+    }
+
+    // ==================== Metadata: result file name (both branches, no workspace) ====================
+
+    @Test
+    public void testResultFileNameUsesLowercasedProjectName()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("metadata-myproject.md", //$NON-NLS-1$
+            new GetMetadataObjectsTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameFallbackWhenProjectNameMissing()
+    {
+        // No projectName -> the generic file name.
+        Map<String, String> params = new HashMap<>();
+        assertEquals("metadata-objects.md", //$NON-NLS-1$
+            new GetMetadataObjectsTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameFallbackWhenProjectNameEmpty()
+    {
+        // An empty projectName is treated like a missing one for the file name.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("metadata-objects.md", //$NON-NLS-1$
+            new GetMetadataObjectsTool().getResultFileName(params));
+    }
+
+    // ==================== Metadata: guide ====================
 
     @Test
     public void testGuideHasMigratedDetail()
@@ -78,7 +173,7 @@ public class GetMetadataObjectsToolTest
         assertTrue(guide.contains("ManagerModule")); //$NON-NLS-1$
     }
 
-    // ==================== Argument validation (no live workbench needed) ====================
+    // ==================== Argument validation (returns before any workbench access) ====================
 
     @Test
     public void testMissingProjectName()
@@ -91,5 +186,45 @@ public class GetMetadataObjectsToolTest
         assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
         assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
         assertTrue(result.contains("\"error\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingProjectNameCarriesDiscoveryHint()
+    {
+        // The required-argument guard appends an actionable discovery hint pointing the
+        // caller at list_projects; pin it so the lean error stays self-service.
+        Map<String, String> params = new HashMap<>();
+        String result = new GetMetadataObjectsTool().execute(params);
+        assertTrue("error must steer the caller to list_projects", //$NON-NLS-1$
+            result.contains("list_projects")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEmptyProjectNameIsError()
+    {
+        // An empty (blank) projectName is rejected by the same required-argument guard,
+        // before any workbench access.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GetMetadataObjectsTool().execute(params);
+        assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingProjectNameIgnoresOtherArgs()
+    {
+        // Supplying metadataType/nameFilter/limit/language without a projectName still
+        // trips the projectName guard first (the guard runs before defaults and before
+        // the workbench is touched), so the metadataType value is never validated here.
+        Map<String, String> params = new HashMap<>();
+        params.put("metadataType", "catalogs"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("nameFilter", "Prod"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("limit", "50"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("language", "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GetMetadataObjectsTool().execute(params);
+        assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
+        assertTrue("an invalid metadataType must NOT leak through before the projectName guard", //$NON-NLS-1$
+            !result.contains("Unknown metadata type")); //$NON-NLS-1$
     }
 }
