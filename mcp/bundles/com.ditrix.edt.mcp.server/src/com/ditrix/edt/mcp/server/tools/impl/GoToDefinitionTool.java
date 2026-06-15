@@ -27,6 +27,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
@@ -45,6 +46,9 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
 public class GoToDefinitionTool implements IMcpTool
 {
     public static final String NAME = "go_to_definition"; //$NON-NLS-1$
+
+    /** Input param: the symbol to resolve (qualified method, bare method, or metadata FQN). */
+    private static final String KEY_SYMBOL = "symbol"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -67,9 +71,9 @@ public class GoToDefinitionTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name", true) //$NON-NLS-1$
-            .stringProperty("symbol", //$NON-NLS-1$
+            .stringProperty(KEY_SYMBOL,
                 "'ModuleName.MethodName', bare 'MethodName' (needs modulePath), or metadata FQN " + //$NON-NLS-1$
                 "'Catalog.Products'", true) //$NON-NLS-1$
             .stringProperty("modulePath", //$NON-NLS-1$
@@ -88,7 +92,7 @@ public class GoToDefinitionTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String symbol = JsonUtils.extractStringArgument(params, "symbol"); //$NON-NLS-1$
+        String symbol = JsonUtils.extractStringArgument(params, KEY_SYMBOL);
         if (symbol != null && !symbol.isEmpty())
         {
             String safeName = symbol.replace(".", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -100,14 +104,14 @@ public class GoToDefinitionTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, "projectName", "symbol"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_SYMBOL);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String symbol = JsonUtils.extractStringArgument(params, "symbol"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String symbol = JsonUtils.extractStringArgument(params, KEY_SYMBOL);
         String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
         String includeSourceStr = JsonUtils.extractStringArgument(params, "includeSource"); //$NON-NLS-1$
 
@@ -297,7 +301,7 @@ public class GoToDefinitionTool implements IMcpTool
 
         // Build frontmatter
         FrontMatter fm = FrontMatter.create()
-            .put("projectName", projectName) //$NON-NLS-1$
+            .put(McpKeys.PROJECT_NAME, projectName)
             .put("module", modulePath) //$NON-NLS-1$
             .put("method", method.getName()) //$NON-NLS-1$
             .put("type", typeStr) //$NON-NLS-1$
@@ -385,7 +389,7 @@ public class GoToDefinitionTool implements IMcpTool
             String region = BslModuleUtils.findRegionForLine(allLines, methodStart + 1);
 
             FrontMatter fm = FrontMatter.create()
-                .put("projectName", projectName) //$NON-NLS-1$
+                .put(McpKeys.PROJECT_NAME, projectName)
                 .put("module", modulePath) //$NON-NLS-1$
                 .put("method", matchedName) //$NON-NLS-1$
                 .put("type", typeStr) //$NON-NLS-1$
@@ -465,7 +469,7 @@ public class GoToDefinitionTool implements IMcpTool
         String collectionFolder = getCollectionFolder(typeName);
 
         FrontMatter fm = FrontMatter.create()
-            .put("projectName", projectName) //$NON-NLS-1$
+            .put(McpKeys.PROJECT_NAME, projectName)
             .put("kind", "MetadataObject") //$NON-NLS-1$ //$NON-NLS-2$
             .put("type", typeName) //$NON-NLS-1$
             .put("name", mdObject.getName()); //$NON-NLS-1$

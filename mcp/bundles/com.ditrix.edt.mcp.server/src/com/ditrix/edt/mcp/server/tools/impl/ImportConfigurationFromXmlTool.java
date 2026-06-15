@@ -21,6 +21,7 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
@@ -42,6 +43,9 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
 {
     public static final String NAME = "import_configuration_from_xml"; //$NON-NLS-1$
 
+    /** Input param: path of the source directory of XML files. */
+    private static final String KEY_IMPORT_PATH = "importPath"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -61,9 +65,9 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("importPath", //$NON-NLS-1$
+            .stringProperty(KEY_IMPORT_PATH,
                 "Path of the source directory of XML files.", true) //$NON-NLS-1$
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "Name of the NEW EDT project to create (must not already exist).", true) //$NON-NLS-1$
             .stringProperty("projectNature", //$NON-NLS-1$
                 "Optional EDT nature ID, e.g. 'com._1c.g5.v8.dt.core.V8ConfigurationNature'; empty = auto-detect.") //$NON-NLS-1$
@@ -81,14 +85,14 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, "importPath", "projectName"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = JsonUtils.requireArguments(params, KEY_IMPORT_PATH, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String importPathStr = JsonUtils.extractStringArgument(params, "importPath"); //$NON-NLS-1$
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String importPathStr = JsonUtils.extractStringArgument(params, KEY_IMPORT_PATH);
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String projectNature = JsonUtils.extractStringArgument(params, "projectNature"); //$NON-NLS-1$
         String xmlVersion = JsonUtils.extractStringArgument(params, "xmlVersion"); //$NON-NLS-1$
 
@@ -180,8 +184,8 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             FrontMatter fm = FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
                 .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("project", projectName) //$NON-NLS-1$
-                .put("importPath", importPath.toString()); //$NON-NLS-1$
+                .put(McpKeys.PROJECT, projectName)
+                .put(KEY_IMPORT_PATH, importPath.toString());
             if (outsideWorkspace)
             {
                 fm.put("outsideWorkspace", true); //$NON-NLS-1$

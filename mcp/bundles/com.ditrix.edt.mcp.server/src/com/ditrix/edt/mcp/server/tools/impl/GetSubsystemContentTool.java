@@ -23,6 +23,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -36,6 +37,9 @@ import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 public class GetSubsystemContentTool implements IMcpTool
 {
     public static final String NAME = "get_subsystem_content"; //$NON-NLS-1$
+
+    /** Input param: fully-qualified name of the subsystem to inspect. */
+    private static final String KEY_SUBSYSTEM_FQN = "subsystemFqn"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -57,9 +61,9 @@ public class GetSubsystemContentTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
-            .stringProperty("subsystemFqn", //$NON-NLS-1$
+            .stringProperty(KEY_SUBSYSTEM_FQN,
                 "Subsystem FQN (required), e.g. 'Subsystem.Sales.Subsystem.Orders'", //$NON-NLS-1$
                 true)
             .booleanProperty("recursive", //$NON-NLS-1$
@@ -78,7 +82,7 @@ public class GetSubsystemContentTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String fqn = JsonUtils.extractStringArgument(params, "subsystemFqn"); //$NON-NLS-1$
+        String fqn = JsonUtils.extractStringArgument(params, KEY_SUBSYSTEM_FQN);
         if (fqn != null && !fqn.isEmpty())
         {
             String safe = fqn.replace('.', '-').toLowerCase();
@@ -90,17 +94,17 @@ public class GetSubsystemContentTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String subsystemFqn = JsonUtils.extractStringArgument(params, "subsystemFqn"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String subsystemFqn = JsonUtils.extractStringArgument(params, KEY_SUBSYSTEM_FQN);
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
 
-        err = JsonUtils.requireArgument(params, "subsystemFqn", " (e.g. 'Subsystem.Sales')"); //$NON-NLS-1$ //$NON-NLS-2$
+        err = JsonUtils.requireArgument(params, KEY_SUBSYSTEM_FQN, " (e.g. 'Subsystem.Sales')"); //$NON-NLS-1$
         if (err != null)
         {
             return err;

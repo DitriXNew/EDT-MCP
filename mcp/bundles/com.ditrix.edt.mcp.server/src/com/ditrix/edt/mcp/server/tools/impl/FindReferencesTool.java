@@ -13,6 +13,7 @@ import org.eclipse.ui.PlatformUI;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -26,6 +27,9 @@ import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 public class FindReferencesTool implements IMcpTool
 {
     public static final String NAME = "find_references"; //$NON-NLS-1$
+
+    /** Input param: FQN of the metadata object to find references to. */
+    private static final String KEY_OBJECT_FQN = "objectFqn"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -48,9 +52,9 @@ public class FindReferencesTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
-            .stringProperty("objectFqn", //$NON-NLS-1$
+            .stringProperty(KEY_OBJECT_FQN,
                 "FQN of the object to search for, e.g. 'Catalog.Products' " + //$NON-NLS-1$
                 "(type token may be English or Russian) (required)", true) //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
@@ -68,7 +72,7 @@ public class FindReferencesTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
+        String objectFqn = JsonUtils.extractStringArgument(params, KEY_OBJECT_FQN);
         if (objectFqn != null && !objectFqn.isEmpty())
         {
             String safeName = objectFqn.replace(".", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -82,19 +86,19 @@ public class FindReferencesTool implements IMcpTool
     {
         // Validate required parameters via the shared guard (canonical reference
         // for the broader required-guard migration).
-        String missing = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String missing = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (missing != null)
         {
             return missing;
         }
-        missing = JsonUtils.requireArgument(params, "objectFqn"); //$NON-NLS-1$
+        missing = JsonUtils.requireArgument(params, KEY_OBJECT_FQN);
         if (missing != null)
         {
             return missing;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String objectFqn = JsonUtils.extractStringArgument(params, KEY_OBJECT_FQN);
 
         // Shared typed accessor (handles the "42.0" form and invalid/missing -> default),
         // replacing the inline Double.parseDouble. Default 100, upper clamp 500 preserved.

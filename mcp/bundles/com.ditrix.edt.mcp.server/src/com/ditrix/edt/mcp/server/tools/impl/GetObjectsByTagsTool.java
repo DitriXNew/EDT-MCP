@@ -16,6 +16,7 @@ import org.eclipse.core.resources.IProject;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tags.TagService;
 import com.ditrix.edt.mcp.server.tags.model.Tag;
@@ -53,12 +54,12 @@ public class GetObjectsByTagsTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringArrayProperty("tags", //$NON-NLS-1$
                 "Array of tag names to filter by (e.g. ['Important', 'NeedsReview']). " + //$NON-NLS-1$
                 "Returns objects that have ANY of these tags. Required.", true) //$NON-NLS-1$
-            .integerProperty("limit", //$NON-NLS-1$
+            .integerProperty(McpKeys.LIMIT,
                 "Maximum number of objects to return per tag. Default: 100") //$NON-NLS-1$
             .build();
     }
@@ -66,9 +67,9 @@ public class GetObjectsByTagsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
 
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
@@ -91,7 +92,7 @@ public class GetObjectsByTagsTool implements IMcpTool
             return ToolResult.error("Tags array is required. Example: [\"Important\", \"NeedsReview\"]").toJson(); //$NON-NLS-1$
         }
         
-        int limit = JsonUtils.extractIntArgument(params, "limit", 100); //$NON-NLS-1$
+        int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, 100);
         limit = Pagination.clampLimit(limit, 1000);
 
         ProjectContext ctx = ProjectContext.of(projectName);

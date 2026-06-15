@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -44,11 +45,17 @@ public class GetMarkersTool implements IMcpTool
 {
     public static final String NAME = "get_markers"; //$NON-NLS-1$
 
+    /** Marker-kind selector value (and row kind) for navigation bookmarks. */
+    private static final String KEY_BOOKMARK = "bookmark"; //$NON-NLS-1$
+
+    /** Priority value for normal-priority task markers. */
+    private static final String KEY_NORMAL = "normal"; //$NON-NLS-1$
+
     /** Closed set of {@code markerKind} selector values. */
-    static final List<String> MARKER_KINDS = Arrays.asList("bookmark", "task"); //$NON-NLS-1$ //$NON-NLS-2$
+    static final List<String> MARKER_KINDS = Arrays.asList(KEY_BOOKMARK, "task"); //$NON-NLS-1$
 
     /** Closed set of priority filter values accepted by the {@code priority} parameter. */
-    static final List<String> PRIORITY_VALUES = Arrays.asList("high", "normal", "low"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    static final List<String> PRIORITY_VALUES = Arrays.asList("high", KEY_NORMAL, "low"); //$NON-NLS-1$ //$NON-NLS-2$
 
     private static final String BOOKMARK_MARKER_TYPE = "org.eclipse.core.resources.bookmark"; //$NON-NLS-1$
     private static final String TASK_MARKER_TYPE = "org.eclipse.core.resources.taskmarker"; //$NON-NLS-1$
@@ -78,13 +85,13 @@ public class GetMarkersTool implements IMcpTool
             .enumProperty("markerKind", //$NON-NLS-1$
                 "Which markers to list: 'bookmark' (manual navigation bookmarks) or 'task' " //$NON-NLS-1$
                 + "(TODO/FIXME/XXX/HACK code markers). Omit to list both.", //$NON-NLS-1$
-                "bookmark", "task") //$NON-NLS-1$ //$NON-NLS-2$
+                KEY_BOOKMARK, "task") //$NON-NLS-1$
             .enumProperty("priority", //$NON-NLS-1$
                 "Filter task markers by priority (optional). Applies to task markers only; " //$NON-NLS-1$
                 + "bookmarks have no priority and are unaffected. Cannot be combined with " //$NON-NLS-1$
                 + "markerKind=bookmark.", //$NON-NLS-1$
-                "high", "normal", "low") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .integerProperty("limit", "Maximum number of results (default: 100, max: 1000)") //$NON-NLS-1$ //$NON-NLS-2$
+                "high", KEY_NORMAL, "low") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(McpKeys.LIMIT, "Maximum number of results (default: 100, max: 1000)") //$NON-NLS-1$
             .build();
     }
 
@@ -114,20 +121,20 @@ public class GetMarkersTool implements IMcpTool
         // priority sub-filters the task family only; combining it with
         // markerKind=bookmark selects no rows it could apply to, so reject the
         // contradiction with an actionable message instead of silently emptying.
-        if (hasPriority && hasKind && "bookmark".equals(markerKind.toLowerCase())) //$NON-NLS-1$
+        if (hasPriority && hasKind && KEY_BOOKMARK.equals(markerKind.toLowerCase()))
         {
             return ToolResult.error("priority filter applies to task markers only; " //$NON-NLS-1$
                 + "markerKind=bookmark selects none. Remove priority, or use markerKind=task " //$NON-NLS-1$
                 + "(or omit markerKind to list both).").toJson(); //$NON-NLS-1$
         }
 
-        boolean includeBookmarks = !hasKind || "bookmark".equals(markerKind.toLowerCase()); //$NON-NLS-1$
+        boolean includeBookmarks = !hasKind || KEY_BOOKMARK.equals(markerKind.toLowerCase());
         boolean includeTasks = !hasKind || "task".equals(markerKind.toLowerCase()); //$NON-NLS-1$
 
         int defaultLimit = ToolParameterSettings.getInstance()
-            .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
+            .getParameterValue(NAME, McpKeys.LIMIT, 100);
 
-        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+        int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);
         limit = Pagination.clampLimit(limit, 1000);
 
         return getMarkers(projectName, filePath, includeBookmarks, includeTasks, priority, limit);
@@ -264,7 +271,7 @@ public class GetMarkersTool implements IMcpTool
                 }
 
                 MarkerRow row = new MarkerRow();
-                row.kind = "bookmark"; //$NON-NLS-1$
+                row.kind = KEY_BOOKMARK;
                 row.type = "BOOKMARK"; //$NON-NLS-1$
                 // A bookmark has no priority; render a placeholder so the column reads clearly.
                 row.priority = "-"; //$NON-NLS-1$
@@ -366,7 +373,7 @@ public class GetMarkersTool implements IMcpTool
         {
             case "high": //$NON-NLS-1$
                 return IMarker.PRIORITY_HIGH;
-            case "normal": //$NON-NLS-1$
+            case KEY_NORMAL:
                 return IMarker.PRIORITY_NORMAL;
             case "low": //$NON-NLS-1$
                 return IMarker.PRIORITY_LOW;
@@ -406,7 +413,7 @@ public class GetMarkersTool implements IMcpTool
             case IMarker.PRIORITY_HIGH:
                 return "high"; //$NON-NLS-1$
             case IMarker.PRIORITY_NORMAL:
-                return "normal"; //$NON-NLS-1$
+                return KEY_NORMAL;
             case IMarker.PRIORITY_LOW:
             default:
                 return "low"; //$NON-NLS-1$

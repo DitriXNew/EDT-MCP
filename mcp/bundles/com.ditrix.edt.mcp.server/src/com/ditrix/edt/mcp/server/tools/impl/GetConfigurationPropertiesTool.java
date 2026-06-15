@@ -28,6 +28,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
@@ -56,7 +57,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "Project name (optional, if not specified returns first configuration project)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.PROJECT_NAME, "Project name (optional, if not specified returns first configuration project)") //$NON-NLS-1$
             .build();
     }
     
@@ -79,7 +80,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         return getConfigurationProperties(projectName);
     }
     
@@ -306,7 +307,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
                 }
             }
 
-            appendScalar(yaml, "projectName", matchedProject.getName()); //$NON-NLS-1$
+            appendScalar(yaml, McpKeys.PROJECT_NAME, matchedProject.getName());
 
             return yaml.toString();
         }

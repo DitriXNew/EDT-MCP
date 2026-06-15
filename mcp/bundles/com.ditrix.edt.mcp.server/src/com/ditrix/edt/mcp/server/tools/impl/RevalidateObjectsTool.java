@@ -49,7 +49,10 @@ import com.e1c.g5.v8.dt.check.ICheckScheduler;
 public class RevalidateObjectsTool implements IMcpTool
 {
     public static final String NAME = "revalidate_objects"; //$NON-NLS-1$
-    
+
+    /** Input param: list of object FQNs to revalidate (empty = full project). */
+    private static final String KEY_OBJECTS = "objects"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -70,7 +73,7 @@ public class RevalidateObjectsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty("objects", "FQNs to revalidate (e.g. ['Document.SalesOrder']). Russian type names supported (e.g. 'Документ.ПродажаТоваров'). Empty array = full project revalidation") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty(KEY_OBJECTS, "FQNs to revalidate (e.g. ['Document.SalesOrder']). Russian type names supported (e.g. 'Документ.ПродажаТоваров'). Empty array = full project revalidation") //$NON-NLS-1$
             .build();
     }
     
@@ -99,7 +102,7 @@ public class RevalidateObjectsTool implements IMcpTool
         // Objects filter: accepts a JSON array (["Document.SalesOrder"]) or a
         // comma-separated string, via the shared extractArrayArgument helper.
         // null (param absent) is normalized to an empty list = full-project revalidation.
-        List<String> objects = JsonUtils.extractArrayArgument(params, "objects"); //$NON-NLS-1$
+        List<String> objects = JsonUtils.extractArrayArgument(params, KEY_OBJECTS);
         if (objects == null)
         {
             objects = new ArrayList<>();
@@ -308,7 +311,7 @@ public class RevalidateObjectsTool implements IMcpTool
             .put("tool", NAME) //$NON-NLS-1$
             .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
             .put("project", projectName) //$NON-NLS-1$
-            .put("mode", "objects") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("mode", KEY_OBJECTS) //$NON-NLS-1$
             .put("objectsRequested", objectFqns.size()) //$NON-NLS-1$
             .put("objectsFound", found.size()); //$NON-NLS-1$
 

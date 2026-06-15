@@ -39,6 +39,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
@@ -54,6 +55,9 @@ import io.github.furstenheim.CopyDown;
 public class GetContentAssistTool implements IMcpTool
 {
     public static final String NAME = "get_content_assist"; //$NON-NLS-1$
+
+    /** Param/result key: 1-based column position. */
+    private static final String KEY_COLUMN = "column"; //$NON-NLS-1$
 
     /**
      * Maximum total time (ms) to wait for the Xtext editor/resource to become ready before
@@ -113,12 +117,12 @@ public class GetContentAssistTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.PROJECT_NAME, "EDT project name", true) //$NON-NLS-1$
             .stringProperty("modulePath", "BSL module path under src (e.g. 'CommonModules/MyModule/Module.bsl'); alias: filePath") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("filePath", "Deprecated alias for modulePath") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("line", "Line number (1-based)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("column", "Column number (1-based)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("limit", "Max proposals to return (default: from preferences, max 1000)") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_COLUMN, "Column number (1-based)", true) //$NON-NLS-1$
+            .integerProperty(McpKeys.LIMIT, "Max proposals to return (default: from preferences, max 1000)") //$NON-NLS-1$
             .integerProperty("offset", "Skip first N matching proposals for pagination (default: 0)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("contains", "Keep proposals whose display string contains any of these substrings (comma-separated, e.g. 'Insert,Add')") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("extendedDocumentation", "Include full documentation per proposal (default: false)") //$NON-NLS-1$ //$NON-NLS-2$
@@ -132,7 +136,7 @@ public class GetContentAssistTool implements IMcpTool
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("file", "Workspace-relative path of the module the proposals are for") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("line", "1-based line where proposals were computed") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("column", "1-based column where proposals were computed") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_COLUMN, "1-based column where proposals were computed") //$NON-NLS-1$
             .integerProperty("totalProposals", "Total proposals offered before any filter") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("filteredOut", "Proposals removed by the contains filter") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("skipped", "Proposals consumed by the offset") //$NON-NLS-1$ //$NON-NLS-2$
@@ -150,7 +154,7 @@ public class GetContentAssistTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         // Canonical modulePath; accept the deprecated filePath alias for back-compat.
         String filePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
         if (filePath == null || filePath.isEmpty())
@@ -158,11 +162,11 @@ public class GetContentAssistTool implements IMcpTool
             filePath = JsonUtils.extractStringArgument(params, "filePath"); //$NON-NLS-1$
         }
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
-        String columnStr = JsonUtils.extractStringArgument(params, "column"); //$NON-NLS-1$
+        String columnStr = JsonUtils.extractStringArgument(params, KEY_COLUMN);
         String containsFilter = JsonUtils.extractStringArgument(params, "contains"); //$NON-NLS-1$
         String extendedDocStr = JsonUtils.extractStringArgument(params, "extendedDocumentation"); //$NON-NLS-1$
         
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
@@ -191,8 +195,8 @@ public class GetContentAssistTool implements IMcpTool
         }
         
         int defaultLimit = ToolParameterSettings.getInstance()
-            .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
-        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+            .getParameterValue(NAME, McpKeys.LIMIT, 100);
+        int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);
         limit = Pagination.clampLimit(limit, 1000);
 
         // Read offset the SAME way as limit (declare-and-read consistency, CLAUDE.md don't #6):
@@ -693,7 +697,7 @@ public class GetContentAssistTool implements IMcpTool
         return ToolResult.success()
             .put("file", filePath) //$NON-NLS-1$
             .put("line", line) //$NON-NLS-1$
-            .put("column", column) //$NON-NLS-1$
+            .put(KEY_COLUMN, column)
             .put("totalProposals", totalProposals) //$NON-NLS-1$
             .put("filteredOut", filteredOut) //$NON-NLS-1$
             .put("skipped", skipped) //$NON-NLS-1$

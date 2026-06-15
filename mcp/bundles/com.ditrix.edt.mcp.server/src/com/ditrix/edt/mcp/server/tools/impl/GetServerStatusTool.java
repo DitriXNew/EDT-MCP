@@ -52,6 +52,9 @@ public class GetServerStatusTool implements IMcpTool
     /** Form-render JVM flag: selects the native (C++) layout render path. */
     private static final String FLAG_NATIVE_LAYOUT_RENDER = "nativeFormLayoutRender"; //$NON-NLS-1$
 
+    /** Output key: whether the MCP server is currently running. */
+    private static final String KEY_RUNNING = "running"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -87,7 +90,7 @@ public class GetServerStatusTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("port", "TCP port the MCP server listens on") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("running", "Whether the MCP server is currently running") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_RUNNING, "Whether the MCP server is currently running") //$NON-NLS-1$
             .stringProperty("protocolVersion", "MCP protocol version implemented by the server") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("pluginVersion", "Version of the EDT-MCP plugin") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("edtVersion", "Detected 1C:EDT version") //$NON-NLS-1$ //$NON-NLS-2$
@@ -120,12 +123,12 @@ public class GetServerStatusTool implements IMcpTool
             if (server != null)
             {
                 result.put("port", server.getPort()); //$NON-NLS-1$
-                result.put("running", server.isRunning()); //$NON-NLS-1$
+                result.put(KEY_RUNNING, server.isRunning());
             }
             else
             {
                 result.put("port", PreferenceConstants.DEFAULT_PORT); //$NON-NLS-1$
-                result.put("running", false); //$NON-NLS-1$
+                result.put(KEY_RUNNING, false);
             }
 
             result.put("protocolVersion", McpConstants.PROTOCOL_VERSION); //$NON-NLS-1$
@@ -164,9 +167,9 @@ public class GetServerStatusTool implements IMcpTool
             // blank get_form_screenshot / get_form_layout_snapshot.
             Map<String, Object> formRenderFlags = new LinkedHashMap<>();
             formRenderFlags.put(FLAG_BUFFERED_LAYOUT_RENDER,
-                Boolean.parseBoolean(System.getProperty("nativeFormBufferedLayoutRender"))); //$NON-NLS-1$
+                Boolean.parseBoolean(System.getProperty(FLAG_BUFFERED_LAYOUT_RENDER)));
             formRenderFlags.put(FLAG_NATIVE_LAYOUT_RENDER,
-                Boolean.parseBoolean(System.getProperty("nativeFormLayoutRender"))); //$NON-NLS-1$
+                Boolean.parseBoolean(System.getProperty(FLAG_NATIVE_LAYOUT_RENDER)));
             result.put("formRenderFlags", formRenderFlags); //$NON-NLS-1$
 
             return result.toJson();

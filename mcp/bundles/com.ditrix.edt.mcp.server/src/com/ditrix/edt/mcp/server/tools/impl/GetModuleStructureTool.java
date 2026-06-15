@@ -36,6 +36,7 @@ import com._1c.g5.v8.dt.bsl.model.RegionPreprocessor;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -76,9 +77,9 @@ public class GetModuleStructureTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
-            .stringProperty("modulePath", //$NON-NLS-1$
+            .stringProperty(McpKeys.MODULE_PATH,
                 "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
             .booleanProperty("includeVariables", //$NON-NLS-1$
                 "Include module-level variable declarations. Default: false") //$NON-NLS-1$
@@ -100,7 +101,7 @@ public class GetModuleStructureTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         if (modulePath != null && !modulePath.isEmpty())
         {
             String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -112,20 +113,20 @@ public class GetModuleStructureTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         boolean includeVariables = JsonUtils.extractBooleanArgument(params, "includeVariables", false); //$NON-NLS-1$
         boolean includeComments = JsonUtils.extractBooleanArgument(params, "includeComments", false); //$NON-NLS-1$
         // Output verbosity: any absent/blank/unrecognized value falls back to concise.
         boolean detailed = FORMAT_DETAILED.equalsIgnoreCase(
             JsonUtils.extractStringArgument(params, "responseFormat")); //$NON-NLS-1$
 
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
-        err = JsonUtils.requireArgument(params, "modulePath", ". Example: 'CommonModules/MyModule/Module.bsl'"); //$NON-NLS-1$ //$NON-NLS-2$
+        err = JsonUtils.requireArgument(params, McpKeys.MODULE_PATH, ". Example: 'CommonModules/MyModule/Module.bsl'"); //$NON-NLS-1$
         if (err != null)
         {
             return err;

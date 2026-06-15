@@ -36,6 +36,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -114,6 +115,15 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "resync_to_disk"; //$NON-NLS-1$
 
+    /** Param: opt-in flag to remove dangling/orphaned references from Configuration.mdo. */
+    private static final String KEY_CLEAN_DANGLING_REFERENCES = "cleanDanglingReferences"; //$NON-NLS-1$
+
+    /** Param: opt-in flag to force-export every top object instead of the missing subset. */
+    private static final String KEY_FULL_EXPORT = "fullExport"; //$NON-NLS-1$
+
+    /** Param: opt-in flag to schedule a full project revalidation after the export. */
+    private static final String KEY_REVALIDATE = "revalidate"; //$NON-NLS-1$
+
     /** Cap on how many FQNs are listed back in the JSON to keep responses bounded. */
     private static final int MAX_LISTED_FQNS = 500;
 
@@ -159,20 +169,20 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required).", true) //$NON-NLS-1$
-            .booleanProperty("cleanDanglingReferences", //$NON-NLS-1$
+            .booleanProperty(KEY_CLEAN_DANGLING_REFERENCES,
                 "When true, REMOVE dangling/orphaned references from Configuration.mdo - entries " //$NON-NLS-1$
                     + "that register an object with no .mdo and no BM body (unresolved proxies), " //$NON-NLS-1$
                     + "the source of md-reference-intergrity 'lost reference' warnings that block " //$NON-NLS-1$
                     + "update_database / XML import. Destructive: rewrites Configuration.mdo. " //$NON-NLS-1$
                     + "Default: false - only report danglingFound + danglingDetails without " //$NON-NLS-1$
                     + "changing anything.") //$NON-NLS-1$
-            .booleanProperty("fullExport", //$NON-NLS-1$
+            .booleanProperty(KEY_FULL_EXPORT,
                 "When true, force-export EVERY metadata top object's .mdo (a full disk refresh; " //$NON-NLS-1$
                     + "slow on a large configuration - the export runs on the UI thread). " //$NON-NLS-1$
                     + "Default: false - export only the objects whose .mdo is missing on disk.") //$NON-NLS-1$
-            .booleanProperty("revalidate", //$NON-NLS-1$
+            .booleanProperty(KEY_REVALIDATE,
                 "When true, schedule a full project revalidation (clean build) after the export so " //$NON-NLS-1$
                     + "stale markers refresh. Default: false (export only).") //$NON-NLS-1$
             .build();
@@ -183,44 +193,44 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the export succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("projectName", "The project that was re-synchronized") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.PROJECT_NAME, "The project that was re-synchronized") //$NON-NLS-1$
             .integerProperty("objectsExported", //$NON-NLS-1$
                 "Number of top objects whose .mdo was (re)written - the missing subset by default, " //$NON-NLS-1$
                     + "every object when fullExport=true") //$NON-NLS-1$
             .integerProperty("totalTopObjects", "Total metadata top objects walked in the BM model") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("fullExport", "Whether a full export of every top object was requested") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_FULL_EXPORT, "Whether a full export of every top object was requested") //$NON-NLS-1$
             .integerProperty("missingBeforeCount", "Top objects that had no .mdo on disk before the export") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty("missingBefore", "FQNs that were missing on disk before the export") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("stillMissingCount", "Top objects still missing on disk after the export") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty("stillMissing", "FQNs still missing on disk after the export") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("cleanDanglingReferences", "Whether dangling-reference removal was requested") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_CLEAN_DANGLING_REFERENCES, "Whether dangling-reference removal was requested") //$NON-NLS-1$
             .integerProperty("danglingFound", "Dangling (unresolved-proxy) references detected in Configuration.mdo") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("danglingRemovedCount", "Dangling references actually removed (0 in report-only mode)") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("danglingRemoved", "Removed dangling entries: [{field, lostFqn, position}]") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("danglingDetails", "All dangling entries found: [{field, lostFqn, position}]") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("danglingWarning", "Set when the dangling scan/cleanup could not complete cleanly") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("revalidate", "Whether a post-export revalidation was requested") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_REVALIDATE, "Whether a post-export revalidation was requested") //$NON-NLS-1$
             .stringProperty("revalidateWarning", "Set when the optional post-export revalidation failed") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("message", "Human-readable summary of the outcome") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable summary of the outcome") //$NON-NLS-1$
             .build();
     }
 
     @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         if (projectName == null || projectName.isEmpty())
         {
             return ToolResult.error("projectName is required").toJson(); //$NON-NLS-1$
         }
-        boolean revalidate = JsonUtils.extractBooleanArgument(params, "revalidate", false); //$NON-NLS-1$
+        boolean revalidate = JsonUtils.extractBooleanArgument(params, KEY_REVALIDATE, false);
         // Default FALSE (report-only): removing the dangling entries rewrites
         // Configuration.mdo, so the destructive step must be an explicit opt-in, never
         // a side effect of a diagnostic run.
-        boolean cleanDangling = JsonUtils.extractBooleanArgument(params, "cleanDanglingReferences", false); //$NON-NLS-1$
+        boolean cleanDangling = JsonUtils.extractBooleanArgument(params, KEY_CLEAN_DANGLING_REFERENCES, false);
         // Default FALSE: only the objects whose .mdo is actually missing are exported;
         // true re-exports everything (a full disk refresh, slow on the UI thread).
-        boolean fullExport = JsonUtils.extractBooleanArgument(params, "fullExport", false); //$NON-NLS-1$
+        boolean fullExport = JsonUtils.extractBooleanArgument(params, KEY_FULL_EXPORT, false);
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -314,16 +324,16 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             ? ToolResult.error("Force-export to disk did not run or failed (services/project/FQN " //$NON-NLS-1$
                 + "unresolved or export threw); see message/objectsExported") //$NON-NLS-1$
             : ToolResult.success();
-        result.put("projectName", projectName) //$NON-NLS-1$
+        result.put(McpKeys.PROJECT_NAME, projectName)
             .put("objectsExported", exported ? exportFqns.size() : 0) //$NON-NLS-1$
             .put("totalTopObjects", allFqns.size()) //$NON-NLS-1$
-            .put("fullExport", fullExport) //$NON-NLS-1$
-            .put("revalidate", revalidate) //$NON-NLS-1$
+            .put(KEY_FULL_EXPORT, fullExport)
+            .put(KEY_REVALIDATE, revalidate)
             .put("missingBeforeCount", missingBefore.size()) //$NON-NLS-1$
             .put("missingBefore", limit(missingBefore)) //$NON-NLS-1$
             .put("stillMissingCount", stillMissing.size()) //$NON-NLS-1$
             .put("stillMissing", limit(stillMissing)) //$NON-NLS-1$
-            .put("cleanDanglingReferences", cleanDangling) //$NON-NLS-1$
+            .put(KEY_CLEAN_DANGLING_REFERENCES, cleanDangling)
             .put("danglingFound", dangling.found) //$NON-NLS-1$
             .put("danglingRemovedCount", dangling.removedCount()) //$NON-NLS-1$
             // danglingRemoved: the entries actually removed (empty in report-only mode).
@@ -340,7 +350,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         {
             result.put("revalidateWarning", revalidateWarning); //$NON-NLS-1$
         }
-        result.put("message", buildMessage(exported, exported ? exportFqns.size() : 0, fullExport, //$NON-NLS-1$
+        result.put(McpKeys.MESSAGE, buildMessage(exported, exported ? exportFqns.size() : 0, fullExport,
             missingBefore.size(), stillMissing.size(), dangling, cleanDangling));
         return result.toJson();
     }

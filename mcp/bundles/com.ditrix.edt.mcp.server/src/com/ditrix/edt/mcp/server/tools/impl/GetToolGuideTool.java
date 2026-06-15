@@ -34,6 +34,9 @@ public class GetToolGuideTool implements IMcpTool
 {
     public static final String NAME = McpConstants.TOOL_GET_TOOL_GUIDE;
 
+    /** Input param: exact name of the tool to document, as it appears in tools/list. */
+    private static final String KEY_TOOL_NAME = "toolName"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -59,7 +62,7 @@ public class GetToolGuideTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("toolName", //$NON-NLS-1$
+            .stringProperty(KEY_TOOL_NAME,
                 "The exact name of the tool to document, as it appears in tools/list (e.g. 'read_module_source').", //$NON-NLS-1$
                 true)
             .build();
@@ -68,20 +71,20 @@ public class GetToolGuideTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String toolName = params != null ? params.get("toolName") : null; //$NON-NLS-1$
+        String toolName = params != null ? params.get(KEY_TOOL_NAME) : null;
         return "guide-" + (toolName != null ? toolName : "tool") + ".md"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArgument(params, "toolName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, KEY_TOOL_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String toolName = params.get("toolName"); //$NON-NLS-1$
+        String toolName = params.get(KEY_TOOL_NAME);
         IMcpTool tool = McpToolRegistry.getInstance().getTool(toolName);
         if (tool == null)
         {

@@ -15,6 +15,7 @@ import org.eclipse.ui.PlatformUI;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.rename.MetadataRenameService;
@@ -34,6 +35,12 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 public class RenameMetadataObjectTool implements IMcpTool
 {
     public static final String NAME = "rename_metadata_object"; //$NON-NLS-1$
+
+    /** Input param: FQN of the metadata object to rename. */
+    private static final String KEY_OBJECT_FQN = "objectFqn"; //$NON-NLS-1$
+
+    /** Input param: new programmatic Name for the object. */
+    private static final String KEY_NEW_NAME = "newName"; //$NON-NLS-1$
 
     private final MetadataRenameService service = new MetadataRenameService();
 
@@ -56,12 +63,12 @@ public class RenameMetadataObjectTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name.", true) //$NON-NLS-1$
-            .stringProperty("objectFqn", //$NON-NLS-1$
+            .stringProperty(KEY_OBJECT_FQN,
                 "FQN of the object to rename, e.g. 'Catalog.Products' or " + //$NON-NLS-1$
                 "'Document.SalesOrder.Attribute.Amount' (Russian type names also accepted).", true) //$NON-NLS-1$
-            .stringProperty("newName", //$NON-NLS-1$
+            .stringProperty(KEY_NEW_NAME,
                 "New programmatic Name for the object.", true) //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = apply the rename; default false = preview only.") //$NON-NLS-1$
@@ -81,7 +88,7 @@ public class RenameMetadataObjectTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         if (projectName != null && !projectName.isEmpty())
         {
             return "rename-refactoring-" + projectName.toLowerCase() + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -92,9 +99,9 @@ public class RenameMetadataObjectTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String objectFqn = JsonUtils.extractStringArgument(params, "objectFqn"); //$NON-NLS-1$
-        String newName = JsonUtils.extractStringArgument(params, "newName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String objectFqn = JsonUtils.extractStringArgument(params, KEY_OBJECT_FQN);
+        String newName = JsonUtils.extractStringArgument(params, KEY_NEW_NAME);
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         String disableIndicesStr = JsonUtils.extractStringArgument(params, "disableIndices"); //$NON-NLS-1$
         final int maxResults = Math.max(0, JsonUtils.extractIntArgument(params, "maxResults", 20)); //$NON-NLS-1$
@@ -116,20 +123,20 @@ public class RenameMetadataObjectTool implements IMcpTool
             }
         }
 
-        String err = JsonUtils.requireArgument(params, "projectName", //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME,
             ". Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
         }
-        err = JsonUtils.requireArgument(params, "objectFqn", //$NON-NLS-1$
+        err = JsonUtils.requireArgument(params, KEY_OBJECT_FQN,
             ". Examples: 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount', " //$NON-NLS-1$
             + "'Catalog.Products.TabularSection.Prices'"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
         }
-        err = JsonUtils.requireArgument(params, "newName", //$NON-NLS-1$
+        err = JsonUtils.requireArgument(params, KEY_NEW_NAME,
             ". Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}"); //$NON-NLS-1$
         if (err != null)
         {

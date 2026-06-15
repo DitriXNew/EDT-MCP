@@ -25,6 +25,7 @@ import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -53,6 +54,15 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "adopt_metadata_object"; //$NON-NLS-1$
 
+    /** Output key: the extension project the object was adopted into. */
+    private static final String KEY_EXTENSION_PROJECT = "extensionProject"; //$NON-NLS-1$
+
+    /** Output key: the object's belonging marker (ADOPTED). */
+    private static final String KEY_OBJECT_BELONGING = "objectBelonging"; //$NON-NLS-1$
+
+    /** Output key: whether the change was exported to disk. */
+    private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -74,7 +84,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "The BASE configuration EDT project that owns the object (NOT the extension) (required)", //$NON-NLS-1$
                 true)
             .stringProperty("fqn", //$NON-NLS-1$
@@ -92,23 +102,23 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "'adopted' or 'alreadyAdopted'") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.ACTION, "'adopted' or 'alreadyAdopted'") //$NON-NLS-1$
             .stringProperty("fqn", "FQN of the adopted object in the extension") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("extensionProject", "The extension the object was adopted into") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("objectBelonging", "ADOPTED (the object is now an adopted copy)") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("persisted", "Whether the change was exported to disk", false) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_EXTENSION_PROJECT, "The extension the object was adopted into") //$NON-NLS-1$
+            .stringProperty(KEY_OBJECT_BELONGING, "ADOPTED (the object is now an adopted copy)") //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk", false) //$NON-NLS-1$
             .build();
     }
 
     @Override
     protected String executeOnUiThread(Map<String, String> params) throws Exception
     {
-        String argErr = JsonUtils.requireArguments(params, "projectName", "fqn"); //$NON-NLS-1$ //$NON-NLS-2$
+        String argErr = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
         if (argErr != null)
         {
             return argErr;
         }
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         String extensionProjectName = JsonUtils.extractStringArgument(params, "extensionProjectName"); //$NON-NLS-1$
 
@@ -201,11 +211,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             // Do NOT call bmGetFqn() on the adopted object - for a MEMBER (form/attribute) it is not
             // a top object and bmGetFqn() throws ("may be called on top objects only").
             return ToolResult.success()
-                .put("action", "alreadyAdopted") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, "alreadyAdopted") //$NON-NLS-1$
                 .put("fqn", normFqn) //$NON-NLS-1$
-                .put("extensionProject", extName) //$NON-NLS-1$
-                .put("objectBelonging", "ADOPTED") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("persisted", true) //$NON-NLS-1$
+                .put(KEY_EXTENSION_PROJECT, extName)
+                .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
+                .put(KEY_PERSISTED, true)
                 .put("message", "'" + normFqn + "' is already adopted in extension '" + extName + "'.") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 .toJson();
         }
@@ -237,11 +247,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(target.getProject(), dirty);
 
         return ToolResult.success()
-            .put("action", "adopted") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
             .put("fqn", adoptedFqn) //$NON-NLS-1$
-            .put("extensionProject", extName) //$NON-NLS-1$
-            .put("objectBelonging", "ADOPTED") //$NON-NLS-1$ //$NON-NLS-2$
-            .put("persisted", persisted) //$NON-NLS-1$
+            .put(KEY_EXTENSION_PROJECT, extName)
+            .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted)
             .toJson();
     }
 

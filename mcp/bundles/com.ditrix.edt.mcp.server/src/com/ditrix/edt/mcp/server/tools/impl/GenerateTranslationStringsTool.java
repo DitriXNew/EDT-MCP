@@ -19,6 +19,7 @@ import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
@@ -78,7 +79,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "Configuration project name (V8ConfigurationNature), not a dictionary storage project. Required.", //$NON-NLS-1$
                 true)
             .stringArrayProperty("targetLanguages", //$NON-NLS-1$
@@ -107,7 +108,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         List<String> targetLanguages = JsonUtils.extractArrayArgument(params, "targetLanguages"); //$NON-NLS-1$
         String storageId = JsonUtils.extractStringArgument(params, "storageId"); //$NON-NLS-1$
         boolean collectInterface = JsonUtils.extractBooleanArgument(params, "collectInterface", true); //$NON-NLS-1$
@@ -116,7 +117,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
         String fillUpType = JsonUtils.extractStringArgument(params, "fillUpType"); //$NON-NLS-1$
         String providerId = JsonUtils.extractStringArgument(params, "providerId"); //$NON-NLS-1$
 
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
@@ -234,7 +235,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
 
             return FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
-                .put("project", projectName) //$NON-NLS-1$
+                .put(McpKeys.PROJECT, projectName)
                 .put("targetLanguages", String.join(", ", targetLanguages)) //$NON-NLS-1$ //$NON-NLS-2$
                 .put("storageId", storageId) //$NON-NLS-1$
                 .put("collectInterface", collectInterface) //$NON-NLS-1$

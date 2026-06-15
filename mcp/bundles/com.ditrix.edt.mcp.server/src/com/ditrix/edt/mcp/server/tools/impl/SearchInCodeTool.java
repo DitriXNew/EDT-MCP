@@ -25,6 +25,7 @@ import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
@@ -39,6 +40,12 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
 public class SearchInCodeTool implements IMcpTool
 {
     public static final String NAME = "search_in_code"; //$NON-NLS-1$
+
+    /** Input param: the search string or regex pattern. */
+    private static final String KEY_QUERY = "query"; //$NON-NLS-1$
+
+    /** Input param: deprecated alias for the result limit. */
+    private static final String KEY_MAX_RESULTS = "maxResults"; //$NON-NLS-1$
 
     /** Default and maximum limits */
     private static final int DEFAULT_MAX_RESULTS = 100;
@@ -73,9 +80,9 @@ public class SearchInCodeTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
-            .stringProperty("query", //$NON-NLS-1$
+            .stringProperty(KEY_QUERY,
                 "Search string or regex pattern (required); matched literally unless isRegex=true", true) //$NON-NLS-1$
             .booleanProperty("caseSensitive", //$NON-NLS-1$
                 "Case-sensitive search. Default: false") //$NON-NLS-1$
@@ -83,7 +90,7 @@ public class SearchInCodeTool implements IMcpTool
                 "Treat query as a regular expression. Default: false") //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
                 "Max matches returned with context. Default: 100, max: 500") //$NON-NLS-1$
-            .integerProperty("maxResults", //$NON-NLS-1$
+            .integerProperty(KEY_MAX_RESULTS,
                 "Deprecated alias for 'limit'. Default: 100, max: 500") //$NON-NLS-1$
             .integerProperty("contextLines", //$NON-NLS-1$
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
@@ -94,7 +101,7 @@ public class SearchInCodeTool implements IMcpTool
                 "more precise than fileMask. See guide for the full list.") //$NON-NLS-1$
             .enumProperty("outputMode", //$NON-NLS-1$
                 "Output mode: 'full' (matches with context, default), 'count', or 'files'", //$NON-NLS-1$
-                "full", "count", "files") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "full", MODE_COUNT, MODE_FILES) //$NON-NLS-1$
             .build();
     }
 
@@ -107,7 +114,7 @@ public class SearchInCodeTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String query = JsonUtils.extractStringArgument(params, "query"); //$NON-NLS-1$
+        String query = JsonUtils.extractStringArgument(params, KEY_QUERY);
         if (query != null && !query.isEmpty())
         {
             String safeName = query.replaceAll("[^a-zA-Z0-9\\u0400-\\u04FF]", "-") //$NON-NLS-1$ //$NON-NLS-2$
@@ -124,17 +131,17 @@ public class SearchInCodeTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String query = JsonUtils.extractStringArgument(params, "query"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String query = JsonUtils.extractStringArgument(params, KEY_QUERY);
         boolean caseSensitive = JsonUtils.extractBooleanArgument(params, "caseSensitive", false); //$NON-NLS-1$
         boolean isRegex = JsonUtils.extractBooleanArgument(params, "isRegex", false); //$NON-NLS-1$
         int configuredMaxResults = ToolParameterSettings.getInstance()
-            .getParameterValue(NAME, "maxResults", DEFAULT_MAX_RESULTS); //$NON-NLS-1$
+            .getParameterValue(NAME, KEY_MAX_RESULTS, DEFAULT_MAX_RESULTS);
         int configuredContextLines = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, "contextLines", DEFAULT_CONTEXT_LINES); //$NON-NLS-1$
         // Canonical param is "limit" (consistent with other paginated tools);
         // "maxResults" is kept as a deprecated alias (precedence: limit, then maxResults).
-        int maxResultsAlias = JsonUtils.extractIntArgument(params, "maxResults", configuredMaxResults); //$NON-NLS-1$
+        int maxResultsAlias = JsonUtils.extractIntArgument(params, KEY_MAX_RESULTS, configuredMaxResults);
         int maxResults = JsonUtils.extractIntArgument(params, "limit", maxResultsAlias); //$NON-NLS-1$
         int contextLines = JsonUtils.extractIntArgument(params, "contextLines", configuredContextLines); //$NON-NLS-1$
         String fileMask = JsonUtils.extractStringArgument(params, "fileMask"); //$NON-NLS-1$
@@ -142,7 +149,7 @@ public class SearchInCodeTool implements IMcpTool
         String outputMode = JsonUtils.extractStringArgument(params, "outputMode"); //$NON-NLS-1$
 
         // Validate required parameters
-        String err = JsonUtils.requireArguments(params, "projectName", "query"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_QUERY);
         if (err != null)
         {
             return err;

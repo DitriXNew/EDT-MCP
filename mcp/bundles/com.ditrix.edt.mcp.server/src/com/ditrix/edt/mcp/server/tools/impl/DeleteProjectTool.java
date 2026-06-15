@@ -14,6 +14,7 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -34,6 +35,9 @@ public class DeleteProjectTool implements IMcpTool
 {
     public static final String NAME = "delete_project"; //$NON-NLS-1$
 
+    /** Input/output param: whether the project's disk files are deleted too. */
+    private static final String KEY_DELETE_CONTENT = "deleteContent"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -53,8 +57,8 @@ public class DeleteProjectTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "Name of the EDT project to remove from the workspace.", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("deleteContent", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME, "Name of the EDT project to remove from the workspace.", true) //$NON-NLS-1$
+            .booleanProperty(KEY_DELETE_CONTENT,
                 "true = also delete the project's files from disk; default false = only unregister " //$NON-NLS-1$
                 + "the project from the workspace (files stay on disk).") //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
@@ -68,12 +72,12 @@ public class DeleteProjectTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "Either 'preview' (nothing changed) or 'deleted' (removed).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.ACTION, "Either 'preview' (nothing changed) or 'deleted' (removed).") //$NON-NLS-1$
             .booleanProperty("confirmationRequired", //$NON-NLS-1$
                 "true on a preview (no change made); absent/false once deleted.") //$NON-NLS-1$
-            .stringProperty("project", "Name of the targeted project.") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("deleteContent", "Whether disk files were (or would be) deleted too.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("message", "Human-readable status message.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.PROJECT, "Name of the targeted project.") //$NON-NLS-1$
+            .booleanProperty(KEY_DELETE_CONTENT, "Whether disk files were (or would be) deleted too.") //$NON-NLS-1$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
             .build();
     }
 
@@ -86,14 +90,14 @@ public class DeleteProjectTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        boolean deleteContent = JsonUtils.extractBooleanArgument(params, "deleteContent", false); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        boolean deleteContent = JsonUtils.extractBooleanArgument(params, KEY_DELETE_CONTENT, false);
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
 
         ProjectContext ctx = ProjectContext.of(projectName);
@@ -110,11 +114,11 @@ public class DeleteProjectTool implements IMcpTool
         if (!confirm)
         {
             return ToolResult.success()
-                .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
                 .put("confirmationRequired", true) //$NON-NLS-1$
-                .put("project", projectName) //$NON-NLS-1$
-                .put("deleteContent", deleteContent) //$NON-NLS-1$
-                .put("message", "PREVIEW: this would remove project '" + projectName //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.PROJECT, projectName)
+                .put(KEY_DELETE_CONTENT, deleteContent)
+                .put(McpKeys.MESSAGE, "PREVIEW: this would remove project '" + projectName //$NON-NLS-1$
                     + "' from the workspace" //$NON-NLS-1$
                     + (deleteContent ? " AND delete its files from disk (IRREVERSIBLE)" : " (files kept on disk)") //$NON-NLS-1$ //$NON-NLS-2$
                     + ". Re-call with confirm=true to apply it.") //$NON-NLS-1$
@@ -129,10 +133,10 @@ public class DeleteProjectTool implements IMcpTool
             project.delete(deleteContent, true, new NullProgressMonitor());
 
             return ToolResult.success()
-                .put("action", "deleted") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("project", projectName) //$NON-NLS-1$
-                .put("deleteContent", deleteContent) //$NON-NLS-1$
-                .put("message", "Project '" + projectName + "' removed from the workspace" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .put(McpKeys.ACTION, "deleted") //$NON-NLS-1$
+                .put(McpKeys.PROJECT, projectName)
+                .put(KEY_DELETE_CONTENT, deleteContent)
+                .put(McpKeys.MESSAGE, "Project '" + projectName + "' removed from the workspace" //$NON-NLS-1$ //$NON-NLS-2$
                     + (deleteContent ? " (files deleted from disk)." : " (files kept on disk).")) //$NON-NLS-1$ //$NON-NLS-2$
                 .toJson();
         }

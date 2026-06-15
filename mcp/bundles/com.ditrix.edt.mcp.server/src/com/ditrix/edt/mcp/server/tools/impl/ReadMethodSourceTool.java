@@ -22,6 +22,7 @@ import com._1c.g5.v8.dt.bsl.model.Module;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
@@ -38,6 +39,8 @@ public class ReadMethodSourceTool implements IMcpTool
 {
     public static final String NAME = "read_method_source"; //$NON-NLS-1$
 
+    /** Input param: name of the procedure/function to read. */
+    private static final String KEY_METHOD_NAME = "methodName"; //$NON-NLS-1$
     private static final String KEY_MODULE = "module"; //$NON-NLS-1$
     private static final String KEY_METHOD = "method"; //$NON-NLS-1$
     private static final String KEY_EXPORT = "export"; //$NON-NLS-1$
@@ -64,11 +67,11 @@ public class ReadMethodSourceTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name", true) //$NON-NLS-1$
-            .stringProperty("modulePath", //$NON-NLS-1$
+            .stringProperty(McpKeys.MODULE_PATH,
                 "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl'", true) //$NON-NLS-1$
-            .stringProperty("methodName", //$NON-NLS-1$
+            .stringProperty(KEY_METHOD_NAME,
                 "Procedure/function name (case-insensitive)", true) //$NON-NLS-1$
             .build();
     }
@@ -82,7 +85,7 @@ public class ReadMethodSourceTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String methodName = JsonUtils.extractStringArgument(params, "methodName"); //$NON-NLS-1$
+        String methodName = JsonUtils.extractStringArgument(params, KEY_METHOD_NAME);
         if (methodName != null && !methodName.isEmpty())
         {
             return "method-" + methodName.toLowerCase() + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -93,15 +96,15 @@ public class ReadMethodSourceTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, "projectName", "modulePath", "methodName"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, McpKeys.MODULE_PATH, KEY_METHOD_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
-        String methodName = JsonUtils.extractStringArgument(params, "methodName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
+        String methodName = JsonUtils.extractStringArgument(params, KEY_METHOD_NAME);
 
         // Try EMF approach first (on UI thread)
         AtomicReference<String> resultRef = new AtomicReference<>();
@@ -194,17 +197,17 @@ public class ReadMethodSourceTool implements IMcpTool
         String contentHash = computeModuleHash(file);
 
         FrontMatter fm = FrontMatter.create()
-            .put("projectName", projectName) //$NON-NLS-1$
-            .put(KEY_MODULE, modulePath); //$NON-NLS-1$
+            .put(McpKeys.PROJECT_NAME, projectName)
+            .put(KEY_MODULE, modulePath);
         if (contentHash != null)
         {
             fm.put("contentHash", contentHash); //$NON-NLS-1$
         }
-        fm.put(KEY_METHOD, method.getName()) //$NON-NLS-1$
+        fm.put(KEY_METHOD, method.getName())
             .put("type", typeStr) //$NON-NLS-1$
-            .put(KEY_EXPORT, method.isExport()) //$NON-NLS-1$
-            .put(KEY_START_LINE, from) //$NON-NLS-1$
-            .put(KEY_END_LINE, to) //$NON-NLS-1$
+            .put(KEY_EXPORT, method.isExport())
+            .put(KEY_START_LINE, from)
+            .put(KEY_END_LINE, to)
             .put("totalLines", allLines.size()); //$NON-NLS-1$
 
         if (region != null)
@@ -291,17 +294,17 @@ public class ReadMethodSourceTool implements IMcpTool
             String contentHash = computeModuleHash(file);
 
             FrontMatter fm = FrontMatter.create()
-                .put("projectName", projectName) //$NON-NLS-1$
-                .put(KEY_MODULE, modulePath); //$NON-NLS-1$
+                .put(McpKeys.PROJECT_NAME, projectName)
+                .put(KEY_MODULE, modulePath);
             if (contentHash != null)
             {
                 fm.put("contentHash", contentHash); //$NON-NLS-1$
             }
-            fm.put(KEY_METHOD, methodName) //$NON-NLS-1$
+            fm.put(KEY_METHOD, methodName)
                 .put("type", typeStr) //$NON-NLS-1$
-                .put(KEY_EXPORT, isExport) //$NON-NLS-1$
-                .put(KEY_START_LINE, methodStart + 1) //$NON-NLS-1$
-                .put(KEY_END_LINE, methodEnd + 1) //$NON-NLS-1$
+                .put(KEY_EXPORT, isExport)
+                .put(KEY_START_LINE, methodStart + 1)
+                .put(KEY_END_LINE, methodEnd + 1)
                 .put("totalLines", allLines.size()); //$NON-NLS-1$
 
             if (region != null)
@@ -362,13 +365,13 @@ public class ReadMethodSourceTool implements IMcpTool
         String typeStr = method instanceof Function ? TYPE_FUNCTION : TYPE_PROCEDURE; //$NON-NLS-1$ //$NON-NLS-2$
 
         FrontMatter fm = FrontMatter.create()
-            .put("projectName", projectName) //$NON-NLS-1$
-            .put(KEY_MODULE, modulePath) //$NON-NLS-1$
-            .put(KEY_METHOD, method.getName()) //$NON-NLS-1$
+            .put(McpKeys.PROJECT_NAME, projectName)
+            .put(KEY_MODULE, modulePath)
+            .put(KEY_METHOD, method.getName())
             .put("type", typeStr) //$NON-NLS-1$
-            .put(KEY_EXPORT, method.isExport()) //$NON-NLS-1$
-            .put(KEY_START_LINE, startLine) //$NON-NLS-1$
-            .put(KEY_END_LINE, endLine); //$NON-NLS-1$
+            .put(KEY_EXPORT, method.isExport())
+            .put(KEY_START_LINE, startLine)
+            .put(KEY_END_LINE, endLine);
 
         StringBuilder sb = new StringBuilder();
         if (sourceText != null)

@@ -18,6 +18,7 @@ import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
@@ -60,7 +61,7 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.PROJECT_NAME, "EDT project name (required)", true) //$NON-NLS-1$
             .build();
     }
 
@@ -73,13 +74,13 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
 
         try
         {
@@ -159,7 +160,7 @@ public class GetTranslationProjectInfoTool implements IMcpTool
 
             return FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
-                .put("project", projectName) //$NON-NLS-1$
+                .put(McpKeys.PROJECT, projectName)
                 .put("storagesCount", storages.size()) //$NON-NLS-1$
                 .put("providersCount", providers.size()) //$NON-NLS-1$
                 .wrapContent(body.toString());

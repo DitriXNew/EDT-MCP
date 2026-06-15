@@ -19,6 +19,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
@@ -61,9 +62,9 @@ public class ReadModuleSourceTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
-            .stringProperty("modulePath", //$NON-NLS-1$
+            .stringProperty(McpKeys.MODULE_PATH,
                 "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
             .integerProperty("startLine", //$NON-NLS-1$
                 "First line, 1-based inclusive; omit to read from the start.") //$NON-NLS-1$
@@ -81,7 +82,7 @@ public class ReadModuleSourceTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         if (modulePath != null && !modulePath.isEmpty())
         {
             String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -94,18 +95,18 @@ public class ReadModuleSourceTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         // Validate required parameters
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         int startLine = JsonUtils.extractIntArgument(params, "startLine", -1); //$NON-NLS-1$
         int endLine = JsonUtils.extractIntArgument(params, "endLine", -1); //$NON-NLS-1$
 
-        err = JsonUtils.requireArgument(params, "modulePath", ". Example: 'CommonModules/MyModule/Module.bsl'"); //$NON-NLS-1$ //$NON-NLS-2$
+        err = JsonUtils.requireArgument(params, McpKeys.MODULE_PATH, ". Example: 'CommonModules/MyModule/Module.bsl'"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
@@ -205,7 +206,7 @@ public class ReadModuleSourceTool implements IMcpTool
         int from, int to, int totalLines, boolean truncated, String contentHash)
     {
         FrontMatter fm = FrontMatter.create()
-            .put("projectName", projectName) //$NON-NLS-1$
+            .put(McpKeys.PROJECT_NAME, projectName)
             .put("module", modulePath); //$NON-NLS-1$
 
         if (contentHash != null)

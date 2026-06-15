@@ -34,7 +34,10 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
 public class GetCheckDescriptionTool implements IMcpTool
 {
     public static final String NAME = "get_check_description"; //$NON-NLS-1$
-    
+
+    /** Input param: the check id (symbolic dash-cased id or short UID code). */
+    private static final String KEY_CHECK_ID = "checkId"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -56,7 +59,7 @@ public class GetCheckDescriptionTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("checkId", //$NON-NLS-1$
+            .stringProperty(KEY_CHECK_ID,
                 "Check id: the symbolic dash-cased id (e.g. 'begin-transaction', " //$NON-NLS-1$
                 + "'ql-temp-table-index') OR the short UID code from get_project_errors " //$NON-NLS-1$
                 + "(e.g. 'SU23'); a UID is resolved when projectName is also supplied. " //$NON-NLS-1$
@@ -71,7 +74,7 @@ public class GetCheckDescriptionTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String checkId = JsonUtils.extractStringArgument(params, "checkId"); //$NON-NLS-1$
+        String checkId = JsonUtils.extractStringArgument(params, KEY_CHECK_ID);
         if (checkId != null && !checkId.isEmpty())
         {
             return checkId + ".md"; //$NON-NLS-1$
@@ -82,7 +85,7 @@ public class GetCheckDescriptionTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String checkId = JsonUtils.extractStringArgument(params, "checkId"); //$NON-NLS-1$
+        String checkId = JsonUtils.extractStringArgument(params, KEY_CHECK_ID);
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         return getCheckDescription(checkId, projectName);
     }

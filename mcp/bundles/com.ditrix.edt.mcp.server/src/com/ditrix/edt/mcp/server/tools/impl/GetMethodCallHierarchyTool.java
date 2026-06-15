@@ -37,6 +37,7 @@ import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -58,6 +59,15 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 {
     public static final String NAME = "get_method_call_hierarchy"; //$NON-NLS-1$
 
+    /** Input param: name of the procedure/function to analyze. */
+    private static final String KEY_METHOD_NAME = "methodName"; //$NON-NLS-1$
+
+    /** Input param: hierarchy direction ('callers' or 'callees'). */
+    private static final String KEY_DIRECTION = "direction"; //$NON-NLS-1$
+
+    /** Direction value: callers (who calls this method). */
+    private static final String KEY_CALLERS = "callers"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -77,16 +87,16 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
-            .stringProperty("modulePath", //$NON-NLS-1$
+            .stringProperty(McpKeys.MODULE_PATH,
                 "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
-            .stringProperty("methodName", //$NON-NLS-1$
+            .stringProperty(KEY_METHOD_NAME,
                 "Name of the procedure/function (case-insensitive, required)", true) //$NON-NLS-1$
-            .enumProperty("direction", //$NON-NLS-1$
+            .enumProperty(KEY_DIRECTION,
                 "'callers' (default) or 'callees'", //$NON-NLS-1$
-                "callers", "callees") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("limit", //$NON-NLS-1$
+                KEY_CALLERS, "callees") //$NON-NLS-1$
+            .integerProperty(McpKeys.LIMIT,
                 "Max results. Default: 100, max: 500") //$NON-NLS-1$
             .build();
     }
@@ -100,12 +110,12 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String methodName = JsonUtils.extractStringArgument(params, "methodName"); //$NON-NLS-1$
-        String direction = JsonUtils.extractStringArgument(params, "direction"); //$NON-NLS-1$
+        String methodName = JsonUtils.extractStringArgument(params, KEY_METHOD_NAME);
+        String direction = JsonUtils.extractStringArgument(params, KEY_DIRECTION);
         if (methodName != null && !methodName.isEmpty())
         {
             return "call-hierarchy-" + methodName.toLowerCase() + //$NON-NLS-1$
-                   "-" + (direction != null ? direction : "callers") + ".md"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                   "-" + (direction != null ? direction : KEY_CALLERS) + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "call-hierarchy.md"; //$NON-NLS-1$
     }
@@ -113,13 +123,13 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
-        String methodName = JsonUtils.extractStringArgument(params, "methodName"); //$NON-NLS-1$
-        String direction = JsonUtils.extractStringArgument(params, "direction"); //$NON-NLS-1$
-        int limit = JsonUtils.extractIntArgument(params, "limit", 100); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
+        String methodName = JsonUtils.extractStringArgument(params, KEY_METHOD_NAME);
+        String direction = JsonUtils.extractStringArgument(params, KEY_DIRECTION);
+        int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, 100);
 
-        String err = JsonUtils.requireArguments(params, "projectName", "modulePath", "methodName"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, McpKeys.MODULE_PATH, KEY_METHOD_NAME);
         if (err != null)
         {
             return err;
@@ -127,11 +137,11 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
         if (direction == null || direction.isEmpty())
         {
-            direction = "callers"; //$NON-NLS-1$
+            direction = KEY_CALLERS;
         }
         direction = direction.toLowerCase();
 
-        if (!"callers".equals(direction) && !"callees".equals(direction)) //$NON-NLS-1$ //$NON-NLS-2$
+        if (!KEY_CALLERS.equals(direction) && !"callees".equals(direction)) //$NON-NLS-1$
         {
             return ToolResult.error("direction must be 'callers' or 'callees'").toJson(); //$NON-NLS-1$
         }
@@ -147,7 +157,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             try
             {
                 String result;
-                if ("callers".equals(dir)) //$NON-NLS-1$
+                if (KEY_CALLERS.equals(dir))
                 {
                     result = findCallers(projectName, modulePath, methodName, maxResults);
                 }

@@ -10,6 +10,7 @@ import java.util.Map;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.symbol.SymbolInfoService;
@@ -26,6 +27,9 @@ import com.ditrix.edt.mcp.server.tools.symbol.SymbolInfoService;
 public class GetSymbolInfoTool implements IMcpTool
 {
     public static final String NAME = "get_symbol_info"; //$NON-NLS-1$
+
+    /** Input param: 1-based column number of the symbol position. */
+    private static final String KEY_COLUMN = "column"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -44,13 +48,13 @@ public class GetSymbolInfoTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", "EDT project name", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.PROJECT_NAME, "EDT project name", true) //$NON-NLS-1$
             .stringProperty("modulePath", //$NON-NLS-1$
                 "BSL module path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (canonical; alias: filePath)") //$NON-NLS-1$
             .stringProperty("filePath", //$NON-NLS-1$
                 "Deprecated alias for modulePath") //$NON-NLS-1$
             .integerProperty("line", "Line number (1-based)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("column", "Column number (1-based)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_COLUMN, "Column number (1-based)", true) //$NON-NLS-1$
             .build();
     }
 
@@ -64,7 +68,7 @@ public class GetSymbolInfoTool implements IMcpTool
     public String getResultFileName(Map<String, String> params)
     {
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
-        String columnStr = JsonUtils.extractStringArgument(params, "column"); //$NON-NLS-1$
+        String columnStr = JsonUtils.extractStringArgument(params, KEY_COLUMN);
         return "symbol-info-" + (lineStr != null ? lineStr : "0") + //$NON-NLS-1$ //$NON-NLS-2$
                "-" + (columnStr != null ? columnStr : "0") + ".md"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
@@ -72,13 +76,13 @@ public class GetSymbolInfoTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         // Canonical modulePath; accept the deprecated filePath alias for back-compat.
         String filePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
         if (filePath == null || filePath.isEmpty())
@@ -90,7 +94,7 @@ public class GetSymbolInfoTool implements IMcpTool
             return ToolResult.error("modulePath is required (or the deprecated alias filePath)").toJson(); //$NON-NLS-1$
         }
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
-        String columnStr = JsonUtils.extractStringArgument(params, "column"); //$NON-NLS-1$
+        String columnStr = JsonUtils.extractStringArgument(params, KEY_COLUMN);
 
         int line;
         int column;
