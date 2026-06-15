@@ -27,6 +27,11 @@ public final class ToolParameterSettings
     /** Preference key prefix for tool parameters */
     private static final String KEY_PREFIX = "tool."; //$NON-NLS-1$
 
+    /** Common "limit" result-cap parameter name shared by several tools. */
+    private static final String LIMIT = "limit"; //$NON-NLS-1$
+    /** Display name for the shared "limit" parameter. */
+    private static final String RESULT_LIMIT = "Result limit"; //$NON-NLS-1$
+
     private static final ToolParameterSettings INSTANCE = new ToolParameterSettings();
 
     /**
@@ -91,23 +96,23 @@ public final class ToolParameterSettings
         Map<String, List<ParameterDef>> map = new LinkedHashMap<>();
 
         map.put("get_project_errors", Collections.singletonList( //$NON-NLS-1$
-            new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
+            new ParameterDef(LIMIT, RESULT_LIMIT,
                 "Default number of errors to return", 100, 1, 1000))); //$NON-NLS-1$
 
         map.put("get_markers", Collections.singletonList( //$NON-NLS-1$
-            new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
+            new ParameterDef(LIMIT, RESULT_LIMIT,
                 "Default number of markers to return", 100, 1, 1000))); //$NON-NLS-1$
 
         map.put("get_metadata_objects", Collections.singletonList( //$NON-NLS-1$
-            new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
+            new ParameterDef(LIMIT, RESULT_LIMIT,
                 "Default number of metadata objects to return", 100, 1, 1000))); //$NON-NLS-1$
 
         map.put("list_subsystems", Collections.singletonList( //$NON-NLS-1$
-            new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
+            new ParameterDef(LIMIT, RESULT_LIMIT,
                 "Default number of subsystems to return", 100, 1, 1000))); //$NON-NLS-1$
 
         map.put("get_content_assist", Collections.singletonList( //$NON-NLS-1$
-            new ParameterDef("limit", "Result limit", //$NON-NLS-1$ //$NON-NLS-2$
+            new ParameterDef(LIMIT, RESULT_LIMIT,
                 "Default number of content assist proposals to return", 100, 1, 1000))); //$NON-NLS-1$
 
         map.put("search_in_code", Arrays.asList( //$NON-NLS-1$

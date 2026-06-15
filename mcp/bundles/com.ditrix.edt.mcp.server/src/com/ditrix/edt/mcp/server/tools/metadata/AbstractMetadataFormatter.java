@@ -32,6 +32,9 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
     protected static final String YES = "Yes"; //$NON-NLS-1$
     protected static final String NO = "No"; //$NON-NLS-1$
     protected static final String DASH = "-"; //$NON-NLS-1$
+    private static final String PROPERTY = "Property"; //$NON-NLS-1$
+    private static final String VALUE = "Value"; //$NON-NLS-1$
+    private static final String SYNONYM = "Synonym"; //$NON-NLS-1$
 
     /**
      * Per-section row cap for the unbounded EMF-reflection dumps
@@ -212,9 +215,9 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
     protected void formatBasicProperties(StringBuilder sb, MdObject mdObject, String language)
     {
         addSectionHeader(sb, "Basic Properties"); //$NON-NLS-1$
-        startTable(sb, "Property", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
+        startTable(sb, PROPERTY, VALUE);
         addPropertyRow(sb, "Name", mdObject.getName()); //$NON-NLS-1$
-        addPropertyRow(sb, "Synonym", getSynonym(mdObject.getSynonym(), language)); //$NON-NLS-1$
+        addPropertyRow(sb, SYNONYM, getSynonym(mdObject.getSynonym(), language));
         
         String comment = mdObject.getComment();
         if (comment != null && !comment.isEmpty())
@@ -244,7 +247,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
             if (standardAttributes != null && !standardAttributes.isEmpty())
             {
                 addSectionHeader(sb, "StandardAttributes"); //$NON-NLS-1$
-                startTable(sb, "Name", "Synonym", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input", "Data History"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
+                startTable(sb, "Name", SYNONYM, "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input", "Data History"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
                 
                 for (StandardAttribute attr : standardAttributes)
                 {
@@ -292,7 +295,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
     protected void formatAllDynamicProperties(StringBuilder sb, EObject eObject, String language, String sectionTitle)
     {
         addSectionHeader(sb, sectionTitle);
-        startTable(sb, "Property", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
+        startTable(sb, PROPERTY, VALUE);
 
         List<EStructuralFeature> features = eObject.eClass().getEAllStructuralFeatures();
 
@@ -414,7 +417,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         if (!simpleAttributes.isEmpty())
         {
             addSectionHeader(sb, "Properties"); //$NON-NLS-1$
-            startTable(sb, "Property", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
+            startTable(sb, PROPERTY, VALUE);
             for (EAttribute attr : simpleAttributes)
             {
                 Object value = eObject.eGet(attr);
@@ -430,7 +433,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         if (!singleReferences.isEmpty())
         {
             addSectionHeader(sb, "References"); //$NON-NLS-1$
-            startTable(sb, "Property", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
+            startTable(sb, PROPERTY, VALUE);
             for (EReference ref : singleReferences)
             {
                 Object value = eObject.eGet(ref);
@@ -470,7 +473,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         {
             // For EMap collections like Synonym, ObjectPresentation - format as key-value table
             addSectionHeader(sb, formatFeatureName(name) + " (" + collection.size() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
-            startTable(sb, "Language", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
+            startTable(sb, "Language", VALUE); //$NON-NLS-1$
             for (Object item : collection)
             {
                 java.util.Map.Entry entry = (java.util.Map.Entry) item;
@@ -497,7 +500,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
                 MdObject mdObj = (MdObject) item;
                 if (first)
                 {
-                    startTable(sb, "FQN", "Synonym"); //$NON-NLS-1$ //$NON-NLS-2$
+                    startTable(sb, "FQN", SYNONYM); //$NON-NLS-1$
                     first = false;
                 }
                 if (mdRendered >= MAX_DYNAMIC_ROWS)

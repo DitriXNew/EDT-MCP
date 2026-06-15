@@ -42,6 +42,12 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     /** Table column / property label for a value cell. */
     private static final String VALUE_TOKEN = "Value"; //$NON-NLS-1$
 
+    /** Table column / property label for a synonym cell. */
+    private static final String SYNONYM_TOKEN = "Synonym"; //$NON-NLS-1$
+
+    /** Table column label for an origin cell. */
+    private static final String ORIGIN_TOKEN = "Origin"; //$NON-NLS-1$
+
     /**
      * Gets the singleton instance.
      */
@@ -242,11 +248,11 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         boolean showOrigin = anyAdopted(forms);
         if (showOrigin)
         {
-            startTable(sb, "Name", "Synonym", "Form Type", "Origin"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            startTable(sb, "Name", SYNONYM_TOKEN, "Form Type", ORIGIN_TOKEN); //$NON-NLS-1$ //$NON-NLS-2$
         }
         else
         {
-            startTable(sb, "Name", "Synonym", "Form Type"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            startTable(sb, "Name", SYNONYM_TOKEN, "Form Type"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         for (Object item : forms)
@@ -306,7 +312,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     private void formatCommandsCollection(StringBuilder sb, String name, Collection<?> commands, String language)
     {
         addSectionHeader(sb, name);
-        startTable(sb, "Name", "Synonym", "Group"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        startTable(sb, "Name", SYNONYM_TOKEN, "Group"); //$NON-NLS-1$ //$NON-NLS-2$
         
         for (Object item : commands)
         {
@@ -344,10 +350,10 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         {
             // Extended format with 10 columns (+ Origin when adopted attributes are present)
             java.util.List<String> headers = new java.util.ArrayList<>(java.util.Arrays.asList(
-                "Name", "Synonym", "Type", "Indexing", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$
+                "Name", SYNONYM_TOKEN, "Type", "Indexing", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
             if (showOrigin)
             {
-                headers.add("Origin"); //$NON-NLS-1$
+                headers.add(ORIGIN_TOKEN);
             }
             startTable(sb, headers.toArray(new String[0]));
 
@@ -421,11 +427,11 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
             // Compact format - Name, Synonym, Type (+ Origin when adopted attributes are present)
             if (showOrigin)
             {
-                startTable(sb, "Name", "Synonym", "Type", "Origin"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                startTable(sb, "Name", SYNONYM_TOKEN, "Type", ORIGIN_TOKEN); //$NON-NLS-1$ //$NON-NLS-2$
             }
             else
             {
-                startTable(sb, "Name", "Synonym", "Type"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                startTable(sb, "Name", SYNONYM_TOKEN, "Type"); //$NON-NLS-1$ //$NON-NLS-2$
             }
 
             for (Object item : items)
@@ -476,7 +482,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
                 // Properties table for the TS itself
                 startTable(sb, "Property", VALUE_TOKEN);
                 addPropertyRow(sb, "Name", ts.getName());
-                addPropertyRow(sb, "Synonym", getSynonym(ts.getSynonym(), language));
+                addPropertyRow(sb, SYNONYM_TOKEN, getSynonym(ts.getSynonym(), language));
                 
                 String comment = ts.getComment();
                 if (comment != null && !comment.isEmpty())
@@ -681,11 +687,11 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
                     // Build table headers based on first item
                     if (full)
                     {
-                        startTable(sb, "Name", "Synonym", "Type"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        startTable(sb, "Name", SYNONYM_TOKEN, "Type"); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                     else
                     {
-                        startTable(sb, "Name", "Synonym"); //$NON-NLS-1$ //$NON-NLS-2$
+                        startTable(sb, "Name", SYNONYM_TOKEN); //$NON-NLS-1$
                     }
                     first = false;
                 }

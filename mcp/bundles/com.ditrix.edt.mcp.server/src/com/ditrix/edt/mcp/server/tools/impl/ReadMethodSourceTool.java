@@ -48,6 +48,8 @@ public class ReadMethodSourceTool implements IMcpTool
     private static final String KEY_END_LINE = "endLine"; //$NON-NLS-1$
     private static final String TYPE_PROCEDURE = "Procedure"; //$NON-NLS-1$
     private static final String TYPE_FUNCTION = "Function"; //$NON-NLS-1$
+    private static final String BSL_FENCE_OPEN = "```bsl\n"; //$NON-NLS-1$
+    private static final String FENCE_CLOSE = "```\n"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -216,12 +218,12 @@ public class ReadMethodSourceTool implements IMcpTool
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("```bsl\n"); //$NON-NLS-1$
+        sb.append(BSL_FENCE_OPEN);
         for (int i = from - 1; i < to; i++)
         {
             sb.append(allLines.get(i)).append('\n');
         }
-        sb.append("```\n"); //$NON-NLS-1$
+        sb.append(FENCE_CLOSE);
 
         // Extension interception: if this is a core method intercepted by an extension
         // (or an extension method that intercepts a core one), note it below the code.
@@ -313,12 +315,12 @@ public class ReadMethodSourceTool implements IMcpTool
             }
 
             StringBuilder sb = new StringBuilder();
-            sb.append("```bsl\n"); //$NON-NLS-1$
+            sb.append(BSL_FENCE_OPEN);
             for (int i = methodStart; i <= methodEnd; i++)
             {
                 sb.append(allLines.get(i)).append('\n');
             }
-            sb.append("```\n"); //$NON-NLS-1$
+            sb.append(FENCE_CLOSE);
 
             return fm.wrapContent(sb.toString());
         }
@@ -376,13 +378,13 @@ public class ReadMethodSourceTool implements IMcpTool
         StringBuilder sb = new StringBuilder();
         if (sourceText != null)
         {
-            sb.append("```bsl\n"); //$NON-NLS-1$
+            sb.append(BSL_FENCE_OPEN);
             sb.append(sourceText);
             if (!sourceText.endsWith("\n")) //$NON-NLS-1$
             {
                 sb.append('\n');
             }
-            sb.append("```\n"); //$NON-NLS-1$
+            sb.append(FENCE_CLOSE);
         }
 
         return fm.wrapContent(sb.toString());

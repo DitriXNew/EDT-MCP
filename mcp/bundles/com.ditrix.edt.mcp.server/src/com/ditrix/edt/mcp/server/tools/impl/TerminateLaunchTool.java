@@ -82,6 +82,18 @@ public class TerminateLaunchTool implements IMcpTool
     /** Input key: deprecated alias of the 'timeout' wait window in seconds. */
     private static final String KEY_TIMEOUT_SECONDS = "timeoutSeconds"; //$NON-NLS-1$
 
+    /** Input key: exact launch configuration name (single-launch mode). */
+    private static final String KEY_LAUNCH_CONFIGURATION_NAME = "launchConfigurationName"; //$NON-NLS-1$
+
+    /** Input key: EDT project name. */
+    private static final String KEY_PROJECT_NAME = "projectName"; //$NON-NLS-1$
+
+    /** Input key: application ID from get_applications. */
+    private static final String KEY_APPLICATION_ID = "applicationId"; //$NON-NLS-1$
+
+    /** Sanitization pattern: any char outside [a-zA-Z0-9._-] for safe file names. */
+    private static final String UNSAFE_FILENAME_CHARS = "[^a-zA-Z0-9._-]"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -101,11 +113,11 @@ public class TerminateLaunchTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("launchConfigurationName", //$NON-NLS-1$
+            .stringProperty(KEY_LAUNCH_CONFIGURATION_NAME,
                 "Exact launch configuration name from list_configurations (single-launch mode).") //$NON-NLS-1$
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(KEY_PROJECT_NAME,
                 "EDT project name; pair with applicationId for one launch, or with all=true.") //$NON-NLS-1$
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(KEY_APPLICATION_ID,
                 "Application ID from get_applications; requires projectName.") //$NON-NLS-1$
             .booleanProperty("all", //$NON-NLS-1$
                 "Terminate every live EDT launch (optionally narrowed by projectName); " //$NON-NLS-1$
@@ -135,19 +147,19 @@ public class TerminateLaunchTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String name = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
+        String name = JsonUtils.extractStringArgument(params, KEY_LAUNCH_CONFIGURATION_NAME);
         if (name != null && !name.isEmpty())
         {
-            String safe = name.replaceAll("[^a-zA-Z0-9._-]", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+            String safe = name.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
             return "terminate-" + safe + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         boolean all = JsonUtils.extractBooleanArgument(params, "all", false); //$NON-NLS-1$
         if (all)
         {
-            String project = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+            String project = JsonUtils.extractStringArgument(params, KEY_PROJECT_NAME);
             if (project != null && !project.isEmpty())
             {
-                String safe = project.replaceAll("[^a-zA-Z0-9._-]", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+                String safe = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
                 return "terminate-all-" + safe + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
             }
             return "terminate-all.md"; //$NON-NLS-1$
@@ -155,12 +167,12 @@ public class TerminateLaunchTool implements IMcpTool
         // projectName + applicationId mode — include both in the filename so
         // parallel calls against different IBs don't overwrite each other's
         // result file.
-        String project = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String appId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String project = JsonUtils.extractStringArgument(params, KEY_PROJECT_NAME);
+        String appId = JsonUtils.extractStringArgument(params, KEY_APPLICATION_ID);
         if (project != null && !project.isEmpty() && appId != null && !appId.isEmpty())
         {
-            String safeProject = project.replaceAll("[^a-zA-Z0-9._-]", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
-            String safeAppId = appId.replaceAll("[^a-zA-Z0-9._-]", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+            String safeProject = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
+            String safeAppId = appId.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
             // Truncate to keep the path short — agents sometimes pass long UUIDs.
             if (safeAppId.length() > 16)
             {
@@ -174,9 +186,9 @@ public class TerminateLaunchTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String configName = JsonUtils.extractStringArgument(params, KEY_LAUNCH_CONFIGURATION_NAME);
+        String projectName = JsonUtils.extractStringArgument(params, KEY_PROJECT_NAME);
+        String applicationId = JsonUtils.extractStringArgument(params, KEY_APPLICATION_ID);
         boolean all = JsonUtils.extractBooleanArgument(params, "all", false); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
