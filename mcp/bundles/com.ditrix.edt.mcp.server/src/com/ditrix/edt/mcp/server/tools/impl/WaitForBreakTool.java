@@ -20,6 +20,7 @@ import com._1c.g5.v8.dt.debug.core.model.IBslStackFrame;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
@@ -44,6 +45,22 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 public class WaitForBreakTool implements IMcpTool
 {
     public static final String NAME = "wait_for_break"; //$NON-NLS-1$
+
+    /** Schema/result key: wait window in seconds. */
+    private static final String KEY_TIMEOUT = "timeout"; //$NON-NLS-1$
+
+    /** Result key: reason when no suspend occurred. */
+    private static final String KEY_REASON = "reason"; //$NON-NLS-1$
+
+    /** {@link #KEY_REASON} value: the wait window elapsed without a suspend. */
+    private static final String REASON_TIMEOUT = "timeout"; //$NON-NLS-1$
+
+    /** Result key: whether the applicationId was auto-resolved. */
+    private static final String KEY_AUTO_RESOLVED = "autoResolved"; //$NON-NLS-1$
+
+    /** Result key: whether resolved via the 1C debug-server target bridge. */
+    private static final String KEY_SERVER_TARGET = "serverTarget"; //$NON-NLS-1$
+
     private static final int DEFAULT_TIMEOUT = 60;
 
     /** Hard cap on the wait window, prevents a worker thread blocking for hours. */
@@ -71,11 +88,11 @@ public class WaitForBreakTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID,
                 "Application id of the running debug session (real, 'attach:<configName>', " //$NON-NLS-1$
                     + "'launch:<configName>', or 'ServerApplication.<app>'). " //$NON-NLS-1$
                     + "Optional if exactly one debug session is active.") //$NON-NLS-1$
-            .integerProperty("timeout", "Wait window in seconds (default: 60)") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_TIMEOUT, "Wait window in seconds (default: 60)") //$NON-NLS-1$
             .build();
     }
 
@@ -85,10 +102,10 @@ public class WaitForBreakTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("hit", "True if a suspend was observed, false on timeout") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("reason", "Reason when no suspend occurred (e.g. 'timeout')") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application id of the debug session waited on") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("autoResolved", "True if applicationId was auto-resolved") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("serverTarget", "True if resolved via the 1C debug-server target bridge") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_REASON, "Reason when no suspend occurred (e.g. 'timeout')") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application id of the debug session waited on") //$NON-NLS-1$
+            .booleanProperty(KEY_AUTO_RESOLVED, "True if applicationId was auto-resolved") //$NON-NLS-1$
+            .booleanProperty(KEY_SERVER_TARGET, "True if resolved via the 1C debug-server target bridge") //$NON-NLS-1$
             .integerProperty("threadId", "Id of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("threadName", "Name of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("frames", "Stack frames of the suspended thread (frameIndex, frameRef, name, line, modulePath, project)") //$NON-NLS-1$ //$NON-NLS-2$
@@ -105,8 +122,8 @@ public class WaitForBreakTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
-        int timeout = clampTimeout(JsonUtils.extractIntArgument(params, "timeout", DEFAULT_TIMEOUT)); //$NON-NLS-1$
+        String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
+        int timeout = clampTimeout(JsonUtils.extractIntArgument(params, KEY_TIMEOUT, DEFAULT_TIMEOUT)); //$NON-NLS-1$
 
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         registry.ensureListenerRegistered();
@@ -157,11 +174,11 @@ public class WaitForBreakTool implements IMcpTool
             {
                 ToolResult r = ToolResult.success()
                     .put("hit", false) //$NON-NLS-1$
-                    .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put("applicationId", applicationId); //$NON-NLS-1$
+                    .put(KEY_REASON, REASON_TIMEOUT)
+                    .put(McpKeys.APPLICATION_ID, applicationId);
                 if (autoResolved)
                 {
-                    r.put("autoResolved", true); //$NON-NLS-1$
+                    r.put(KEY_AUTO_RESOLVED, true);
                 }
                 return r.toJson();
             }
@@ -250,12 +267,12 @@ public class WaitForBreakTool implements IMcpTool
             {
                 ToolResult r = ToolResult.success()
                     .put("hit", false) //$NON-NLS-1$
-                    .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put("applicationId", applicationId) //$NON-NLS-1$
-                    .put("serverTarget", true); //$NON-NLS-1$
+                    .put(KEY_REASON, REASON_TIMEOUT)
+                    .put(McpKeys.APPLICATION_ID, applicationId)
+                    .put(KEY_SERVER_TARGET, true);
                 if (autoResolved)
                 {
-                    r.put("autoResolved", true); //$NON-NLS-1$
+                    r.put(KEY_AUTO_RESOLVED, true);
                 }
                 return r.toJson();
             }
@@ -317,15 +334,15 @@ public class WaitForBreakTool implements IMcpTool
             .put("hit", true) //$NON-NLS-1$
             .put("threadId", snapshot.threadId) //$NON-NLS-1$
             .put("threadName", thread.getName()) //$NON-NLS-1$
-            .put("applicationId", applicationId) //$NON-NLS-1$
+            .put(McpKeys.APPLICATION_ID, applicationId)
             .put("frames", frames); //$NON-NLS-1$
         if (autoResolved)
         {
-            result.put("autoResolved", true); //$NON-NLS-1$
+            result.put(KEY_AUTO_RESOLVED, true);
         }
         if (serverTarget)
         {
-            result.put("serverTarget", true); //$NON-NLS-1$
+            result.put(KEY_SERVER_TARGET, true);
         }
         if (!frames.isEmpty())
         {

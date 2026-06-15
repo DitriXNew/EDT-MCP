@@ -141,6 +141,20 @@ public final class FormElementWriter
     private static final String AUTO_COMMAND_BAR_TOKEN = "AutoCommandBar"; //$NON-NLS-1$
     /** The Designer-XML child-collection token, tolerated (and ignored) at the end of a parent path. */
     private static final String CHILD_ITEMS_TOKEN = "ChildItems"; //$NON-NLS-1$
+    /** The owner's owned-form collection feature name (and FQN segment). */
+    private static final String KEY_FORMS = "forms"; //$NON-NLS-1$
+    /** The horizontal-alignment feature name on a command bar / label-decoration ext info. */
+    private static final String KEY_HORIZONTAL_ALIGN = "horizontalAlign"; //$NON-NLS-1$
+    /** The event-handlers collection feature name on a form element. */
+    private static final String KEY_HANDLERS = "handlers"; //$NON-NLS-1$
+    /** The auto-max-width boolean feature name on a visual item / ext info. */
+    private static final String KEY_AUTO_MAX_WIDTH = "autoMaxWidth"; //$NON-NLS-1$
+    /** The auto-max-height boolean feature name on a visual item / ext info. */
+    private static final String KEY_AUTO_MAX_HEIGHT = "autoMaxHeight"; //$NON-NLS-1$
+    /** The concrete {@code Button} form-item EClass / platform-type-map key. */
+    private static final String ELEM_BUTTON = "Button"; //$NON-NLS-1$
+    /** The leading fragment of the "invalid event" error message. */
+    private static final String ERR_EVENT_PREFIX = "Event '"; //$NON-NLS-1$
 
     /** A supported form-element kind, resolved from a (bilingual) FQN kind token. */
     public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON }
@@ -264,7 +278,7 @@ public final class FormElementWriter
             return false;
         }
         String s = token.toLowerCase();
-        return "form".equals(s) || "forms".equals(s) //$NON-NLS-1$ //$NON-NLS-2$
+        return "form".equals(s) || KEY_FORMS.equals(s) //$NON-NLS-1$
             || RU_FORM.equals(s) || RU_FORMS.equals(s);
     }
 
@@ -746,7 +760,7 @@ public final class FormElementWriter
         IModelObjectFactory mdFactory, IModelObjectFactory formFactory,
         ITopObjectFqnGenerator fqnGenerator, Version version, boolean russianAutoNames)
     {
-        EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature("forms"); //$NON-NLS-1$
+        EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature(KEY_FORMS);
         if (formsFeature == null || !(formsFeature.getEType() instanceof EClass))
         {
             throw new RuntimeException("Object type '" + owner.eClass().getName() //$NON-NLS-1$
@@ -786,7 +800,7 @@ public final class FormElementWriter
 
         // (4) Add the MD-form to the owner's forms collection BEFORE generating the content FQN, so the
         // MD-form has a resolvable parent chain (owner -> configuration) and therefore a resolvable FQN.
-        addToList(owner, "forms", mdForm); //$NON-NLS-1$
+        addToList(owner, KEY_FORMS, mdForm);
 
         // (5) Register the content form as a BM top object under the canonical external-property FQN.
         String contentFqn = fqnGenerator.generateExternalPropertyFqn(mdForm,
@@ -952,7 +966,7 @@ public final class FormElementWriter
             return null;
         }
         setBooleanFeature(bar, "autoFill", true); //$NON-NLS-1$
-        setEnumFeature(bar, "horizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(bar, KEY_HORIZONTAL_ALIGN, "Left"); //$NON-NLS-1$
         setIntFeature(bar, FEATURE_ID, -1);
         setStringFeature(bar, FEATURE_NAME,
             russianAutoNames ? RU_FORM_COMMAND_BAR : EN_FORM_COMMAND_BAR);
@@ -1011,7 +1025,7 @@ public final class FormElementWriter
      */
     public static EObject findOwnedForm(MdObject owner, String formName)
     {
-        EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature("forms"); //$NON-NLS-1$
+        EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature(KEY_FORMS);
         if (formsFeature == null)
         {
             return null;
@@ -1120,8 +1134,8 @@ public final class FormElementWriter
         setIntFeature(item, FEATURE_ID, nextItemId(formModel));
         if (kind == Kind.DECORATION)
         {
-            setBooleanFeature(item, "autoMaxWidth", true); //$NON-NLS-1$
-            setBooleanFeature(item, "autoMaxHeight", true); //$NON-NLS-1$
+            setBooleanFeature(item, KEY_AUTO_MAX_WIDTH, true);
+            setBooleanFeature(item, KEY_AUTO_MAX_HEIGHT, true);
         }
         initManagedItem(formModel, item, kind, container, requestedType);
         applyTitle(item, titleLanguage, title);
@@ -1307,7 +1321,7 @@ public final class FormElementWriter
             index = destItems.size();
         }
         destItems.add(index, item);
-        if ("Button".equals(item.eClass().getName())) //$NON-NLS-1$
+        if (ELEM_BUTTON.equals(item.eClass().getName()))
         {
             setEnumFeature(item, FEATURE_TYPE,
                 isCommandBarContext(container) ? "CommandBarButton" : "UsualButton"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1455,7 +1469,7 @@ public final class FormElementWriter
     /** The placement-rule {@link Kind} for a concrete item EClass name, or {@code null} when none. */
     private static Kind kindForEClass(String eClassName)
     {
-        if ("Button".equals(eClassName)) //$NON-NLS-1$
+        if (ELEM_BUTTON.equals(eClassName))
         {
             return Kind.BUTTON;
         }
@@ -1567,8 +1581,8 @@ public final class FormElementWriter
         EObject extInfo = singleReference(item, FEATURE_EXT_INFO);
         if (extInfo != null)
         {
-            setBooleanFeature(extInfo, "autoMaxWidth", true); //$NON-NLS-1$
-            setBooleanFeature(extInfo, "autoMaxHeight", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, KEY_AUTO_MAX_WIDTH, true);
+            setBooleanFeature(extInfo, KEY_AUTO_MAX_HEIGHT, true);
             setBooleanFeature(extInfo, "wrap", true); //$NON-NLS-1$
             setBooleanFeature(extInfo, "chooseType", true); //$NON-NLS-1$
             setBooleanFeature(extInfo, "typeDomainEnabled", true); //$NON-NLS-1$
@@ -1612,7 +1626,7 @@ public final class FormElementWriter
         {
             return invalid;
         }
-        EObject item = createFromClassifier(formModel, "Button"); //$NON-NLS-1$
+        EObject item = createFromClassifier(formModel, ELEM_BUTTON);
         if (item == null)
         {
             return "Cannot create a form button for this form model."; //$NON-NLS-1$
@@ -1632,8 +1646,8 @@ public final class FormElementWriter
         }
         // The platform factory's remaining new-button defaults (FormObjectFactory.newButton); without
         // them the exported button diverges from a designer-created one (e.g. AutoMaxWidth=false).
-        setBooleanFeature(item, "autoMaxWidth", true); //$NON-NLS-1$
-        setBooleanFeature(item, "autoMaxHeight", true); //$NON-NLS-1$
+        setBooleanFeature(item, KEY_AUTO_MAX_WIDTH, true);
+        setBooleanFeature(item, KEY_AUTO_MAX_HEIGHT, true);
         setBooleanFeature(item, "commandUniqueness", true); //$NON-NLS-1$
         setEnumFeature(item, "representation", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
         setEnumFeature(item, "shape", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1733,13 +1747,13 @@ public final class FormElementWriter
             setStringFeature(tooltip, FEATURE_NAME, uniqueChildName(formModel, base,
                 russianAutoNames ? RU_SUFFIX_EXTENDED_TOOLTIP : SUFFIX_EXTENDED_TOOLTIP));
             setEnumFeature(tooltip, FEATURE_TYPE, TYPE_LITERAL_LABEL);
-            setBooleanFeature(tooltip, "autoMaxWidth", true); //$NON-NLS-1$
-            setBooleanFeature(tooltip, "autoMaxHeight", true); //$NON-NLS-1$
+            setBooleanFeature(tooltip, KEY_AUTO_MAX_WIDTH, true);
+            setBooleanFeature(tooltip, KEY_AUTO_MAX_HEIGHT, true);
             setExtInfoClassifier(formModel, tooltip, ECLASS_LABEL_DECORATION_EXT_INFO);
             EObject tooltipExtInfo = singleReference(tooltip, FEATURE_EXT_INFO);
             if (tooltipExtInfo != null)
             {
-                setEnumFeature(tooltipExtInfo, "horizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
+                setEnumFeature(tooltipExtInfo, KEY_HORIZONTAL_ALIGN, "Left"); //$NON-NLS-1$
             }
             item.eSet(tooltipFeat, tooltip);
             setIntFeature(tooltip, FEATURE_ID, nextItemId(formModel));
@@ -1906,7 +1920,7 @@ public final class FormElementWriter
             }
             return createCommandAction(container, eventName, procName, createdKind);
         }
-        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
+        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature(KEY_HANDLERS);
         if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
         {
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
@@ -1947,7 +1961,7 @@ public final class FormElementWriter
                     sb.append(n);
                 }
             }
-            return "Event '" + eventName + "' is not valid for " + container.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+            return ERR_EVENT_PREFIX + eventName + "' is not valid for " + container.eClass().getName() //$NON-NLS-1$
                 + ". Available events: " + sb; //$NON-NLS-1$
         }
         return bindEventHandler(container, handlersFeat, matched, eventName, procName, callType,
@@ -2001,7 +2015,7 @@ public final class FormElementWriter
         // the extension handler COEXIST with the base handler and with other-call-type extension handlers;
         // only a same-(event, callType) EventHandlerExtension is a real duplicate.
         EStructuralFeature evFeat = handlerEventFeature(handlersFeat);
-        for (EObject existing : referenceList(container, "handlers")) //$NON-NLS-1$
+        for (EObject existing : referenceList(container, KEY_HANDLERS))
         {
             if (evFeat == null || existing.eGet(evFeat) != matched)
             {
@@ -2033,7 +2047,7 @@ public final class FormElementWriter
             }
             handler.eSet(ctFeat, callTypeLiteral.getInstance());
         }
-        addToList(container, "handlers", handler); //$NON-NLS-1$
+        addToList(container, KEY_HANDLERS, handler);
         recordKind(handler, createdKind);
         return null;
     }
@@ -2108,7 +2122,7 @@ public final class FormElementWriter
     {
         if (!isActionToken(eventName))
         {
-            return "Event '" + eventName + "' is not valid for a form command" //$NON-NLS-1$ //$NON-NLS-2$
+            return ERR_EVENT_PREFIX + eventName + "' is not valid for a form command" //$NON-NLS-1$
                 + ". Available events: " + COMMAND_ACTION_EVENT; //$NON-NLS-1$
         }
         EStructuralFeature actionFeat = command.eClass().getEStructuralFeature(FEATURE_ACTION);
@@ -2291,7 +2305,7 @@ public final class FormElementWriter
         m.put("Table", "FormTable"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("Decoration", "FormDecoration"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("FormField", "FormField"); //$NON-NLS-1$ //$NON-NLS-2$
-        m.put("Button", "FormButton"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put(ELEM_BUTTON, "FormButton"); //$NON-NLS-1$
         m.put("FormGroup", "FormGroup"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("Addition", "FormItemAddition"); //$NON-NLS-1$ //$NON-NLS-2$
         // Form ext-infos.
@@ -2419,7 +2433,7 @@ public final class FormElementWriter
             EObject extInfo = singleReference(item, FEATURE_EXT_INFO);
             if (extInfo != null)
             {
-                setEnumFeature(extInfo, "horizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
+                setEnumFeature(extInfo, KEY_HORIZONTAL_ALIGN, "Left"); //$NON-NLS-1$
             }
         }
     }
@@ -2594,14 +2608,14 @@ public final class FormElementWriter
             }
             return singleReference(container, FEATURE_ACTION);
         }
-        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
+        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature(KEY_HANDLERS);
         if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
         {
             return null;
         }
         EClass ehType = ((EReference)handlersFeat).getEReferenceType();
         EStructuralFeature evFeat = ehType != null ? ehType.getEStructuralFeature("event") : null; //$NON-NLS-1$
-        for (EObject handler : referenceList(container, "handlers")) //$NON-NLS-1$
+        for (EObject handler : referenceList(container, KEY_HANDLERS))
         {
             Object ev = evFeat != null ? handler.eGet(evFeat) : null;
             if (ev instanceof EObject
@@ -2646,7 +2660,7 @@ public final class FormElementWriter
             }
             if (!isActionToken(eventName))
             {
-                return "Event '" + eventName + "' is not valid for a form command" //$NON-NLS-1$ //$NON-NLS-2$
+                return ERR_EVENT_PREFIX + eventName + "' is not valid for a form command" //$NON-NLS-1$
                     + ". Available events: " + COMMAND_ACTION_EVENT; //$NON-NLS-1$
             }
             EObject action = singleReference(container, FEATURE_ACTION);
@@ -2659,7 +2673,7 @@ public final class FormElementWriter
             setStringFeature(handler, FEATURE_NAME, procName);
             return null;
         }
-        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
+        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature(KEY_HANDLERS);
         if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
         {
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$

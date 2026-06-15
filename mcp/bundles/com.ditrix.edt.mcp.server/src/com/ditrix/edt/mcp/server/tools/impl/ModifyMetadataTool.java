@@ -32,6 +32,7 @@ import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -61,6 +62,21 @@ import com.google.gson.JsonObject;
 public class ModifyMetadataTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "modify_metadata"; //$NON-NLS-1$
+
+    /** Output result key: names of the properties that were set. */
+    private static final String KEY_APPLIED = "applied"; //$NON-NLS-1$
+
+    /** Output result key: whether the change was exported to disk. */
+    private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
+
+    /** Output value for {@link McpKeys#ACTION}: the node was modified. */
+    private static final String VAL_MODIFIED = "modified"; //$NON-NLS-1$
+
+    /** Property/JSON key: the value of a property entry. */
+    private static final String KEY_VALUE = "value"; //$NON-NLS-1$
+
+    /** Error message prefix for an unresolved form FQN. */
+    private static final String ERR_FORM_NOT_FOUND_PREFIX = "Form not found for '"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -92,7 +108,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required).", true) //$NON-NLS-1$
             .stringProperty("fqn", //$NON-NLS-1$
                 "Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or " //$NON-NLS-1$
@@ -116,28 +132,28 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the properties were set", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "'modified' on success") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.ACTION, "'modified' on success") //$NON-NLS-1$
             .stringProperty("fqn", "Normalized FQN of the modified node") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty("applied", "Names of the properties that were set") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("persisted", "Whether the change was exported to disk") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set") //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
             .stringProperty("destination", //$NON-NLS-1$
                 "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. " //$NON-NLS-1$
                 + "\"group 'Main' at index 1\"") //$NON-NLS-1$
-            .stringProperty("message", "Human-readable confirmation message") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
             .build();
     }
 
     @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, "projectName", "fqn"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
         if (err != null)
         {
             return err;
         }
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
@@ -296,13 +312,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             applied.add(change.featureName());
         }
         ToolResult result = ToolResult.success()
-            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("applied", applied) //$NON-NLS-1$
-            .put("persisted", persisted); //$NON-NLS-1$
+            .put(KEY_APPLIED, applied)
+            .put(KEY_PERSISTED, persisted);
         normReport.addTo(result);
         return result
-            .put("message", "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .put(McpKeys.MESSAGE, "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .toJson();
     }
 
@@ -386,7 +402,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
                 config, ref.formPath,
-                "Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
+                ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form member as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
                     + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table)."); //$NON-NLS-1$
             persisted = FormElementWriter.writeEditableForm(fctx, "ModifyFormMember", //$NON-NLS-1$
@@ -435,13 +451,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         ToolResult result = ToolResult.success()
-            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("applied", applied) //$NON-NLS-1$
-            .put("persisted", persisted); //$NON-NLS-1$
+            .put(KEY_APPLIED, applied)
+            .put(KEY_PERSISTED, persisted);
         normReport.addTo(result);
         return result
-            .put("message", "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .put(McpKeys.MESSAGE, "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .toJson();
     }
 
@@ -505,7 +521,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             String name = asString(prop.get("name")); //$NON-NLS-1$
             if (PROP_PROCEDURE.equalsIgnoreCase(name) || PROP_HANDLER.equalsIgnoreCase(name))
             {
-                return asString(prop.get("value")); //$NON-NLS-1$
+                return asString(prop.get(KEY_VALUE));
             }
         }
         return null;
@@ -578,12 +594,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             String name = asString(prop.get("name")); //$NON-NLS-1$
             if (isParentProp(name))
             {
-                targetParent = asString(prop.get("value")); //$NON-NLS-1$
+                targetParent = asString(prop.get(KEY_VALUE));
                 hasParent = true;
             }
             else if (isPositionProp(name))
             {
-                position = asString(prop.get("value")); //$NON-NLS-1$
+                position = asString(prop.get(KEY_VALUE));
                 hasPosition = true;
             }
             else
@@ -610,7 +626,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
                 ctx.config, ref.formPath,
-                "Form not found for '" + normFqn + "'. Address a form item as " //$NON-NLS-1$ //$NON-NLS-2$
+                ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form item as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
             final String mdFormName = fctx.mdForm.getName();
             persisted = FormElementWriter.writeEditableForm(fctx, "MoveFormItem", //$NON-NLS-1$
@@ -638,12 +654,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             applied.add(PROP_POSITION);
         }
         return ToolResult.success()
-            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("applied", applied) //$NON-NLS-1$
-            .put("persisted", persisted) //$NON-NLS-1$
+            .put(KEY_APPLIED, applied)
+            .put(KEY_PERSISTED, persisted)
             .put("destination", destination[0]) //$NON-NLS-1$
-            .put("message", "Moved form item '" + itemName + "' to " + destination[0]) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .put(McpKeys.MESSAGE, "Moved form item '" + itemName + "' to " + destination[0]) //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
     }
 
@@ -670,7 +686,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
                 ctx.config, ref.formPath,
-                "Form not found for '" + normFqn + "'. Address a handler as " //$NON-NLS-1$ //$NON-NLS-2$
+                ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a handler as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.Handler.Event' or " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<ItemKind>.<ItemName>.Handler.Event'."); //$NON-NLS-1$
             persisted = FormElementWriter.writeEditableForm(fctx, "RebindFormHandler", //$NON-NLS-1$
@@ -705,11 +721,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         return ToolResult.success()
-            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("applied", java.util.Collections.singletonList(PROP_PROCEDURE)) //$NON-NLS-1$
-            .put("persisted", persisted) //$NON-NLS-1$
-            .put("message", "Rebound the handler for event '" + eventName + "' to procedure '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .put(KEY_APPLIED, java.util.Collections.singletonList(PROP_PROCEDURE))
+            .put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, "Rebound the handler for event '" + eventName + "' to procedure '" //$NON-NLS-1$ //$NON-NLS-2$
                 + procName + "'") //$NON-NLS-1$
             .toJson();
     }
@@ -733,7 +749,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             String name = asString(prop.get("name")); //$NON-NLS-1$
             if (PROP_COMMAND.equalsIgnoreCase(name) || PROP_COMMAND_NAME.equalsIgnoreCase(name))
             {
-                commandName = asString(prop.get("value")); //$NON-NLS-1$
+                commandName = asString(prop.get(KEY_VALUE));
             }
             else
             {
@@ -755,7 +771,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
                 ctx.config, ref.formPath,
-                "Form not found for '" + normFqn + "'. Address a button as " //$NON-NLS-1$ //$NON-NLS-2$
+                ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a button as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.Button.Name' or 'CommonForm.FormName.Button.Name'."); //$NON-NLS-1$
             persisted = FormElementWriter.writeEditableForm(fctx, "RebindButtonCommand", //$NON-NLS-1$
                 (formModel, tx) ->
@@ -790,11 +806,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         return ToolResult.success()
-            .put("action", "modified") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("applied", java.util.Collections.singletonList(PROP_COMMAND)) //$NON-NLS-1$
-            .put("persisted", persisted) //$NON-NLS-1$
-            .put("message", "Re-pointed button '" + buttonName + "' at command '" //$NON-NLS-1$ //$NON-NLS-2$
+            .put(KEY_APPLIED, java.util.Collections.singletonList(PROP_COMMAND))
+            .put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, "Re-pointed button '" + buttonName + "' at command '" //$NON-NLS-1$ //$NON-NLS-2$
                 + commandNameFinal + "'") //$NON-NLS-1$
             .toJson();
     }
@@ -854,7 +870,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "rename_metadata_object, which cascades the rename across BSL code, forms and " //$NON-NLS-1$
                 + "metadata. modify_metadata only sets non-identity properties.").toJson(); //$NON-NLS-1$
         }
-        String value = asString(prop.get("value")); //$NON-NLS-1$
+        String value = asString(prop.get(KEY_VALUE));
 
         // findFeature classifies ONLY the matched feature and skips the current-value rendering
         // (eGet + proxy + type rendering) that the full introspect() performs for EVERY assignable
@@ -930,7 +946,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
                 }
                 MetadataTypeBuilder.Result tr =
-                    MetadataTypeBuilder.build(prop.get("value"), config, version); //$NON-NLS-1$
+                    MetadataTypeBuilder.build(prop.get(KEY_VALUE), config, version);
                 if (tr.error != null)
                 {
                     return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -955,7 +971,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
             case MANY_REFERENCE:
             {
-                JsonElement raw = prop.get("value"); //$NON-NLS-1$
+                JsonElement raw = prop.get(KEY_VALUE);
                 if (raw == null || !raw.isJsonArray())
                 {
                     return ToolResult.error("'" + name + "' is a list reference: provide 'value' as an " //$NON-NLS-1$ //$NON-NLS-2$
@@ -983,7 +999,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
             case STYLE_VALUE:
             {
-                StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get("value")); //$NON-NLS-1$
+                StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE));
                 if (sv.error != null)
                 {
                     return ToolResult.error("Invalid StyleItem '" + name + "': " + sv.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$

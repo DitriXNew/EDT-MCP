@@ -20,6 +20,7 @@ import org.eclipse.swt.widgets.Shell;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
@@ -41,7 +42,16 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 public class UpdateDatabaseTool implements IMcpTool
 {
     public static final String NAME = "update_database"; //$NON-NLS-1$
-    
+
+    /** Output key: whether a running 1C client was terminated to free the infobase. */
+    private static final String KEY_TERMINATED_CLIENT = "terminatedClient"; //$NON-NLS-1$
+    /** Output key: display name of the target application. */
+    private static final String KEY_APPLICATION_NAME = "applicationName"; //$NON-NLS-1$
+    /** Output key: update mode applied (FULL or INCREMENTAL). */
+    private static final String KEY_UPDATE_TYPE = "updateType"; //$NON-NLS-1$
+    /** Output key: application update state before the update. */
+    private static final String KEY_STATE_BEFORE = "stateBefore"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -68,7 +78,7 @@ public class UpdateDatabaseTool implements IMcpTool
                 "Exact runtime-client config name from list_configurations (preferred target).") //$NON-NLS-1$
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name; required if launchConfigurationName is omitted.") //$NON-NLS-1$
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID from get_applications; required if launchConfigurationName is omitted.") //$NON-NLS-1$
             .booleanProperty("fullUpdate", //$NON-NLS-1$
                 "true = full reload, false = incremental (default false).") //$NON-NLS-1$
@@ -87,17 +97,17 @@ public class UpdateDatabaseTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "Either 'preview' (nothing changed) or 'updated' (applied).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.ACTION, "Either 'preview' (nothing changed) or 'updated' (applied).") //$NON-NLS-1$
             .booleanProperty("confirmationRequired", //$NON-NLS-1$
                 "true on a preview (no infobase change made); absent/false once updated.") //$NON-NLS-1$
-            .stringProperty("project", "Target EDT project name.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Target application ID.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationName", "Display name of the target application.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("updateType", "Update mode applied: FULL or INCREMENTAL.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("stateBefore", "Application update state before the update.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.PROJECT, "Target EDT project name.") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID, "Target application ID.") //$NON-NLS-1$
+            .stringProperty(KEY_APPLICATION_NAME, "Display name of the target application.") //$NON-NLS-1$
+            .stringProperty(KEY_UPDATE_TYPE, "Update mode applied: FULL or INCREMENTAL.") //$NON-NLS-1$
+            .stringProperty(KEY_STATE_BEFORE, "Application update state before the update.") //$NON-NLS-1$
             .stringProperty("stateAfter", "Application update state after the update.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("message", "Human-readable status message for the update.") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("terminatedClient", //$NON-NLS-1$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable status message for the update.") //$NON-NLS-1$
+            .booleanProperty(KEY_TERMINATED_CLIENT,
                 "Present and true ONLY when an applied update (confirm=true) terminated a running " //$NON-NLS-1$
                 + "client to free the infobase; absent otherwise (preview, opt-out, or no running " //$NON-NLS-1$
                 + "client).") //$NON-NLS-1$
@@ -118,7 +128,7 @@ public class UpdateDatabaseTool implements IMcpTool
     {
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
         boolean fullUpdate = JsonUtils.extractBooleanArgument(params, "fullUpdate", false); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         boolean terminateRunningClients =
@@ -237,15 +247,15 @@ public class UpdateDatabaseTool implements IMcpTool
             if (!confirm)
             {
                 return ToolResult.success()
-                    .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
                     .put("confirmationRequired", true) //$NON-NLS-1$
-                    .put("project", projectName) //$NON-NLS-1$
-                    .put("applicationId", applicationId) //$NON-NLS-1$
-                    .put("applicationName", application.getName()) //$NON-NLS-1$
-                    .put("updateType", updateType.name()) //$NON-NLS-1$
-                    .put("stateBefore", stateBefore.name()) //$NON-NLS-1$
+                    .put(McpKeys.PROJECT, projectName)
+                    .put(McpKeys.APPLICATION_ID, applicationId)
+                    .put(KEY_APPLICATION_NAME, application.getName())
+                    .put(KEY_UPDATE_TYPE, updateType.name())
+                    .put(KEY_STATE_BEFORE, stateBefore.name())
                     .put("willTerminateRunningClients", terminateRunningClients) //$NON-NLS-1$
-                    .put("message", "PREVIEW: this would apply a " + updateType.name() //$NON-NLS-1$ //$NON-NLS-2$
+                    .put(McpKeys.MESSAGE, "PREVIEW: this would apply a " + updateType.name() //$NON-NLS-1$
                         + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
                         + "' (project " + projectName + "). This mutates the infobase and is " //$NON-NLS-1$ //$NON-NLS-2$
                         + "IRREVERSIBLE." //$NON-NLS-1$
@@ -312,30 +322,30 @@ public class UpdateDatabaseTool implements IMcpTool
             // (truthful; "swept but none / not confirmed" and opt-out are indistinguishable by
             // absence — the confirmationRequired idiom).
             ToolResult result = ToolResult.success()
-                .put("action", "updated") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("project", projectName) //$NON-NLS-1$
-                .put("applicationId", applicationId) //$NON-NLS-1$
-                .put("applicationName", application.getName()) //$NON-NLS-1$
-                .put("updateType", updateType.name()) //$NON-NLS-1$
-                .put("stateBefore", stateBefore.name()) //$NON-NLS-1$
+                .put(McpKeys.ACTION, "updated") //$NON-NLS-1$
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(KEY_APPLICATION_NAME, application.getName())
+                .put(KEY_UPDATE_TYPE, updateType.name())
+                .put(KEY_STATE_BEFORE, stateBefore.name())
                 .put("stateAfter", stateAfter.name()); //$NON-NLS-1$
             if (terminatedClient)
             {
-                result.put("terminatedClient", true); //$NON-NLS-1$
+                result.put(KEY_TERMINATED_CLIENT, true);
             }
             
             // Add status message based on result
             if (stateAfter == ApplicationUpdateState.UPDATED)
             {
-                result.put("message", "Database updated successfully"); //$NON-NLS-1$ //$NON-NLS-2$
+                result.put(McpKeys.MESSAGE, "Database updated successfully"); //$NON-NLS-1$
             }
             else if (stateAfter == ApplicationUpdateState.BEING_UPDATED)
             {
-                result.put("message", "Update in progress"); //$NON-NLS-1$ //$NON-NLS-2$
+                result.put(McpKeys.MESSAGE, "Update in progress"); //$NON-NLS-1$
             }
             else
             {
-                result.put("message", "Update completed with state: " + stateAfter.name()); //$NON-NLS-1$ //$NON-NLS-2$
+                result.put(McpKeys.MESSAGE, "Update completed with state: " + stateAfter.name()); //$NON-NLS-1$
             }
             
             return result.toJson();
@@ -349,11 +359,11 @@ public class UpdateDatabaseTool implements IMcpTool
             // the terminate window) so the agent can act instead of seeing a bare failure.
             ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
                 + e.getMessage() + describeInfobaseHolder(applicationId));
-            errorResult.put("applicationId", applicationId); //$NON-NLS-1$
-            errorResult.put("project", projectName); //$NON-NLS-1$
+            errorResult.put(McpKeys.APPLICATION_ID, applicationId);
+            errorResult.put(McpKeys.PROJECT, projectName);
             if (terminatedClient)
             {
-                errorResult.put("terminatedClient", true); //$NON-NLS-1$
+                errorResult.put(KEY_TERMINATED_CLIENT, true);
             }
 
             // Try to get additional error details
@@ -371,7 +381,7 @@ public class UpdateDatabaseTool implements IMcpTool
             ToolResult errorResult = ToolResult.error("Unexpected error: " + e.getMessage()); //$NON-NLS-1$
             if (terminatedClient)
             {
-                errorResult.put("terminatedClient", true); //$NON-NLS-1$
+                errorResult.put(KEY_TERMINATED_CLIENT, true);
             }
             return errorResult.toJson();
         }

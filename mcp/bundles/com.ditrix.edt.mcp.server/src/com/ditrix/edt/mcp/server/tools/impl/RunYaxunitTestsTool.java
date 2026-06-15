@@ -74,6 +74,18 @@ public class RunYaxunitTestsTool implements IMcpTool
 {
     public static final String NAME = "run_yaxunit_tests"; //$NON-NLS-1$
 
+    /** Input/filter param: extension names to filter tests by extension. */
+    private static final String KEY_EXTENSIONS = "extensions"; //$NON-NLS-1$
+
+    /** Input/filter param: module names to filter tests. */
+    private static final String KEY_MODULES = "modules"; //$NON-NLS-1$
+
+    /** Input/filter param: test names in Module.Method format. */
+    private static final String KEY_TESTS = "tests"; //$NON-NLS-1$
+
+    /** JUnit XML report file name written by the YAXUnit run. */
+    private static final String VAL_JUNIT_XML = "junit.xml"; //$NON-NLS-1$
+
     private static final int DEFAULT_TIMEOUT = 60;
     private static final int POLL_INTERVAL_MS = 1000;
 
@@ -130,9 +142,9 @@ public class RunYaxunitTestsTool implements IMcpTool
             .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted).") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("applicationId", //$NON-NLS-1$
                 "Application ID from get_applications (required if launchConfigurationName is omitted).") //$NON-NLS-1$
-            .stringArrayProperty("extensions", "Extension names to filter tests (array; a comma-separated string is also accepted).") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty("modules", "Module names to filter tests (array; a comma-separated string is also accepted).") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty("tests", "Test names in Module.Method format (array; a comma-separated string is also accepted).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty(KEY_EXTENSIONS, "Extension names to filter tests (array; a comma-separated string is also accepted).") //$NON-NLS-1$
+            .stringArrayProperty(KEY_MODULES, "Module names to filter tests (array; a comma-separated string is also accepted).") //$NON-NLS-1$
+            .stringArrayProperty(KEY_TESTS, "Test names in Module.Method format (array; a comma-separated string is also accepted).") //$NON-NLS-1$
             .integerProperty("timeout", "Polling window in seconds (default: 60); on expiry returns Pending.") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
                 "Auto-chain (default: true): force-recompute the project + its extensions, terminate a " //$NON-NLS-1$
@@ -219,9 +231,9 @@ public class RunYaxunitTestsTool implements IMcpTool
         // comma-strings (run key, retry, buildParamsJson). extractArrayArgument accepts
         // BOTH a JSON array and a comma-separated string; re-join to the canonical comma
         // form so the downstream String plumbing is unchanged.
-        String extensions = joinList(JsonUtils.extractArrayArgument(params, "extensions")); //$NON-NLS-1$
-        String modules = joinList(JsonUtils.extractArrayArgument(params, "modules")); //$NON-NLS-1$
-        String tests = joinList(JsonUtils.extractArrayArgument(params, "tests")); //$NON-NLS-1$
+        String extensions = joinList(JsonUtils.extractArrayArgument(params, KEY_EXTENSIONS));
+        String modules = joinList(JsonUtils.extractArrayArgument(params, KEY_MODULES));
+        String tests = joinList(JsonUtils.extractArrayArgument(params, KEY_TESTS));
         int timeout = JsonUtils.extractIntArgument(params, "timeout", DEFAULT_TIMEOUT); //$NON-NLS-1$
         if (timeout < 1)
         {
@@ -552,7 +564,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                             cleanupTempDir(reportDir);
                             Files.createDirectories(reportDir);
                             Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
-                            String paramsJson = buildParamsJson(reportDir.resolve("junit.xml").toString(), //$NON-NLS-1$
+                            String paramsJson = buildParamsJson(reportDir.resolve(VAL_JUNIT_XML).toString(),
                                     extensions, modules, tests);
                             Files.write(paramsFile, paramsJson.getBytes(StandardCharsets.UTF_8));
                             Activator.logInfo("YAXUnit params written to: " + paramsFile); //$NON-NLS-1$
@@ -653,7 +665,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                 + "-" + DEBUG_LAUNCH_COUNTER.getAndIncrement()); //$NON-NLS-1$
         Files.createDirectories(reportDir);
         Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
-        Path junitFile = reportDir.resolve("junit.xml"); //$NON-NLS-1$
+        Path junitFile = reportDir.resolve(VAL_JUNIT_XML);
         Files.write(paramsFile,
             buildParamsJson(junitFile.toString(), extensions, modules, tests).getBytes(StandardCharsets.UTF_8));
 
@@ -1237,19 +1249,19 @@ public class RunYaxunitTestsTool implements IMcpTool
 
         if (extensions != null && !extensions.isEmpty())
         {
-            filter.put("extensions", splitToList(extensions)); //$NON-NLS-1$
+            filter.put(KEY_EXTENSIONS, splitToList(extensions));
             hasFilter = true;
         }
 
         if (modules != null && !modules.isEmpty())
         {
-            filter.put("modules", splitToList(modules)); //$NON-NLS-1$
+            filter.put(KEY_MODULES, splitToList(modules));
             hasFilter = true;
         }
 
         if (tests != null && !tests.isEmpty())
         {
-            filter.put("tests", splitToList(tests)); //$NON-NLS-1$
+            filter.put(KEY_TESTS, splitToList(tests));
             hasFilter = true;
         }
 
@@ -1330,7 +1342,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             return null;
         }
 
-        String[] candidates = {"junit.xml", "report.xml", "test-report.xml"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String[] candidates = {VAL_JUNIT_XML, "report.xml", "test-report.xml"}; //$NON-NLS-1$ //$NON-NLS-2$
         for (String name : candidates)
         {
             File f = tempDir.resolve(name).toFile();

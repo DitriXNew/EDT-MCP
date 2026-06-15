@@ -25,6 +25,7 @@ import org.eclipse.swt.widgets.Display;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
@@ -58,6 +59,21 @@ public class DebugLaunchTool implements IMcpTool
 {
     public static final String NAME = "debug_launch"; //$NON-NLS-1$
 
+    /** Output key: name of the launched/running launch configuration. */
+    private static final String KEY_LAUNCH_CONFIGURATION = "launchConfiguration"; //$NON-NLS-1$
+
+    /** Output key: launch configuration type id. */
+    private static final String KEY_CONFIGURATION_TYPE = "configurationType"; //$NON-NLS-1$
+
+    /** Output key: true if this is an Attach (server-side debug) configuration. */
+    private static final String KEY_ATTACH = "attach"; //$NON-NLS-1$
+
+    /** Output key: launch status (e.g. "launching"). */
+    private static final String KEY_STATUS = "status"; //$NON-NLS-1$
+
+    /** Error-log prefix for an asynchronous launch failure. */
+    private static final String ERR_ASYNC_PREFIX = "debug_launch failed asynchronously: "; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -81,7 +97,7 @@ public class DebugLaunchTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name; required unless launchConfigurationName is given.") //$NON-NLS-1$
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID from get_applications; required in the projectName+applicationId mode.") //$NON-NLS-1$
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
                 "Exact name of an EDT debug launch config (runtime client or Attach); skips projectName/applicationId.") //$NON-NLS-1$
@@ -103,16 +119,16 @@ public class DebugLaunchTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("launchConfiguration", "Name of the launched/running launch configuration") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("configurationType", "Launch configuration type id") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("attach", "True if this is an Attach (server-side debug) configuration") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("project", "EDT project name associated with the launch") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application id of the launched configuration") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_LAUNCH_CONFIGURATION, "Name of the launched/running launch configuration") //$NON-NLS-1$
+            .stringProperty(KEY_CONFIGURATION_TYPE, "Launch configuration type id") //$NON-NLS-1$
+            .booleanProperty(KEY_ATTACH, "True if this is an Attach (server-side debug) configuration") //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT, "EDT project name associated with the launch") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application id of the launched configuration") //$NON-NLS-1$
             .booleanProperty("alreadyRunning", "True if a matching session was already alive; re-launch skipped") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("mode", "Launch mode of the session (e.g. debug, run)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("status", "\"launching\" when the launch was dispatched asynchronously and is " //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_STATUS, "\"launching\" when the launch was dispatched asynchronously and is " //$NON-NLS-1$
                 + "still starting; absent on the alreadyRunning short-circuit. Poll debug_status for readiness.") //$NON-NLS-1$
-            .stringProperty("message", "Human-readable status message") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable status message") //$NON-NLS-1$
             .build();
     }
 
@@ -126,7 +142,7 @@ public class DebugLaunchTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, "updateBeforeLaunch", true); //$NON-NLS-1$
         boolean restartIfRunning = extractRestartIfRunning(params);
@@ -273,12 +289,12 @@ public class DebugLaunchTool implements IMcpTool
             }
 
             ToolResult result = ToolResult.success()
-                .put("launchConfiguration", config.getName()) //$NON-NLS-1$
-                .put("configurationType", typeId) //$NON-NLS-1$
-                .put("attach", isAttach) //$NON-NLS-1$
+                .put(KEY_LAUNCH_CONFIGURATION, config.getName())
+                .put(KEY_CONFIGURATION_TYPE, typeId)
+                .put(KEY_ATTACH, isAttach)
                 .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("status", "launching") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("message", isAttach //$NON-NLS-1$
+                .put(KEY_STATUS, "launching") //$NON-NLS-1$
+                .put(McpKeys.MESSAGE, isAttach
                     ? "Attach debug session is connecting — poll debug_status to confirm it is " //$NON-NLS-1$
                         + "running, then wait_for_break to block until a breakpoint is hit." //$NON-NLS-1$
                     : "Debug session is starting asynchronously. The 1C client may show startup " //$NON-NLS-1$
@@ -287,11 +303,11 @@ public class DebugLaunchTool implements IMcpTool
                         + "wait_for_break."); //$NON-NLS-1$
             if (configProject != null && !configProject.isEmpty())
             {
-                result.put("project", configProject); //$NON-NLS-1$
+                result.put(McpKeys.PROJECT, configProject);
             }
             if (effectiveAppId != null)
             {
-                result.put("applicationId", effectiveAppId); //$NON-NLS-1$
+                result.put(McpKeys.APPLICATION_ID, effectiveAppId);
             }
             return result.toJson();
         }
@@ -451,14 +467,14 @@ public class DebugLaunchTool implements IMcpTool
             }
 
             return ToolResult.success()
-                .put("project", projectName) //$NON-NLS-1$
-                .put("applicationId", applicationId) //$NON-NLS-1$
-                .put("launchConfiguration", configName) //$NON-NLS-1$
-                .put("configurationType", LaunchConfigUtils.getConfigTypeId(matchingConfig)) //$NON-NLS-1$
-                .put("attach", false) //$NON-NLS-1$
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(KEY_LAUNCH_CONFIGURATION, configName)
+                .put(KEY_CONFIGURATION_TYPE, LaunchConfigUtils.getConfigTypeId(matchingConfig))
+                .put(KEY_ATTACH, false)
                 .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("status", "launching") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("message", "Debug session is starting asynchronously. The 1C client may show " //$NON-NLS-1$ //$NON-NLS-2$
+                .put(KEY_STATUS, "launching") //$NON-NLS-1$
+                .put(McpKeys.MESSAGE, "Debug session is starting asynchronously. The 1C client may show " //$NON-NLS-1$
                     + "startup dialogs (login / database update); this call does NOT wait for it. " //$NON-NLS-1$
                     + "Poll debug_status until the session appears running, then use wait_for_break.") //$NON-NLS-1$
                 .toJson();
@@ -658,26 +674,26 @@ public class DebugLaunchTool implements IMcpTool
             ToolResult already = ToolResult.success()
                 .put("alreadyRunning", true) //$NON-NLS-1$
                 .put("mode", mode) //$NON-NLS-1$
-                .put("message", message); //$NON-NLS-1$
+                .put(McpKeys.MESSAGE, message);
             if (launchConfiguration != null && !launchConfiguration.isEmpty())
             {
-                already.put("launchConfiguration", launchConfiguration); //$NON-NLS-1$
+                already.put(KEY_LAUNCH_CONFIGURATION, launchConfiguration);
             }
             if (configurationType != null && !configurationType.isEmpty())
             {
-                already.put("configurationType", configurationType); //$NON-NLS-1$
+                already.put(KEY_CONFIGURATION_TYPE, configurationType);
             }
             if (attach != null)
             {
-                already.put("attach", attach.booleanValue()); //$NON-NLS-1$
+                already.put(KEY_ATTACH, attach.booleanValue());
             }
             if (project != null && !project.isEmpty())
             {
-                already.put("project", project); //$NON-NLS-1$
+                already.put(McpKeys.PROJECT, project);
             }
             if (applicationId != null && !applicationId.isEmpty())
             {
-                already.put("applicationId", applicationId); //$NON-NLS-1$
+                already.put(McpKeys.APPLICATION_ID, applicationId);
             }
             return already;
         }
@@ -906,16 +922,16 @@ public class DebugLaunchTool implements IMcpTool
         }
         catch (CoreException e)
         {
-            Activator.logError("debug_launch failed asynchronously: " + e.getMessage(), e); //$NON-NLS-1$
+            Activator.logError(ERR_ASYNC_PREFIX + e.getMessage(), e);
             return e.getStatus();
         }
         catch (Throwable t)
         {
             // Never let the Job die on an uncaught exception — it would vanish
             // without a trace for the MCP caller. Log + report an error status.
-            Activator.logError("debug_launch failed asynchronously: " + t.getMessage(), t); //$NON-NLS-1$
+            Activator.logError(ERR_ASYNC_PREFIX + t.getMessage(), t);
             return new Status(IStatus.ERROR, Activator.PLUGIN_ID,
-                "debug_launch failed asynchronously: " + t.getMessage(), t); //$NON-NLS-1$
+                ERR_ASYNC_PREFIX + t.getMessage(), t);
         }
         finally
         {
@@ -937,10 +953,10 @@ public class DebugLaunchTool implements IMcpTool
             obj.addProperty("name", cfg.getName()); //$NON-NLS-1$
             String typeId = LaunchConfigUtils.getConfigTypeId(cfg);
             obj.addProperty("type", typeId); //$NON-NLS-1$
-            obj.addProperty("attach", LaunchConfigUtils.isAttachConfigTypeId(typeId)); //$NON-NLS-1$
-            obj.addProperty("project", LaunchConfigUtils.readAttribute(cfg, //$NON-NLS-1$
+            obj.addProperty(KEY_ATTACH, LaunchConfigUtils.isAttachConfigTypeId(typeId));
+            obj.addProperty(McpKeys.PROJECT, LaunchConfigUtils.readAttribute(cfg,
                 LaunchConfigUtils.ATTR_PROJECT_NAME, "")); //$NON-NLS-1$
-            obj.addProperty("applicationId", LaunchConfigUtils.readAttribute(cfg, //$NON-NLS-1$
+            obj.addProperty(McpKeys.APPLICATION_ID, LaunchConfigUtils.readAttribute(cfg,
                 LaunchConfigUtils.ATTR_APPLICATION_ID, "")); //$NON-NLS-1$
             String alias = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, ""); //$NON-NLS-1$
             if (!alias.isEmpty())

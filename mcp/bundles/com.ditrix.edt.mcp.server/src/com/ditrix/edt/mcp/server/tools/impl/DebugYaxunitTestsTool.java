@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 
 /**
@@ -28,6 +29,24 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 public class DebugYaxunitTestsTool implements IMcpTool
 {
     public static final String NAME = "debug_yaxunit_tests"; //$NON-NLS-1$
+
+    /** Input param: comma-separated update scope for the pre-launch auto-chain. */
+    private static final String KEY_UPDATE_SCOPE = "updateScope"; //$NON-NLS-1$
+
+    /** Input param: exact runtime-client launch configuration name. */
+    private static final String KEY_LAUNCH_CONFIGURATION_NAME = "launchConfigurationName"; //$NON-NLS-1$
+
+    /** Input param: comma-separated extension names to filter tests by extension. */
+    private static final String KEY_EXTENSIONS = "extensions"; //$NON-NLS-1$
+
+    /** Input param: comma-separated module names to filter tests. */
+    private static final String KEY_MODULES = "modules"; //$NON-NLS-1$
+
+    /** Input param: comma-separated test names as Module.Method. */
+    private static final String KEY_TESTS = "tests"; //$NON-NLS-1$
+
+    /** Input param: whether to run a silent DB update before launch. */
+    private static final String KEY_UPDATE_BEFORE_LAUNCH = "updateBeforeLaunch"; //$NON-NLS-1$
 
     /**
      * The merged implementation. A fresh instance is fine — all of
@@ -55,20 +74,20 @@ public class DebugYaxunitTestsTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("launchConfigurationName", //$NON-NLS-1$
+            .stringProperty(KEY_LAUNCH_CONFIGURATION_NAME,
                 "Exact runtime-client launch config name (preferred; from list_configurations).") //$NON-NLS-1$
-            .stringProperty("projectName", "EDT project name (required if launchConfigurationName is omitted).") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME, "EDT project name (required if launchConfigurationName is omitted).") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID,
                 "Application id from get_applications (required if launchConfigurationName is omitted).") //$NON-NLS-1$
-            .stringProperty("extensions", "Comma-separated extension names to filter tests by extension.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("modules", "Comma-separated module names to filter tests.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("tests", //$NON-NLS-1$
+            .stringProperty(KEY_EXTENSIONS, "Comma-separated extension names to filter tests by extension.") //$NON-NLS-1$
+            .stringProperty(KEY_MODULES, "Comma-separated module names to filter tests.") //$NON-NLS-1$
+            .stringProperty(KEY_TESTS,
                 "Comma-separated test names as Module.Method (recommended: pin to one test for a predictable cycle).") //$NON-NLS-1$
-            .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
+            .booleanProperty(KEY_UPDATE_BEFORE_LAUNCH,
                 "Default true: terminate any live client and run a silent DB update first so no modal " //$NON-NLS-1$
                     + "'Update database?' dialog blocks the call; false keeps legacy delegate behaviour — " //$NON-NLS-1$
                     + "no client sweep, no auto-confirmed update dialog; platform dialogs may appear.") //$NON-NLS-1$
-            .stringProperty("updateScope", RunYaxunitTestsTool.UPDATE_SCOPE_DESCRIPTION) //$NON-NLS-1$
+            .stringProperty(KEY_UPDATE_SCOPE, RunYaxunitTestsTool.UPDATE_SCOPE_DESCRIPTION)
             .build();
     }
 
@@ -80,14 +99,14 @@ public class DebugYaxunitTestsTool implements IMcpTool
         // shim still satisfies schema/execute parity (rule #6), and the explicit
         // list documents exactly what the alias accepts.
         Map<String, String> forwarded = new HashMap<>();
-        putIfPresent(forwarded, "launchConfigurationName", params.get("launchConfigurationName")); //$NON-NLS-1$ //$NON-NLS-2$
-        putIfPresent(forwarded, "projectName", params.get("projectName")); //$NON-NLS-1$ //$NON-NLS-2$
-        putIfPresent(forwarded, "applicationId", params.get("applicationId")); //$NON-NLS-1$ //$NON-NLS-2$
-        putIfPresent(forwarded, "extensions", params.get("extensions")); //$NON-NLS-1$ //$NON-NLS-2$
-        putIfPresent(forwarded, "modules", params.get("modules")); //$NON-NLS-1$ //$NON-NLS-2$
-        putIfPresent(forwarded, "tests", params.get("tests")); //$NON-NLS-1$ //$NON-NLS-2$
-        putIfPresent(forwarded, "updateBeforeLaunch", params.get("updateBeforeLaunch")); //$NON-NLS-1$ //$NON-NLS-2$
-        putIfPresent(forwarded, "updateScope", params.get("updateScope")); //$NON-NLS-1$ //$NON-NLS-2$
+        putIfPresent(forwarded, KEY_LAUNCH_CONFIGURATION_NAME, params.get(KEY_LAUNCH_CONFIGURATION_NAME));
+        putIfPresent(forwarded, McpKeys.PROJECT_NAME, params.get(McpKeys.PROJECT_NAME));
+        putIfPresent(forwarded, McpKeys.APPLICATION_ID, params.get(McpKeys.APPLICATION_ID));
+        putIfPresent(forwarded, KEY_EXTENSIONS, params.get(KEY_EXTENSIONS));
+        putIfPresent(forwarded, KEY_MODULES, params.get(KEY_MODULES));
+        putIfPresent(forwarded, KEY_TESTS, params.get(KEY_TESTS));
+        putIfPresent(forwarded, KEY_UPDATE_BEFORE_LAUNCH, params.get(KEY_UPDATE_BEFORE_LAUNCH));
+        putIfPresent(forwarded, KEY_UPDATE_SCOPE, params.get(KEY_UPDATE_SCOPE));
         forwarded.put("debug", "true"); //$NON-NLS-1$ //$NON-NLS-2$
         return DELEGATE.execute(forwarded);
     }
