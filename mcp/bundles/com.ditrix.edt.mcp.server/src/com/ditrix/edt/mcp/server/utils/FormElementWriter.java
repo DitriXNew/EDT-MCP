@@ -850,10 +850,18 @@ public final class FormElementWriter
         }
         // Guard: the factory may not run in this environment (its injector may be absent), or a future
         // change may stop seeding the command bar. Ensure the render-critical element is present.
-        if (singleReference(content, FEATURE_AUTO_COMMAND_BAR) == null)
+        EObject autoCommandBar = singleReference(content, FEATURE_AUTO_COMMAND_BAR);
+        if (autoCommandBar == null)
         {
-            setSingleReference(content, FEATURE_AUTO_COMMAND_BAR,
-                createDefaultAutoCommandBar(content, russianAutoNames));
+            autoCommandBar = createDefaultAutoCommandBar(content, russianAutoNames);
+            setSingleReference(content, FEATURE_AUTO_COMMAND_BAR, autoCommandBar);
+        }
+        // The FormObjectFactory-built bar does NOT carry the id=-1 sentinel a form's own predefined
+        // command bar requires, so EDT validation flags it (form-invalid-item-id). Enforce id=-1 on
+        // the bar regardless of who created it (the fallback bar already set it; this is idempotent).
+        if (autoCommandBar != null)
+        {
+            setIntFeature(autoCommandBar, FEATURE_ID, -1);
         }
         applyFormDefaults(content, version);
         return content;
