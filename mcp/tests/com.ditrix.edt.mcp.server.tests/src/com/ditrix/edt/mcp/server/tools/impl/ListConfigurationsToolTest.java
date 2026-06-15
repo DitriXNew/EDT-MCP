@@ -62,6 +62,37 @@ public class ListConfigurationsToolTest
     }
 
     @Test
+    public void testSchemaTypeEnumListsAllValues()
+    {
+        // The 'type' filter is an enum; the schema must advertise each accepted value
+        // so a client can offer them. Runtime validation honours the same set.
+        String schema = new ListConfigurationsTool().getInputSchema();
+        assertTrue("type enum must include 'attach'", schema.contains("attach")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("type enum must include 'client'", schema.contains("client")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("type enum must include 'all'", schema.contains("all")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresEnvelopeFields()
+    {
+        // JSON tool: it overrides the (null) default with a permissive success envelope.
+        String schema = new ListConfigurationsTool().getOutputSchema();
+        assertNotNull(schema);
+        assertTrue("outputSchema must declare success", schema.contains("\"success\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare configurations", //$NON-NLS-1$
+            schema.contains("\"configurations\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare count", schema.contains("\"count\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testResultFileNameIsJsonDefault()
+    {
+        // No override: the IMcpTool default derives the file name from the tool name.
+        assertEquals("list_configurations.md", //$NON-NLS-1$
+            new ListConfigurationsTool().getResultFileName(new HashMap<>()));
+    }
+
+    @Test
     public void testInvalidTypeRejected()
     {
         // The out-of-enum 'type' guard runs before any live launch-manager access,
@@ -73,6 +104,30 @@ public class ListConfigurationsToolTest
         assertTrue("must be a structured error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must name the failing param value", result.contains("Invalid type")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must echo the rejected value", result.contains("bogus_enum_value")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testInvalidTypeErrorNamesValidSet()
+    {
+        // The rejection message must spell out the accepted values so the caller can self-correct.
+        Map<String, String> params = new HashMap<>();
+        params.put("type", "xyz"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new ListConfigurationsTool().execute(params);
+        assertTrue("must list 'all'", result.contains("all")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must list 'attach'", result.contains("attach")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must list 'client'", result.contains("client")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testUnknownTypeWithWeirdCasingRejected()
+    {
+        // Only the known tokens (case-insensitively) pass; an arbitrary value is
+        // rejected up front, before any live launch-manager access.
+        Map<String, String> params = new HashMap<>();
+        params.put("type", "Attached"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new ListConfigurationsTool().execute(params);
+        assertTrue("near-miss token must still be rejected", result.contains("Invalid type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("rejected value echoed", result.contains("Attached")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

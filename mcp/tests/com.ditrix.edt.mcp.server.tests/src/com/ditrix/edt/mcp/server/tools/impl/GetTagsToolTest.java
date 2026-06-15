@@ -20,10 +20,14 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 /**
  * Tests for {@link GetTagsTool}.
  * <p>
- * Covers tool metadata, the input schema, and the projectName required-argument
- * validation that returns before the first {@code ProjectStateChecker}/
- * {@code ResourcesPlugin} access. Reading the tag store needs a live project and
- * is covered by the E2E suite.
+ * Covers tool metadata, the input schema, and the two {@code execute()}
+ * early-validation branches reachable headlessly: the missing-projectName guard
+ * and the project-not-found sentinel. Both return BEFORE the
+ * {@code TagService.getTagStorage(project)} call (the EDT boundary, which needs a
+ * live project's tag store). The transient BUILDING pre-flight
+ * ({@code ResourcesPlugin}-backed) is traversed safely for a non-existent project
+ * name (it resolves to NOT_AVAILABLE, never BUILDING). Reading the tag store is
+ * covered by the E2E suite.
  */
 public class GetTagsToolTest
 {
@@ -61,7 +65,18 @@ public class GetTagsToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
     }
 
-    // ==================== Argument validation (no live workspace needed) ====================
+    @Test
+    public void testSchemaRequiresProjectName()
+    {
+        // projectName is the sole input and it is required.
+        String schema = new GetTagsTool().getInputSchema();
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue("schema must declare a required array", requiredIdx >= 0); //$NON-NLS-1$
+        assertTrue("projectName must be required", //$NON-NLS-1$
+            schema.substring(requiredIdx).contains("\"projectName\"")); //$NON-NLS-1$
+    }
+
+    // ==================== Argument validation (no live tag store needed) ====================
 
     @Test
     public void testMissingProjectName()
@@ -69,5 +84,19 @@ public class GetTagsToolTest
         Map<String, String> params = new HashMap<>();
         String result = new GetTagsTool().execute(params);
         assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnknownProjectIsNotFound()
+    {
+        // projectName present but the project does not exist in the (empty) test
+        // workspace: the building pre-flight resolves it to NOT_AVAILABLE (never
+        // BUILDING) and falls through to the actionable "Project not found"
+        // sentinel, which is returned before any tag-store access.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "NoSuchProject_GetTags"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GetTagsTool().execute(params);
+        assertTrue("an unknown project must produce 'Project not found'", //$NON-NLS-1$
+            result.contains("Project not found")); //$NON-NLS-1$
     }
 }

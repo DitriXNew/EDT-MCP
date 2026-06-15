@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -26,11 +27,17 @@ import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 /**
  * Tests for {@link GetCheckDescriptionTool}.
  * <p>
- * Covers tool metadata, the input schema, and the checkId required-argument
- * validation that returns before the configured-folder / preference-store
- * access. Reading the actual check document needs the configured docs folder and
- * is covered by the E2E suite. (Uses the {@code IMcpTool} default MARKDOWN
- * response type.)
+ * Covers tool metadata, the input schema, the {@code getResultFileName} naming
+ * helper, the {@code checkId} required-argument guard, the pure UID -> symbolic
+ * resolver, and the {@code hasCheckDocumentation} lookup. The headless boundary
+ * is {@code Activator.getDefault().getPreferenceStore()} (the configured
+ * check-descriptions folder): in the unit-test runtime the Activator is not
+ * started, so any document-reading path degrades to an error payload /
+ * {@code false} rather than returning content. {@code findCheckDocumentationFile}
+ * swallows that and yields {@code null}, so {@code hasCheckDocumentation} is
+ * headless-safe. Reading an actual check document needs the configured docs
+ * folder and is covered by the E2E suite. (Uses the {@code IMcpTool} default
+ * MARKDOWN response type.)
  */
 public class GetCheckDescriptionToolTest
 {
@@ -93,7 +100,37 @@ public class GetCheckDescriptionToolTest
             desc.contains("UID")); //$NON-NLS-1$
     }
 
-    // ==================== Argument validation (no configured folder needed) ====================
+    // ==================== getResultFileName (pure, no folder/Activator) ====================
+
+    @Test
+    public void testResultFileNameUsesCheckId()
+    {
+        // A supplied checkId names the result file <checkId>.md.
+        Map<String, String> params = new HashMap<>();
+        params.put("checkId", "begin-transaction"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("begin-transaction.md", //$NON-NLS-1$
+            new GetCheckDescriptionTool().getResultFileName(params));
+    }
+
+    @Test
+    public void testResultFileNameFallsBackToToolName()
+    {
+        // No checkId -> the file name falls back to "<toolName>.md".
+        assertEquals("get_check_description.md", //$NON-NLS-1$
+            new GetCheckDescriptionTool().getResultFileName(new HashMap<>()));
+    }
+
+    @Test
+    public void testResultFileNameEmptyCheckIdFallsBackToToolName()
+    {
+        // A blank checkId is treated as absent -> fall back to the tool name.
+        Map<String, String> params = new HashMap<>();
+        params.put("checkId", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("get_check_description.md", //$NON-NLS-1$
+            new GetCheckDescriptionTool().getResultFileName(params));
+    }
+
+    // ==================== checkId validation (no configured folder needed) ====================
 
     @Test
     public void testMissingCheckId()
@@ -101,6 +138,74 @@ public class GetCheckDescriptionToolTest
         Map<String, String> params = new HashMap<>();
         String result = new GetCheckDescriptionTool().execute(params);
         assertTrue(result.contains("checkId is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStaticGetCheckDescriptionNullCheckIdIsError()
+    {
+        // The static entry point shares the same required-checkId guard, which
+        // returns BEFORE any preference-store / folder access.
+        String result = GetCheckDescriptionTool.getCheckDescription(null);
+        assertTrue("null checkId must produce the checkId-required error", //$NON-NLS-1$
+            result.contains("checkId is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStaticGetCheckDescriptionEmptyCheckIdIsError()
+    {
+        String result = GetCheckDescriptionTool.getCheckDescription(""); //$NON-NLS-1$
+        assertTrue("empty checkId must produce the checkId-required error", //$NON-NLS-1$
+            result.contains("checkId is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStaticGetCheckDescriptionTwoArgEmptyCheckIdIsError()
+    {
+        // The projectName-aware overload applies the same guard first.
+        String result = GetCheckDescriptionTool.getCheckDescription("", "SomeProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("empty checkId must produce the checkId-required error", //$NON-NLS-1$
+            result.contains("checkId is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGetCheckDescriptionForUnknownCheckIsError()
+    {
+        // A non-empty but unknown checkId can never resolve to a document
+        // (no configured folder in the unit-test runtime, and even if one were
+        // configured this id has no .md file): the tool yields an error payload,
+        // never content. A unique synthetic id keeps this independent of any
+        // packaged or configured check docs.
+        String result = GetCheckDescriptionTool.getCheckDescription("no-such-check-xyz-unit"); //$NON-NLS-1$
+        assertNotNull(result);
+        assertTrue("an unresolvable checkId must yield a structured error payload", //$NON-NLS-1$
+            result.contains("\"success\":false") || result.contains("\"success\": false")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== hasCheckDocumentation (headless-safe lookup) ====================
+
+    @Test
+    public void testHasCheckDocumentationNullCheckIdIsFalse()
+    {
+        // A null/empty checkId short-circuits to false before any folder access.
+        assertFalse(GetCheckDescriptionTool.hasCheckDocumentation(null));
+        assertFalse(GetCheckDescriptionTool.hasCheckDocumentation("")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHasCheckDocumentationForUnknownCheckIsFalse()
+    {
+        // findCheckDocumentationFile swallows the missing-folder / absent-Activator
+        // condition and returns null, so the public probe is a safe false. A unique
+        // synthetic id also guarantees no packaged/configured doc can match.
+        assertFalse(GetCheckDescriptionTool.hasCheckDocumentation("no-such-check-xyz-unit")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHasCheckDocumentationPathTraversalIsFalse()
+    {
+        // A checkId carrying path-traversal characters must never resolve a file;
+        // the lookup is null-safe and returns false (no exception).
+        assertFalse(GetCheckDescriptionTool.hasCheckDocumentation("../../etc/passwd")); //$NON-NLS-1$
     }
 
     // ==================== UID -> symbolic resolution (pure, mocked repository) ====================

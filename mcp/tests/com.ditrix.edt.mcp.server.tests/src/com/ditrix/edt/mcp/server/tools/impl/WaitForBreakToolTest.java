@@ -13,6 +13,9 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IThread;
 import org.junit.After;
@@ -66,6 +69,20 @@ public class WaitForBreakToolTest
         assertNotNull(schema);
         assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"timeout\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresSnapshotFields()
+    {
+        String schema = new WaitForBreakTool().getOutputSchema();
+        assertNotNull(schema);
+        assertTrue(schema.contains("\"hit\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"reason\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"threadId\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"frames\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"topFrameRef\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"serverTarget\"")); //$NON-NLS-1$
     }
 
     // ==================== Timeout clamping (pure, no live debug session) ====================
@@ -146,5 +163,69 @@ public class WaitForBreakToolTest
         assertTrue(json.contains("\"hit\":true")); //$NON-NLS-1$
         // Same emit-only-when-true convention as the timeout path.
         assertFalse(json.contains("serverTarget")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHitResponseCarriesAutoResolvedAndTopFrameRefWithFrames() throws Exception
+    {
+        // A snapshot with one (mocked) stack frame: the response must register the
+        // frame, expose its frameRef as topFrameRef, and flag autoResolved when set.
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        registry.clear();
+        IThread thread = mock(IThread.class);
+        when(thread.getName()).thenReturn("auto thread"); //$NON-NLS-1$
+        IStackFrame frame = mock(IStackFrame.class);
+        when(frame.getName()).thenReturn("Module.Method"); //$NON-NLS-1$
+        when(frame.getLineNumber()).thenReturn(42);
+        when(thread.getStackFrames()).thenReturn(new IStackFrame[] { frame });
+        String appId = "launch:AutoCfg"; //$NON-NLS-1$
+        registry.injectSuspend(appId, thread);
+
+        String json = WaitForBreakTool.buildSnapshotResponse(registry.getSnapshot(appId), registry,
+            appId, true, false);
+
+        assertTrue(json.contains("\"hit\":true")); //$NON-NLS-1$
+        assertTrue(json.contains("\"autoResolved\":true")); //$NON-NLS-1$
+        assertTrue(json.contains("\"frameIndex\":0")); //$NON-NLS-1$
+        assertTrue(json.contains("\"topFrameRef\":")); //$NON-NLS-1$
+        assertTrue(json.contains("\"line\":42")); //$NON-NLS-1$
+    }
+
+    // ==================== execute(): headless-reachable branches ====================
+
+    @Test
+    public void testExecuteBlankApplicationIdWithNoActiveSessionIsError()
+    {
+        // No active launch/server session exists headless, so a blank applicationId
+        // cannot be auto-resolved: the tool must return the structured error BEFORE
+        // entering any blocking wait.
+        DebugSessionRegistry.get().clear();
+        Map<String, String> params = new HashMap<>();
+        params.put("timeout", "1"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new WaitForBreakTool().execute(params);
+        assertTrue(result.contains("applicationId is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExecuteReturnsExistingSnapshotImmediatelyAsHit() throws Exception
+    {
+        // An explicit id with a pre-existing snapshot resolves to no live target
+        // headless, falls through with that id, and waitForSuspend returns the
+        // already-present snapshot immediately — no blocking, a clean hit.
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        registry.clear();
+        IThread thread = mock(IThread.class);
+        when(thread.getName()).thenReturn("pre-suspended"); //$NON-NLS-1$
+        when(thread.getStackFrames()).thenReturn(new IStackFrame[0]);
+        String appId = "launch:PreCfg"; //$NON-NLS-1$
+        registry.injectSuspend(appId, thread);
+
+        Map<String, String> params = new HashMap<>();
+        params.put("applicationId", appId); //$NON-NLS-1$
+        params.put("timeout", "1"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new WaitForBreakTool().execute(params);
+
+        assertTrue(result.contains("\"hit\":true")); //$NON-NLS-1$
+        assertTrue(result.contains("\"applicationId\":\"launch:PreCfg\"")); //$NON-NLS-1$
     }
 }
