@@ -38,7 +38,10 @@ import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 public class UniversalMetadataFormatter extends AbstractMetadataFormatter
 {
     private static final UniversalMetadataFormatter INSTANCE = new UniversalMetadataFormatter();
-    
+
+    /** Table column / property label for a value cell. */
+    private static final String VALUE_TOKEN = "Value"; //$NON-NLS-1$
+
     /**
      * Gets the singleton instance.
      */
@@ -116,8 +119,8 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
      */
     private void formatStyleItemValue(StringBuilder sb, StyleItem styleItem)
     {
-        addSectionHeader(sb, "Value"); //$NON-NLS-1$
-        startTable(sb, "Property", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
+        addSectionHeader(sb, VALUE_TOKEN);
+        startTable(sb, "Property", VALUE_TOKEN); //$NON-NLS-1$
         addPropertyRow(sb, "Style Type", formatEnum(styleItem.getType())); //$NON-NLS-1$
 
         Value value = styleItem.getValue();
@@ -131,7 +134,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         }
         else
         {
-            addPropertyRow(sb, "Value", DASH); //$NON-NLS-1$
+            addPropertyRow(sb, VALUE_TOKEN, DASH);
         }
     }
 
@@ -472,7 +475,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
                 sb.append("\n#### ").append(ts.getName()).append("\n\n");
                 
                 // Properties table for the TS itself
-                startTable(sb, "Property", "Value");
+                startTable(sb, "Property", VALUE_TOKEN);
                 addPropertyRow(sb, "Name", ts.getName());
                 addPropertyRow(sb, "Synonym", getSynonym(ts.getSynonym(), language));
                 
@@ -624,7 +627,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     private void formatMapEntryCollection(StringBuilder sb, String name, Collection<?> items, String language)
     {
         addSectionHeader(sb, name);
-        startTable(sb, "Language", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
+        startTable(sb, "Language", VALUE_TOKEN); //$NON-NLS-1$
         
         for (Object item : items)
         {
@@ -719,7 +722,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
                 if (first)
                 {
                     // Get available feature names for headers
-                    startTable(sb, "Name", "Value"); //$NON-NLS-1$ //$NON-NLS-2$
+                    startTable(sb, "Name", VALUE_TOKEN); //$NON-NLS-1$
                     first = false;
                 }
                 

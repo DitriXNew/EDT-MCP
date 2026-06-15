@@ -25,7 +25,13 @@ public final class JsonUtils
     {
         // Utility class
     }
-    
+
+    /** JSON key for the EDT version field. */
+    private static final String KEY_EDT_VERSION = "edt_version"; //$NON-NLS-1$
+
+    /** JSON key for the status field. */
+    private static final String KEY_STATUS = "status"; //$NON-NLS-1$
+
     /**
      * Builds a JSON-RPC 2.0 error response.
      * 
@@ -87,9 +93,9 @@ public final class JsonUtils
         JsonObject response = new JsonObject();
         response.addProperty("name", name); //$NON-NLS-1$
         response.addProperty("version", version); //$NON-NLS-1$
-        response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
+        response.addProperty(KEY_EDT_VERSION, edtVersion);
         response.addProperty("protocol_version", protocolVersion); //$NON-NLS-1$
-        response.addProperty("status", "running"); //$NON-NLS-1$ //$NON-NLS-2$
+        response.addProperty(KEY_STATUS, "running"); //$NON-NLS-1$
         return GsonProvider.toJson(response);
     }
     
@@ -113,9 +119,9 @@ public final class JsonUtils
     public static String buildHealthResponse(String edtVersion)
     {
         JsonObject response = new JsonObject();
-        response.addProperty("status", HEALTH_STATUS_OK); //$NON-NLS-1$
+        response.addProperty(KEY_STATUS, HEALTH_STATUS_OK);
         response.addProperty("live", true); //$NON-NLS-1$
-        response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
+        response.addProperty(KEY_EDT_VERSION, edtVersion);
         return GsonProvider.toJson(response);
     }
 
@@ -170,12 +176,12 @@ public final class JsonUtils
         }
 
         JsonObject response = new JsonObject();
-        response.addProperty("status", status); //$NON-NLS-1$
+        response.addProperty(KEY_STATUS, status);
         // Always-true liveness ping: the process is up and answered this request.
         response.addProperty("live", true); //$NON-NLS-1$
         response.addProperty("ready", ready); //$NON-NLS-1$
         response.addProperty("running", running); //$NON-NLS-1$
-        response.addProperty("edt_version", edtVersion); //$NON-NLS-1$
+        response.addProperty(KEY_EDT_VERSION, edtVersion);
 
         JsonArray missingArray = new JsonArray();
         for (String name : missing)

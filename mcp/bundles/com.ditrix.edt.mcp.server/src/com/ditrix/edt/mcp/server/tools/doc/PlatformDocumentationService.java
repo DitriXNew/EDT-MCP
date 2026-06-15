@@ -87,6 +87,9 @@ public class PlatformDocumentationService
     private static final String MEMBER_CONSTRUCTOR = "constructor"; //$NON-NLS-1$
     private static final String MEMBER_EVENT = "event"; //$NON-NLS-1$
 
+    /** Fallback heading label when a documented element has no name. */
+    private static final String UNKNOWN_LABEL = "Unknown"; //$NON-NLS-1$
+
     /**
      * Gets documentation for a platform type (ValueTable, Array, etc.).
      */
@@ -251,7 +254,7 @@ public class PlatformDocumentationService
         String displayName = useRussian ? type.getNameRu() : type.getName();
         String altName = useRussian ? type.getName() : type.getNameRu();
 
-        sb.append("# ").append(displayName != null ? displayName : "Unknown"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("# ").append(displayName != null ? displayName : UNKNOWN_LABEL); //$NON-NLS-1$
         if (altName != null && !altName.equals(displayName))
         {
             sb.append(" / ").append(altName); //$NON-NLS-1$
@@ -500,7 +503,7 @@ public class PlatformDocumentationService
         String name = useRussian && method.getNameRu() != null ? method.getNameRu() : method.getName();
         String altName = useRussian ? method.getName() : method.getNameRu();
 
-        sb.append("### ").append(name != null ? MarkdownUtils.escapeMarkdown(name) : "Unknown"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("### ").append(name != null ? MarkdownUtils.escapeMarkdown(name) : UNKNOWN_LABEL); //$NON-NLS-1$
         if (altName != null && !altName.equals(name))
         {
             sb.append(" / ").append(MarkdownUtils.escapeMarkdown(altName)); //$NON-NLS-1$
@@ -611,7 +614,7 @@ public class PlatformDocumentationService
         String name = useRussian && prop.getNameRu() != null ? prop.getNameRu() : prop.getName();
         String altName = useRussian ? prop.getName() : prop.getNameRu();
 
-        sb.append("### ").append(name != null ? MarkdownUtils.escapeMarkdown(name) : "Unknown"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("### ").append(name != null ? MarkdownUtils.escapeMarkdown(name) : UNKNOWN_LABEL); //$NON-NLS-1$
         if (altName != null && !altName.equals(name))
         {
             sb.append(" / ").append(MarkdownUtils.escapeMarkdown(altName)); //$NON-NLS-1$
@@ -659,7 +662,7 @@ public class PlatformDocumentationService
         String name = useRussian && event.getNameRu() != null ? event.getNameRu() : event.getName();
         String altName = useRussian ? event.getName() : event.getNameRu();
 
-        sb.append("### ").append(name != null ? MarkdownUtils.escapeMarkdown(name) : "Unknown"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("### ").append(name != null ? MarkdownUtils.escapeMarkdown(name) : UNKNOWN_LABEL); //$NON-NLS-1$
         if (altName != null && !altName.equals(name))
         {
             sb.append(" / ").append(MarkdownUtils.escapeMarkdown(altName)); //$NON-NLS-1$
@@ -824,7 +827,7 @@ public class PlatformDocumentationService
         String displayName = useRussian ? method.getNameRu() : method.getName();
         String altName = useRussian ? method.getName() : method.getNameRu();
 
-        sb.append("# ").append(displayName != null ? displayName : "Unknown"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("# ").append(displayName != null ? displayName : UNKNOWN_LABEL); //$NON-NLS-1$
         if (altName != null && !altName.equals(displayName))
         {
             sb.append(" / ").append(altName); //$NON-NLS-1$

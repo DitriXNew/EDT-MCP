@@ -78,6 +78,9 @@ public final class LaunchLifecycleUtils
      */
     private static final ConcurrentMap<String, Object> KEY_LOCKS = new ConcurrentHashMap<>();
 
+    /** Fallback label for a launch whose configuration name is unavailable. */
+    private static final String UNKNOWN_LABEL = "<unknown>"; //$NON-NLS-1$
+
     // =========================================================================
     // Pre-launch preparation in-flight registry (Fix 2: 25 s budget + pending)
     // =========================================================================
@@ -1580,7 +1583,7 @@ public final class LaunchLifecycleUtils
                     continue;
                 }
                 String name = live.getLaunchConfiguration() != null
-                    ? live.getLaunchConfiguration().getName() : "<unknown>"; //$NON-NLS-1$
+                    ? live.getLaunchConfiguration().getName() : UNKNOWN_LABEL;
                 // Identity-equals lookup against the OWNED registry — relies on
                 // the invariant that callers pass the exact ILaunch instance
                 // returned by workingCopy.launch() to registerOwnedLaunch.
@@ -1621,7 +1624,7 @@ public final class LaunchLifecycleUtils
                     continue;
                 }
                 String name = live.getLaunchConfiguration() != null
-                    ? live.getLaunchConfiguration().getName() : "<unknown>"; //$NON-NLS-1$
+                    ? live.getLaunchConfiguration().getName() : UNKNOWN_LABEL;
                 // Defensive: today both YAXUnit tools register only runtime
                 // launches, so an Attach in OWNED is purely hypothetical. If a
                 // future tool starts registering Attach launches as owned, we
@@ -2311,7 +2314,7 @@ public final class LaunchLifecycleUtils
         if (isOwnedLaunch(session.launch))
         {
             String name = session.launch.getLaunchConfiguration() != null
-                ? session.launch.getLaunchConfiguration().getName() : "<unknown>"; //$NON-NLS-1$
+                ? session.launch.getLaunchConfiguration().getName() : UNKNOWN_LABEL;
             Activator.logInfo("Fresh-launch sweep: skipping MCP-owned launch '" + name //$NON-NLS-1$
                 + "'; it is managed by its own tool: applicationId=" + delegateAppId); //$NON-NLS-1$
             return false;

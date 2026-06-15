@@ -44,6 +44,8 @@ public final class StyleValueBuilder
     private static final int RGB_MIN = 0;
     /** Maximum allowed RGB component value. */
     private static final int RGB_MAX = 255;
+    /** Error-message fragment between the expected range/value and the actual one. */
+    private static final String GOT_SEPARATOR = ", got "; //$NON-NLS-1$
 
     /** A successfully built style value (the mcore {@link Value} + the matching element {@link StyleElementType}),
      * or an actionable {@link #error} message. Exactly one of {@code error} / {@code value} is set. */
@@ -288,15 +290,15 @@ public final class StyleValueBuilder
     {
         if (outOfRange(red))
         {
-            return "red must be in range " + RGB_MIN + "-" + RGB_MAX + ", got " + red + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            return "red must be in range " + RGB_MIN + "-" + RGB_MAX + GOT_SEPARATOR + red + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         if (outOfRange(green))
         {
-            return "green must be in range " + RGB_MIN + "-" + RGB_MAX + ", got " + green + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            return "green must be in range " + RGB_MIN + "-" + RGB_MAX + GOT_SEPARATOR + green + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         if (outOfRange(blue))
         {
-            return "blue must be in range " + RGB_MIN + "-" + RGB_MAX + ", got " + blue + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            return "blue must be in range " + RGB_MIN + "-" + RGB_MAX + GOT_SEPARATOR + blue + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         return null;
     }

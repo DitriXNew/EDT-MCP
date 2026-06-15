@@ -27,6 +27,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 
@@ -44,11 +45,15 @@ public class FormLayoutSnapshotService
     private static final String VIEW_PROJECTION_FIELD = "viewProjection"; //$NON-NLS-1$
     private static final String MODE_COMPACT = "compact"; //$NON-NLS-1$
     private static final String MODE_FULL = "full"; //$NON-NLS-1$
+    /** Bounds map key for element height. */
+    private static final String KEY_HEIGHT = "height"; //$NON-NLS-1$
+    /** Bounds map key for element width. */
+    private static final String KEY_WIDTH = "width"; //$NON-NLS-1$
     private static final List<String> DISPLAY_PROPERTY_NAMES = List.of(
         "visible", "groupVisible", "enabled", "groupEnabled", "readOnly", "groupReadOnly", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "skipOnInput", "defaultControl", "stretchableMode", "gridLeft", "gridTop", "gridWidth", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "gridHeight", "gridHAlign", "gridVAlign", "gridLeftPadding", "gridTopPadding", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-        "gridRightPadding", "gridBottomPadding", "alignedAreaTopOffset", "width", "height", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        "gridRightPadding", "gridBottomPadding", "alignedAreaTopOffset", KEY_WIDTH, KEY_HEIGHT, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "minWidth", "maxWidth", "minHeight", "maxHeight", "backColor", "textColor", "borderColor", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
         "tooltip", "representation", "shape", "pictureLocation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "textHAlign", "hAlign", "vAlign", "wrap", "multiLine", "passwordMode", "choiceButton", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
@@ -373,14 +378,14 @@ public class FormLayoutSnapshotService
         Object layout = getProjectedModel(layoutProjection, presentation);
         if (getLayoutBounds(layout) != null)
         {
-            return "layoutProjection"; //$NON-NLS-1$
+            return LAYOUT_PROJECTION_FIELD;
         }
 
         Object view = getProjectedModel(viewProjection, presentation);
         Object controlBounds = invokeNoArg(view, "getBounds"); //$NON-NLS-1$
         if (controlBounds instanceof Rectangle)
         {
-            return "viewProjection"; //$NON-NLS-1$
+            return VIEW_PROJECTION_FIELD;
         }
 
         return null;
@@ -392,8 +397,8 @@ public class FormLayoutSnapshotService
         {
             return false;
         }
-        Object width = bounds.get("width"); //$NON-NLS-1$
-        Object height = bounds.get("height"); //$NON-NLS-1$
+        Object width = bounds.get(KEY_WIDTH);
+        Object height = bounds.get(KEY_HEIGHT);
         return width instanceof Number && height instanceof Number
             && ((Number)width).intValue() > 0 && ((Number)height).intValue() > 0;
     }
@@ -423,8 +428,8 @@ public class FormLayoutSnapshotService
         Map<String, Object> bounds = new LinkedHashMap<>();
         bounds.put("left", left); //$NON-NLS-1$
         bounds.put("top", top); //$NON-NLS-1$
-        bounds.put("width", width); //$NON-NLS-1$
-        bounds.put("height", height); //$NON-NLS-1$
+        bounds.put(KEY_WIDTH, width);
+        bounds.put(KEY_HEIGHT, height);
         bounds.put("right", left + width); //$NON-NLS-1$
         bounds.put("bottom", top + height); //$NON-NLS-1$
         return bounds;
@@ -484,7 +489,7 @@ public class FormLayoutSnapshotService
     {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", false); //$NON-NLS-1$
-        result.put("error", message); //$NON-NLS-1$
+        result.put(McpKeys.ERROR, message);
         return dumpYaml(result);
     }
 

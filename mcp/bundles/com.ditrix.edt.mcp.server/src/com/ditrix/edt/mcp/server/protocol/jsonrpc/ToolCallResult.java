@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -98,9 +99,9 @@ public class ToolCallResult
             if (element.isJsonObject())
             {
                 JsonObject obj = element.getAsJsonObject();
-                if (obj.has("error") && obj.get("error").isJsonPrimitive()) //$NON-NLS-1$ //$NON-NLS-2$
+                if (obj.has(McpKeys.ERROR) && obj.get(McpKeys.ERROR).isJsonPrimitive())
                 {
-                    String message = obj.get("error").getAsString(); //$NON-NLS-1$
+                    String message = obj.get(McpKeys.ERROR).getAsString();
                     if (message != null && !message.isEmpty())
                     {
                         return message;

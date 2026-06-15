@@ -46,6 +46,12 @@ public class McpProtocolHandler
      */
     static final long SLOW_TOOL_CALL_MS = 5000L;
 
+    /** MIME type for Markdown resource bodies. */
+    private static final String MIME_TEXT_MARKDOWN = "text/markdown"; //$NON-NLS-1$
+
+    /** JSON key flagging a structured success/failure outcome. */
+    private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
+
     private final McpToolRegistry toolRegistry;
 
     /**
@@ -347,7 +353,7 @@ public class McpProtocolHandler
                     return buildToolCallTextResponse(result, requestId);
                 }
                 String fileName = tool.getResultFileName(params);
-                return buildToolCallResourceResponse(result, "text/markdown", fileName, requestId); //$NON-NLS-1$
+                return buildToolCallResourceResponse(result, MIME_TEXT_MARKDOWN, fileName, requestId);
             case YAML:
                 // Same delivery as MARKDOWN (error diversion, signal append, plain
                 // text fallback) but the embedded resource advertises a YAML
@@ -491,12 +497,12 @@ public class McpProtocolHandler
             }
 
             com.google.gson.JsonObject obj = element.getAsJsonObject();
-            if (!obj.has("error")) //$NON-NLS-1$
+            if (!obj.has(McpKeys.ERROR))
             {
                 return null;
             }
 
-            JsonElement error = obj.get("error"); //$NON-NLS-1$
+            JsonElement error = obj.get(McpKeys.ERROR);
             if (error.isJsonNull())
             {
                 return null;
@@ -689,7 +695,7 @@ public class McpProtocolHandler
             resource.addProperty("uri", McpConstants.GUIDE_URI_SCHEME + name); //$NON-NLS-1$
             resource.addProperty("name", name + " guide"); //$NON-NLS-1$ //$NON-NLS-2$
             resource.addProperty("description", "Full how-to for " + name); //$NON-NLS-1$ //$NON-NLS-2$
-            resource.addProperty("mimeType", "text/markdown"); //$NON-NLS-1$ //$NON-NLS-2$
+            resource.addProperty("mimeType", MIME_TEXT_MARKDOWN); //$NON-NLS-1$
             resources.add(resource);
         }
 
@@ -731,7 +737,7 @@ public class McpProtocolHandler
 
         JsonObject content = new JsonObject();
         content.addProperty("uri", uri); //$NON-NLS-1$
-        content.addProperty("mimeType", "text/markdown"); //$NON-NLS-1$ //$NON-NLS-2$
+        content.addProperty("mimeType", MIME_TEXT_MARKDOWN); //$NON-NLS-1$
         content.addProperty("text", GuideRenderer.render(tool)); //$NON-NLS-1$
 
         JsonArray contents = new JsonArray();
@@ -917,9 +923,9 @@ public class McpProtocolHandler
             // list) must stay isError:false, otherwise every future field name would
             // be latently coupled to the error-detection contract.
             com.google.gson.JsonObject obj = element.getAsJsonObject();
-            return obj.has("success") && obj.get("success").isJsonPrimitive()
-                && obj.get("success").getAsJsonPrimitive().isBoolean()
-                && !obj.get("success").getAsBoolean();
+            return obj.has(KEY_SUCCESS) && obj.get(KEY_SUCCESS).isJsonPrimitive()
+                && obj.get(KEY_SUCCESS).getAsJsonPrimitive().isBoolean()
+                && !obj.get(KEY_SUCCESS).getAsBoolean();
         }
         catch (Exception e)
         {
@@ -948,7 +954,7 @@ public class McpProtocolHandler
             {
                 err.addProperty("message", message); //$NON-NLS-1$
             }
-            envelope.add("error", err); //$NON-NLS-1$
+            envelope.add(McpKeys.ERROR, err);
             return GsonProvider.toJsonSerializeNulls(envelope);
         }
         return GsonProvider.toJson(JsonRpcResponse.error(requestId, code, message));

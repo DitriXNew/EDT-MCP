@@ -18,10 +18,19 @@ import java.util.Map;
  */
 public class JsonSchemaBuilder
 {
+    /** JSON Schema {@code "object"} type token. */
+    private static final String TYPE_OBJECT = "object"; //$NON-NLS-1$
+
+    /** JSON Schema {@code "string"} type token. */
+    private static final String TYPE_STRING = "string"; //$NON-NLS-1$
+
+    /** JSON Schema {@code "description"} key. */
+    private static final String KEY_DESCRIPTION = "description"; //$NON-NLS-1$
+
     private final Map<String, Object> schema = new LinkedHashMap<>();
     private final Map<String, Object> properties = new LinkedHashMap<>();
     private final List<String> required = new ArrayList<>();
-    
+
     /**
      * Creates a new schema builder with type "object".
      * 
@@ -30,7 +39,7 @@ public class JsonSchemaBuilder
     public static JsonSchemaBuilder object()
     {
         JsonSchemaBuilder builder = new JsonSchemaBuilder();
-        builder.schema.put("type", "object"); //$NON-NLS-1$ //$NON-NLS-2$
+        builder.schema.put("type", TYPE_OBJECT); //$NON-NLS-1$
         return builder;
     }
     
@@ -57,17 +66,17 @@ public class JsonSchemaBuilder
     public JsonSchemaBuilder stringProperty(String name, String description, boolean required)
     {
         Map<String, Object> prop = new LinkedHashMap<>();
-        prop.put("type", "string"); //$NON-NLS-1$ //$NON-NLS-2$
-        prop.put("description", description); //$NON-NLS-1$
+        prop.put("type", TYPE_STRING); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
         properties.put(name, prop);
-        
+
         if (required)
         {
             this.required.add(name);
         }
         return this;
     }
-    
+
     /**
      * Adds a string property restricted to a closed set of values (a JSON Schema
      * {@code enum}). Only use this when {@code execute()} accepts exactly the given
@@ -99,8 +108,8 @@ public class JsonSchemaBuilder
     public JsonSchemaBuilder enumProperty(String name, String description, boolean required, String... values)
     {
         Map<String, Object> prop = new LinkedHashMap<>();
-        prop.put("type", "string"); //$NON-NLS-1$ //$NON-NLS-2$
-        prop.put("description", description); //$NON-NLS-1$
+        prop.put("type", TYPE_STRING); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
         prop.put("enum", Arrays.asList(values)); //$NON-NLS-1$
         properties.put(name, prop);
 
@@ -135,7 +144,7 @@ public class JsonSchemaBuilder
     {
         Map<String, Object> prop = new LinkedHashMap<>();
         prop.put("type", "integer"); //$NON-NLS-1$ //$NON-NLS-2$
-        prop.put("description", description); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
         properties.put(name, prop);
         
         if (required)
@@ -169,7 +178,7 @@ public class JsonSchemaBuilder
     {
         Map<String, Object> prop = new LinkedHashMap<>();
         prop.put("type", "boolean"); //$NON-NLS-1$ //$NON-NLS-2$
-        prop.put("description", description); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
         properties.put(name, prop);
         
         if (required)
@@ -202,12 +211,12 @@ public class JsonSchemaBuilder
     public JsonSchemaBuilder stringArrayProperty(String name, String description, boolean required)
     {
         Map<String, Object> items = new LinkedHashMap<>();
-        items.put("type", "string"); //$NON-NLS-1$ //$NON-NLS-2$
-        
+        items.put("type", TYPE_STRING); //$NON-NLS-1$
+
         Map<String, Object> prop = new LinkedHashMap<>();
         prop.put("type", "array"); //$NON-NLS-1$ //$NON-NLS-2$
         prop.put("items", items); //$NON-NLS-1$
-        prop.put("description", description); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
         properties.put(name, prop);
         
         if (required)
@@ -243,7 +252,7 @@ public class JsonSchemaBuilder
     {
         Map<String, Object> prop = new LinkedHashMap<>();
         prop.put("type", "number"); //$NON-NLS-1$ //$NON-NLS-2$
-        prop.put("description", description); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
         properties.put(name, prop);
 
         if (required)
@@ -279,8 +288,8 @@ public class JsonSchemaBuilder
     public JsonSchemaBuilder objectProperty(String name, String description, boolean required)
     {
         Map<String, Object> prop = new LinkedHashMap<>();
-        prop.put("type", "object"); //$NON-NLS-1$ //$NON-NLS-2$
-        prop.put("description", description); //$NON-NLS-1$
+        prop.put("type", TYPE_OBJECT); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
         properties.put(name, prop);
 
         if (required)
@@ -317,12 +326,12 @@ public class JsonSchemaBuilder
     public JsonSchemaBuilder objectArrayProperty(String name, String description, boolean required)
     {
         Map<String, Object> items = new LinkedHashMap<>();
-        items.put("type", "object"); //$NON-NLS-1$ //$NON-NLS-2$
+        items.put("type", TYPE_OBJECT); //$NON-NLS-1$
 
         Map<String, Object> prop = new LinkedHashMap<>();
         prop.put("type", "array"); //$NON-NLS-1$ //$NON-NLS-2$
         prop.put("items", items); //$NON-NLS-1$
-        prop.put("description", description); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
         properties.put(name, prop);
 
         if (required)
