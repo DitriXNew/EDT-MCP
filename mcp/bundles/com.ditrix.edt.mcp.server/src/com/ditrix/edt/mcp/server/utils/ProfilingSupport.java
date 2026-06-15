@@ -51,6 +51,12 @@ public final class ProfilingSupport
      */
     public static String toggleProfiling(IDebugTarget target) throws ReflectiveOperationException
     {
+        // The contract is a non-null target; guard it explicitly so a null caller gets an actionable
+        // error instead of an NPE when the target is dereferenced below (e.g. for the error message).
+        if (target == null)
+        {
+            return "No active debug target to toggle profiling on."; //$NON-NLS-1$
+        }
         Bundle debugBundle = Platform.getBundle(DEBUG_CORE_BUNDLE);
         if (debugBundle == null)
         {

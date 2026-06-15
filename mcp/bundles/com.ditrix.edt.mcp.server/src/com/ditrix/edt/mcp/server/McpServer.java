@@ -16,6 +16,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
@@ -46,10 +47,10 @@ public class McpServer
     private volatile long toolExecutionStartTime = 0;
     
     /** User signal for current operation (cancel, retry, background, expert) */
-    private volatile UserSignal userSignal = null;
-    
+    private final AtomicReference<UserSignal> userSignal = new AtomicReference<>();
+
     /** Currently active tool call that can be interrupted */
-    private volatile ActiveToolCall activeToolCall = null;
+    private final AtomicReference<ActiveToolCall> activeToolCall = new AtomicReference<>();
     
     /** Protocol handler */
     private McpProtocolHandler protocolHandler;
@@ -328,7 +329,7 @@ public class McpServer
      */
     public void setUserSignal(UserSignal signal)
     {
-        this.userSignal = signal;
+        this.userSignal.set(signal);
     }
 
     /**
@@ -339,9 +340,8 @@ public class McpServer
      */
     public UserSignal consumeUserSignal()
     {
-        UserSignal signal = this.userSignal;
-        this.userSignal = null;
-        return signal;
+        // Atomic get-and-clear so a signal is consumed exactly once even under concurrent callers.
+        return this.userSignal.getAndSet(null);
     }
 
     /**
@@ -351,7 +351,7 @@ public class McpServer
      */
     public void setActiveToolCall(ActiveToolCall toolCall)
     {
-        this.activeToolCall = toolCall;
+        this.activeToolCall.set(toolCall);
     }
 
     /**
@@ -361,7 +361,7 @@ public class McpServer
      */
     public ActiveToolCall getActiveToolCall()
     {
-        return activeToolCall;
+        return activeToolCall.get();
     }
 
     /**
@@ -369,7 +369,7 @@ public class McpServer
      */
     public void clearActiveToolCall()
     {
-        this.activeToolCall = null;
+        this.activeToolCall.set(null);
     }
 
     /**
@@ -382,7 +382,7 @@ public class McpServer
      */
     public synchronized boolean interruptToolCall(UserSignal signal)
     {
-        ActiveToolCall call = this.activeToolCall;
+        ActiveToolCall call = this.activeToolCall.get();
         if (call != null && !call.hasResponded())
         {
             boolean sent = call.sendSignalResponse(signal);
@@ -391,7 +391,7 @@ public class McpServer
                 // Clear tool execution state atomically
                 this.currentToolName = null;
                 this.toolExecutionStartTime = 0;
-                this.activeToolCall = null;
+                this.activeToolCall.set(null);
             }
             return sent;
         }
