@@ -33,6 +33,12 @@ public class GetProfilingResultsTool implements IMcpTool
 {
     public static final String NAME = "get_profiling_results"; //$NON-NLS-1$
 
+    /** Output key: number of result sets returned. */
+    private static final String KEY_COUNT = "count"; //$NON-NLS-1$
+
+    /** Output key: whether profiling is currently active. */
+    private static final String KEY_PROFILING_ACTIVE = "profilingActive"; //$NON-NLS-1$
+
     private static final String WIRING_BUNDLE = "com._1c.g5.wiring"; //$NON-NLS-1$
     private static final String PROFILING_CORE_BUNDLE = "com._1c.g5.v8.dt.profiling.core"; //$NON-NLS-1$
 
@@ -75,8 +81,8 @@ public class GetProfilingResultsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("count", "Number of result sets returned (0 or 1 — only the latest session)") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("profilingActive", "Whether profiling is currently active") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_COUNT, "Number of result sets returned (0 or 1 — only the latest session)") //$NON-NLS-1$
+            .booleanProperty(KEY_PROFILING_ACTIVE, "Whether profiling is currently active") //$NON-NLS-1$
             .stringProperty("message", "Informational note when no results are available") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("results", //$NON-NLS-1$
                 "Per-result sets: name, totalDurability, moduleCount and modules map of lines") //$NON-NLS-1$
@@ -139,8 +145,8 @@ public class GetProfilingResultsTool implements IMcpTool
             if (results == null || results.isEmpty())
             {
                 return ToolResult.success()
-                    .put("count", 0) //$NON-NLS-1$
-                    .put("profilingActive", profilingActive) //$NON-NLS-1$
+                    .put(KEY_COUNT, 0)
+                    .put(KEY_PROFILING_ACTIVE, profilingActive)
                     .put("message", "No profiling results available. " //$NON-NLS-1$ //$NON-NLS-2$
                         + "Make sure you called start_profiling before running the test.") //$NON-NLS-1$
                     .toJson();
@@ -251,8 +257,8 @@ public class GetProfilingResultsTool implements IMcpTool
             }
 
             return ToolResult.success()
-                .put("count", resultSummaries.size()) //$NON-NLS-1$
-                .put("profilingActive", profilingActive) //$NON-NLS-1$
+                .put(KEY_COUNT, resultSummaries.size())
+                .put(KEY_PROFILING_ACTIVE, profilingActive)
                 .put("results", resultSummaries) //$NON-NLS-1$
                 .toJson();
         }

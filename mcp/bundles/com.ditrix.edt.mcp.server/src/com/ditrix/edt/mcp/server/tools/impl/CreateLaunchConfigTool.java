@@ -19,6 +19,7 @@ import org.eclipse.debug.core.ILaunchManager;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
@@ -48,6 +49,12 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 public class CreateLaunchConfigTool implements IMcpTool
 {
     public static final String NAME = "create_launch_config"; //$NON-NLS-1$
+
+    /** Param/output key: client kind selector (thin/thick/web). */
+    private static final String KEY_CLIENT_TYPE = "clientType"; //$NON-NLS-1$
+
+    /** clientType enum value: thick client. */
+    private static final String KEY_THICK = "thick"; //$NON-NLS-1$
 
     // -------------------------------------------------------------------------
     // New constants (string literals from R-B javap -constants table, verified)
@@ -122,17 +129,17 @@ public class CreateLaunchConfigTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(McpKeys.PROJECT_NAME,
                 "V8 configuration project name (required). Must be a V8ConfigurationNature project. " //$NON-NLS-1$
                 + "Use list_projects to discover available projects.", //$NON-NLS-1$
                 true)
-            .enumProperty("clientType", //$NON-NLS-1$
+            .enumProperty(KEY_CLIENT_TYPE,
                 "Client kind: thin (default), thick, or web.", //$NON-NLS-1$
-                "thin", "thick", "web") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "thin", KEY_THICK, "web") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", //$NON-NLS-1$
                 "Config name; default '<Project> Thin|Thick|Web Client', uniquified. " //$NON-NLS-1$
                 + "If a config with this name already exists the call is rejected.") //$NON-NLS-1$
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID,
                 "Application (infobase) ID from get_applications. " //$NON-NLS-1$
                 + "If omitted the project's default application is used. " //$NON-NLS-1$
                 + "If the project has no applications, the call is rejected with a hint.") //$NON-NLS-1$
@@ -147,8 +154,8 @@ public class CreateLaunchConfigTool implements IMcpTool
             .stringProperty("action", "Always 'created' on success.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Exact name of the created launch configuration.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("project", "Project the configuration targets.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("clientType", "Client kind: thin, thick, or web.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(KEY_CLIENT_TYPE, "Client kind: thin, thick, or web.") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID stored in the config (real IApplicationManager id).") //$NON-NLS-1$
             .stringProperty("type", "Launch configuration type id.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable status message.") //$NON-NLS-1$ //$NON-NLS-2$
@@ -165,16 +172,16 @@ public class CreateLaunchConfigTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         // ── 1. Required argument ───────────────────────────────────────────────
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
             return err;
         }
 
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String clientTypeParam = JsonUtils.extractStringArgument(params, "clientType"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String clientTypeParam = JsonUtils.extractStringArgument(params, KEY_CLIENT_TYPE);
         String nameParam = JsonUtils.extractStringArgument(params, "name"); //$NON-NLS-1$
-        String applicationIdParam = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String applicationIdParam = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
 
         // ── 2. Resolve client type ─────────────────────────────────────────────
         String clientType = (clientTypeParam == null || clientTypeParam.isEmpty()) ? "thin" : clientTypeParam.toLowerCase(java.util.Locale.ROOT); //$NON-NLS-1$
@@ -351,8 +358,8 @@ public class CreateLaunchConfigTool implements IMcpTool
                 .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("name", saved.getName()) //$NON-NLS-1$
                 .put("project", projectName) //$NON-NLS-1$
-                .put("clientType", clientType) //$NON-NLS-1$
-                .put("applicationId", effectiveApplicationId) //$NON-NLS-1$
+                .put(KEY_CLIENT_TYPE, clientType)
+                .put(McpKeys.APPLICATION_ID, effectiveApplicationId)
                 .put("type", LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID) //$NON-NLS-1$
                 .put("message", "Created '" + saved.getName() + "' (" + clientLabel //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + ") for project '" + projectName + "'. Use debug_launch or " //$NON-NLS-1$ //$NON-NLS-2$
@@ -382,7 +389,7 @@ public class CreateLaunchConfigTool implements IMcpTool
         {
             case "thin": //$NON-NLS-1$
                 return COMPONENT_TYPE_THIN;
-            case "thick": //$NON-NLS-1$
+            case KEY_THICK:
                 return COMPONENT_TYPE_THICK;
             case "web": //$NON-NLS-1$
                 return COMPONENT_TYPE_WEB;
@@ -398,7 +405,7 @@ public class CreateLaunchConfigTool implements IMcpTool
         {
             case "thin": //$NON-NLS-1$
                 return "Thin Client"; //$NON-NLS-1$
-            case "thick": //$NON-NLS-1$
+            case KEY_THICK:
                 return "Thick Client"; //$NON-NLS-1$
             case "web": //$NON-NLS-1$
                 return "Web Client"; //$NON-NLS-1$

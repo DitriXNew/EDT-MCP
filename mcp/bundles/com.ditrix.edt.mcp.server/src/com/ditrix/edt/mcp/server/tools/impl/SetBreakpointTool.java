@@ -14,6 +14,7 @@ import org.eclipse.debug.core.model.IBreakpoint;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BreakpointUtils;
@@ -31,6 +32,12 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 public class SetBreakpointTool implements IMcpTool
 {
     public static final String NAME = "set_breakpoint"; //$NON-NLS-1$
+
+    /** Input/output key: legacy alias of the module identifier. */
+    private static final String KEY_MODULE = "module"; //$NON-NLS-1$
+
+    /** Input/output key: 1-based line number. */
+    private static final String KEY_LINE_NUMBER = "lineNumber"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -52,10 +59,10 @@ public class SetBreakpointTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "EDT project name (required when modulePath is module-relative)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("modulePath", //$NON-NLS-1$
+            .stringProperty(McpKeys.MODULE_PATH,
                 "Module identifier — EDT module path (CommonModules/Foo/Module.bsl) or absolute file path (required)") //$NON-NLS-1$
-            .stringProperty("module", "Legacy alias for modulePath (deprecated)") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("lineNumber", "1-based line number (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_MODULE, "Legacy alias for modulePath (deprecated)") //$NON-NLS-1$
+            .integerProperty(KEY_LINE_NUMBER, "1-based line number (required)", true) //$NON-NLS-1$
             .build();
     }
 
@@ -65,10 +72,10 @@ public class SetBreakpointTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("breakpointId", "Eclipse marker id of the created breakpoint (-1 if none)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("modulePath", "Module identifier as supplied (EDT path or absolute path)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("module", "Legacy alias echo of the module identifier") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MODULE_PATH, "Module identifier as supplied (EDT path or absolute path)") //$NON-NLS-1$
+            .stringProperty(KEY_MODULE, "Legacy alias echo of the module identifier") //$NON-NLS-1$
             .stringProperty("resolvedFile", "Workspace-relative path of the resolved .bsl file") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("lineNumber", "1-based line number where the breakpoint was set") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_LINE_NUMBER, "1-based line number where the breakpoint was set") //$NON-NLS-1$
             .booleanProperty("degraded", "True when only a marker-only breakpoint could be created") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("warning", "Warning text when the breakpoint is degraded/marker-only") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -86,11 +93,11 @@ public class SetBreakpointTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         // modulePath is the canonical parameter; "module" is a legacy alias kept for
         // one release. Both resolve through the same BreakpointUtils resolver.
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         String module = (modulePath != null && !modulePath.isEmpty())
             ? modulePath
-            : JsonUtils.extractStringArgument(params, "module"); //$NON-NLS-1$
-        int lineNumber = JsonUtils.extractIntArgument(params, "lineNumber", -1); //$NON-NLS-1$
+            : JsonUtils.extractStringArgument(params, KEY_MODULE);
+        int lineNumber = JsonUtils.extractIntArgument(params, KEY_LINE_NUMBER, -1);
 
         if (module == null || module.isEmpty())
         {
@@ -135,10 +142,10 @@ public class SetBreakpointTool implements IMcpTool
                 + (degraded ? " (degraded — marker-only)" : "")); //$NON-NLS-1$ //$NON-NLS-2$
             ToolResult res = ToolResult.success()
                 .put("breakpointId", markerId) //$NON-NLS-1$
-                .put("modulePath", module) //$NON-NLS-1$
-                .put("module", module) //$NON-NLS-1$
+                .put(McpKeys.MODULE_PATH, module)
+                .put(KEY_MODULE, module)
                 .put("resolvedFile", file.getFullPath().toString()) //$NON-NLS-1$
-                .put("lineNumber", lineNumber); //$NON-NLS-1$
+                .put(KEY_LINE_NUMBER, lineNumber);
             if (degraded)
             {
                 res.put("degraded", true); //$NON-NLS-1$

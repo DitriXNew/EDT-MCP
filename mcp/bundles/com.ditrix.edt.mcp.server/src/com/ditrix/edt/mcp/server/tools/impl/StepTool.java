@@ -15,6 +15,7 @@ import org.eclipse.debug.core.model.IThread;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
@@ -30,6 +31,16 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 public class StepTool implements IMcpTool
 {
     public static final String NAME = "step"; //$NON-NLS-1$
+
+    /** Input/output key: debug thread id. */
+    private static final String KEY_THREAD_ID = "threadId"; //$NON-NLS-1$
+
+    /** Input key: wait window in seconds. */
+    private static final String KEY_TIMEOUT = "timeout"; //$NON-NLS-1$
+
+    /** Output key: reason when a suspend was not hit. */
+    private static final String KEY_REASON = "reason"; //$NON-NLS-1$
+
     private static final int DEFAULT_TIMEOUT = 30;
 
     /** Hard cap on the wait window, prevents a worker thread blocking for hours. */
@@ -52,10 +63,10 @@ public class StepTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .integerProperty("threadId", "Thread id from wait_for_break (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_THREAD_ID, "Thread id from wait_for_break (required)", true) //$NON-NLS-1$
             .enumProperty("kind", "Step kind: over, into, out (required)", true, //$NON-NLS-1$ //$NON-NLS-2$
                 "over", "into", "out") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .integerProperty("timeout", "Wait window in seconds (default: 30)") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_TIMEOUT, "Wait window in seconds (default: 30)") //$NON-NLS-1$
             .build();
     }
 
@@ -65,10 +76,10 @@ public class StepTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("hit", "True if a suspend event was caught, false on timeout") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("reason", "Reason when not hit (e.g. timeout)") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("threadId", "Id of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_REASON, "Reason when not hit (e.g. timeout)") //$NON-NLS-1$
+            .integerProperty(KEY_THREAD_ID, "Id of the suspended thread") //$NON-NLS-1$
             .stringProperty("threadName", "Name of the suspended thread") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application id of the debug session") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application id of the debug session") //$NON-NLS-1$
             .booleanProperty("serverTarget", "True if stepping a 1C debug-server target") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("frames", "Stack frames: frameIndex, frameRef, name, line, modulePath, project") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("topFrameRef", "Stable ref of the top stack frame") //$NON-NLS-1$ //$NON-NLS-2$
@@ -84,9 +95,9 @@ public class StepTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        long threadId = JsonUtils.extractLongArgument(params, "threadId", -1L); //$NON-NLS-1$
+        long threadId = JsonUtils.extractLongArgument(params, KEY_THREAD_ID, -1L);
         String kind = JsonUtils.extractStringArgument(params, "kind"); //$NON-NLS-1$
-        int timeout = clampTimeout(JsonUtils.extractIntArgument(params, "timeout", DEFAULT_TIMEOUT)); //$NON-NLS-1$
+        int timeout = clampTimeout(JsonUtils.extractIntArgument(params, KEY_TIMEOUT, DEFAULT_TIMEOUT));
 
         if (threadId <= 0)
         {
@@ -191,9 +202,9 @@ public class StepTool implements IMcpTool
                 {
                     return ToolResult.success()
                         .put("hit", false) //$NON-NLS-1$
-                        .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
-                        .put("applicationId", appId) //$NON-NLS-1$
-                        .put("threadId", threadId) //$NON-NLS-1$
+                        .put(KEY_REASON, KEY_TIMEOUT)
+                        .put(McpKeys.APPLICATION_ID, appId)
+                        .put(KEY_THREAD_ID, threadId)
                         .put("serverTarget", true) //$NON-NLS-1$
                         .toJson();
                 }
@@ -208,9 +219,9 @@ public class StepTool implements IMcpTool
             {
                 return ToolResult.success()
                     .put("hit", false) //$NON-NLS-1$
-                    .put("reason", "timeout") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put("applicationId", appId) //$NON-NLS-1$
-                    .put("threadId", threadId) //$NON-NLS-1$
+                    .put(KEY_REASON, KEY_TIMEOUT)
+                    .put(McpKeys.APPLICATION_ID, appId)
+                    .put(KEY_THREAD_ID, threadId)
                     .toJson();
             }
             return WaitForBreakTool.buildSnapshotResponse(snapshot, registry, appId, false,

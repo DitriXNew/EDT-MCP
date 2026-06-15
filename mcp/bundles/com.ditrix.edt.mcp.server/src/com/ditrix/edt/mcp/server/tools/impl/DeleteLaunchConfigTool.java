@@ -15,6 +15,7 @@ import org.eclipse.debug.core.ILaunchManager;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
@@ -72,13 +73,13 @@ public class DeleteLaunchConfigTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("action", "Either 'preview' (nothing changed) or 'deleted' (removed).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.ACTION, "Either 'preview' (nothing changed) or 'deleted' (removed).") //$NON-NLS-1$
             .booleanProperty("confirmationRequired", //$NON-NLS-1$
                 "true on a preview (no change made); absent/false once deleted.") //$NON-NLS-1$
             .stringProperty("name", "Name of the targeted launch configuration.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("project", "Project the configuration targets (if known).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.PROJECT, "Project the configuration targets (if known).") //$NON-NLS-1$
             .stringProperty("type", "Launch configuration type id (if known).") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("message", "Human-readable status message.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
             .build();
     }
 
@@ -136,18 +137,18 @@ public class DeleteLaunchConfigTool implements IMcpTool
         if (!confirm)
         {
             ToolResult result = ToolResult.success()
-                .put("action", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
                 .put("confirmationRequired", true) //$NON-NLS-1$
                 .put("name", configName); //$NON-NLS-1$
             if (!project.isEmpty())
             {
-                result.put("project", project); //$NON-NLS-1$
+                result.put(McpKeys.PROJECT, project);
             }
             if (!typeId.isEmpty())
             {
                 result.put("type", typeId); //$NON-NLS-1$
             }
-            result.put("message", "PREVIEW: this would delete launch configuration '" //$NON-NLS-1$ //$NON-NLS-2$
+            result.put(McpKeys.MESSAGE, "PREVIEW: this would delete launch configuration '" //$NON-NLS-1$
                 + configName + "'" //$NON-NLS-1$
                 + (project.isEmpty() ? "" : " (project: " + project + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ". Re-call with confirm=true to apply it."); //$NON-NLS-1$
@@ -162,17 +163,17 @@ public class DeleteLaunchConfigTool implements IMcpTool
             config.delete();
 
             ToolResult result = ToolResult.success()
-                .put("action", "deleted") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, "deleted") //$NON-NLS-1$
                 .put("name", configName); //$NON-NLS-1$
             if (!project.isEmpty())
             {
-                result.put("project", project); //$NON-NLS-1$
+                result.put(McpKeys.PROJECT, project);
             }
             if (!typeId.isEmpty())
             {
                 result.put("type", typeId); //$NON-NLS-1$
             }
-            result.put("message", "Launch configuration '" + configName + "' deleted."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            result.put(McpKeys.MESSAGE, "Launch configuration '" + configName + "' deleted."); //$NON-NLS-1$ //$NON-NLS-2$
             return result.toJson();
         }
         catch (CoreException e)

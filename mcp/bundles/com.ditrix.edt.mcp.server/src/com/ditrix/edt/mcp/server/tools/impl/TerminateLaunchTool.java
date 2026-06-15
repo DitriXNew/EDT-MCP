@@ -79,6 +79,9 @@ public class TerminateLaunchTool implements IMcpTool
     private static final String R_ALREADY_TERMINATED = "already_terminated"; //$NON-NLS-1$
     private static final String R_ERROR = "error"; //$NON-NLS-1$
 
+    /** Input key: deprecated alias of the 'timeout' wait window in seconds. */
+    private static final String KEY_TIMEOUT_SECONDS = "timeoutSeconds"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -112,10 +115,10 @@ public class TerminateLaunchTool implements IMcpTool
             .booleanProperty("force", //$NON-NLS-1$
                 "On polite-termination timeout, escalate to an OS-level process kill; " //$NON-NLS-1$
                     + "may lose unsaved 1C state. Default false. Ignored for Attach.") //$NON-NLS-1$
-            .integerProperty("timeout", //$NON-NLS-1$
+            .integerProperty(R_TIMEOUT,
                 "Polite-wait window per launch in seconds, clamped to [1, 120]. " //$NON-NLS-1$
                     + "Default from EDT preferences (factory default 10).") //$NON-NLS-1$
-            .integerProperty("timeoutSeconds", //$NON-NLS-1$
+            .integerProperty(KEY_TIMEOUT_SECONDS,
                 "Deprecated alias of 'timeout' (kept for backward compatibility).") //$NON-NLS-1$
             .booleanProperty("includeAttach", //$NON-NLS-1$
                 "Whether to act on Attach configs (disconnected, server keeps running). " //$NON-NLS-1$
@@ -179,11 +182,11 @@ public class TerminateLaunchTool implements IMcpTool
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
         boolean includeAttach = JsonUtils.extractBooleanArgument(params, "includeAttach", true); //$NON-NLS-1$
         int configuredDefault = ToolParameterSettings.getInstance()
-            .getParameterValue(NAME, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS); //$NON-NLS-1$
+            .getParameterValue(NAME, KEY_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS);
         // Canonical 'timeout' (aligned with run_yaxunit_tests); 'timeoutSeconds' is a
         // back-compat alias. Prefer 'timeout' when present, else the alias, else the default.
-        int timeoutSeconds = JsonUtils.extractIntArgument(params, "timeout", //$NON-NLS-1$
-            JsonUtils.extractIntArgument(params, "timeoutSeconds", configuredDefault)); //$NON-NLS-1$
+        int timeoutSeconds = JsonUtils.extractIntArgument(params, R_TIMEOUT,
+            JsonUtils.extractIntArgument(params, KEY_TIMEOUT_SECONDS, configuredDefault));
         if (timeoutSeconds < 1)
         {
             timeoutSeconds = 1;

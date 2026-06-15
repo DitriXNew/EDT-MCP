@@ -14,6 +14,7 @@ import org.eclipse.debug.core.model.IThread;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
@@ -31,6 +32,12 @@ import com.ditrix.edt.mcp.server.utils.DebugTargetResolver;
 public class ResumeTool implements IMcpTool
 {
     public static final String NAME = "resume"; //$NON-NLS-1$
+
+    /** Output key: resume scope ('thread' or 'target'). */
+    private static final String KEY_SCOPE = "scope"; //$NON-NLS-1$
+
+    /** Output key: whether the thread or target was resumed. */
+    private static final String KEY_RESUMED = "resumed"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -55,7 +62,7 @@ public class ResumeTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .integerProperty("threadId", "Thread id from wait_for_break") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID,
                 "Application id (real, 'attach:<configName>', 'launch:<configName>', or " //$NON-NLS-1$
                     + "'ServerApplication.<app>'). Resumes this session's target/suspended thread. " //$NON-NLS-1$
                     + "Optional if exactly one debug session is active.") //$NON-NLS-1$
@@ -67,9 +74,9 @@ public class ResumeTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("resumed", "Whether the thread or target was resumed") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("scope", "Resume scope: 'thread' or 'target'") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application id of the resumed debug target") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_RESUMED, "Whether the thread or target was resumed") //$NON-NLS-1$
+            .stringProperty(KEY_SCOPE, "Resume scope: 'thread' or 'target'") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application id of the resumed debug target") //$NON-NLS-1$
             .booleanProperty("autoResolved", "Whether the lone active session was auto-resolved") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("serverTarget", "True if resolved via the 1C debug-server target bridge") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -85,7 +92,7 @@ public class ResumeTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         long threadId = JsonUtils.extractLongArgument(params, "threadId", -1L); //$NON-NLS-1$
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
 
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         registry.ensureListenerRegistered();
@@ -119,7 +126,7 @@ public class ResumeTool implements IMcpTool
                 // outlived its suspend and the next wait_for_break returned it as a
                 // fresh hit). clearSnapshot(null) is a safe no-op.
                 registry.clearSnapshot(threadAppId);
-                return ToolResult.success().put("resumed", true).put("scope", "thread").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                return ToolResult.success().put(KEY_RESUMED, true).put(KEY_SCOPE, "thread").toJson(); //$NON-NLS-1$
             }
 
             // Unified resolution: accept ANY id form for the same session —
@@ -184,9 +191,9 @@ public class ResumeTool implements IMcpTool
             // the now-stale pre-resume frame.
             registry.clearSnapshot(effectiveAppId);
             ToolResult out = ToolResult.success()
-                .put("resumed", true) //$NON-NLS-1$
-                .put("scope", scope) //$NON-NLS-1$
-                .put("applicationId", effectiveAppId); //$NON-NLS-1$
+                .put(KEY_RESUMED, true)
+                .put(KEY_SCOPE, scope)
+                .put(McpKeys.APPLICATION_ID, effectiveAppId);
             if (res.isServerTarget())
             {
                 out.put("serverTarget", true); //$NON-NLS-1$

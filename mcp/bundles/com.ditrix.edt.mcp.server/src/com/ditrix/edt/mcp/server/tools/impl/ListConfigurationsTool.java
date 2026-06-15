@@ -46,6 +46,12 @@ public class ListConfigurationsTool implements IMcpTool
 {
     public static final String NAME = "list_configurations"; //$NON-NLS-1$
 
+    /** type filter value: 1C:Enterprise runtime-client configs. */
+    private static final String KEY_CLIENT = "client"; //$NON-NLS-1$
+
+    /** Token "attach": the server-side Attach type filter value and per-config output flag. */
+    private static final String KEY_ATTACH = "attach"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -69,7 +75,7 @@ public class ListConfigurationsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .enumProperty("type", //$NON-NLS-1$
                 "Filter by config kind; default 'all'. e.g. 'attach' for server-side debug.", //$NON-NLS-1$
-                "attach", "client", "all") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                KEY_ATTACH, KEY_CLIENT, "all") //$NON-NLS-1$
             .stringProperty("projectName", "Optional exact project-name filter.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -138,7 +144,7 @@ public class ListConfigurationsTool implements IMcpTool
                 Map<String, Object> entry = new LinkedHashMap<>();
                 entry.put("name", cfg.getName()); //$NON-NLS-1$
                 entry.put("type", typeId); //$NON-NLS-1$
-                entry.put("attach", isAttach); //$NON-NLS-1$
+                entry.put(KEY_ATTACH, isAttach);
 
                 String appId = LaunchConfigUtils.getApplicationIdFor(cfg);
                 if (appId != null)
@@ -194,8 +200,8 @@ public class ListConfigurationsTool implements IMcpTool
      */
     private static boolean isKnownTypeFilter(String filter)
     {
-        return "all".equalsIgnoreCase(filter) || "attach".equalsIgnoreCase(filter) //$NON-NLS-1$ //$NON-NLS-2$
-            || "client".equalsIgnoreCase(filter) || "runtime".equalsIgnoreCase(filter) //$NON-NLS-1$ //$NON-NLS-2$
+        return "all".equalsIgnoreCase(filter) || KEY_ATTACH.equalsIgnoreCase(filter) //$NON-NLS-1$
+            || KEY_CLIENT.equalsIgnoreCase(filter) || "runtime".equalsIgnoreCase(filter) //$NON-NLS-1$
             || "runtimeClient".equalsIgnoreCase(filter); //$NON-NLS-1$
     }
 
@@ -205,11 +211,11 @@ public class ListConfigurationsTool implements IMcpTool
         {
             return true;
         }
-        if ("attach".equalsIgnoreCase(filter)) //$NON-NLS-1$
+        if (KEY_ATTACH.equalsIgnoreCase(filter))
         {
             return isAttach;
         }
-        if ("client".equalsIgnoreCase(filter) || "runtime".equalsIgnoreCase(filter) //$NON-NLS-1$ //$NON-NLS-2$
+        if (KEY_CLIENT.equalsIgnoreCase(filter) || "runtime".equalsIgnoreCase(filter) //$NON-NLS-1$
             || "runtimeClient".equalsIgnoreCase(filter)) //$NON-NLS-1$
         {
             return isClient;

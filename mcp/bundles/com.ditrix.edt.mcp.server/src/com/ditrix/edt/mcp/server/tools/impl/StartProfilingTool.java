@@ -15,6 +15,7 @@ import org.eclipse.debug.core.model.IDebugTarget;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
@@ -42,6 +43,12 @@ import com.ditrix.edt.mcp.server.utils.ProfilingSupport;
 public class StartProfilingTool implements IMcpTool
 {
     public static final String NAME = "start_profiling"; //$NON-NLS-1$
+
+    /** Output key: whether profiling is currently active for the application id. */
+    private static final String KEY_ACTIVE = "active"; //$NON-NLS-1$
+
+    /** Output key: whether this call started profiling (vs. already active). */
+    private static final String KEY_STARTED = "started"; //$NON-NLS-1$
 
     /**
      * Shared on/off state, keyed by {@code applicationId}. The EDT profiling
@@ -115,7 +122,7 @@ public class StartProfilingTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("applicationId", "Application id of the running debug session (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application id of the running debug session (required)", true) //$NON-NLS-1$
             .build();
     }
 
@@ -124,10 +131,10 @@ public class StartProfilingTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("active", "Whether profiling is now active for this applicationId") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("started", "True if this call started profiling, false if already active") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application id of the profiled debug session") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("message", "Human-readable status and next-step guidance") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_ACTIVE, "Whether profiling is now active for this applicationId") //$NON-NLS-1$
+            .booleanProperty(KEY_STARTED, "True if this call started profiling, false if already active") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application id of the profiled debug session") //$NON-NLS-1$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable status and next-step guidance") //$NON-NLS-1$
             .build();
     }
 
@@ -140,12 +147,12 @@ public class StartProfilingTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArgument(params, "applicationId"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.APPLICATION_ID);
         if (err != null)
         {
             return err;
         }
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
 
         try
         {
@@ -155,10 +162,10 @@ public class StartProfilingTool implements IMcpTool
             if (isProfilingActive(applicationId))
             {
                 return ToolResult.success()
-                    .put("active", true) //$NON-NLS-1$
-                    .put("started", false) //$NON-NLS-1$
-                    .put("applicationId", applicationId) //$NON-NLS-1$
-                    .put("message", "Profiling is already active for this applicationId. " //$NON-NLS-1$ //$NON-NLS-2$
+                    .put(KEY_ACTIVE, true)
+                    .put(KEY_STARTED, false)
+                    .put(McpKeys.APPLICATION_ID, applicationId)
+                    .put(McpKeys.MESSAGE, "Profiling is already active for this applicationId. " //$NON-NLS-1$
                         + "Run your test, then call stop_profiling and get_profiling_results.") //$NON-NLS-1$
                     .toJson();
             }
@@ -185,10 +192,10 @@ public class StartProfilingTool implements IMcpTool
             Activator.logInfo("Profiling started via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
 
             return ToolResult.success()
-                .put("active", true) //$NON-NLS-1$
-                .put("started", true) //$NON-NLS-1$
-                .put("applicationId", applicationId) //$NON-NLS-1$
-                .put("message", "Profiling started. Run your test, then call stop_profiling " //$NON-NLS-1$ //$NON-NLS-2$
+                .put(KEY_ACTIVE, true)
+                .put(KEY_STARTED, true)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(McpKeys.MESSAGE, "Profiling started. Run your test, then call stop_profiling " //$NON-NLS-1$
                     + "and get_profiling_results.") //$NON-NLS-1$
                 .toJson();
         }

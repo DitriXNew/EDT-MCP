@@ -41,6 +41,13 @@ import com.ditrix.edt.mcp.server.utils.VariableSerializer;
 public class EvaluateExpressionTool implements IMcpTool
 {
     public static final String NAME = "evaluate_expression"; //$NON-NLS-1$
+
+    /** Input key: BSL expression to evaluate. */
+    private static final String KEY_EXPRESSION = "expression"; //$NON-NLS-1$
+
+    /** Output key: string representation of the evaluated value. */
+    private static final String KEY_VALUE = "value"; //$NON-NLS-1$
+
     private static final long EVAL_TIMEOUT_MS = 15_000L;
 
     @Override
@@ -62,7 +69,7 @@ public class EvaluateExpressionTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .integerProperty("frameRef", "Stable frame reference from wait_for_break (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("expression", "BSL expression to evaluate (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_EXPRESSION, "BSL expression to evaluate (required)", true) //$NON-NLS-1$
             .build();
     }
 
@@ -72,7 +79,7 @@ public class EvaluateExpressionTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("type", "BSL reference type name of the evaluated value") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("value", "String representation of the evaluated value (may be truncated)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_VALUE, "String representation of the evaluated value (may be truncated)") //$NON-NLS-1$
             .booleanProperty("truncated", "True when value was truncated to the max length") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("fullLength", "Full length of value before truncation") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -88,13 +95,13 @@ public class EvaluateExpressionTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         long frameRef = JsonUtils.extractLongArgument(params, "frameRef", -1L); //$NON-NLS-1$
-        String expression = JsonUtils.extractStringArgument(params, "expression"); //$NON-NLS-1$
+        String expression = JsonUtils.extractStringArgument(params, KEY_EXPRESSION);
 
         if (frameRef <= 0)
         {
             return ToolResult.error("frameRef is required").toJson(); //$NON-NLS-1$
         }
-        String err = JsonUtils.requireArgument(params, "expression"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, KEY_EXPRESSION);
         if (err != null)
         {
             return err;
@@ -167,13 +174,13 @@ public class EvaluateExpressionTool implements IMcpTool
                 .put("type", type); //$NON-NLS-1$
             if (stringValue != null && stringValue.length() > VariableSerializer.MAX_VALUE_LENGTH)
             {
-                res.put("value", stringValue.substring(0, VariableSerializer.MAX_VALUE_LENGTH)); //$NON-NLS-1$
+                res.put(KEY_VALUE, stringValue.substring(0, VariableSerializer.MAX_VALUE_LENGTH));
                 res.put("truncated", true); //$NON-NLS-1$
                 res.put("fullLength", stringValue.length()); //$NON-NLS-1$
             }
             else
             {
-                res.put("value", stringValue); //$NON-NLS-1$
+                res.put(KEY_VALUE, stringValue);
             }
             return res.toJson();
         }

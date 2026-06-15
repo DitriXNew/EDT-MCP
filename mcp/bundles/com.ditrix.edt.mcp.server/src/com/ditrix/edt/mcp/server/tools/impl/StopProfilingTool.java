@@ -13,6 +13,7 @@ import org.eclipse.debug.core.model.IDebugTarget;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
@@ -38,6 +39,12 @@ public class StopProfilingTool implements IMcpTool
 {
     public static final String NAME = "stop_profiling"; //$NON-NLS-1$
 
+    /** Output key: whether profiling is still active after the call. */
+    private static final String KEY_ACTIVE = "active"; //$NON-NLS-1$
+
+    /** Output key: whether profiling was actually toggled off by this call. */
+    private static final String KEY_STOPPED = "stopped"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -57,7 +64,7 @@ public class StopProfilingTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("applicationId", "Application id of the running debug session (required)", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application id of the running debug session (required)", true) //$NON-NLS-1$
             .build();
     }
 
@@ -66,10 +73,10 @@ public class StopProfilingTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("active", "Whether profiling is still active after the call") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("stopped", "Whether profiling was actually toggled off") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("applicationId", "Application id the result refers to") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("message", "Human-readable summary of the outcome") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_ACTIVE, "Whether profiling is still active after the call") //$NON-NLS-1$
+            .booleanProperty(KEY_STOPPED, "Whether profiling was actually toggled off") //$NON-NLS-1$
+            .stringProperty(McpKeys.APPLICATION_ID, "Application id the result refers to") //$NON-NLS-1$
+            .stringProperty(McpKeys.MESSAGE, "Human-readable summary of the outcome") //$NON-NLS-1$
             .build();
     }
 
@@ -82,12 +89,12 @@ public class StopProfilingTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArgument(params, "applicationId"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, McpKeys.APPLICATION_ID);
         if (err != null)
         {
             return err;
         }
-        String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
 
         try
         {
@@ -97,10 +104,10 @@ public class StopProfilingTool implements IMcpTool
             if (!StartProfilingTool.isProfilingActive(applicationId))
             {
                 return ToolResult.success()
-                    .put("active", false) //$NON-NLS-1$
-                    .put("stopped", false) //$NON-NLS-1$
-                    .put("applicationId", applicationId) //$NON-NLS-1$
-                    .put("message", "Profiling was not active for this applicationId; nothing to stop.") //$NON-NLS-1$ //$NON-NLS-2$
+                    .put(KEY_ACTIVE, false)
+                    .put(KEY_STOPPED, false)
+                    .put(McpKeys.APPLICATION_ID, applicationId)
+                    .put(McpKeys.MESSAGE, "Profiling was not active for this applicationId; nothing to stop.") //$NON-NLS-1$
                     .toJson();
             }
 
@@ -112,10 +119,10 @@ public class StopProfilingTool implements IMcpTool
                 // debug server. Clear our state and report it benignly.
                 StartProfilingTool.markInactive(applicationId);
                 return ToolResult.success()
-                    .put("active", false) //$NON-NLS-1$
-                    .put("stopped", true) //$NON-NLS-1$
-                    .put("applicationId", applicationId) //$NON-NLS-1$
-                    .put("message", "No active debug target for applicationId: " + applicationId //$NON-NLS-1$ //$NON-NLS-2$
+                    .put(KEY_ACTIVE, false)
+                    .put(KEY_STOPPED, true)
+                    .put(McpKeys.APPLICATION_ID, applicationId)
+                    .put(McpKeys.MESSAGE, "No active debug target for applicationId: " + applicationId //$NON-NLS-1$
                         + "; the debug session has ended. Profiling state cleared.") //$NON-NLS-1$
                     .toJson();
             }
@@ -134,10 +141,10 @@ public class StopProfilingTool implements IMcpTool
             Activator.logInfo("Profiling stopped via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
 
             return ToolResult.success()
-                .put("active", false) //$NON-NLS-1$
-                .put("stopped", true) //$NON-NLS-1$
-                .put("applicationId", applicationId) //$NON-NLS-1$
-                .put("message", "Profiling stopped. Call get_profiling_results to retrieve the collected coverage.") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(KEY_ACTIVE, false)
+                .put(KEY_STOPPED, true)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(McpKeys.MESSAGE, "Profiling stopped. Call get_profiling_results to retrieve the collected coverage.") //$NON-NLS-1$
                 .toJson();
         }
         catch (Exception e)
