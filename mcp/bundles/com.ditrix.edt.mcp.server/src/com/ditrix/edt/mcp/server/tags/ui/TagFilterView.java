@@ -973,9 +973,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     @Override
     public void onTagsChanged(IProject project) {
-        Display.getDefault().asyncExec(() -> {
-            refreshTagsTree();
-        });
+        Display.getDefault().asyncExec(() -> refreshTagsTree());
     }
     
     @Override

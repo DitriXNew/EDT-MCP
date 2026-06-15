@@ -638,8 +638,7 @@ public class MetadataRenameService
             Collection<?> matches = (Collection<?>) invokeMethod(supplier, "getMatches", //$NON-NLS-1$
                 new Class<?>[] {Change.class, getClassOrThrow("com._1c.g5.v8.dt.search.core.SimpleSearchResultCollector")}, //$NON-NLS-1$
                 normalChange, collector);
-            Map<String, ExactMatchInfo> exactMatchMap = toExactMatchMap(matches);
-            return exactMatchMap;
+            return toExactMatchMap(matches);
         }
         catch (Exception e)
         {

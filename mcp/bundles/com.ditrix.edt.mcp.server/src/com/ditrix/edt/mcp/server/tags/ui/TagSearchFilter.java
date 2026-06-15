@@ -102,6 +102,7 @@ public class TagSearchFilter extends ViewerFilter {
      * Default constructor for extension factory.
      */
     public TagSearchFilter() {
+        // No initialization needed; required by the extension factory.
     }
     
     /**

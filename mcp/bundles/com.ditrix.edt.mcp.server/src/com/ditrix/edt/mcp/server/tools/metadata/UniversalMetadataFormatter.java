@@ -198,7 +198,6 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
             {
                 // StandardAttributes are now formatted via formatStandardAttributes() method
                 // Skip them here to avoid duplication
-                continue;
             }
             else if (firstItem instanceof CharacteristicsDescription)
             {

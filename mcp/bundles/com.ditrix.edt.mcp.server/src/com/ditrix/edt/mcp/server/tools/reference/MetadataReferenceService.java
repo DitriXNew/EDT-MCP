@@ -734,12 +734,7 @@ public class MetadataReferenceService
             }
 
             // Skip derived command interface (cmi/deriveddata package)
-            if (packageUri.contains("cmi") && packageUri.contains("deriveddata")) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                return true;
-            }
-
-            return false;
+            return packageUri.contains("cmi") && packageUri.contains("deriveddata"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         private String getCategoryFromObject(IBmObject object)
@@ -833,13 +828,8 @@ public class MetadataReferenceService
             }
 
             // Skip paths starting with technical features
-            if (path.startsWith("Value types") || path.startsWith("Form context") //$NON-NLS-1$ //$NON-NLS-2$
-                || path.startsWith("Db view defs") || path.startsWith("Standard commands")) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                return true;
-            }
-
-            return false;
+            return path.startsWith("Value types") || path.startsWith("Form context") //$NON-NLS-1$ //$NON-NLS-2$
+                || path.startsWith("Db view defs") || path.startsWith("Standard commands"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         /**

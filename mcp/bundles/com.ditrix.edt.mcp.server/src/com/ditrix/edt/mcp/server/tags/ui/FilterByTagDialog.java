@@ -608,10 +608,7 @@ public class FilterByTagDialog extends SelectionDialog {
                 return true;
             }
             String description = tag.getDescription();
-            if (description != null && description.toLowerCase().contains(searchPattern)) {
-                return true;
-            }
-            return false;
+            return description != null && description.toLowerCase().contains(searchPattern);
         }
     }
 }
