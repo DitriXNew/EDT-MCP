@@ -540,12 +540,7 @@ public class Activator extends AbstractUIPlugin
 
         // 3) Standard AWT headless flag (if provided by runtime)
         String awtHeadless = System.getProperty("java.awt.headless"); //$NON-NLS-1$
-        if ("true".equalsIgnoreCase(awtHeadless)) //$NON-NLS-1$
-        {
-            return true;
-        }
-
-        // Default to false (assume UI is available)
-        return false;
+        // Default to false (assume UI is available) unless the AWT headless flag is set.
+        return "true".equalsIgnoreCase(awtHeadless); //$NON-NLS-1$
     }
 }

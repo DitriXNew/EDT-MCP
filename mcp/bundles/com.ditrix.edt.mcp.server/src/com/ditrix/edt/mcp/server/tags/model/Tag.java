@@ -12,7 +12,10 @@ import java.util.Objects;
  * Represents a single tag that can be applied to metadata objects.
  */
 public class Tag {
-    
+
+    /** Default tag color (medium gray) used when none is supplied. */
+    private static final String DEFAULT_COLOR = "#808080";
+
     private String name;
     private String color;
     private String description;
@@ -23,7 +26,7 @@ public class Tag {
      * @param name the tag name
      */
     public Tag(String name) {
-        this(name, "#808080", "");
+        this(name, DEFAULT_COLOR, "");
     }
     
     /**
@@ -45,7 +48,7 @@ public class Tag {
      */
     public Tag(String name, String color, String description) {
         this.name = Objects.requireNonNull(name, "Tag name cannot be null");
-        this.color = color != null ? color : "#808080";
+        this.color = color != null ? color : DEFAULT_COLOR;
         this.description = description != null ? description : "";
     }
     
@@ -54,7 +57,7 @@ public class Tag {
      */
     public Tag() {
         this.name = "";
-        this.color = "#808080";
+        this.color = DEFAULT_COLOR;
         this.description = "";
     }
     

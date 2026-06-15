@@ -249,7 +249,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 targetModuleName, candidateIsTarget, relToSrc, callers, limit);
         }
 
-        return formatCallersOutput(modulePath, methodName, callers, limit, totalReferences);
+        return formatCallersOutput(modulePath, methodName, callers, totalReferences);
     }
 
     /**
@@ -549,7 +549,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
         }
 
-        return formatCalleesOutput(modulePath, methodName, callees, limit, totalInvocations);
+        return formatCalleesOutput(modulePath, methodName, callees, totalInvocations);
     }
 
     // ========== Helper methods ==========
@@ -601,7 +601,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     }
 
     private String formatCallersOutput(String modulePath, String methodName,
-                                        List<CallerInfo> callers, int limit, int totalReferences)
+                                        List<CallerInfo> callers, int totalReferences)
     {
         StringBuilder sb = new StringBuilder();
         sb.append("## Call Hierarchy: ").append(modulePath).append(" :: ").append(methodName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -636,7 +636,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     }
 
     private String formatCalleesOutput(String modulePath, String methodName,
-                                        List<CalleeInfo> callees, int limit, int totalInvocations)
+                                        List<CalleeInfo> callees, int totalInvocations)
     {
         StringBuilder sb = new StringBuilder();
         sb.append("## Call Hierarchy: ").append(modulePath).append(" :: ").append(methodName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

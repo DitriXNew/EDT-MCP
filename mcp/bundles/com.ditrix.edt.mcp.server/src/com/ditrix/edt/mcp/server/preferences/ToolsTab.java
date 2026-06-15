@@ -250,7 +250,10 @@ public class ToolsTab
         treeViewer.addTreeListener(new ITreeViewerListener()
         {
             @Override
-            public void treeCollapsed(TreeExpansionEvent event) { }
+            public void treeCollapsed(TreeExpansionEvent event)
+            {
+                // No action needed on collapse; check states are only set lazily on expand.
+            }
 
             @Override
             public void treeExpanded(TreeExpansionEvent event)

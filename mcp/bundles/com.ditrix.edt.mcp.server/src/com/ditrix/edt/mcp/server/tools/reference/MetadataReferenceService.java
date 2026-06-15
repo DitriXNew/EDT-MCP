@@ -734,12 +734,7 @@ public class MetadataReferenceService
             }
 
             // Skip derived command interface (cmi/deriveddata package)
-            if (packageUri.contains("cmi") && packageUri.contains("deriveddata")) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                return true;
-            }
-
-            return false;
+            return packageUri.contains("cmi") && packageUri.contains("deriveddata"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         private String getCategoryFromObject(IBmObject object)
@@ -804,7 +799,7 @@ public class MetadataReferenceService
             }
 
             // Build the inner path EDT-style: FeatureLabel.ObjectName.FeatureLabel...
-            String innerPath = buildInnerPathEdtStyle(sourceObject, topObject, ref.getFeature());
+            String innerPath = buildInnerPathEdtStyle(sourceObject, ref.getFeature());
 
             // Filter out internal/technical paths that EDT doesn't show
             if (innerPath != null && isInternalPath(innerPath))
@@ -833,13 +828,8 @@ public class MetadataReferenceService
             }
 
             // Skip paths starting with technical features
-            if (path.startsWith("Value types") || path.startsWith("Form context") //$NON-NLS-1$ //$NON-NLS-2$
-                || path.startsWith("Db view defs") || path.startsWith("Standard commands")) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                return true;
-            }
-
-            return false;
+            return path.startsWith("Value types") || path.startsWith("Form context") //$NON-NLS-1$ //$NON-NLS-2$
+                || path.startsWith("Db view defs") || path.startsWith("Standard commands"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         /**
@@ -875,11 +865,10 @@ public class MetadataReferenceService
          * Following EDT's TableItemsFactory algorithm.
          *
          * @param sourceObject the source object where reference is located
-         * @param topObject the top-level container
          * @param referenceFeature the feature that contains the reference
          * @return path string like "Items.List.Items.Owner.Data path"
          */
-        private String buildInnerPathEdtStyle(IBmObject sourceObject, IBmObject topObject, EStructuralFeature referenceFeature)
+        private String buildInnerPathEdtStyle(IBmObject sourceObject, EStructuralFeature referenceFeature)
         {
             // Build path exactly like EDT's TableItemsFactory.getTopObjectPathToReference
             // Path is built from source up to topObject: Deque<Pair<EObject, EStructuralFeature>>

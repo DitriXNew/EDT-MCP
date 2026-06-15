@@ -67,6 +67,12 @@ public class SymbolInfoService
     // the same one) rather than re-declaring a local copy.
     private static final URI BSL_LOOKUP_URI = BslModuleUtils.BSL_LOOKUP_URI;
 
+    private static final String PROPERTY = "Property"; //$NON-NLS-1$
+    private static final String VALUE = "Value"; //$NON-NLS-1$
+    private static final String SYMBOL = "Symbol"; //$NON-NLS-1$
+    private static final String IN_METHOD = "In method"; //$NON-NLS-1$
+    private static final String EMF_TYPE = "EMF type"; //$NON-NLS-1$
+
     // Lazy-initialized CopyDown instance for HTML-to-Markdown conversion (thread-confined to UI thread)
     private CopyDown copyDown; //$NON-NLS-1$
 
@@ -103,7 +109,6 @@ public class SymbolInfoService
         final IFile targetFile = file;
         final int targetLine = line;
         final int targetColumn = column;
-        final String targetFilePath = filePath;
 
         AtomicReference<String> resultRef = new AtomicReference<>();
 
@@ -112,7 +117,7 @@ public class SymbolInfoService
         display.syncExec(() -> {
             try
             {
-                String result = executeOnUiThread(targetFile, targetLine, targetColumn, targetFilePath);
+                String result = executeOnUiThread(targetFile, targetLine, targetColumn);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -163,7 +168,7 @@ public class SymbolInfoService
     /**
      * Executes symbol info retrieval on UI thread.
      */
-    private String executeOnUiThread(IFile file, int line, int column, String filePath) throws Exception
+    private String executeOnUiThread(IFile file, int line, int column) throws Exception
     {
         IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
         if (window == null)
@@ -486,7 +491,7 @@ public class SymbolInfoService
 
                     // Return at least token info
                     StringBuilder sb = new StringBuilder();
-                    sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
+                    sb.append(MarkdownUtils.tableHeader(PROPERTY, VALUE));
                     sb.append(codeCell("Token", leafNode.getText())); //$NON-NLS-1$
                     String grammar = leafNode.getGrammarElement() != null
                         ? leafNode.getGrammarElement().eClass().getName() : "-"; //$NON-NLS-1$
@@ -532,14 +537,14 @@ public class SymbolInfoService
     private String buildEObjectInfo(EObject element)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(MarkdownUtils.tableHeader(PROPERTY, VALUE));
 
         if (element instanceof Method)
         {
             Method method = (Method) element;
             boolean isFunction = element instanceof Function;
 
-            sb.append(codeCell("Symbol", method.getName())); //$NON-NLS-1$
+            sb.append(codeCell(SYMBOL, method.getName()));
             sb.append("| **Kind** | ").append(isFunction ? "Function" : "Procedure").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             sb.append(codeCell("Signature", BslModuleUtils.buildSignature(method))); //$NON-NLS-1$
             sb.append("| **Export** | ").append(method.isExport() ? "Yes" : "No").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -566,7 +571,7 @@ public class SymbolInfoService
         else if (element instanceof FormalParam)
         {
             FormalParam param = (FormalParam) element;
-            sb.append(codeCell("Symbol", param.getName())); //$NON-NLS-1$
+            sb.append(codeCell(SYMBOL, param.getName()));
             sb.append("| **Kind** | Parameter |\n"); //$NON-NLS-1$
             sb.append("| **ByValue** | ").append(param.isByValue() ? "Yes" : "No").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
@@ -574,58 +579,58 @@ public class SymbolInfoService
             EObject container = param.eContainer();
             if (container instanceof Method)
             {
-                sb.append(codeCell("In method", ((Method) container).getName())); //$NON-NLS-1$
+                sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
             }
         }
         else if (element instanceof StaticFeatureAccess)
         {
             StaticFeatureAccess sfa = (StaticFeatureAccess) element;
-            sb.append(codeCell("Symbol", sfa.getName())); //$NON-NLS-1$
+            sb.append(codeCell(SYMBOL, sfa.getName()));
             sb.append("| **Kind** | StaticFeatureAccess |\n"); //$NON-NLS-1$
-            sb.append(cell("EMF type", sfa.eClass().getName())); //$NON-NLS-1$
+            sb.append(cell(EMF_TYPE, sfa.eClass().getName()));
 
             // Show containing method
             EObject container = findContainingMethod(sfa);
             if (container instanceof Method)
             {
-                sb.append(codeCell("In method", ((Method) container).getName())); //$NON-NLS-1$
+                sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
             }
         }
         else if (element instanceof DynamicFeatureAccess)
         {
             DynamicFeatureAccess dfa = (DynamicFeatureAccess) element;
-            sb.append(codeCell("Symbol", dfa.getName())); //$NON-NLS-1$
+            sb.append(codeCell(SYMBOL, dfa.getName()));
             sb.append("| **Kind** | DynamicFeatureAccess |\n"); //$NON-NLS-1$
-            sb.append(cell("EMF type", dfa.eClass().getName())); //$NON-NLS-1$
+            sb.append(cell(EMF_TYPE, dfa.eClass().getName()));
 
             // Show containing method
             EObject container = findContainingMethod(dfa);
             if (container instanceof Method)
             {
-                sb.append(codeCell("In method", ((Method) container).getName())); //$NON-NLS-1$
+                sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
             }
         }
         else if (element instanceof Invocation)
         {
             Invocation invocation = (Invocation) element;
             sb.append("| **Kind** | Invocation |\n"); //$NON-NLS-1$
-            sb.append(cell("EMF type", invocation.eClass().getName())); //$NON-NLS-1$
+            sb.append(cell(EMF_TYPE, invocation.eClass().getName()));
 
             // Try to get the method name from the feature access
             EObject methodAccess = invocation.getMethodAccess();
             if (methodAccess instanceof StaticFeatureAccess)
             {
-                sb.append(codeCell("Symbol", ((StaticFeatureAccess) methodAccess).getName())); //$NON-NLS-1$
+                sb.append(codeCell(SYMBOL, ((StaticFeatureAccess) methodAccess).getName()));
             }
             else if (methodAccess instanceof DynamicFeatureAccess)
             {
-                sb.append(codeCell("Symbol", ((DynamicFeatureAccess) methodAccess).getName())); //$NON-NLS-1$
+                sb.append(codeCell(SYMBOL, ((DynamicFeatureAccess) methodAccess).getName()));
             }
         }
         else if (element instanceof Module)
         {
             sb.append("| **Kind** | Module |\n"); //$NON-NLS-1$
-            sb.append(cell("EMF type", element.eClass().getName())); //$NON-NLS-1$
+            sb.append(cell(EMF_TYPE, element.eClass().getName()));
         }
         else
         {
@@ -638,7 +643,7 @@ public class SymbolInfoService
                 Object name = ReflectionUtils.invokeMethod(element, "getName"); //$NON-NLS-1$
                 if (name instanceof String && !((String) name).isEmpty())
                 {
-                    sb.append(codeCell("Symbol", (String) name)); //$NON-NLS-1$
+                    sb.append(codeCell(SYMBOL, (String) name));
                 }
             }
             catch (Exception e)
@@ -650,7 +655,7 @@ public class SymbolInfoService
             EObject container = findContainingMethod(element);
             if (container instanceof Method)
             {
-                sb.append(codeCell("In method", ((Method) container).getName())); //$NON-NLS-1$
+                sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
             }
 
             int startLine = BslModuleUtils.getStartLine(element);
@@ -866,7 +871,7 @@ public class SymbolInfoService
             }
 
             StringBuilder sb = new StringBuilder();
-            sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(MarkdownUtils.tableHeader(PROPERTY, VALUE));
             sb.append(codeCell("Token", leafNode.getText())); //$NON-NLS-1$
             return sb.toString();
         }

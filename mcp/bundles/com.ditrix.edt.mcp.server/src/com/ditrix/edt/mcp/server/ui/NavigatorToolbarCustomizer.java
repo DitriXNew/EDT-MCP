@@ -78,26 +78,32 @@ public class NavigatorToolbarCustomizer {
 
             @Override
             public void partBroughtToTop(IWorkbenchPartReference partRef) {
+                // Intentionally empty: IPartListener2 hook not needed here
             }
 
             @Override
             public void partClosed(IWorkbenchPartReference partRef) {
+                // Intentionally empty: IPartListener2 hook not needed here
             }
 
             @Override
             public void partDeactivated(IWorkbenchPartReference partRef) {
+                // Intentionally empty: IPartListener2 hook not needed here
             }
 
             @Override
             public void partHidden(IWorkbenchPartReference partRef) {
+                // Intentionally empty: IPartListener2 hook not needed here
             }
 
             @Override
             public void partVisible(IWorkbenchPartReference partRef) {
+                // Intentionally empty: IPartListener2 hook not needed here
             }
 
             @Override
             public void partInputChanged(IWorkbenchPartReference partRef) {
+                // Intentionally empty: IPartListener2 hook not needed here
             }
         };
 
@@ -121,10 +127,12 @@ public class NavigatorToolbarCustomizer {
 
             @Override
             public void windowActivated(IWorkbenchWindow window) {
+                // Intentionally empty: IWindowListener hook not needed here
             }
 
             @Override
             public void windowDeactivated(IWorkbenchWindow window) {
+                // Intentionally empty: IWindowListener hook not needed here
             }
         };
         PlatformUI.getWorkbench().addWindowListener(windowListener);
@@ -157,6 +165,7 @@ public class NavigatorToolbarCustomizer {
 
             @Override
             public void pageActivated(IWorkbenchPage page) {
+                // Intentionally empty: IPageListener hook not needed here
             }
         };
         window.addPageListener(pageListener);

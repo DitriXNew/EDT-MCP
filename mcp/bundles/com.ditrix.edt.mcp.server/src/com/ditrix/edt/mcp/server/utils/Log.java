@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.runtime.IStatus;
@@ -55,7 +56,7 @@ public final class Log
      * tracing flag; overridable (e.g. from tests) via {@link #setDebugGate}.
      * Never {@code null}.
      */
-    private static volatile BooleanSupplier debugGate = DEFAULT_DEBUG_GATE;
+    private static final AtomicReference<BooleanSupplier> debugGate = new AtomicReference<>(DEFAULT_DEBUG_GATE);
 
     private Log()
     {
@@ -70,7 +71,7 @@ public final class Log
      */
     public static boolean isDebugEnabled()
     {
-        return debugGate.getAsBoolean();
+        return debugGate.get().getAsBoolean();
     }
 
     /**
@@ -82,7 +83,7 @@ public final class Log
      */
     static void setDebugGate(BooleanSupplier gate)
     {
-        debugGate = gate != null ? gate : DEFAULT_DEBUG_GATE;
+        debugGate.set(gate != null ? gate : DEFAULT_DEBUG_GATE);
     }
 
     /**

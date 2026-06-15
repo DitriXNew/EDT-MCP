@@ -53,6 +53,8 @@ public class TranslateConfigurationTool implements IMcpTool
 {
     public static final String NAME = "translate_configuration"; //$NON-NLS-1$
 
+    private static final String TARGET_LANGUAGES = "targetLanguages"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -76,7 +78,7 @@ public class TranslateConfigurationTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty(McpKeys.PROJECT_NAME, "Project name (typically the source, e.g. the ru project). Required.", true) //$NON-NLS-1$
-            .stringArrayProperty("targetLanguages", //$NON-NLS-1$
+            .stringArrayProperty(TARGET_LANGUAGES,
                 "Target language codes to synchronize (e.g. [\"en\"]). Required.", true) //$NON-NLS-1$
             .build();
     }
@@ -91,7 +93,7 @@ public class TranslateConfigurationTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
-        List<String> targetLanguages = JsonUtils.extractArrayArgument(params, "targetLanguages"); //$NON-NLS-1$
+        List<String> targetLanguages = JsonUtils.extractArrayArgument(params, TARGET_LANGUAGES);
 
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
@@ -153,7 +155,7 @@ public class TranslateConfigurationTool implements IMcpTool
             return FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
                 .put(McpKeys.PROJECT, projectName)
-                .put("targetLanguages", String.join(", ", targetLanguages)) //$NON-NLS-1$ //$NON-NLS-2$
+                .put(TARGET_LANGUAGES, String.join(", ", targetLanguages)) //$NON-NLS-1$
                 .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
                 .wrapContent("Translate configuration completed."); //$NON-NLS-1$
         }

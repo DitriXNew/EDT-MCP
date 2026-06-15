@@ -108,9 +108,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
         {
             // Execute in UI thread
             Activator.logInfo("getConfigurationProperties: Switching to UI thread..."); //$NON-NLS-1$
-            display.syncExec(() -> {
-                result[0] = getConfigurationPropertiesInternal(projectName);
-            });
+            display.syncExec(() -> result[0] = getConfigurationPropertiesInternal(projectName));
         }
         
         return result[0];

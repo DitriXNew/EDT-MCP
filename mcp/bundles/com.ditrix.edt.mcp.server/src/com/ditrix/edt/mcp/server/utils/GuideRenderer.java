@@ -31,6 +31,10 @@ import com.google.gson.JsonParser;
  */
 public final class GuideRenderer
 {
+    private static final String PROPERTIES = "properties"; //$NON-NLS-1$
+    private static final String REQUIRED = "required"; //$NON-NLS-1$
+    private static final String DESCRIPTION = "description"; //$NON-NLS-1$
+
     private GuideRenderer()
     {
         // Utility class - no instantiation
@@ -118,13 +122,13 @@ public final class GuideRenderer
                 if (parsed != null && parsed.isJsonObject())
                 {
                     JsonObject root = parsed.getAsJsonObject();
-                    if (root.has("properties") && root.get("properties").isJsonObject()) //$NON-NLS-1$ //$NON-NLS-2$
+                    if (root.has(PROPERTIES) && root.get(PROPERTIES).isJsonObject())
                     {
-                        properties = root.getAsJsonObject("properties"); //$NON-NLS-1$
+                        properties = root.getAsJsonObject(PROPERTIES);
                     }
-                    if (root.has("required") && root.get("required").isJsonArray()) //$NON-NLS-1$ //$NON-NLS-2$
+                    if (root.has(REQUIRED) && root.get(REQUIRED).isJsonArray())
                     {
-                        required = root.getAsJsonArray("required"); //$NON-NLS-1$
+                        required = root.getAsJsonArray(REQUIRED);
                     }
                 }
             }
@@ -152,8 +156,8 @@ public final class GuideRenderer
             String type = prop.has("type") && prop.get("type").isJsonPrimitive() //$NON-NLS-1$ //$NON-NLS-2$
                 ? prop.get("type").getAsString() : ""; //$NON-NLS-1$ //$NON-NLS-2$
             String typeCell = appendEnum(type, prop);
-            String descriptionCell = prop.has("description") && prop.get("description").isJsonPrimitive() //$NON-NLS-1$ //$NON-NLS-2$
-                ? prop.get("description").getAsString() : ""; //$NON-NLS-1$ //$NON-NLS-2$
+            String descriptionCell = prop.has(DESCRIPTION) && prop.get(DESCRIPTION).isJsonPrimitive()
+                ? prop.get(DESCRIPTION).getAsString() : ""; //$NON-NLS-1$
 
             sb.append(MarkdownUtils.tableRow(name, requiredCell, typeCell, descriptionCell));
         }

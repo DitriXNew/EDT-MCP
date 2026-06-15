@@ -202,11 +202,10 @@ public final class TagColorIconFactory {
                 }
                 
                 color.dispose();
-                
+
                 // Get the image data
-                ImageData result = image.getImageData();
-                return result;
-                
+                return image.getImageData();
+
             } finally {
                 gc.dispose();
                 image.dispose();
@@ -276,11 +275,10 @@ public final class TagColorIconFactory {
                 }
                 
                 color.dispose();
-                
+
                 // Get the image data
-                ImageData result = image.getImageData();
-                return result;
-                
+                return image.getImageData();
+
             } finally {
                 gc.dispose();
                 image.dispose();

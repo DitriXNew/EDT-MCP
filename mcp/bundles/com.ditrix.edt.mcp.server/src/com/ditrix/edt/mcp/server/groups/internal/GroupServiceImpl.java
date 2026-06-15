@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -82,14 +83,16 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
     private final List<IGroupChangeListener> listeners = new CopyOnWriteArrayList<>();
     
     /**
-     * File system watcher for external changes.
+     * File system watcher for external changes. AtomicReference (not a bare volatile field) so the
+     * mutable resource is published thread-safely between the start/stop path and the watcher thread.
      */
-    private volatile WatchService watchService;
-    
+    private final AtomicReference<WatchService> watchService = new AtomicReference<>();
+
     /**
-     * Thread for watching file system changes.
+     * Thread for watching file system changes. AtomicReference for the same thread-safe-publication
+     * reason as {@link #watchService}.
      */
-    private volatile Thread watchThread;
+    private final AtomicReference<Thread> watchThread = new AtomicReference<>();
     
     /**
      * Map from watch key to project path for file watcher.
@@ -163,10 +166,11 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
     private void startFileWatcher() {
         synchronized (watcherLock) {
             try {
-                watchService = FileSystems.getDefault().newWatchService();
-                watchThread = new Thread(this::runFileWatcher, "GroupService-FileWatcher");
-                watchThread.setDaemon(true);
-                watchThread.start();
+                watchService.set(FileSystems.getDefault().newWatchService());
+                Thread thread = new Thread(this::runFileWatcher, "GroupService-FileWatcher");
+                thread.setDaemon(true);
+                watchThread.set(thread);
+                thread.start();
             } catch (IOException e) {
                 Activator.logError("Failed to start file watcher", e);
             }
@@ -179,7 +183,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
     private void stopFileWatcher() {
         synchronized (watcherLock) {
             // Interrupt thread first
-            Thread thread = watchThread;
+            Thread thread = watchThread.get();
             if (thread != null) {
                 thread.interrupt();
                 try {
@@ -188,7 +192,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-                watchThread = null;
+                watchThread.set(null);
             }
             
             // Cancel all watch keys (use copy to avoid concurrent modification)
@@ -202,14 +206,14 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
             watchKeyToPath.clear();
             
             // Close watch service
-            WatchService service = watchService;
+            WatchService service = watchService.get();
             if (service != null) {
                 try {
                     service.close();
                 } catch (IOException e) {
                     Activator.logError("Error closing watch service", e);
                 }
-                watchService = null;
+                watchService.set(null);
             }
         }
     }
@@ -219,7 +223,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
      */
     private void runFileWatcher() {
         while (!shutdown.get() && !Thread.currentThread().isInterrupted()) {
-            WatchService service = watchService;
+            WatchService service = watchService.get();
             if (service == null) {
                 break;
             }
@@ -296,7 +300,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
      * Registers a project for file watching.
      */
     private void ensureProjectWatched(IProject project) {
-        WatchService service = watchService;
+        WatchService service = watchService.get();
         if (service == null) {
             return;
         }

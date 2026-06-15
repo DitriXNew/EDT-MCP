@@ -31,7 +31,9 @@ import com.ditrix.edt.mcp.server.tags.TagUtils;
  * Works on EObjects that are currently in a group.
  */
 public class RemoveFromGroupHandler extends AbstractHandler {
-    
+
+    private static final String REMOVE_FROM_GROUP = "Remove from Group";
+
     @Override
     public void setEnabled(Object evaluationContext) {
         // Check if selection contains objects that are in groups
@@ -102,7 +104,7 @@ public class RemoveFromGroupHandler extends AbstractHandler {
             ? "Remove this object from its group?"
             : "Remove " + objectsToRemove.size() + " objects from their groups?";
         
-        if (!MessageDialog.openConfirm(shell, "Remove from Group", message)) {
+        if (!MessageDialog.openConfirm(shell, REMOVE_FROM_GROUP, message)) {
             return null;
         }
         
@@ -126,10 +128,10 @@ public class RemoveFromGroupHandler extends AbstractHandler {
         
         // Show result
         if (successCount > 0 && failCount == 0) {
-            MessageDialog.openInformation(shell, "Remove from Group", 
+            MessageDialog.openInformation(shell, REMOVE_FROM_GROUP,
                 "Removed " + successCount + " object(s) from their groups.");
         } else if (failCount > 0) {
-            MessageDialog.openWarning(shell, "Remove from Group", 
+            MessageDialog.openWarning(shell, REMOVE_FROM_GROUP,
                 "Removed " + successCount + " object(s), failed to remove " + failCount + " object(s).");
         }
         

@@ -61,9 +61,7 @@ public class FilterByTagManager {
      */
     private void resetToggleState() {
         // Delay execution to ensure command service is available
-        org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
-            updateToggleState(false);
-        });
+        org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> updateToggleState(false));
     }
     
     /**
