@@ -303,14 +303,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         int omitted = 0;
         for (EStructuralFeature feature : features)
         {
-            // Skip derived, transient, and volatile features (they're computed, not stored)
-            if (feature.isDerived() || feature.isTransient() || feature.isVolatile())
-            {
-                continue;
-            }
-
-            // Skip containment references (handled separately as collections)
-            if (feature instanceof EReference && ((EReference) feature).isContainment())
+            if (isSkippableFeature(feature))
             {
                 continue;
             }
@@ -344,6 +337,26 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         {
             appendTruncatedRow(sb, omitted, "properties"); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Decides whether a structural feature is excluded from the dynamic property
+     * dump: derived/transient/volatile features (computed, not stored) and
+     * containment references (handled separately as collections) are skipped.
+     *
+     * @param feature the structural feature to test
+     * @return {@code true} if the feature should be skipped
+     */
+    private static boolean isSkippableFeature(EStructuralFeature feature)
+    {
+        // Skip derived, transient, and volatile features (they're computed, not stored)
+        if (feature.isDerived() || feature.isTransient() || feature.isVolatile())
+        {
+            return true;
+        }
+
+        // Skip containment references (handled separately as collections)
+        return feature instanceof EReference && ((EReference) feature).isContainment();
     }
 
     /**

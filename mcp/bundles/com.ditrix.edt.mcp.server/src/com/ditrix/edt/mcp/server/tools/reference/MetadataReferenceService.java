@@ -29,6 +29,7 @@ import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.common.Functions;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.mcore.Field;
 import com._1c.g5.v8.dt.mcore.FieldSource;
 import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.mcore.TypeItem;
@@ -492,35 +493,44 @@ public class MetadataReferenceService
                 }
 
                 Collection<IBmCrossReference> refs = engine.getBackReferences((IBmObject) field);
-                for (IBmCrossReference ref : refs)
+                collectFieldBackReferences(refs, field, target);
+            }
+        }
+
+        /**
+         * Collects the back-references of a single field, skipping null source objects,
+         * self-references and references with no resolvable path.
+         */
+        private void collectFieldBackReferences(Collection<IBmCrossReference> refs, Field field, MdObject target)
+        {
+            for (IBmCrossReference ref : refs)
+            {
+                if (references.size() >= limit * 10)
                 {
-                    if (references.size() >= limit * 10)
-                    {
-                        break;
-                    }
-
-                    IBmObject sourceObject = ref.getObject();
-                    if (sourceObject == null)
-                    {
-                        continue;
-                    }
-
-                    // Skip self-references
-                    if (sourceObject == target)
-                    {
-                        continue;
-                    }
-
-                    String category = "Field references"; //$NON-NLS-1$
-                    String sourcePath = getFullReferencePath(sourceObject, ref);
-                    if (sourcePath == null)
-                    {
-                        continue;
-                    }
-                    String feature = field.getName();
-
-                    addReference(new ReferenceInfo(category, sourcePath, feature));
+                    break;
                 }
+
+                IBmObject sourceObject = ref.getObject();
+                if (sourceObject == null)
+                {
+                    continue;
+                }
+
+                // Skip self-references
+                if (sourceObject == target)
+                {
+                    continue;
+                }
+
+                String category = "Field references"; //$NON-NLS-1$
+                String sourcePath = getFullReferencePath(sourceObject, ref);
+                if (sourcePath == null)
+                {
+                    continue;
+                }
+                String feature = field.getName();
+
+                addReference(new ReferenceInfo(category, sourcePath, feature));
             }
         }
 
@@ -1055,6 +1065,15 @@ public class MetadataReferenceService
                 // Ignore
             }
 
+            return getObjectPathFromUriOrClass(object);
+        }
+
+        /**
+         * Derives an object path from its URI (preferring the part after "/src/"),
+         * falling back to the EClass name when no URI path is available.
+         */
+        private String getObjectPathFromUriOrClass(IBmObject object)
+        {
             // Try to get URI path
             if (object instanceof EObject)
             {

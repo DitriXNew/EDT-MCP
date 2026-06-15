@@ -365,24 +365,31 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             
             List<Tag> tags = tagService.getTags(project);
             Set<String> projectTags = selectedTagsByProject.computeIfAbsent(project, p -> new HashSet<>());
-            
-            if (select) {
-                for (Tag tag : tags) {
-                    projectTags.add(tag.getName());
-                    tagsTreeViewer.setChecked(new TagEntry(project, tag), true);
-                }
-                tagsTreeViewer.setChecked(project, true);
-                tagsTreeViewer.setGrayed(project, false);
-            } else {
-                projectTags.clear();
-                for (Tag tag : tags) {
-                    tagsTreeViewer.setChecked(new TagEntry(project, tag), false);
-                }
-                tagsTreeViewer.setChecked(project, false);
-                tagsTreeViewer.setGrayed(project, false);
-            }
+
+            applyTagSelection(project, tags, projectTags, select);
         }
         updateFilteredResults();
+    }
+
+    /**
+     * Apply the select/deselect state to one project's tags and its checkbox.
+     */
+    private void applyTagSelection(IProject project, List<Tag> tags, Set<String> projectTags, boolean select) {
+        if (select) {
+            for (Tag tag : tags) {
+                projectTags.add(tag.getName());
+                tagsTreeViewer.setChecked(new TagEntry(project, tag), true);
+            }
+            tagsTreeViewer.setChecked(project, true);
+            tagsTreeViewer.setGrayed(project, false);
+        } else {
+            projectTags.clear();
+            for (Tag tag : tags) {
+                tagsTreeViewer.setChecked(new TagEntry(project, tag), false);
+            }
+            tagsTreeViewer.setChecked(project, false);
+            tagsTreeViewer.setGrayed(project, false);
+        }
     }
     
     /**
@@ -403,21 +410,27 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             if (inputElement instanceof IWorkspaceRoot root) {
                 List<IProject> result = new ArrayList<>();
                 for (IProject project : root.getProjects()) {
-                    if (project.isOpen()) {
-                        // Check if it's an EDT project
-                        if (v8ProjectManager != null) {
-                            IV8Project v8Project = v8ProjectManager.getProject(project);
-                            if (v8Project != null) {
-                                result.add(project);
-                            }
-                        } else {
-                            result.add(project);
-                        }
+                    if (isElementProject(project)) {
+                        result.add(project);
                     }
                 }
                 return result.toArray();
             }
             return new Object[0];
+        }
+
+        /**
+         * Whether an open EDT project should appear as a top-level tree element.
+         */
+        private boolean isElementProject(IProject project) {
+            if (!project.isOpen()) {
+                return false;
+            }
+            // Check if it's an EDT project
+            if (v8ProjectManager != null) {
+                return v8ProjectManager.getProject(project) != null;
+            }
+            return true;
         }
         
         @Override

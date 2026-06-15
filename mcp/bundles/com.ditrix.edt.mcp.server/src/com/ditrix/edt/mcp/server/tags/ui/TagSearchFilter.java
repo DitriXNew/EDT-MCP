@@ -438,20 +438,37 @@ public class TagSearchFilter extends ViewerFilter {
             
             if (result instanceof java.util.Collection<?> children) {
                 for (Object child : children) {
-                    if (child instanceof EObject childEObject) {
-                        String childFqn = TagUtils.extractFqn(childEObject);
-                        if (childFqn != null && matchesFqnOrParentInProject(childFqn, project)) {
-                            return true;
-                        }
-                        // Recursively check children
-                        if (hasMatchingChildSubsystemInProject(childEObject, project)) {
-                            return true;
-                        }
+                    if (childSubsystemMatchesInProject(child, project)) {
+                        return true;
                     }
                 }
             }
         } catch (Exception e) {
             // Not a subsystem or no getSubsystems method - ignore
+        }
+        return false;
+    }
+
+    /**
+     * Tells whether a single child of a subsystem (or any of its descendants)
+     * matches tags within {@code project}. Extracted loop body of
+     * {@link #hasMatchingChildSubsystemInProject(EObject, IProject)} — same decision:
+     * a non-{@link EObject} child never matches; otherwise the child matches when its
+     * FQN matches (directly or via a matching parent path) or when a recursive descent
+     * finds a match.
+     *
+     * @param child the child element to test (may be any object)
+     * @param project the project (can be null for global check)
+     * @return true if the child or a descendant matches
+     */
+    private boolean childSubsystemMatchesInProject(Object child, IProject project) {
+        if (child instanceof EObject childEObject) {
+            String childFqn = TagUtils.extractFqn(childEObject);
+            if (childFqn != null && matchesFqnOrParentInProject(childFqn, project)) {
+                return true;
+            }
+            // Recursively check children
+            return hasMatchingChildSubsystemInProject(childEObject, project);
         }
         return false;
     }

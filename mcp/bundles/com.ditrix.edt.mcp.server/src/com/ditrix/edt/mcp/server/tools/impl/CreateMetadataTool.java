@@ -264,22 +264,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "('...Form.F.<ItemKind>.Item.Handler.<Event>' or '...Form.F.Handler.<Event>'). " //$NON-NLS-1$
                 + "The FQN '" + fqn + "' is not a form event handler; omit callType.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        if (formRef != null)
+        String formResult = tryDispatchFormFqn(projectName, normFqn, formRef, properties, params,
+            normReport, callType);
+        if (formResult != null)
         {
-            if (FormElementWriter.isHandlerToken(formRef.kindToken))
-            {
-                return createFormHandler(projectName, normFqn, formRef, properties, callType);
-            }
-            return createFormMember(projectName, normFqn, formRef, properties, normReport);
-        }
-
-        // A 4-part form FQN (Type.Object.Form.FormName) addresses the FORM OBJECT itself - neither a
-        // form member (6+ parts, handled above) nor an mdclass member (Form is not a child-kind token).
-        // It creates a working managed form (the BasicForm mdo + a renderable content Form).
-        FormElementWriter.FormObjectRef formObjectRef = FormElementWriter.parseFormObjectCreate(normFqn);
-        if (formObjectRef != null)
-        {
-            return createFormObject(projectName, normFqn, formObjectRef, properties, params, normReport);
+            return formResult;
         }
 
         // Parse the supported properties (synonym/comment); reject anything else early. The synonym /
@@ -358,6 +347,39 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 typeSpecific, normReport);
         }
         return createMember(project, projectName, target, normFqn, props, synonymLanguage, normReport);
+    }
+
+    /**
+     * Dispatches a FORM-targeted FQN to the dedicated form writers, extracted verbatim from
+     * {@link #executeOnUiThread}. A 6+-part FQN that is a form member is created as a handler or a
+     * plain member; a 4-part {@code Type.Object.Form.FormName} FQN addresses the FORM OBJECT itself
+     * (the BasicForm mdo plus a renderable content Form). Returns {@code null} when {@code normFqn}
+     * is not a form-targeted FQN, so the caller falls through to mdclass-member creation.
+     *
+     * @return the form-creation result JSON, or {@code null} when this is not a form FQN
+     */
+    private String tryDispatchFormFqn(String projectName, String normFqn,
+        FormElementWriter.FormMemberRef formRef, List<JsonObject> properties, Map<String, String> params,
+        MdNameNormalizer.Report normReport, String callType)
+    {
+        if (formRef != null)
+        {
+            if (FormElementWriter.isHandlerToken(formRef.kindToken))
+            {
+                return createFormHandler(projectName, normFqn, formRef, properties, callType);
+            }
+            return createFormMember(projectName, normFqn, formRef, properties, normReport);
+        }
+
+        // A 4-part form FQN (Type.Object.Form.FormName) addresses the FORM OBJECT itself - neither a
+        // form member (6+ parts, handled above) nor an mdclass member (Form is not a child-kind token).
+        // It creates a working managed form (the BasicForm mdo + a renderable content Form).
+        FormElementWriter.FormObjectRef formObjectRef = FormElementWriter.parseFormObjectCreate(normFqn);
+        if (formObjectRef != null)
+        {
+            return createFormObject(projectName, normFqn, formObjectRef, properties, params, normReport);
+        }
+        return null;
     }
 
     // ---- top-level creation (mirrors the former create_metadata_object) -------------------------

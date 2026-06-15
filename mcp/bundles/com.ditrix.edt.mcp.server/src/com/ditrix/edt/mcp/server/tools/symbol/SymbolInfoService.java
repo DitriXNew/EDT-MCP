@@ -461,35 +461,47 @@ public class SymbolInfoService
             }
 
             // Fallback: find leaf node directly
-            ICompositeNode rootNode = resource.getParseResult() != null
-                ? resource.getParseResult().getRootNode() : null;
-            if (rootNode != null)
-            {
-                ILeafNode leafNode = NodeModelUtils.findLeafNodeAtOffset(rootNode, offset);
-                if (leafNode != null)
-                {
-                    EObject semanticElement = NodeModelUtils.findActualSemanticObjectFor(leafNode);
-                    if (semanticElement != null)
-                    {
-                        return buildEObjectInfo(semanticElement);
-                    }
-
-                    // Return at least token info
-                    StringBuilder sb = new StringBuilder();
-                    sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
-                    sb.append(codeCell("Token", leafNode.getText())); //$NON-NLS-1$
-                    String grammar = leafNode.getGrammarElement() != null
-                        ? leafNode.getGrammarElement().eClass().getName() : "-"; //$NON-NLS-1$
-                    sb.append(cell("Grammar", grammar)); //$NON-NLS-1$
-                    return sb.toString();
-                }
-            }
+            return resolveLeafNodeInfo(resource, offset);
         }
         catch (Exception e)
         {
             Activator.logWarning("EObject resolution failed: " + e.getMessage()); //$NON-NLS-1$
         }
 
+        return null;
+    }
+
+    /**
+     * Fallback for {@link #resolveEObjectInfo}: locates the leaf node at {@code offset}
+     * directly via the parse result and builds info for its semantic element, or a bare
+     * token table when no semantic element is available. Returns {@code null} when no
+     * leaf node can be found.
+     */
+    private String resolveLeafNodeInfo(XtextResource resource, int offset)
+    {
+        ICompositeNode rootNode = resource.getParseResult() != null
+            ? resource.getParseResult().getRootNode() : null;
+        if (rootNode != null)
+        {
+            ILeafNode leafNode = NodeModelUtils.findLeafNodeAtOffset(rootNode, offset);
+            if (leafNode != null)
+            {
+                EObject semanticElement = NodeModelUtils.findActualSemanticObjectFor(leafNode);
+                if (semanticElement != null)
+                {
+                    return buildEObjectInfo(semanticElement);
+                }
+
+                // Return at least token info
+                StringBuilder sb = new StringBuilder();
+                sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
+                sb.append(codeCell("Token", leafNode.getText())); //$NON-NLS-1$
+                String grammar = leafNode.getGrammarElement() != null
+                    ? leafNode.getGrammarElement().eClass().getName() : "-"; //$NON-NLS-1$
+                sb.append(cell("Grammar", grammar)); //$NON-NLS-1$
+                return sb.toString();
+            }
+        }
         return null;
     }
 
@@ -813,27 +825,7 @@ public class SymbolInfoService
             }
 
             // Calculate offset using actual line terminators from the file content
-            int offset = 0;
-            int currentLine = 1;
-            for (int i = 0; i < content.length() && currentLine < line; i++)
-            {
-                char ch = content.charAt(i);
-                if (ch == '\r')
-                {
-                    currentLine++;
-                    // Skip \n after \r (CRLF)
-                    if (i + 1 < content.length() && content.charAt(i + 1) == '\n')
-                    {
-                        i++;
-                    }
-                }
-                else if (ch == '\n')
-                {
-                    currentLine++;
-                }
-                offset = i + 1;
-            }
-            offset += Math.max(0, column - 1);
+            int offset = computeOffset(content, line, column);
 
             // Find node at offset
             ICompositeNode rootNode = NodeModelUtils.getNode(module);
@@ -865,6 +857,37 @@ public class SymbolInfoService
             Activator.logWarning("EMF fallback failed: " + e.getMessage()); //$NON-NLS-1$
             return null;
         }
+    }
+
+    /**
+     * Computes a 0-based character offset into {@code content} for the given 1-based
+     * {@code line}/{@code column}, honouring the file's actual CR/LF/CRLF terminators
+     * (so it matches the document the EMF parser saw).
+     */
+    private int computeOffset(String content, int line, int column)
+    {
+        int offset = 0;
+        int currentLine = 1;
+        for (int i = 0; i < content.length() && currentLine < line; i++)
+        {
+            char ch = content.charAt(i);
+            if (ch == '\r')
+            {
+                currentLine++;
+                // Skip \n after \r (CRLF)
+                if (i + 1 < content.length() && content.charAt(i + 1) == '\n')
+                {
+                    i++;
+                }
+            }
+            else if (ch == '\n')
+            {
+                currentLine++;
+            }
+            offset = i + 1;
+        }
+        offset += Math.max(0, column - 1);
+        return offset;
     }
 
     /**

@@ -109,25 +109,8 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
         }
         
         // Check if any selected element is in a group
-        boolean hasGroupedElements = false;
-        
-        for (Iterator<?> it = lastNonEmptySelection.iterator(); it.hasNext();) {
-            Object element = it.next();
-            
-            if (element instanceof EObject eObject) {
-                IProject project = TagUtils.extractProject(eObject);
-                String fqn = TagUtils.extractFqn(eObject);
-                
-                if (project != null && fqn != null) {
-                    Group group = groupService.findGroupForObject(project, fqn);
-                    if (group != null) {
-                        hasGroupedElements = true;
-                        break;
-                    }
-                }
-            }
-        }
-        
+        boolean hasGroupedElements = hasGroupedElements(groupService);
+
         if (hasGroupedElements) {
             // Schedule selection restoration asynchronously
             Display display = viewer.getControl().getDisplay();
@@ -137,6 +120,31 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
         }
     }
     
+    /**
+     * Scans the remembered selection for any element that belongs to a group.
+     *
+     * @param groupService the (non-null) group service used to resolve group membership
+     * @return {@code true} as soon as one selected metadata object is found in a group
+     */
+    private boolean hasGroupedElements(IGroupService groupService) {
+        for (Iterator<?> it = lastNonEmptySelection.iterator(); it.hasNext();) {
+            Object element = it.next();
+
+            if (element instanceof EObject eObject) {
+                IProject project = TagUtils.extractProject(eObject);
+                String fqn = TagUtils.extractFqn(eObject);
+
+                if (project != null && fqn != null) {
+                    Group group = groupService.findGroupForObject(project, fqn);
+                    if (group != null) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     /**
      * Restores selection by finding the group adapter and creating a TreePath through it.
      * This is necessary because the object is hidden by GroupedObjectsFilter in its original location,

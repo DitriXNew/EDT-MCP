@@ -67,59 +67,17 @@ public final class JUnitXmlParser
             int attrErrors = getIntAttr(suite, "errors", 0); //$NON-NLS-1$
             int attrSkipped = getIntAttr(suite, "skipped", 0); //$NON-NLS-1$
 
-            // Count failures/errors/skipped from actual child nodes as a fallback
-            // in case the producer omits or misreports the testsuite attributes.
-            int nodeFailures = 0;
-            int nodeErrors = 0;
-            int nodeSkipped = 0;
-
-            NodeList caseNodes = suite.getElementsByTagName("testcase"); //$NON-NLS-1$
-            for (int j = 0; j < caseNodes.getLength(); j++)
-            {
-                Element testCase = (Element) caseNodes.item(j);
-                String className = testCase.getAttribute("classname"); //$NON-NLS-1$
-                String testName = testCase.getAttribute("name"); //$NON-NLS-1$
-                String fullName = (className != null && !className.isEmpty())
-                        ? className + "." + testName //$NON-NLS-1$
-                        : testName;
-
-                NodeList failureNodes = testCase.getElementsByTagName("failure"); //$NON-NLS-1$
-                if (failureNodes.getLength() > 0)
-                {
-                    nodeFailures++;
-                    Element failure = (Element) failureNodes.item(0);
-                    results.addFailure(new JUnitTestResults.TestCase(fullName,
-                            failure.getAttribute("message"), //$NON-NLS-1$
-                            failure.getTextContent()));
-                }
-
-                NodeList errorNodes = testCase.getElementsByTagName("error"); //$NON-NLS-1$
-                if (errorNodes.getLength() > 0)
-                {
-                    nodeErrors++;
-                    Element error = (Element) errorNodes.item(0);
-                    results.addError(new JUnitTestResults.TestCase(fullName,
-                            error.getAttribute("message"), //$NON-NLS-1$
-                            error.getTextContent()));
-                }
-
-                NodeList skippedNodes = testCase.getElementsByTagName("skipped"); //$NON-NLS-1$
-                if (skippedNodes.getLength() > 0)
-                {
-                    nodeSkipped++;
-                    Element skip = (Element) skippedNodes.item(0);
-                    results.addSkipped(new JUnitTestResults.TestCase(fullName,
-                            skip.getAttribute("message"), //$NON-NLS-1$
-                            null));
-                }
-            }
+            // Scan the suite's testcases: record each failure/error/skipped into 'results'
+            // and return the fallback node counts {caseCount, failures, errors, skipped}
+            // for producers that omit or misreport the testsuite attributes.
+            int[] nodeCounts = countSuiteCases(suite, results);
 
             // Use the higher of attribute count vs node count to handle producers
             // that omit or misreport testsuite attributes.
-            int finalTests = Math.max(attrTests, caseNodes.getLength());
-            int finalFailures = Math.max(attrFailures, nodeFailures);
-            int finalErrors = Math.max(attrErrors, nodeErrors);
-            int finalSkipped = Math.max(attrSkipped, nodeSkipped);
+            int finalTests = Math.max(attrTests, nodeCounts[0]);
+            int finalFailures = Math.max(attrFailures, nodeCounts[1]);
+            int finalErrors = Math.max(attrErrors, nodeCounts[2]);
+            int finalSkipped = Math.max(attrSkipped, nodeCounts[3]);
             results.addToTotals(finalTests, finalFailures, finalErrors, finalSkipped);
         }
 
@@ -131,6 +89,61 @@ public final class JUnitXmlParser
         }
 
         return results;
+    }
+
+    /**
+     * Scans every {@code <testcase>} of a {@code <testsuite>}: records each failure / error / skipped
+     * child into {@code results} and returns the per-suite fallback counts
+     * {@code {caseCount, failures, errors, skipped}} — the inner testcase loop of {@link #parseDocument},
+     * extracted verbatim. The counts let the caller reconcile against the suite-level attributes.
+     */
+    private static int[] countSuiteCases(Element suite, JUnitTestResults results)
+    {
+        int nodeFailures = 0;
+        int nodeErrors = 0;
+        int nodeSkipped = 0;
+
+        NodeList caseNodes = suite.getElementsByTagName("testcase"); //$NON-NLS-1$
+        for (int j = 0; j < caseNodes.getLength(); j++)
+        {
+            Element testCase = (Element) caseNodes.item(j);
+            String className = testCase.getAttribute("classname"); //$NON-NLS-1$
+            String testName = testCase.getAttribute("name"); //$NON-NLS-1$
+            String fullName = (className != null && !className.isEmpty())
+                    ? className + "." + testName //$NON-NLS-1$
+                    : testName;
+
+            NodeList failureNodes = testCase.getElementsByTagName("failure"); //$NON-NLS-1$
+            if (failureNodes.getLength() > 0)
+            {
+                nodeFailures++;
+                Element failure = (Element) failureNodes.item(0);
+                results.addFailure(new JUnitTestResults.TestCase(fullName,
+                        failure.getAttribute("message"), //$NON-NLS-1$
+                        failure.getTextContent()));
+            }
+
+            NodeList errorNodes = testCase.getElementsByTagName("error"); //$NON-NLS-1$
+            if (errorNodes.getLength() > 0)
+            {
+                nodeErrors++;
+                Element error = (Element) errorNodes.item(0);
+                results.addError(new JUnitTestResults.TestCase(fullName,
+                        error.getAttribute("message"), //$NON-NLS-1$
+                        error.getTextContent()));
+            }
+
+            NodeList skippedNodes = testCase.getElementsByTagName("skipped"); //$NON-NLS-1$
+            if (skippedNodes.getLength() > 0)
+            {
+                nodeSkipped++;
+                Element skip = (Element) skippedNodes.item(0);
+                results.addSkipped(new JUnitTestResults.TestCase(fullName,
+                        skip.getAttribute("message"), //$NON-NLS-1$
+                        null));
+            }
+        }
+        return new int[] {caseNodes.getLength(), nodeFailures, nodeErrors, nodeSkipped};
     }
 
     private static DocumentBuilder newSecureBuilder() throws Exception

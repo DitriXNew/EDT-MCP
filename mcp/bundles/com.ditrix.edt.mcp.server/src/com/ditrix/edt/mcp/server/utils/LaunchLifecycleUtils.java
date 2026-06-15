@@ -19,6 +19,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -987,17 +988,8 @@ public final class LaunchLifecycleUtils
             {
                 for (IExtensionProject extension : extensions)
                 {
-                    if (extension == null)
-                    {
-                        continue;
-                    }
-                    IProject parent = extension.getParentProject();
-                    if (!launchProject.equals(parent))
-                    {
-                        continue;
-                    }
-                    IProject extProject = extension.getProject();
-                    if (extProject != null && extProject.exists() && extProject.isOpen())
+                    IProject extProject = matchingOpenExtensionProject(extension, launchProject);
+                    if (extProject != null)
                     {
                         projects.add(extProject);
                     }
@@ -1013,6 +1005,34 @@ public final class LaunchLifecycleUtils
                 + launchProject.getName(), e);
         }
         return new ArrayList<>(projects);
+    }
+
+    /**
+     * Returns {@code extension}'s underlying project when it is a non-{@code null}
+     * extension whose {@link IExtensionProject#getParentProject() parent} is
+     * {@code launchProject} and whose project exists and is open; otherwise
+     * {@code null} (the extension is skipped). Pure helper for the discovery loop in
+     * {@link #collectLaunchAndExtensionProjects(IProject)} — same skip/keep decision
+     * the inline {@code continue}/guard chain made.
+     */
+    private static IProject matchingOpenExtensionProject(IExtensionProject extension,
+            IProject launchProject)
+    {
+        if (extension == null)
+        {
+            return null;
+        }
+        IProject parent = extension.getParentProject();
+        if (!launchProject.equals(parent))
+        {
+            return null;
+        }
+        IProject extProject = extension.getProject();
+        if (extProject != null && extProject.exists() && extProject.isOpen())
+        {
+            return extProject;
+        }
+        return null;
     }
 
     /**
@@ -2041,6 +2061,49 @@ public final class LaunchLifecycleUtils
     }
 
     /**
+     * Polls {@code isTerminated} until it reports {@code true} or {@code timeoutMs}
+     * elapses, sleeping {@link LaunchConfigUtils#LAUNCH_POLL_INTERVAL_MS} between
+     * checks. Shared by {@link #terminateExistingSessionAndWait(IDebugTarget, String, long)}
+     * and {@link #terminateExistingLaunchAndWait(ILaunch, String)} — preserves the exact
+     * original loop behaviour: a {@link RuntimeException} from the probe or an interruption
+     * (after re-asserting the interrupt flag) breaks the wait and returns the
+     * confirmation seen so far.
+     *
+     * @return {@code true} when {@code isTerminated} returned {@code true} within the window;
+     *     {@code false} when the deadline elapsed or the wait was broken early.
+     */
+    private static boolean waitForTerminated(BooleanSupplier isTerminated, long timeoutMs)
+    {
+        boolean terminated = false;
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline)
+        {
+            try
+            {
+                if (isTerminated.getAsBoolean())
+                {
+                    terminated = true;
+                    break;
+                }
+            }
+            catch (RuntimeException e)
+            {
+                break;
+            }
+            try
+            {
+                Thread.sleep(LaunchConfigUtils.LAUNCH_POLL_INTERVAL_MS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return terminated;
+    }
+
+    /**
      * Timeout-parameterized seam of {@link #terminateExistingSessionAndWait(IDebugTarget, String)}
      * — package-private so the headless test can exercise the timeout-elapsed path without
      * waiting out the full production window. Production callers always go through the public
@@ -2067,32 +2130,7 @@ public final class LaunchLifecycleUtils
         {
             Activator.logError("Error terminating existing debug session before restart", e); //$NON-NLS-1$
         }
-        boolean terminated = false;
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline)
-        {
-            try
-            {
-                if (target.isTerminated())
-                {
-                    terminated = true;
-                    break;
-                }
-            }
-            catch (Exception e)
-            {
-                break;
-            }
-            try
-            {
-                Thread.sleep(LaunchConfigUtils.LAUNCH_POLL_INTERVAL_MS);
-            }
-            catch (InterruptedException e)
-            {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
+        boolean terminated = waitForTerminated(target::isTerminated, timeoutMs);
         if (!terminated)
         {
             Activator.logWarning("Existing client debug session did not confirm termination within " //$NON-NLS-1$
@@ -2139,32 +2177,7 @@ public final class LaunchLifecycleUtils
         {
             Activator.logError("Error terminating existing launch before restart", e); //$NON-NLS-1$
         }
-        boolean terminated = false;
-        long deadline = System.currentTimeMillis() + RESTART_TERMINATE_TIMEOUT_MS;
-        while (System.currentTimeMillis() < deadline)
-        {
-            try
-            {
-                if (launch.isTerminated())
-                {
-                    terminated = true;
-                    break;
-                }
-            }
-            catch (Exception e)
-            {
-                break;
-            }
-            try
-            {
-                Thread.sleep(LaunchConfigUtils.LAUNCH_POLL_INTERVAL_MS);
-            }
-            catch (InterruptedException e)
-            {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
+        boolean terminated = waitForTerminated(launch::isTerminated, RESTART_TERMINATE_TIMEOUT_MS);
         if (!terminated)
         {
             Activator.logWarning("Existing client launch did not confirm termination within " //$NON-NLS-1$

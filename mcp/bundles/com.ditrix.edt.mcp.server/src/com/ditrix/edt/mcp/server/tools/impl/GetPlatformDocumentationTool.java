@@ -230,15 +230,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
                 inTypeInfo = false;
             }
 
-            boolean keep = trimmed.isEmpty() // blank lines kept (collapsed below)
-                || line.startsWith("# ") //$NON-NLS-1$
-                || line.startsWith("## ") //$NON-NLS-1$
-                || line.startsWith("### ") //$NON-NLS-1$
-                || trimmed.equals("**Type Info:**") //$NON-NLS-1$
-                || (inTypeInfo && trimmed.startsWith("- ")) //$NON-NLS-1$
-                || trimmed.startsWith("**Collection element types:**") //$NON-NLS-1$
-                || trimmed.startsWith("**Category:**") //$NON-NLS-1$
-                || trimmed.startsWith("*Results limited to "); //$NON-NLS-1$
+            boolean keep = shouldKeepLine(line, trimmed, inTypeInfo);
 
             if (!keep)
             {
@@ -261,5 +253,25 @@ public class GetPlatformDocumentationTool implements IMcpTool
             out.append(line).append("\n"); //$NON-NLS-1$
         }
         return out.toString();
+    }
+
+    /**
+     * Decides whether a single line of the 'detailed' markdown survives into the 'concise' rendering —
+     * the keep-predicate of {@link #condense}. Keeps blank lines (collapsed by the caller), the H1/H2/H3
+     * headings, the {@code **Type Info:**} header and its bullets (only while {@code inTypeInfo}), the
+     * {@code **Collection element types:**} / {@code **Category:**} lines and the results-limit footer;
+     * drops everything else. Pure predicate over the supplied line state.
+     */
+    private static boolean shouldKeepLine(String line, String trimmed, boolean inTypeInfo)
+    {
+        return trimmed.isEmpty() // blank lines kept (collapsed below)
+            || line.startsWith("# ") //$NON-NLS-1$
+            || line.startsWith("## ") //$NON-NLS-1$
+            || line.startsWith("### ") //$NON-NLS-1$
+            || trimmed.equals("**Type Info:**") //$NON-NLS-1$
+            || (inTypeInfo && trimmed.startsWith("- ")) //$NON-NLS-1$
+            || trimmed.startsWith("**Collection element types:**") //$NON-NLS-1$
+            || trimmed.startsWith("**Category:**") //$NON-NLS-1$
+            || trimmed.startsWith("*Results limited to "); //$NON-NLS-1$
     }
 }

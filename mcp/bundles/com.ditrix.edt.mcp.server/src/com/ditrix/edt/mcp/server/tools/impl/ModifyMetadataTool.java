@@ -635,13 +635,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         catch (Exception e)
         {
-            String validationJson = FormValidationException.jsonOf(e);
-            if (validationJson != null)
-            {
-                return validationJson;
-            }
-            Activator.logError("Error moving form item", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to move form item: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+            return moveFormItemError(e);
         }
 
         List<String> applied = new ArrayList<>();
@@ -661,6 +655,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put("destination", destination[0]) //$NON-NLS-1$
             .put(McpKeys.MESSAGE, "Moved form item '" + itemName + "' to " + destination[0]) //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
+    }
+
+    /**
+     * Maps a failure from the {@link #moveFormItem} write transaction to its error JSON: a structured
+     * {@link FormValidationException} payload when present (the move primitive rejected the item / parent /
+     * placement and rolled the tx back), otherwise a generic "Failed to move form item" error built from
+     * the unwrapped cause message. Mirrors the catch arm of {@code moveFormItem} verbatim.
+     */
+    private String moveFormItemError(Exception e)
+    {
+        String validationJson = FormValidationException.jsonOf(e);
+        if (validationJson != null)
+        {
+            return validationJson;
+        }
+        Activator.logError("Error moving form item", e); //$NON-NLS-1$
+        return ToolResult.error("Failed to move form item: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
     }
 
     /**

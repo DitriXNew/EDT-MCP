@@ -130,33 +130,13 @@ public class GetTranslationProjectInfoTool implements IMcpTool
 
             StringBuilder body = new StringBuilder();
             body.append("## Storages\n\n"); //$NON-NLS-1$
-            if (storages.isEmpty())
-            {
-                body.append("(none)\n"); //$NON-NLS-1$
-            }
-            else
-            {
-                // IDs are wrapped in backticks so they round-trip VERBATIM into
-                // generate_translation_strings.storageId without the agent scraping prose.
-                for (String storage : storages)
-                {
-                    body.append("- `").append(storage).append("`\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
+            // IDs are wrapped in backticks so they round-trip VERBATIM into
+            // generate_translation_strings.storageId without the agent scraping prose.
+            appendBacktickedList(body, storages);
             body.append("\n## Translation providers\n\n"); //$NON-NLS-1$
-            if (providers.isEmpty())
-            {
-                body.append("(none)\n"); //$NON-NLS-1$
-            }
-            else
-            {
-                // Backticked for the same reason: a provider id feeds
-                // generate_translation_strings.providerId verbatim.
-                for (String provider : providers)
-                {
-                    body.append("- `").append(provider).append("`\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
+            // Backticked for the same reason: a provider id feeds
+            // generate_translation_strings.providerId verbatim.
+            appendBacktickedList(body, providers);
 
             return FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
@@ -168,6 +148,26 @@ public class GetTranslationProjectInfoTool implements IMcpTool
         catch (Exception e)
         {
             return CliReflectionErrors.toErrorJson(e, "Get info", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * Appends {@code items} to {@code body} as a Markdown bullet list with each value wrapped
+     * in backticks, or the literal {@code (none)} when the list is empty. Extracted verbatim
+     * from the Storages / providers section rendering (identical shape for both).
+     */
+    private static void appendBacktickedList(StringBuilder body, List<String> items)
+    {
+        if (items.isEmpty())
+        {
+            body.append("(none)\n"); //$NON-NLS-1$
+        }
+        else
+        {
+            for (String item : items)
+            {
+                body.append("- `").append(item).append("`\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
         }
     }
 

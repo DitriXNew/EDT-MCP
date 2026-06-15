@@ -331,38 +331,43 @@ public class GetMetadataObjectsTool implements IMcpTool
                 break;
             }
 
-            // Get synonym for the specified language
-            String displaySynonym = getSynonymForLanguage(info, language);
-            String displayComment = info.comment != null ? info.comment : ""; //$NON-NLS-1$
-            String objectModule = info.hasObjectModule ? "Yes" : "-"; //$NON-NLS-1$ //$NON-NLS-2$
-            String managerModule = info.hasManagerModule ? "Yes" : "-"; //$NON-NLS-1$ //$NON-NLS-2$
-
-            if (isExtensionProject)
-            {
-                sb.append(MarkdownUtils.tableRow(
-                    info.name,
-                    displaySynonym,
-                    displayComment,
-                    info.type,
-                    objectModule,
-                    managerModule,
-                    ExtensionOriginUtils.originLabel(info.belonging, true)));
-            }
-            else
-            {
-                sb.append(MarkdownUtils.tableRow(
-                    info.name,
-                    displaySynonym,
-                    displayComment,
-                    info.type,
-                    objectModule,
-                    managerModule));
-            }
+            sb.append(formatObjectRow(info, language, isExtensionProject));
 
             count++;
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Formats a single metadata object as one markdown table row.
+     */
+    private String formatObjectRow(MetadataInfo info, String language, boolean isExtensionProject)
+    {
+        // Get synonym for the specified language
+        String displaySynonym = getSynonymForLanguage(info, language);
+        String displayComment = info.comment != null ? info.comment : ""; //$NON-NLS-1$
+        String objectModule = info.hasObjectModule ? "Yes" : "-"; //$NON-NLS-1$ //$NON-NLS-2$
+        String managerModule = info.hasManagerModule ? "Yes" : "-"; //$NON-NLS-1$ //$NON-NLS-2$
+
+        if (isExtensionProject)
+        {
+            return MarkdownUtils.tableRow(
+                info.name,
+                displaySynonym,
+                displayComment,
+                info.type,
+                objectModule,
+                managerModule,
+                ExtensionOriginUtils.originLabel(info.belonging, true));
+        }
+        return MarkdownUtils.tableRow(
+            info.name,
+            displaySynonym,
+            displayComment,
+            info.type,
+            objectModule,
+            managerModule);
     }
     
     // ========== Collection methods ==========

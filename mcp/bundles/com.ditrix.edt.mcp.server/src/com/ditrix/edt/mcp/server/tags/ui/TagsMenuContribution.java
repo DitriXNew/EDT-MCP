@@ -304,20 +304,29 @@ public class TagsMenuContribution extends CompoundContributionItem {
             
             // Get active bindings for this command
             Binding[] bindings = bindingService.getBindings();
-            for (Binding binding : bindings) {
-                ParameterizedCommand boundCommand = binding.getParameterizedCommand();
-                if (boundCommand != null && boundCommand.equals(paramCommand)) {
-                    KeySequence keySequence = binding.getTriggerSequence() instanceof KeySequence ? 
-                        (KeySequence) binding.getTriggerSequence() : null;
-                    if (keySequence != null) {
-                        return keySequence.format();
-                    }
-                }
-            }
-            
-            return null;
+            return findFormattedKeySequence(bindings, paramCommand);
         } catch (NotDefinedException e) {
             return null;
         }
+    }
+
+    /**
+     * Scans {@code bindings} for the one bound to {@code paramCommand} and returns its
+     * trigger as a formatted key sequence, or {@code null} when no key-sequence binding
+     * matches.
+     */
+    private String findFormattedKeySequence(Binding[] bindings, ParameterizedCommand paramCommand) {
+        for (Binding binding : bindings) {
+            ParameterizedCommand boundCommand = binding.getParameterizedCommand();
+            if (boundCommand != null && boundCommand.equals(paramCommand)) {
+                KeySequence keySequence = binding.getTriggerSequence() instanceof KeySequence ?
+                    (KeySequence) binding.getTriggerSequence() : null;
+                if (keySequence != null) {
+                    return keySequence.format();
+                }
+            }
+        }
+
+        return null;
     }
 }

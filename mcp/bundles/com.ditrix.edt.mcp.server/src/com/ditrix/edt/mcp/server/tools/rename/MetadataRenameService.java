@@ -1610,31 +1610,7 @@ public class MetadataRenameService
         String type = childType.toLowerCase();
 
         // Determine which getter to use based on child type
-        String getterName = null;
-        if ("attribute".equals(type) || "attributes".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-            || "\u0440\u0435\u043a\u0432\u0438\u0437\u0438\u0442".equals(type) //$NON-NLS-1$ // реквизит
-            || "\u0440\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b".equals(type)) //$NON-NLS-1$ // реквизиты
-        {
-            getterName = "getAttributes"; //$NON-NLS-1$
-        }
-        else if ("tabularsection".equals(type) || "tabularsections".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-            || "\u0442\u0430\u0431\u043b\u0438\u0447\u043d\u0430\u044f\u0447\u0430\u0441\u0442\u044c".equals(type) //$NON-NLS-1$ // табличнаячасть
-            || "\u0442\u0430\u0431\u043b\u0438\u0447\u043d\u044b\u0435\u0447\u0430\u0441\u0442\u0438".equals(type)) //$NON-NLS-1$ // табличныечасти
-        {
-            getterName = "getTabularSections"; //$NON-NLS-1$
-        }
-        else if ("dimension".equals(type) || "dimensions".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-            || "\u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u0435".equals(type) //$NON-NLS-1$ // измерение
-            || "\u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u044f".equals(type)) //$NON-NLS-1$ // измерения
-        {
-            getterName = "getDimensions"; //$NON-NLS-1$
-        }
-        else if ("resource".equals(type) || "resources".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-            || "\u0440\u0435\u0441\u0443\u0440\u0441".equals(type) //$NON-NLS-1$ // ресурс
-            || "\u0440\u0435\u0441\u0443\u0440\u0441\u044b".equals(type)) //$NON-NLS-1$ // ресурсы
-        {
-            getterName = "getResources"; //$NON-NLS-1$
-        }
+        String getterName = resolveChildGetterName(type);
 
         if (getterName == null)
         {
@@ -1664,5 +1640,40 @@ public class MetadataRenameService
             Activator.logError("Error finding child " + childType + "." + childName, e); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
+    }
+
+    /**
+     * Maps a (lower-cased) child-type token - English singular/plural or its Russian
+     * equivalent - to the EMF collection getter that holds children of that kind, or
+     * {@code null} when the token names no supported child collection.
+     */
+    private String resolveChildGetterName(String type)
+    {
+        String getterName = null;
+        if ("attribute".equals(type) || "attributes".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
+            || "реквизит".equals(type) //$NON-NLS-1$ // реквизит
+            || "реквизиты".equals(type)) //$NON-NLS-1$ // реквизиты
+        {
+            getterName = "getAttributes"; //$NON-NLS-1$
+        }
+        else if ("tabularsection".equals(type) || "tabularsections".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
+            || "табличнаячасть".equals(type) //$NON-NLS-1$ // табличнаячасть
+            || "табличныечасти".equals(type)) //$NON-NLS-1$ // табличныечасти
+        {
+            getterName = "getTabularSections"; //$NON-NLS-1$
+        }
+        else if ("dimension".equals(type) || "dimensions".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
+            || "измерение".equals(type) //$NON-NLS-1$ // измерение
+            || "измерения".equals(type)) //$NON-NLS-1$ // измерения
+        {
+            getterName = "getDimensions"; //$NON-NLS-1$
+        }
+        else if ("resource".equals(type) || "resources".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
+            || "ресурс".equals(type) //$NON-NLS-1$ // ресурс
+            || "ресурсы".equals(type)) //$NON-NLS-1$ // ресурсы
+        {
+            getterName = "getResources"; //$NON-NLS-1$
+        }
+        return getterName;
     }
 }

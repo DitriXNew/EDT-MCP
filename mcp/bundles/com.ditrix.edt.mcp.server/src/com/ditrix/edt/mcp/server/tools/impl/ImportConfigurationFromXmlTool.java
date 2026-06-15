@@ -16,6 +16,7 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -160,22 +161,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                 Path.class, String.class, String.class, String.class);
             method.invoke(api, importPath, projectName, projectNature, xmlVersion);
 
-            // The CLI API hardcodes setRefreshProject(false) on the import
-            // operation, so the imported project is left in a state where
-            // IDtProjectManager.getDtProject(p) returns null until something
-            // triggers EDT's project lifecycle. Close + open + refresh here
-            // forces EDT to re-scan and bring the project to the ready state.
-            IProject created = workspace.getRoot().getProject(projectName);
-            if (created != null && created.exists())
-            {
-                NullProgressMonitor monitor = new NullProgressMonitor();
-                if (created.isOpen())
-                {
-                    created.close(monitor);
-                }
-                created.open(monitor);
-                created.refreshLocal(IResource.DEPTH_INFINITE, monitor);
-            }
+            refreshImportedProject(workspace, projectName);
 
             // Action result: status + the source path and the created project name.
             // There is no round-trip ID, machine-structured position, declared
@@ -207,6 +193,32 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         catch (Exception e)
         {
             return CliReflectionErrors.toErrorJson(e, "Import", "CLI"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * Forces EDT to re-scan the freshly imported project so it reaches the ready
+     * state. The CLI API hardcodes {@code setRefreshProject(false)} on the import
+     * operation, so the imported project is left in a state where
+     * {@code IDtProjectManager.getDtProject(p)} returns {@code null} until something
+     * triggers EDT's project lifecycle. Close + open + refresh here forces the
+     * re-scan. No-op when the project does not (yet) exist. Any
+     * {@link CoreException} propagates to {@code execute}'s catch block, exactly as
+     * when this logic was inline.
+     */
+    private static void refreshImportedProject(IWorkspace workspace, String projectName)
+        throws CoreException
+    {
+        IProject created = workspace.getRoot().getProject(projectName);
+        if (created != null && created.exists())
+        {
+            NullProgressMonitor monitor = new NullProgressMonitor();
+            if (created.isOpen())
+            {
+                created.close(monitor);
+            }
+            created.open(monitor);
+            created.refreshLocal(IResource.DEPTH_INFINITE, monitor);
         }
     }
 }

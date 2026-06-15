@@ -229,14 +229,7 @@ public class TerminateLaunchTool implements IMcpTool
 
             if (!includeAttach)
             {
-                Iterator<ILaunch> it = targets.iterator();
-                while (it.hasNext())
-                {
-                    if (LaunchConfigUtils.isAttachConfig(it.next().getLaunchConfiguration()))
-                    {
-                        it.remove();
-                    }
-                }
+                removeAttachLaunches(targets);
             }
 
             if (targets.isEmpty())
@@ -260,6 +253,22 @@ public class TerminateLaunchTool implements IMcpTool
         {
             Activator.logError("Error in terminate_launch", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
+        }
+    }
+
+    /**
+     * Drops every attach launch (RemoteRuntime / LocalRuntime) from the target
+     * list in place, used when {@code includeAttach=false}.
+     */
+    private static void removeAttachLaunches(List<ILaunch> targets)
+    {
+        Iterator<ILaunch> it = targets.iterator();
+        while (it.hasNext())
+        {
+            if (LaunchConfigUtils.isAttachConfig(it.next().getLaunchConfiguration()))
+            {
+                it.remove();
+            }
         }
     }
 
@@ -512,30 +521,7 @@ public class TerminateLaunchTool implements IMcpTool
             }
             else
             {
-                launch.terminate();
-                if (LaunchLifecycleUtils.waitForTerminated(launch, timeoutSeconds * 1000L))
-                {
-                    result.code = R_TERMINATED;
-                }
-                else if (force)
-                {
-                    forceTerminateProcesses(launch);
-                    if (LaunchLifecycleUtils.waitForTerminated(launch, FORCE_GRACE_MS))
-                    {
-                        result.code = R_FORCE_TERMINATED;
-                    }
-                    else
-                    {
-                        result.code = R_TIMEOUT;
-                        result.note = "Force-terminate sent but launch still not marked terminated."; //$NON-NLS-1$
-                    }
-                }
-                else
-                {
-                    result.code = R_TIMEOUT;
-                    result.note = "Still terminating in background. " //$NON-NLS-1$
-                        + "Re-run with `force=true` to kill the OS process."; //$NON-NLS-1$
-                }
+                terminateRuntimeLaunch(launch, timeoutSeconds, force, result);
             }
         }
         catch (DebugException e)
@@ -556,6 +542,41 @@ public class TerminateLaunchTool implements IMcpTool
         }
         result.durationMs = System.currentTimeMillis() - start;
         return result;
+    }
+
+    /**
+     * Terminates a runtime-client (non-attach) launch via {@link ILaunch#terminate()},
+     * waiting up to {@code timeoutSeconds}. On timeout with {@code force=true}, escalates
+     * to {@link IProcess#terminate()} with a short grace wait. Records the outcome code
+     * and any note on {@code result}; propagates {@link DebugException} to the caller.
+     */
+    private static void terminateRuntimeLaunch(ILaunch launch, int timeoutSeconds, boolean force,
+            TerminationResult result) throws DebugException
+    {
+        launch.terminate();
+        if (LaunchLifecycleUtils.waitForTerminated(launch, timeoutSeconds * 1000L))
+        {
+            result.code = R_TERMINATED;
+        }
+        else if (force)
+        {
+            forceTerminateProcesses(launch);
+            if (LaunchLifecycleUtils.waitForTerminated(launch, FORCE_GRACE_MS))
+            {
+                result.code = R_FORCE_TERMINATED;
+            }
+            else
+            {
+                result.code = R_TIMEOUT;
+                result.note = "Force-terminate sent but launch still not marked terminated."; //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            result.code = R_TIMEOUT;
+            result.note = "Still terminating in background. " //$NON-NLS-1$
+                + "Re-run with `force=true` to kill the OS process."; //$NON-NLS-1$
+        }
     }
 
     /**

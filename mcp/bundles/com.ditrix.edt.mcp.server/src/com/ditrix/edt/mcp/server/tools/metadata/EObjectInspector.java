@@ -171,23 +171,33 @@ public final class EObjectInspector
         
         for (EReference ref : eObj.eClass().getEAllReferences())
         {
-            if (ref.isContainment() && !ref.isDerived() && !ref.isTransient())
+            if (isNonEmptyContainmentReference(eObj, ref))
             {
-                Object value = eObj.eGet(ref);
-                if (value != null)
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check whether a single containment reference holds a non-empty value.
+     *
+     * @param eObj the owning EObject
+     * @param ref the reference to inspect
+     * @return true if the reference is a persistent containment reference with a non-empty value
+     */
+    private static boolean isNonEmptyContainmentReference(EObject eObj, EReference ref)
+    {
+        if (ref.isContainment() && !ref.isDerived() && !ref.isTransient())
+        {
+            Object value = eObj.eGet(ref);
+            if (value != null)
+            {
+                if (ref.isMany())
                 {
-                    if (ref.isMany())
-                    {
-                        if (!((Collection<?>) value).isEmpty())
-                        {
-                            return true;
-                        }
-                    }
-                    else
-                    {
-                        return true;
-                    }
+                    return !((Collection<?>) value).isEmpty();
                 }
+                return true;
             }
         }
         return false;
@@ -394,6 +404,18 @@ public final class EObjectInspector
             }
         }
         
+        return formatByAlternativeNameFeature(eObj);
+    }
+
+    /**
+     * Try alternative name features (some objects use different naming) and otherwise
+     * fall back to the clean class name.
+     *
+     * @param eObj the EObject to format
+     * @return "Type.Value" for the first matching alternative feature, or the clean class name
+     */
+    private static String formatByAlternativeNameFeature(EObject eObj)
+    {
         // Try alternative name features (some objects use different naming)
         for (String altName : Arrays.asList("id", "identifier", "code")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
@@ -407,7 +429,7 @@ public final class EObjectInspector
                 }
             }
         }
-        
+
         // Fallback: clean class name without Impl suffix
         return getCleanClassName(eObj);
     }

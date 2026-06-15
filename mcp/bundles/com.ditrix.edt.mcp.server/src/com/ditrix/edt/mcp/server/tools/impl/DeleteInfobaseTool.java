@@ -754,18 +754,9 @@ public class DeleteInfobaseTool implements IMcpTool
                 {
                     continue;
                 }
-                for (IApplication app : apps)
+                if (anyApplicationServesDir(apps, target, other, dbDir))
                 {
-                    // Resolve EVERY co-owner kind: a FILE infobase OR a standalone (wst) server that
-                    // serves the same on-disk database — not just file infobases.
-                    Path otherDir = resolveApplicationDbDir(app);
-                    if (otherDir != null && target.equals(otherDir.toAbsolutePath().normalize()))
-                    {
-                        Activator.logInfo("delete_infobase: database '" + dbDir //$NON-NLS-1$
-                            + "' is also used by project '" + other.getName() //$NON-NLS-1$
-                            + "' — keeping the files on disk"); //$NON-NLS-1$
-                        return true;
-                    }
+                    return true;
                 }
             }
         }
@@ -774,6 +765,30 @@ public class DeleteInfobaseTool implements IMcpTool
             // Enumeration itself failed — keep the files (the safe choice).
             Activator.logError("delete_infobase: shared-infobase check failed — keeping the files", e); //$NON-NLS-1$
             return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns {@code true} when ANY application of {@code other} resolves to the same on-disk database
+     * {@code target} (absolute, normalized) — the per-project arm of {@link #isSharedWithOtherProjects}.
+     * Resolves EVERY co-owner kind: a FILE infobase OR a standalone (wst) server that serves the same
+     * on-disk database — not just file infobases. {@code other} / {@code dbDir} are used only for the
+     * "kept on disk" log line.
+     */
+    private static boolean anyApplicationServesDir(List<IApplication> apps, Path target, IProject other,
+            Path dbDir)
+    {
+        for (IApplication app : apps)
+        {
+            Path otherDir = resolveApplicationDbDir(app);
+            if (otherDir != null && target.equals(otherDir.toAbsolutePath().normalize()))
+            {
+                Activator.logInfo("delete_infobase: database '" + dbDir //$NON-NLS-1$
+                    + "' is also used by project '" + other.getName() //$NON-NLS-1$
+                    + "' — keeping the files on disk"); //$NON-NLS-1$
+                return true;
+            }
         }
         return false;
     }

@@ -909,11 +909,7 @@ public final class DebugServerTargetSupport
                     if (suspendedAt == null)
                     {
                         suspendedThreadName = safe(th.getName());
-                        IStackFrame top = th.getTopStackFrame();
-                        if (top != null)
-                        {
-                            suspendedAt = safe(top.getName()) + " @ " + top.getLineNumber(); //$NON-NLS-1$
-                        }
+                        suspendedAt = topFrameLabel(th);
                     }
                 }
             }
@@ -933,6 +929,24 @@ public final class DebugServerTargetSupport
             m.put("suspendedThread", suspendedThreadName); //$NON-NLS-1$
         }
         return m;
+    }
+
+    /**
+     * Builds the "{@code name @ line}" label for the top stack frame of a suspended
+     * thread, or {@code null} when the thread has no top frame. Mirrors the original
+     * inline logic exactly; propagates {@link DebugException} to the caller.
+     *
+     * @param th a suspended thread
+     * @return the top-frame label, or {@code null} if there is no top frame
+     */
+    private static String topFrameLabel(IThread th) throws org.eclipse.debug.core.DebugException
+    {
+        IStackFrame top = th.getTopStackFrame();
+        if (top != null)
+        {
+            return safe(top.getName()) + " @ " + top.getLineNumber(); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**

@@ -199,6 +199,30 @@ public final class FrontMatter
             return "\"\""; //$NON-NLS-1$
         }
 
+        if (!needsYamlQuoting(value))
+        {
+            return value;
+        }
+
+        // Wrap in double quotes, escaping \ and "
+        return "\"" //$NON-NLS-1$
+            + value.replace("\\", "\\\\") //$NON-NLS-1$ //$NON-NLS-2$
+                .replace("\"", "\\\"") //$NON-NLS-1$ //$NON-NLS-2$
+                .replace("\n", "\\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .replace("\r", "\\r") //$NON-NLS-1$ //$NON-NLS-2$
+            + "\""; //$NON-NLS-1$
+    }
+
+    /**
+     * Determines whether a non-empty string value must be wrapped in double quotes
+     * to be emitted as a safe YAML scalar.
+     *
+     * @param value the non-empty string value to inspect
+     * @return true if the value contains YAML special characters, leading/trailing
+     *     whitespace, newlines, is a YAML reserved word, or looks like a number
+     */
+    private static boolean needsYamlQuoting(String value)
+    {
         // Check if quoting is needed
         boolean needsQuoting = false;
 
@@ -240,17 +264,6 @@ public final class FrontMatter
             needsQuoting = true;
         }
 
-        if (!needsQuoting)
-        {
-            return value;
-        }
-
-        // Wrap in double quotes, escaping \ and "
-        return "\"" //$NON-NLS-1$
-            + value.replace("\\", "\\\\") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("\"", "\\\"") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("\n", "\\n") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("\r", "\\r") //$NON-NLS-1$ //$NON-NLS-2$
-            + "\""; //$NON-NLS-1$
+        return needsQuoting;
     }
 }

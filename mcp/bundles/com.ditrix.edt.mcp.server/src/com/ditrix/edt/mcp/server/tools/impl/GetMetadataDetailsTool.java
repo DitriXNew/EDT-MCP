@@ -199,54 +199,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         // Process each FQN
         for (String fqn : objectFqns)
         {
-            // Assignable-schema mode: resolve the node (top object OR member) via the shared
-            // resolver and render its assignable-property table - what modify_metadata can set.
-            if (assignable)
-            {
-                MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, fqn);
-                if (node == null || node.object == null)
-                {
-                    failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
-                    continue;
-                }
-                sb.append(formatAssignable(MetadataTypeUtils.normalizeFqn(fqn), node.object));
-                sb.append(SECTION_SEPARATOR);
-                continue;
-            }
-
-            // A FQN that addresses a FORM ITSELF (Type.Object.Form.FormName or CommonForm.FormName)
-            // renders the form's STRUCTURE (items / attributes / commands) via the cross-model hop
-            // (FormStructureReader). Form MEMBERS use their own create/modify/delete FQNs; this branch
-            // is for the whole form.
-            String formPath = FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(fqn));
-            if (formPath != null)
-            {
-                String formStructure = renderFormStructure(config, bmModel, formPath, effectiveLanguage);
-                if (formStructure == null)
-                {
-                    failures.add(new String[] { fqn, "the form has no editable content model (it may " //$NON-NLS-1$
-                        + "be empty, an ordinary/legacy form, or not yet built)" }); //$NON-NLS-1$
-                    continue;
-                }
-                sb.append(formStructure);
-                sb.append(SECTION_SEPARATOR);
-                continue;
-            }
-
-            MdObject mdObject = resolveObject(config, fqn);
-            if (mdObject == null)
-            {
-                failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
-                continue;
-            }
-            sb.append(MetadataFormatterRegistry.format(mdObject, full, effectiveLanguage));
-            // ORIGIN footer: core / core (adopted) / extension. For a base
-            // configuration this is always "core"; for an extension it distinguishes
-            // an adopted base object from one the extension itself owns.
-            sb.append("\n**Origin:** ") //$NON-NLS-1$
-                .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), isExtensionProject))
-                .append("\n"); //$NON-NLS-1$
-            sb.append(SECTION_SEPARATOR);
+            processFqn(fqn, sb, failures, config, bmModel, effectiveLanguage, full, assignable,
+                isExtensionProject);
         }
 
         if (!failures.isEmpty())
@@ -255,6 +209,65 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Renders a single FQN of the request into {@code sb}, or records a {@code {fqn, reason}}
+     * row in {@code failures} when it cannot be resolved. Extracted verbatim from the
+     * {@link #getMetadataDetailsInternal} loop body; a per-object failure is not a whole-call
+     * failure, so this method never throws on a resolution miss.
+     */
+    private void processFqn(String fqn, StringBuilder sb, List<String[]> failures, Configuration config,
+        IBmModel bmModel, String effectiveLanguage, boolean full, boolean assignable, boolean isExtensionProject)
+    {
+        // Assignable-schema mode: resolve the node (top object OR member) via the shared
+        // resolver and render its assignable-property table - what modify_metadata can set.
+        if (assignable)
+        {
+            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, fqn);
+            if (node == null || node.object == null)
+            {
+                failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
+                return;
+            }
+            sb.append(formatAssignable(MetadataTypeUtils.normalizeFqn(fqn), node.object));
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
+
+        // A FQN that addresses a FORM ITSELF (Type.Object.Form.FormName or CommonForm.FormName)
+        // renders the form's STRUCTURE (items / attributes / commands) via the cross-model hop
+        // (FormStructureReader). Form MEMBERS use their own create/modify/delete FQNs; this branch
+        // is for the whole form.
+        String formPath = FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(fqn));
+        if (formPath != null)
+        {
+            String formStructure = renderFormStructure(config, bmModel, formPath, effectiveLanguage);
+            if (formStructure == null)
+            {
+                failures.add(new String[] { fqn, "the form has no editable content model (it may " //$NON-NLS-1$
+                    + "be empty, an ordinary/legacy form, or not yet built)" }); //$NON-NLS-1$
+                return;
+            }
+            sb.append(formStructure);
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
+
+        MdObject mdObject = resolveObject(config, fqn);
+        if (mdObject == null)
+        {
+            failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
+            return;
+        }
+        sb.append(MetadataFormatterRegistry.format(mdObject, full, effectiveLanguage));
+        // ORIGIN footer: core / core (adopted) / extension. For a base
+        // configuration this is always "core"; for an extension it distinguishes
+        // an adopted base object from one the extension itself owns.
+        sb.append("\n**Origin:** ") //$NON-NLS-1$
+            .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), isExtensionProject))
+            .append("\n"); //$NON-NLS-1$
+        sb.append(SECTION_SEPARATOR);
     }
 
     /**

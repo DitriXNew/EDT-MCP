@@ -366,15 +366,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         // Preferred: the resolver linked this access to one or more concrete features.
         if (entries != null && !entries.isEmpty())
         {
-            for (FeatureEntry entry : entries)
-            {
-                EObject feature = entry.getFeature();
-                if (feature != null && methodUri.equals(EcoreUtil.getURI(feature)))
-                {
-                    return true;
-                }
-            }
-            return false;
+            return matchesResolvedFeature(entries, methodUri);
         }
 
         // Fallback: feature entries were not populated — match by call shape.
@@ -386,6 +378,26 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         // Unqualified call: only counts as a caller inside the target module itself.
         return candidateIsTarget;
+    }
+
+    /**
+     * True when any resolved feature entry points at the target method (exact match by URI).
+     *
+     * @param entries the non-empty list of resolved feature entries
+     * @param methodUri the URI of the target method
+     * @return true if at least one entry resolves to the target method
+     */
+    private boolean matchesResolvedFeature(EList<FeatureEntry> entries, URI methodUri)
+    {
+        for (FeatureEntry entry : entries)
+        {
+            EObject feature = entry.getFeature();
+            if (feature != null && methodUri.equals(EcoreUtil.getURI(feature)))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -300,19 +300,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // Step 6 (optional, best-effort): refresh stale validation markers. Only run
         // when the export actually succeeded - a failed export must not then trigger a
         // full clean build.
-        String revalidateWarning = null;
-        if (revalidate && exported)
-        {
-            try
-            {
-                CleanProjectTool.cleanProject(projectName);
-            }
-            catch (Exception e)
-            {
-                Activator.logError("Error revalidating after resync_to_disk: " + projectName, e); //$NON-NLS-1$
-                revalidateWarning = unwrapCauseMessage(e);
-            }
-        }
+        String revalidateWarning = runOptionalRevalidation(projectName, revalidate, exported);
 
         // The force-export swallows failures and returns false (unresolved
         // services/project, or the export threw). `exported` is true when the export
@@ -353,6 +341,34 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         result.put(McpKeys.MESSAGE, buildMessage(exported, exported ? exportFqns.size() : 0, fullExport,
             missingBefore.size(), stillMissing.size(), dangling, cleanDangling));
         return result.toJson();
+    }
+
+    /**
+     * Step 6 (optional, best-effort): refresh stale validation markers. Only runs when a
+     * revalidation was requested AND the export actually succeeded - a failed export must
+     * not then trigger a full clean build. Any failure is swallowed (logged) and surfaced
+     * as the returned warning. Extracted verbatim from {@link #executeOnUiThread}.
+     *
+     * @param projectName the project to revalidate
+     * @param revalidate whether revalidation was requested
+     * @param exported whether the export succeeded
+     * @return the warning message when revalidation failed, otherwise {@code null}
+     */
+    private String runOptionalRevalidation(String projectName, boolean revalidate, boolean exported)
+    {
+        if (revalidate && exported)
+        {
+            try
+            {
+                CleanProjectTool.cleanProject(projectName);
+            }
+            catch (Exception e)
+            {
+                Activator.logError("Error revalidating after resync_to_disk: " + projectName, e); //$NON-NLS-1$
+                return unwrapCauseMessage(e);
+            }
+        }
+        return null;
     }
 
     /**

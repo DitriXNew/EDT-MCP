@@ -472,28 +472,7 @@ public class ListModulesTool implements IMcpTool
         {
             if (member instanceof IFile)
             {
-                IFile file = (IFile) member;
-                if (file.getName().endsWith(".bsl")) //$NON-NLS-1$
-                {
-                    // Build module path relative to src/
-                    String fullPath = file.getProjectRelativePath().toString();
-                    String modulePath = fullPath.startsWith("src/") ? fullPath.substring(4) : fullPath; //$NON-NLS-1$
-
-                    if (nameFilter != null && !nameFilter.isEmpty()
-                        && !modulePath.toLowerCase().contains(nameFilter.toLowerCase()))
-                    {
-                        continue;
-                    }
-
-                    String moduleType = determineModuleType(modulePath, basePath);
-
-                    ModuleInfo info = new ModuleInfo();
-                    info.modulePath = modulePath;
-                    info.moduleType = moduleType;
-                    info.parentType = parentType;
-                    info.parentName = parentName;
-                    modules.add(info);
-                }
+                addBslFileIfMatches((IFile) member, modules, basePath, parentType, parentName, nameFilter);
             }
             else if (member instanceof IContainer)
             {
@@ -501,6 +480,39 @@ public class ListModulesTool implements IMcpTool
                     basePath, parentType, parentName, nameFilter, depth + 1);
             }
         }
+    }
+
+    /**
+     * Handles a single file member of {@link #collectBslFilesRecursive}: a non-.bsl file
+     * is ignored, and a .bsl file is added to {@code modules} only when it passes the
+     * {@code nameFilter}. Extracted verbatim from the recursive walk's per-file branch;
+     * the original loop {@code continue} (skip this file) is an early {@code return} here.
+     */
+    private void addBslFileIfMatches(IFile file, List<ModuleInfo> modules, String basePath,
+                                      String parentType, String parentName, String nameFilter)
+    {
+        if (!file.getName().endsWith(".bsl")) //$NON-NLS-1$
+        {
+            return;
+        }
+        // Build module path relative to src/
+        String fullPath = file.getProjectRelativePath().toString();
+        String modulePath = fullPath.startsWith("src/") ? fullPath.substring(4) : fullPath; //$NON-NLS-1$
+
+        if (nameFilter != null && !nameFilter.isEmpty()
+            && !modulePath.toLowerCase().contains(nameFilter.toLowerCase()))
+        {
+            return;
+        }
+
+        String moduleType = determineModuleType(modulePath, basePath);
+
+        ModuleInfo info = new ModuleInfo();
+        info.modulePath = modulePath;
+        info.moduleType = moduleType;
+        info.parentType = parentType;
+        info.parentName = parentName;
+        modules.add(info);
     }
 
     /**

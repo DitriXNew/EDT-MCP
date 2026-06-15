@@ -686,22 +686,35 @@ public final class BslModuleUtils
                 {
                     paramsBuilder.append(", "); //$NON-NLS-1$
                 }
-                if (param.isByValue())
-                {
-                    paramsBuilder.append("Val "); //$NON-NLS-1$
-                }
-                paramsBuilder.append(param.getName());
-                if (param.getDefaultValue() != null)
-                {
-                    String defaultText = getSourceText(param.getDefaultValue());
-                    if (defaultText != null)
-                    {
-                        paramsBuilder.append(" = ").append(defaultText.trim()); //$NON-NLS-1$
-                    }
-                }
+                paramsBuilder.append(formatFormalParam(param));
             }
         }
         return paramsBuilder.length() > 0 ? paramsBuilder.toString() : "-"; //$NON-NLS-1$
+    }
+
+    /**
+     * Formats a single formal parameter, e.g. "Val Param = 0".
+     *
+     * @param param the formal parameter
+     * @return the parameter text without any leading separator
+     */
+    private static String formatFormalParam(FormalParam param)
+    {
+        StringBuilder builder = new StringBuilder();
+        if (param.isByValue())
+        {
+            builder.append("Val "); //$NON-NLS-1$
+        }
+        builder.append(param.getName());
+        if (param.getDefaultValue() != null)
+        {
+            String defaultText = getSourceText(param.getDefaultValue());
+            if (defaultText != null)
+            {
+                builder.append(" = ").append(defaultText.trim()); //$NON-NLS-1$
+            }
+        }
+        return builder.toString();
     }
 
     /**

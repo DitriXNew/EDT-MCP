@@ -235,6 +235,14 @@ public class SearchInCodeTool implements IMcpTool
         }
 
         // Format output
+        return formatOutput(outputMode, query, collector);
+    }
+
+    /**
+     * Formats the collected search results according to the requested output mode.
+     */
+    private String formatOutput(String outputMode, String query, SearchCollector collector)
+    {
         if (MODE_COUNT.equals(outputMode))
         {
             return formatCountOutput(query, collector);
