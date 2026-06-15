@@ -545,8 +545,13 @@ public class SymbolInfoService
 
     /**
      * Builds a markdown info table for the given EObject.
+     * <p>
+     * Package-private (not {@code private}) so the same-package unit test can drive the
+     * pure per-kind formatting branches with in-memory {@code BslFactory}-built objects,
+     * without a live workbench/editor. This mirrors the test seam used by
+     * {@code AbstractMetadataFormatter}'s protected helpers.
      */
-    private String buildEObjectInfo(EObject element)
+    String buildEObjectInfo(EObject element)
     {
         StringBuilder sb = new StringBuilder();
         sb.append(MarkdownUtils.tableHeader(PROPERTY, VALUE));

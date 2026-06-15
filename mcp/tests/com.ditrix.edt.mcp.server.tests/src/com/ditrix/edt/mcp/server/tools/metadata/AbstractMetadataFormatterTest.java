@@ -12,11 +12,19 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.eclipse.emf.common.util.BasicEMap;
 import org.eclipse.emf.common.util.EMap;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 
 /**
  * Tests for the protected helpers of {@link AbstractMetadataFormatter}, reached
@@ -318,6 +326,322 @@ public class AbstractMetadataFormatterTest
         // Exactly one row: a lone trailing newline, no embedded ones that would
         // split the table.
         assertEquals("the notice must be exactly one row", 1, countChar(row, '\n'));
+    }
+
+    // ==================== addPropertyRow overloads ====================
+
+    @Test
+    public void testAddPropertyRowStringValue()
+    {
+        // The String overload prints the value as-is in the second cell.
+        StringBuilder sb = new StringBuilder();
+        f.addPropertyRow(sb, "Name", "Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("| Name | Products |\n", sb.toString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAddPropertyRowNullStringValueRendersDash()
+    {
+        // A null String value falls back to the DASH placeholder, never a literal "null".
+        StringBuilder sb = new StringBuilder();
+        f.addPropertyRow(sb, "Comment", (String) null); //$NON-NLS-1$
+        assertEquals("| Comment | - |\n", sb.toString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAddPropertyRowBooleanValue()
+    {
+        // The boolean overload renders Yes / No via formatBoolean.
+        StringBuilder sb = new StringBuilder();
+        f.addPropertyRow(sb, "Indexed", true); //$NON-NLS-1$
+        f.addPropertyRow(sb, "Indexed", false); //$NON-NLS-1$
+        assertEquals("| Indexed | Yes |\n| Indexed | No |\n", sb.toString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAddPropertyRowIntValue()
+    {
+        // The int overload renders the decimal string of the value.
+        StringBuilder sb = new StringBuilder();
+        f.addPropertyRow(sb, "Code Length", 9); //$NON-NLS-1$
+        assertEquals("| Code Length | 9 |\n", sb.toString()); //$NON-NLS-1$
+    }
+
+    // ==================== header helpers ====================
+
+    @Test
+    public void testAddSectionHeaderFormatsLevel3()
+    {
+        StringBuilder sb = new StringBuilder();
+        f.addSectionHeader(sb, "Basic Properties"); //$NON-NLS-1$
+        assertEquals("\n### Basic Properties\n\n", sb.toString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAddMainHeaderFormatsTypeAndName()
+    {
+        StringBuilder sb = new StringBuilder();
+        f.addMainHeader(sb, "Catalog", "Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("## Catalog: Products\n\n", sb.toString()); //$NON-NLS-1$
+    }
+
+    // ==================== formatFeatureName — camelCase splitting ====================
+
+    @Test
+    public void testFormatFeatureNameSplitsCamelCaseAndCapitalizes()
+    {
+        // "codeLength" -> "Code Length": the leading char is upper-cased and a space is
+        // inserted before every interior upper-case char.
+        assertEquals("Code Length", f.formatFeatureName("codeLength")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatFeatureNameSingleWordJustCapitalizes()
+    {
+        assertEquals("Name", f.formatFeatureName("name")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatFeatureNameNullAndEmptyArePassedThrough()
+    {
+        assertEquals("", f.formatFeatureName("")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(null, f.formatFeatureName(null));
+    }
+
+    // ==================== formatEObjectReference ====================
+
+    @Test
+    public void testFormatEObjectReferenceNullReturnsDash()
+    {
+        assertEquals("-", f.formatEObjectReference(null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatEObjectReferenceMdObjectAsTypeDotName()
+    {
+        // An MdObject reference renders as EClass.Name (e.g. "Catalog.Products").
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        cat.setName("Products"); //$NON-NLS-1$
+        assertEquals("Catalog.Products", f.formatEObjectReference(cat)); //$NON-NLS-1$
+    }
+
+    // ==================== formatDynamicValue — type dispatch ====================
+
+    @Test
+    public void testFormatDynamicValueNullReturnsDash()
+    {
+        assertEquals("-", f.formatDynamicValue(null, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueBoolean()
+    {
+        assertEquals("Yes", f.formatDynamicValue(Boolean.TRUE, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("No", f.formatDynamicValue(Boolean.FALSE, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueEnum()
+    {
+        // A raw Java enum is rendered via formatEnum (toString of the literal).
+        assertEquals("MONDAY", f.formatDynamicValue(java.time.DayOfWeek.MONDAY, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueTypeDescription()
+    {
+        // A TypeDescription value is delegated to formatType (single named type -> its name).
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        td.getTypes().add(newType("String")); //$NON-NLS-1$
+        assertEquals("String", f.formatDynamicValue(td, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueEMapPicksByLanguageCode()
+    {
+        // An EMap value (e.g. a synonym map) is resolved by language CODE, like getSynonym.
+        BasicEMap<String, String> syn = new BasicEMap<>();
+        syn.put("en", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+        syn.put("ru", "Tovary"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Goods", f.formatDynamicValue(syn, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Tovary", f.formatDynamicValue(syn, "ru")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueMdObjectReference()
+    {
+        // An MdObject value renders as a Type.Name reference.
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        cat.setName("Partners"); //$NON-NLS-1$
+        assertEquals("Catalog.Partners", f.formatDynamicValue(cat, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueEmptyCollectionReturnsDash()
+    {
+        assertEquals("-", f.formatDynamicValue(new ArrayList<>(), "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueSmallCollectionInlinedAsCommaList()
+    {
+        // A small (<= 5) collection of MdObjects is inlined as "Type.Name, Type.Name".
+        Catalog a = MdClassFactory.eINSTANCE.createCatalog();
+        a.setName("A"); //$NON-NLS-1$
+        Catalog b = MdClassFactory.eINSTANCE.createCatalog();
+        b.setName("B"); //$NON-NLS-1$
+        List<MdObject> list = new ArrayList<>();
+        list.add(a);
+        list.add(b);
+        assertEquals("Catalog.A, Catalog.B", f.formatDynamicValue(list, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueLargeCollectionShowsCountOnly()
+    {
+        // A collection larger than 5 is summarised as "[N items]" rather than inlined.
+        List<MdObject> list = new ArrayList<>();
+        for (int i = 0; i < 6; i++)
+        {
+            Catalog c = MdClassFactory.eINSTANCE.createCatalog();
+            c.setName("C" + i); //$NON-NLS-1$
+            list.add(c);
+        }
+        assertEquals("[6 items]", f.formatDynamicValue(list, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueStringFallsBackToToString()
+    {
+        // A plain non-EMF value falls through to toString().
+        assertEquals("plain", f.formatDynamicValue("plain", "en")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    // ==================== formatReferenceCollection ====================
+
+    @Test
+    public void testFormatReferenceCollectionMdObjectsRenderFqnTable()
+    {
+        // A collection of MdObjects renders a section header with the count and an FQN/Synonym table.
+        Catalog a = MdClassFactory.eINSTANCE.createCatalog();
+        a.setName("Products"); //$NON-NLS-1$
+        a.getSynonym().put("en", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+        Catalog b = MdClassFactory.eINSTANCE.createCatalog();
+        b.setName("Partners"); //$NON-NLS-1$
+        List<MdObject> list = new ArrayList<>();
+        list.add(a);
+        list.add(b);
+
+        StringBuilder sb = new StringBuilder();
+        f.formatReferenceCollection(sb, "content", list, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        String out = sb.toString();
+
+        assertTrue("header must carry the camelCased name and count, got:\n" + out, //$NON-NLS-1$
+            out.contains("### Content (2)")); //$NON-NLS-1$
+        assertTrue("the FQN/Synonym table header must be present", out.contains("| FQN | Synonym |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("first MdObject row shows its FQN and synonym", //$NON-NLS-1$
+            out.contains("| Catalog.Products | Goods |")); //$NON-NLS-1$
+        // The second catalog has no synonym -> its synonym cell is empty.
+        assertTrue("second MdObject row shows its FQN", out.contains("| Catalog.Partners |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatReferenceCollectionEMapEntriesRenderLanguageTable()
+    {
+        // A collection whose items are Map.Entry (an EMap like a synonym) renders a Language/Value table.
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        cat.getSynonym().put("en", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+        cat.getSynonym().put("ru", "Tovary"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        StringBuilder sb = new StringBuilder();
+        f.formatReferenceCollection(sb, "synonym", cat.getSynonym(), "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        String out = sb.toString();
+
+        assertTrue("header must show the EMap entry count, got:\n" + out, //$NON-NLS-1$
+            out.contains("### Synonym (2)")); //$NON-NLS-1$
+        assertTrue("the Language/Value table header must be present", out.contains("| Language | Value |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an en entry row must be present", out.contains("| en | Goods |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a ru entry row must be present", out.contains("| ru | Tovary |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== formatStandardAttributes ====================
+
+    @Test
+    public void testFormatStandardAttributesEmitsTableForPopulatedList()
+    {
+        // A Catalog (a BasicDbObject) exposes getStandardAttributes(); a populated entry must produce
+        // the StandardAttributes section with the attribute's name in a row.
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        StandardAttribute attr = MdClassFactory.eINSTANCE.createStandardAttribute();
+        attr.setName("Code"); //$NON-NLS-1$
+        attr.getSynonym().put("en", "Code"); //$NON-NLS-1$ //$NON-NLS-2$
+        cat.getStandardAttributes().add(attr);
+
+        StringBuilder sb = new StringBuilder();
+        f.formatStandardAttributes(sb, cat, "en"); //$NON-NLS-1$
+        String out = sb.toString();
+
+        assertTrue("a populated list must emit the StandardAttributes section, got:\n" + out, //$NON-NLS-1$
+            out.contains("### StandardAttributes")); //$NON-NLS-1$
+        assertTrue("the standard-attribute name must appear in a row", out.contains("| Code | Code |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatStandardAttributesEmptyListEmitsNothing()
+    {
+        // A Catalog with no standard attributes set must not emit the section at all.
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        StringBuilder sb = new StringBuilder();
+        f.formatStandardAttributes(sb, cat, "en"); //$NON-NLS-1$
+        assertEquals("", sb.toString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatStandardAttributesNoSuchMethodIsSilent()
+    {
+        // An object lacking getStandardAttributes() (a plain TypeDescription) is a no-op, not an error.
+        StringBuilder sb = new StringBuilder();
+        f.formatStandardAttributes(sb, McoreFactory.eINSTANCE.createTypeDescription(), "en"); //$NON-NLS-1$
+        assertEquals("", sb.toString()); //$NON-NLS-1$
+    }
+
+    // ==================== formatDynamicPropertiesSeparated ====================
+
+    @Test
+    public void testFormatDynamicPropertiesSeparatedRendersSetScalarsAsProperties()
+    {
+        // Only features that are actually eIsSet are rendered; a Catalog with name + comment set
+        // produces a Properties section carrying those scalar rows.
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        cat.setName("Products"); //$NON-NLS-1$
+        cat.setComment("A catalog"); //$NON-NLS-1$
+
+        StringBuilder sb = new StringBuilder();
+        f.formatDynamicPropertiesSeparated(sb, cat, "en"); //$NON-NLS-1$
+        String out = sb.toString();
+
+        assertTrue("a Properties section must be present, got:\n" + out, out.contains("### Properties")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the set name scalar must be rendered", out.contains("| Name | Products |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the set comment scalar must be rendered", out.contains("| Comment | A catalog |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== formatAllDynamicProperties ====================
+
+    @Test
+    public void testFormatAllDynamicPropertiesEmitsTitledTable()
+    {
+        // The reflection dump emits the given section title, a Property/Value table, and a row for a
+        // set scalar (Name). Containment children (attributes) are NOT dumped here.
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        cat.setName("Products"); //$NON-NLS-1$
+
+        StringBuilder sb = new StringBuilder();
+        f.formatAllDynamicProperties(sb, cat, "en", "All Properties"); //$NON-NLS-1$ //$NON-NLS-2$
+        String out = sb.toString();
+
+        assertTrue("the section title must be emitted, got:\n" + out, out.contains("### All Properties")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a Property/Value table must be opened", out.contains("| Property | Value |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the set Name scalar must appear", out.contains("| Name | Products |")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static int countChar(String s, char c)
