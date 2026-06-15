@@ -605,23 +605,15 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         // --- 3. Fail-fast runtime probe (BEFORE the Job, so "no runtime" fails instantly) ---
-        final String versionMask = platform != null ? platform : ""; //$NON-NLS-1$
+        final String versionMask = orEmpty(platform);
         boolean hasRuntime = ssHasRuntime(serverService, versionMask);
         if (!hasRuntime)
         {
-            return ToolResult.error("No standalone-server runtime registered" //$NON-NLS-1$
-                + (platform != null && !platform.isEmpty() ? " for version '" + platform + "'" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + ". Install a 1C platform >= 8.3.23 with the standalone server (ibsrv/ibcmd) and " //$NON-NLS-1$
-                + "register it in EDT (Window -> Preferences -> 1C:Enterprise -> Installed " //$NON-NLS-1$
-                + "Installations), or pass a matching platform=...").toJson(); //$NON-NLS-1$
+            return ToolResult.error(noRuntimeError(platform)).toJson();
         }
 
         // --- 4. Auto-generate the infobase name from the directory if omitted ---
-        if (infobaseName == null || infobaseName.isEmpty())
-        {
-            Path fileName = infobaseDir.getFileName();
-            infobaseName = fileName != null ? fileName.toString() : projectName;
-        }
+        infobaseName = effectiveStandaloneInfobaseName(infobaseName, infobaseDir, projectName);
 
         // --- 5. Build the FILE infobase reference for the new IB ---
         InfobaseReference ibRef =
@@ -710,8 +702,8 @@ public class CreateInfobaseTool implements IMcpTool
                 .toJson();
         }
 
-        Pair<?, ?> pair = (jobResult.get() instanceof Pair) ? (Pair<?, ?>)jobResult.get() : null;
-        if (pair == null || pair.getSecond() == null)
+        Pair<?, ?> pair = asPair(jobResult.get());
+        if (!hasInfobaseHandle(pair))
         {
             return ToolResult.error("Standalone-server creation returned no infobase handle.").toJson(); //$NON-NLS-1$
         }
@@ -725,14 +717,14 @@ public class CreateInfobaseTool implements IMcpTool
         // requested name; reading the actual value future-proofs the read-back / applicationId / reported
         // name against any platform that de-duplicates a colliding name. Falls back to the requested name.
         String actualName = ssGetInfobaseName(pair.getSecond());
-        String effectiveName = (actualName != null && !actualName.isEmpty()) ? actualName : infobaseName;
+        String effectiveName = firstNonEmpty(actualName, infobaseName);
 
         // --- 8. Resolve the web URL (best-effort; ssGetInfobaseUrl returns null on any failure) ---
         // The ACTUAL port is read back from the resolved URL (EDT auto-allocates it), not the hint we
         // passed in. When the URL cannot be resolved we report no port rather than echoing a fiction.
         URI url = ssGetInfobaseUrl(finalService, pair.getSecond());
-        String webUrl = (url != null) ? url.toString() : null;
-        int actualPort = (url != null) ? url.getPort() : -1;
+        String webUrl = urlToString(url);
+        int actualPort = urlToPort(url);
 
         // --- 9. Read back applications and return ---
         return buildStandaloneServerResult(projectName, infobaseDir, effectiveName, actualPort,
@@ -1014,6 +1006,117 @@ public class CreateInfobaseTool implements IMcpTool
         }
         String fromProject = projectName != null ? projectName.replaceAll("[^A-Za-z0-9]", "") : ""; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         return fromProject.isEmpty() ? KIND_INFOBASE : fromProject;
+    }
+
+    /**
+     * Builds the "no standalone-server runtime registered" error message. Behaviour-identical to the
+     * former inline string concatenation, including the optional {@code for version '...'} fragment.
+     *
+     * @param platform the requested platform version mask (may be {@code null}/empty)
+     * @return the error message
+     */
+    /**
+     * Returns the given string, or the empty string when it is {@code null}. Behaviour-identical to the
+     * former inline {@code platform != null ? platform : ""}.
+     *
+     * @param value the value (may be {@code null})
+     * @return {@code value}, or {@code ""} when {@code null}
+     */
+    private static String orEmpty(String value)
+    {
+        return value != null ? value : ""; //$NON-NLS-1$
+    }
+
+    private static String noRuntimeError(String platform)
+    {
+        return "No standalone-server runtime registered" //$NON-NLS-1$
+            + (platform != null && !platform.isEmpty() ? " for version '" + platform + "'" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + ". Install a 1C platform >= 8.3.23 with the standalone server (ibsrv/ibcmd) and " //$NON-NLS-1$
+            + "register it in EDT (Window -> Preferences -> 1C:Enterprise -> Installed " //$NON-NLS-1$
+            + "Installations), or pass a matching platform=..."; //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves the effective infobase name when the caller omitted it: derives it from the infobase
+     * directory's file name, falling back to the project name. Behaviour-identical to the former inline
+     * {@code if (infobaseName == null || infobaseName.isEmpty()) { ... }} block — returns the original
+     * name unchanged when it is non-empty.
+     *
+     * @param infobaseName the requested infobase name (may be {@code null}/empty)
+     * @param infobaseDir the infobase directory
+     * @param projectName the project name (final fallback)
+     * @return the effective infobase name
+     */
+    private static String effectiveStandaloneInfobaseName(String infobaseName, Path infobaseDir,
+            String projectName)
+    {
+        if (infobaseName == null || infobaseName.isEmpty())
+        {
+            Path fileName = infobaseDir.getFileName();
+            return fileName != null ? fileName.toString() : projectName;
+        }
+        return infobaseName;
+    }
+
+    /**
+     * Casts the create-job result to a {@link Pair} when it is one, else {@code null}. Behaviour-identical
+     * to the former inline {@code (result instanceof Pair) ? (Pair<?, ?>)result : null}.
+     *
+     * @param result the value read back from the create job
+     * @return the result as a {@link Pair}, or {@code null}
+     */
+    private static Pair<?, ?> asPair(Object result)
+    {
+        return (result instanceof Pair) ? (Pair<?, ?>)result : null;
+    }
+
+    /**
+     * Tells whether the create-job pair carries a usable infobase handle. Behaviour-identical to the
+     * former inline {@code !(pair == null || pair.getSecond() == null)} guard.
+     *
+     * @param pair the create-job result pair (may be {@code null})
+     * @return {@code true} when the pair and its second element are both non-{@code null}
+     */
+    private static boolean hasInfobaseHandle(Pair<?, ?> pair)
+    {
+        return pair != null && pair.getSecond() != null;
+    }
+
+    /**
+     * Returns the first argument when it is non-empty, else the second. Behaviour-identical to the former
+     * inline {@code (actualName != null && !actualName.isEmpty()) ? actualName : infobaseName}.
+     *
+     * @param preferred the preferred value (used when non-{@code null}/non-empty)
+     * @param fallback the fallback value
+     * @return {@code preferred} when non-empty, else {@code fallback}
+     */
+    private static String firstNonEmpty(String preferred, String fallback)
+    {
+        return (preferred != null && !preferred.isEmpty()) ? preferred : fallback;
+    }
+
+    /**
+     * The URL as a string, or {@code null} when the URL is {@code null}. Behaviour-identical to the former
+     * inline {@code (url != null) ? url.toString() : null}.
+     *
+     * @param url the resolved web URL (may be {@code null})
+     * @return the string form, or {@code null}
+     */
+    private static String urlToString(URI url)
+    {
+        return (url != null) ? url.toString() : null;
+    }
+
+    /**
+     * The URL's port, or {@code -1} when the URL is {@code null}. Behaviour-identical to the former inline
+     * {@code (url != null) ? url.getPort() : -1}.
+     *
+     * @param url the resolved web URL (may be {@code null})
+     * @return the port, or {@code -1}
+     */
+    private static int urlToPort(URI url)
+    {
+        return (url != null) ? url.getPort() : -1;
     }
 
     /**

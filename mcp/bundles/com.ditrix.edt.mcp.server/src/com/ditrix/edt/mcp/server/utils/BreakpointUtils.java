@@ -149,11 +149,48 @@ public final class BreakpointUtils
 
         IBreakpointManager bpManager = DebugPlugin.getDefault().getBreakpointManager();
 
-        // Strategy 1: load EDT-specific BslLineBreakpoint via the owning bundle's
-        // class loader. The class lives in an `internal.*` package that OSGi will
-        // not export through Import-Package, so a plain Class.forName() from this
-        // bundle would fail with ClassNotFoundException — but Bundle.loadClass()
-        // bypasses the export restriction and returns the class directly.
+        // Strategy 1: load EDT-specific BslLineBreakpoint via the owning bundle's class loader.
+        IBreakpoint edtBreakpoint = tryCreateEdtBreakpoint(file, lineNumber, bpManager);
+        if (edtBreakpoint != null)
+        {
+            return edtBreakpoint;
+        }
+
+        // Strategy 2: create marker of EDT type and wrap as generic ILineBreakpoint via DebugPlugin
+        IBreakpoint markerBreakpoint = tryCreateMarkerBreakpoint(file, lineNumber, bpManager);
+        if (markerBreakpoint != null)
+        {
+            return markerBreakpoint;
+        }
+
+        // Strategy 3: generic Eclipse line marker (least useful, but compiles & runs)
+        IMarker marker = file.createMarker(GENERIC_LINE_MARKER);
+        Map<String, Object> attrs = new HashMap<>();
+        attrs.put(IMarker.LINE_NUMBER, Integer.valueOf(lineNumber));
+        attrs.put(IBreakpoint.ENABLED, Boolean.TRUE);
+        marker.setAttributes(attrs);
+        MarkerOnlyBreakpoint fallback = new MarkerOnlyBreakpoint(marker);
+        bpManager.addBreakpoint(fallback);
+        fallback.registered = true;
+        return fallback;
+    }
+
+    /**
+     * Strategy 1: loads the EDT-specific {@code BslLineBreakpoint} via the owning bundle's class loader
+     * and instantiates it. The class lives in an {@code internal.*} package that OSGi will not export
+     * through Import-Package, so a plain {@code Class.forName()} from this bundle would fail with
+     * {@code ClassNotFoundException} — but {@code Bundle.loadClass()} bypasses the export restriction and
+     * returns the class directly. Registers the created breakpoint with the manager (EDT's constructor
+     * creates the marker but does not register). Behaviour-identical to the former inline Strategy 1.
+     *
+     * @param file the resource the breakpoint is on
+     * @param lineNumber the 1-based line number
+     * @param bpManager the breakpoint manager to register with
+     * @return the created EDT breakpoint, or {@code null} when the bundle/class is unavailable
+     */
+    private static IBreakpoint tryCreateEdtBreakpoint(IFile file, int lineNumber,
+            IBreakpointManager bpManager)
+    {
         Bundle debugCoreBundle = Platform.getBundle(BSL_DEBUG_CORE_BUNDLE);
         if (debugCoreBundle != null)
         {
@@ -191,8 +228,24 @@ public final class BreakpointUtils
             Activator.logError("Bundle " + BSL_DEBUG_CORE_BUNDLE //$NON-NLS-1$
                     + " not found — falling back to marker", new IllegalStateException("bundle missing")); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        return null;
+    }
 
-        // Strategy 2: create marker of EDT type and wrap as generic ILineBreakpoint via DebugPlugin
+    /**
+     * Strategy 2: creates a marker of an EDT breakpoint type and wraps it as a generic breakpoint via the
+     * {@link DebugPlugin}. When EDT is loaded it picks the marker up via its lifecycle listener; otherwise
+     * the marker is kept and reported as a degraded {@link MarkerOnlyBreakpoint}. Behaviour-identical to
+     * the former inline Strategy 2: returns on the first marker type that does not throw, falling through
+     * (returning {@code null}) only when every marker type fails.
+     *
+     * @param file the resource the breakpoint is on
+     * @param lineNumber the 1-based line number
+     * @param bpManager the breakpoint manager to register with
+     * @return the created/looked-up breakpoint, or {@code null} when every marker type throws
+     */
+    private static IBreakpoint tryCreateMarkerBreakpoint(IFile file, int lineNumber,
+            IBreakpointManager bpManager)
+    {
         for (String markerType : BSL_MARKER_TYPES)
         {
             try
@@ -221,17 +274,7 @@ public final class BreakpointUtils
                 // try next marker type
             }
         }
-
-        // Strategy 3: generic Eclipse line marker (least useful, but compiles & runs)
-        IMarker marker = file.createMarker(GENERIC_LINE_MARKER);
-        Map<String, Object> attrs = new HashMap<>();
-        attrs.put(IMarker.LINE_NUMBER, Integer.valueOf(lineNumber));
-        attrs.put(IBreakpoint.ENABLED, Boolean.TRUE);
-        marker.setAttributes(attrs);
-        MarkerOnlyBreakpoint fallback = new MarkerOnlyBreakpoint(marker);
-        bpManager.addBreakpoint(fallback);
-        fallback.registered = true;
-        return fallback;
+        return null;
     }
 
     /**

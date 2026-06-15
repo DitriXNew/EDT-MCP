@@ -74,27 +74,11 @@ public class RemoveFromGroupHandler extends AbstractHandler {
         }
         
         IGroupService service = Activator.getGroupServiceStatic();
-        
+
         // Collect selected objects that are in groups
         List<ObjectInGroup> objectsToRemove = new ArrayList<>();
-        IProject project = null;
-        
-        for (Object element : structuredSelection.toList()) {
-            if (element instanceof EObject eObject) {
-                IProject objProject = TagUtils.extractProject(eObject);
-                String fqn = TagUtils.extractFqn(eObject);
-                if (objProject != null && fqn != null) {
-                    Group group = service.findGroupForObject(objProject, fqn);
-                    if (group != null) {
-                        objectsToRemove.add(new ObjectInGroup(objProject, fqn));
-                        if (project == null) {
-                            project = objProject;
-                        }
-                    }
-                }
-            }
-        }
-        
+        IProject project = collectObjectsInGroups(structuredSelection, service, objectsToRemove);
+
         if (objectsToRemove.isEmpty() || project == null) {
             return null;
         }
@@ -126,7 +110,44 @@ public class RemoveFromGroupHandler extends AbstractHandler {
             }
         }
         
-        // Show result
+        showRemovalResult(shell, successCount, failCount);
+
+        return null;
+    }
+
+    /**
+     * Collects, from the current selection, every {@link EObject} that resolves to a project +
+     * FQN and is currently in a group; each match is appended to {@code objectsToRemove}. Returns
+     * the project of the first such match (the original location to report against), or
+     * {@code null} when no selected object is in a group.
+     */
+    private IProject collectObjectsInGroups(IStructuredSelection structuredSelection,
+            IGroupService service, List<ObjectInGroup> objectsToRemove) {
+        IProject project = null;
+        for (Object element : structuredSelection.toList()) {
+            if (element instanceof EObject eObject) {
+                IProject objProject = TagUtils.extractProject(eObject);
+                String fqn = TagUtils.extractFqn(eObject);
+                if (objProject != null && fqn != null) {
+                    Group group = service.findGroupForObject(objProject, fqn);
+                    if (group != null) {
+                        objectsToRemove.add(new ObjectInGroup(objProject, fqn));
+                        if (project == null) {
+                            project = objProject;
+                        }
+                    }
+                }
+            }
+        }
+        return project;
+    }
+
+    /**
+     * Shows the post-removal feedback dialog: an information dialog on a fully successful run, a
+     * warning dialog when at least one removal failed, and nothing when nothing succeeded and
+     * nothing failed (mirrors the original inline behaviour exactly).
+     */
+    private void showRemovalResult(Shell shell, int successCount, int failCount) {
         if (successCount > 0 && failCount == 0) {
             MessageDialog.openInformation(shell, REMOVE_FROM_GROUP,
                 "Removed " + successCount + " object(s) from their groups.");
@@ -134,8 +155,6 @@ public class RemoveFromGroupHandler extends AbstractHandler {
             MessageDialog.openWarning(shell, REMOVE_FROM_GROUP,
                 "Removed " + successCount + " object(s), failed to remove " + failCount + " object(s).");
         }
-        
-        return null;
     }
     
     /**

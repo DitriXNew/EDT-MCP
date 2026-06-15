@@ -200,86 +200,25 @@ public class RevalidateObjectsTool implements IMcpTool
             IProgressMonitor monitor) throws CoreException
     {
         String projectName = project.getName();
-        
-        // Get services from Activator
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        ICheckScheduler checkScheduler = Activator.getDefault().getCheckScheduler();
-        
-        if (bmModelManager == null)
-        {
-            return ToolResult.error("IBmModelManager service is not available").toJson(); //$NON-NLS-1$
-        }
-        
-        if (checkScheduler == null)
-        {
-            return ToolResult.error("ICheckScheduler service is not available").toJson(); //$NON-NLS-1$
-        }
-        
-        // Get DtProject
-        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-        IDtProject dtProject = dtProjectManager != null ? dtProjectManager.getDtProject(project) : null;
-        
-        if (dtProject == null)
-        {
-            return ToolResult.error("Not an EDT project: " + projectName).toJson(); //$NON-NLS-1$
-        }
-        
-        // Get BM model
-        IBmModel bmModel = bmModelManager.getModel(dtProject);
-        if (bmModel == null)
-        {
-            return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
-        }
-        
-        // Find objects by FQN using executeReadonlyTask
-        List<String> found = new ArrayList<>();
-        List<String> notFound = new ArrayList<>();
-        List<String> skippedNullUri = new ArrayList<>();
-        Collection<Object> objectsToValidate = new ArrayList<>();
-        
-        // Normalize FQNs to English singular form (supports Russian type names),
-        // but keep the original user input for result reporting
-        List<String> originalFqns = new ArrayList<>(objectFqns);
-        List<String> normalizedFqns = new ArrayList<>();
-        for (String fqn : objectFqns)
-        {
-            normalizedFqns.add(MetadataTypeUtils.normalizeFqn(fqn));
-        }
 
-        BmTransactions.<Void>read(bmModel, "RevalidateObjectsLookup", (tx, pm) -> //$NON-NLS-1$
+        // Resolve the required services / BM model (read-only: returns an error payload
+        // when a service or the model is unavailable). No validation is scheduled here.
+        RevalidateServices services = resolveServices(project, projectName);
+        if (services.error != null)
         {
-            for (int i = 0; i < normalizedFqns.size(); i++)
-            {
-                String normalizedFqn = normalizedFqns.get(i);
-                String originalFqn = originalFqns.get(i);
+            return services.error;
+        }
+        ICheckScheduler checkScheduler = services.checkScheduler;
+        IBmModel bmModel = services.bmModel;
 
-                IBmObject obj = tx.getTopObjectByFqn(normalizedFqn);
-                if (obj != null)
-                {
-                    // Use bmGetId() - returns Long which is accepted by scheduleValidation
-                    long bmId = obj.bmGetId();
-                    if (bmId > 0)
-                    {
-                        Activator.logInfo("Found object: " + originalFqn + " -> bmId: " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
-                        objectsToValidate.add(Long.valueOf(bmId));
-                        found.add(originalFqn);
-                    }
-                    else
-                    {
-                        // Object found but has invalid ID (transient object)
-                        Activator.logInfo("Object has invalid bmId: " + originalFqn + " -> " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
-                        skippedNullUri.add(originalFqn);
-                    }
-                }
-                else
-                {
-                    Activator.logInfo("Object not found: " + originalFqn + " (normalized: " + normalizedFqn + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    notFound.add(originalFqn);
-                }
-            }
-            return null;
-        });
-        
+        // Find objects by FQN (read-only lookup): classifies each requested FQN into
+        // found / not-found / skipped buckets and collects the bmIds to validate.
+        ObjectLookupResult lookup = lookupObjectsToValidate(bmModel, objectFqns);
+        List<String> found = lookup.found;
+        List<String> notFound = lookup.notFound;
+        List<String> skippedNullUri = lookup.skippedNullUri;
+        Collection<Object> objectsToValidate = lookup.objectsToValidate;
+
         // Schedule validation if we found objects
         if (!objectsToValidate.isEmpty())
         {
@@ -329,6 +268,141 @@ public class RevalidateObjectsTool implements IMcpTool
         appendFqnSection(body, "Skipped (no persistent id)", skippedNullUri); //$NON-NLS-1$
 
         return fm.wrapContent(body.toString());
+    }
+
+    /**
+     * Resolves the services and BM model needed to schedule validation (read-only). On
+     * any unavailable service / model the returned holder carries an {@code error} JSON
+     * payload that the caller should return as-is; no validation is scheduled here.
+     *
+     * @param project the project to work with
+     * @param projectName the project name (used only for error messages)
+     * @return a {@link RevalidateServices} holder with the model + scheduler, or an error
+     */
+    private static RevalidateServices resolveServices(IProject project, String projectName)
+    {
+        RevalidateServices services = new RevalidateServices();
+
+        // Get services from Activator
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        ICheckScheduler checkScheduler = Activator.getDefault().getCheckScheduler();
+
+        if (bmModelManager == null)
+        {
+            services.error = ToolResult.error("IBmModelManager service is not available").toJson(); //$NON-NLS-1$
+            return services;
+        }
+
+        if (checkScheduler == null)
+        {
+            services.error = ToolResult.error("ICheckScheduler service is not available").toJson(); //$NON-NLS-1$
+            return services;
+        }
+
+        // Get DtProject
+        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
+        IDtProject dtProject = dtProjectManager != null ? dtProjectManager.getDtProject(project) : null;
+
+        if (dtProject == null)
+        {
+            services.error = ToolResult.error("Not an EDT project: " + projectName).toJson(); //$NON-NLS-1$
+            return services;
+        }
+
+        // Get BM model
+        IBmModel bmModel = bmModelManager.getModel(dtProject);
+        if (bmModel == null)
+        {
+            services.error = ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
+            return services;
+        }
+
+        services.checkScheduler = checkScheduler;
+        services.bmModel = bmModel;
+        return services;
+    }
+
+    /**
+     * Finds the requested objects by FQN inside a read-only BM transaction and classifies
+     * each into found / not-found / skipped (transient id) buckets, collecting the bmIds to
+     * validate. Read-only: looks objects up and logs, but schedules nothing.
+     *
+     * @param bmModel the BM model to query
+     * @param objectFqns the user-supplied FQNs (normalized to English singular for lookup,
+     *     reported back in their original form)
+     * @return an {@link ObjectLookupResult} with the per-bucket FQN lists and the bmIds
+     */
+    private static ObjectLookupResult lookupObjectsToValidate(IBmModel bmModel, List<String> objectFqns)
+    {
+        ObjectLookupResult result = new ObjectLookupResult();
+
+        // Normalize FQNs to English singular form (supports Russian type names),
+        // but keep the original user input for result reporting
+        List<String> originalFqns = new ArrayList<>(objectFqns);
+        List<String> normalizedFqns = new ArrayList<>();
+        for (String fqn : objectFqns)
+        {
+            normalizedFqns.add(MetadataTypeUtils.normalizeFqn(fqn));
+        }
+
+        BmTransactions.<Void>read(bmModel, "RevalidateObjectsLookup", (tx, pm) -> //$NON-NLS-1$
+        {
+            for (int i = 0; i < normalizedFqns.size(); i++)
+            {
+                String normalizedFqn = normalizedFqns.get(i);
+                String originalFqn = originalFqns.get(i);
+
+                IBmObject obj = tx.getTopObjectByFqn(normalizedFqn);
+                if (obj != null)
+                {
+                    // Use bmGetId() - returns Long which is accepted by scheduleValidation
+                    long bmId = obj.bmGetId();
+                    if (bmId > 0)
+                    {
+                        Activator.logInfo("Found object: " + originalFqn + " -> bmId: " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
+                        result.objectsToValidate.add(Long.valueOf(bmId));
+                        result.found.add(originalFqn);
+                    }
+                    else
+                    {
+                        // Object found but has invalid ID (transient object)
+                        Activator.logInfo("Object has invalid bmId: " + originalFqn + " -> " + bmId); //$NON-NLS-1$ //$NON-NLS-2$
+                        result.skippedNullUri.add(originalFqn);
+                    }
+                }
+                else
+                {
+                    Activator.logInfo("Object not found: " + originalFqn + " (normalized: " + normalizedFqn + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    result.notFound.add(originalFqn);
+                }
+            }
+            return null;
+        });
+
+        return result;
+    }
+
+    /**
+     * Holder for {@link #resolveServices}: the resolved scheduler + BM model, or an
+     * {@code error} JSON payload the caller returns as-is.
+     */
+    private static class RevalidateServices
+    {
+        ICheckScheduler checkScheduler;
+        IBmModel bmModel;
+        String error;
+    }
+
+    /**
+     * Holder for {@link #lookupObjectsToValidate}: the per-bucket FQN lists and the bmIds
+     * collected for scheduling.
+     */
+    private static class ObjectLookupResult
+    {
+        final List<String> found = new ArrayList<>();
+        final List<String> notFound = new ArrayList<>();
+        final List<String> skippedNullUri = new ArrayList<>();
+        final Collection<Object> objectsToValidate = new ArrayList<>();
     }
 
     /**

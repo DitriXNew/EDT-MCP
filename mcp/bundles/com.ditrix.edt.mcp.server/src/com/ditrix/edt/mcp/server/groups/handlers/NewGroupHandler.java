@@ -107,24 +107,8 @@ public class NewGroupHandler extends AbstractHandler {
         final IProject finalProject = project;
         final String finalParentPath = parentPath;
         
-        EditGroupDialog dialog = new EditGroupDialog(shell, name -> {
-            if (name == null || name.trim().isEmpty()) {
-                return "Group name cannot be empty";
-            }
-            String trimmed = name.trim();
-            if (trimmed.contains("/") || trimmed.contains("\\")) {
-                return "Group name cannot contain path separators";
-            }
-            // Check for existing group with same name
-            IGroupService service = Activator.getGroupServiceStatic();
-            String fullPath = finalParentPath.isEmpty() 
-                ? trimmed 
-                : finalParentPath + "/" + trimmed;
-            if (service.getGroupStorage(finalProject).getGroupByFullPath(fullPath) != null) {
-                return "A group with this name already exists";
-            }
-            return null;
-        });
+        EditGroupDialog dialog = new EditGroupDialog(shell,
+            name -> validateGroupName(name, finalProject, finalParentPath));
         
         if (dialog.open() == Window.OK) {
             String groupName = dialog.getGroupName();
@@ -149,7 +133,37 @@ public class NewGroupHandler extends AbstractHandler {
         
         return null;
     }
-    
+
+    /**
+     * Validates a proposed group name for the {@link EditGroupDialog}. Returns an
+     * error message to display, or {@code null} when the name is acceptable: it must
+     * be non-blank, contain no path separators, and not collide with an existing
+     * group at the same parent path. Performs no mutations.
+     *
+     * @param name the candidate name entered in the dialog
+     * @param project the project the group would be created in
+     * @param parentPath the collection path the group would live under
+     * @return the validation error message, or {@code null} if the name is valid
+     */
+    private String validateGroupName(String name, IProject project, String parentPath) {
+        if (name == null || name.trim().isEmpty()) {
+            return "Group name cannot be empty";
+        }
+        String trimmed = name.trim();
+        if (trimmed.contains("/") || trimmed.contains("\\")) {
+            return "Group name cannot contain path separators";
+        }
+        // Check for existing group with same name
+        IGroupService service = Activator.getGroupServiceStatic();
+        String fullPath = parentPath.isEmpty()
+            ? trimmed
+            : parentPath + "/" + trimmed;
+        if (service.getGroupStorage(project).getGroupByFullPath(fullPath) != null) {
+            return "A group with this name already exists";
+        }
+        return null;
+    }
+
     /**
      * Checks if the element is a collection adapter.
      */

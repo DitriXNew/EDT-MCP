@@ -347,24 +347,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (FormElementWriter.isHandlerToken(ref.kindToken) || ref.isItemLevel())
         {
             String procName = handlerProcedureValue(properties);
-            if (procName != null)
+            String rebindErr = validateHandlerRebind(properties, procName);
+            if (rebindErr != null)
             {
-                // A handler rebind is structural and must not be mixed with other property changes in
-                // one call - the same policy the move ('parent'/'position') and button-command
-                // ('command') branches enforce. Reject BEFORE any mutation.
-                String mixed = firstNonHandlerRebindProperty(properties);
-                if (mixed != null)
-                {
-                    return ToolResult.error("Rebinding a handler's procedure ('procedure') cannot be " //$NON-NLS-1$
-                        + "combined with other property changes ('" + mixed + "') in one call. Rebind " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "the procedure first, then make the other changes in a separate call.").toJson(); //$NON-NLS-1$
-                }
-                return rebindFormHandler(ctx, normFqn, ref, procName);
+                return rebindErr;
             }
-            return ToolResult.error("On a form event-handler FQN, modify_metadata can only REBIND the " //$NON-NLS-1$
-                + "bound procedure - pass a 'procedure' property (e.g. {name:'procedure', " //$NON-NLS-1$
-                + "value:'NewProc'}). To bind a new event use create_metadata, to remove it " //$NON-NLS-1$
-                + "delete_metadata.").toJson(); //$NON-NLS-1$
+            return rebindFormHandler(ctx, normFqn, ref, procName);
         }
 
         // A button's command targets a FormCommand (a form-model object, not an mdclass object), so it
@@ -415,21 +403,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
                             + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
                     }
-                    List<PreparedChange> changes = new ArrayList<>();
-                    for (JsonObject prop : properties)
-                    {
-                        String guard = guardFormProperty(prop);
-                        if (guard != null)
-                        {
-                            throw new FormValidationException(guard);
-                        }
-                        String pErr = prepare(config, version, member,
-                            normalizeFormProperty(member, prop), changes, normReport);
-                        if (pErr != null)
-                        {
-                            throw new FormValidationException(pErr);
-                        }
-                    }
+                    List<PreparedChange> changes =
+                        prepareFormMemberChanges(config, version, member, properties, normReport);
                     for (PreparedChange change : changes)
                     {
                         change.applyTo(member, tx);
@@ -459,6 +434,66 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return result
             .put(McpKeys.MESSAGE, "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .toJson();
+    }
+
+    /**
+     * Validates a handler-rebind request on a handler / item-level FQN. A handler FQN supports only
+     * REBINDING its BSL procedure, and that rebind is structural so it must not be mixed with other
+     * property changes. Returns a JSON error to refuse the call - when no {@code procedure} value was
+     * supplied ({@code procName == null}), or when the rebind is mixed with another property change -
+     * or {@code null} when the rebind is valid and the caller may proceed to {@link #rebindFormHandler}.
+     * Pure (no model mutation): reads only the supplied property list.
+     */
+    private static String validateHandlerRebind(List<JsonObject> properties, String procName)
+    {
+        if (procName != null)
+        {
+            // A handler rebind is structural and must not be mixed with other property changes in
+            // one call - the same policy the move ('parent'/'position') and button-command
+            // ('command') branches enforce. Reject BEFORE any mutation.
+            String mixed = firstNonHandlerRebindProperty(properties);
+            if (mixed != null)
+            {
+                return ToolResult.error("Rebinding a handler's procedure ('procedure') cannot be " //$NON-NLS-1$
+                    + "combined with other property changes ('" + mixed + "') in one call. Rebind " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "the procedure first, then make the other changes in a separate call.").toJson(); //$NON-NLS-1$
+            }
+            return null;
+        }
+        return ToolResult.error("On a form event-handler FQN, modify_metadata can only REBIND the " //$NON-NLS-1$
+            + "bound procedure - pass a 'procedure' property (e.g. {name:'procedure', " //$NON-NLS-1$
+            + "value:'NewProc'}). To bind a new event use create_metadata, to remove it " //$NON-NLS-1$
+            + "delete_metadata.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Validates every property of a form-member modify against the introspected schema and builds the
+     * ordered list of {@link PreparedChange}s to apply. Runs inside the BM write transaction (called
+     * from the {@code writeEditableForm} callback) but performs NO model mutation itself - it only
+     * reads {@code member}'s schema and constructs the changes; a structural-property guard or an
+     * invalid value throws {@link FormValidationException} BEFORE any {@code eSet}, exactly as the
+     * inline loop did, so the transaction rolls back with no partial mutation. The returned changes are
+     * applied by the caller.
+     */
+    private List<PreparedChange> prepareFormMemberChanges(Configuration config, Version version,
+        EObject member, List<JsonObject> properties, MdNameNormalizer.Report normReport)
+    {
+        List<PreparedChange> changes = new ArrayList<>();
+        for (JsonObject prop : properties)
+        {
+            String guard = guardFormProperty(prop);
+            if (guard != null)
+            {
+                throw new FormValidationException(guard);
+            }
+            String pErr = prepare(config, version, member,
+                normalizeFormProperty(member, prop), changes, normReport);
+            if (pErr != null)
+            {
+                throw new FormValidationException(pErr);
+            }
+        }
+        return changes;
     }
 
     /**

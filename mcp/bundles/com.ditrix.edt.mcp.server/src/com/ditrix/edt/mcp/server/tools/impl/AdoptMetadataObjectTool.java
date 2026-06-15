@@ -132,23 +132,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         // Resolve the source: a top object or a member (attribute/tabular section/...) via the shared
         // resolver; a FORM object via the form resolver (forms are a separate getForms() collection,
         // not in the mdclass child-token tree, so resolveExisting does not see them).
-        EObject source;
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(ctx.config, normFqn);
-        if (node != null && node.object != null)
+        EObject source = resolveAdoptionSource(ctx.config, normFqn);
+        if (source == null)
         {
-            source = node.object;
-        }
-        else
-        {
-            MdObject form = resolveFormObject(ctx.config, normFqn);
-            if (form == null)
-            {
-                return ToolResult.error("Object not found: " + normFqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Check the FQN: 'Type.Name' for a top object (e.g. 'Catalog.Products'), " //$NON-NLS-1$
-                    + "'Type.Name.Kind.Name' for a member (e.g. 'Catalog.Products.Attribute.Weight'), " //$NON-NLS-1$
-                    + "'Type.Name.Form.FormName' for a form (e.g. 'Catalog.Products.Form.ItemForm').").toJson(); //$NON-NLS-1$
-            }
-            source = form;
+            return ToolResult.error("Object not found: " + normFqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Check the FQN: 'Type.Name' for a top object (e.g. 'Catalog.Products'), " //$NON-NLS-1$
+                + "'Type.Name.Kind.Name' for a member (e.g. 'Catalog.Products.Attribute.Weight'), " //$NON-NLS-1$
+                + "'Type.Name.Form.FormName' for a form (e.g. 'Catalog.Products.Form.ItemForm').").toJson(); //$NON-NLS-1$
         }
 
         // Resolve the target extension: the configuration extensions whose parent is this config project.
@@ -162,7 +152,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             .collect(Collectors.toList());
 
         IExtensionProject target;
-        if (extensionProjectName != null && !extensionProjectName.isEmpty())
+        if (isNonEmpty(extensionProjectName))
         {
             target = candidates.stream()
                 .filter(c -> extensionProjectName.equals(c.getProject().getName()))
@@ -229,6 +219,50 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         // Configuration.mdo registration (the parent collection changed), mirroring create_metadata.
         // bmGetTopObject()/its bmGetFqn() are safe identity reads on the object the platform returned.
         String adoptedFqn = normFqn;
+        List<String> dirty = collectDirtyFqns(adopted, target);
+        boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(target.getProject(), dirty);
+
+        return ToolResult.success()
+            .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
+            .put("fqn", adoptedFqn) //$NON-NLS-1$
+            .put(KEY_EXTENSION_PROJECT, extName)
+            .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted)
+            .toJson();
+    }
+
+    /**
+     * Resolves the source object to adopt: a top object or a member via the shared
+     * {@link MetadataNodeResolver}, falling back to a FORM object via {@link #resolveFormObject}. A
+     * read-only resolution; returns {@code null} when the FQN addresses nothing. Behaviour-identical to
+     * the former inline node/form resolution that set the {@code source} local.
+     *
+     * @param config the configuration to resolve against
+     * @param normFqn the normalized FQN
+     * @return the resolved source object, or {@code null} when not found
+     */
+    private static EObject resolveAdoptionSource(Configuration config, String normFqn)
+    {
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
+        if (node != null && node.object != null)
+        {
+            return node.object;
+        }
+        return resolveFormObject(config, normFqn);
+    }
+
+    /**
+     * Collects the FQNs of the objects whose {@code .mdo} must be re-exported after an adoption: the
+     * adopted object's TOP object (when it is a {@link IBmObject}) and the extension
+     * {@code Configuration} (whose child collection changed). A read-only computation — the actual
+     * disk export is done by the caller. Behaviour-identical to the former inline dirty-list building.
+     *
+     * @param adopted the object returned by the adopter
+     * @param target the target extension project
+     * @return the (possibly empty) list of dirty FQNs, in the original order
+     */
+    private static List<String> collectDirtyFqns(EObject adopted, IExtensionProject target)
+    {
         List<String> dirty = new ArrayList<>();
         if (adopted instanceof IBmObject)
         {
@@ -239,20 +273,25 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             }
         }
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        Configuration extConfig = configProvider != null ? configProvider.getConfiguration(target.getProject()) : null;
+        Configuration extConfig =
+            configProvider != null ? configProvider.getConfiguration(target.getProject()) : null;
         if (extConfig instanceof IBmObject)
         {
             dirty.add(((IBmObject)extConfig).bmGetFqn());
         }
-        boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(target.getProject(), dirty);
+        return dirty;
+    }
 
-        return ToolResult.success()
-            .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
-            .put("fqn", adoptedFqn) //$NON-NLS-1$
-            .put(KEY_EXTENSION_PROJECT, extName)
-            .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
-            .put(KEY_PERSISTED, persisted)
-            .toJson();
+    /**
+     * Tells whether the given string is non-{@code null} and non-empty. Behaviour-identical to the former
+     * inline {@code s != null && !s.isEmpty()}.
+     *
+     * @param value the value to test
+     * @return {@code true} when {@code value} is non-{@code null} and non-empty
+     */
+    private static boolean isNonEmpty(String value)
+    {
+        return value != null && !value.isEmpty();
     }
 
     /**

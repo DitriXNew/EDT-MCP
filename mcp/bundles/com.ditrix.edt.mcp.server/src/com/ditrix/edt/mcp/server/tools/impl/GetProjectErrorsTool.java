@@ -434,37 +434,11 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         
         // Objects filter (FQN matching against the resolved object presentation)
-        if (!objects.isEmpty())
+        if (excludedByObjectsFilter(objects, presentationResolved, objectPresentation, unresolvedFilteredOut))
         {
-            if (!presentationResolved)
-            {
-                // Cannot resolve the location, so we cannot decide membership for an
-                // explicit object filter. The marker is excluded from the result; count it
-                // separately so the caller is warned that it was filtered out, not shown.
-                unresolvedFilteredOut[0]++;
-                return null;
-            }
-            if (objectPresentation.isEmpty())
-            {
-                return null;
-            }
-            
-            String presentationLower = objectPresentation.toLowerCase();
-            boolean matched = false;
-            for (String fqnVariant : objects)
-            {
-                if (presentationLower.contains(fqnVariant))
-                {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched)
-            {
-                return null;
-            }
+            return null;
         }
-        
+
         // Build the ErrorInfo, reusing the already resolved symbolic check id and presentation.
         ErrorInfo error = new ErrorInfo();
         error.checkCode = shortUid;
@@ -491,7 +465,45 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         return error;
     }
-    
+
+    /**
+     * Decides whether the marker is excluded by an explicit objects filter, matching the
+     * resolved object presentation against the FQN variants. Returns {@code false} when no
+     * objects filter is active. As a side effect, increments {@code unresolvedFilteredOut}
+     * for a marker whose presentation could not be resolved while a filter is active (the
+     * marker is excluded but counted separately so the caller can warn about it).
+     */
+    static boolean excludedByObjectsFilter(Set<String> objects, boolean presentationResolved,
+        String objectPresentation, int[] unresolvedFilteredOut)
+    {
+        if (objects.isEmpty())
+        {
+            return false;
+        }
+        if (!presentationResolved)
+        {
+            // Cannot resolve the location, so we cannot decide membership for an
+            // explicit object filter. The marker is excluded from the result; count it
+            // separately so the caller is warned that it was filtered out, not shown.
+            unresolvedFilteredOut[0]++;
+            return true;
+        }
+        if (objectPresentation.isEmpty())
+        {
+            return true;
+        }
+
+        String presentationLower = objectPresentation.toLowerCase();
+        for (String fqnVariant : objects)
+        {
+            if (presentationLower.contains(fqnVariant))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * Resolves the symbolic check id (e.g. "bsl-legacy-check-expression-type") for a marker's
      * short UID (e.g. "SU23") exactly once. Returns {@code null} when it cannot be resolved.

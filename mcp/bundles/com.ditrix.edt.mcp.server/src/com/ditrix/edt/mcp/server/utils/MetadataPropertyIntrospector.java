@@ -261,49 +261,64 @@ public final class MetadataPropertyIntrospector
         }
         if (feature instanceof EAttribute)
         {
-            EClassifier type = ((EAttribute)feature).getEAttributeType();
-            if (type instanceof EEnum)
-            {
-                return ValueKind.ENUM;
-            }
-            String typeName = type != null ? type.getInstanceClassName() : null;
-            if ("boolean".equals(typeName) || "java.lang.Boolean".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                return ValueKind.BOOLEAN;
-            }
-            if ("int".equals(typeName) || "java.lang.Integer".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
-                || "long".equals(typeName) || "java.lang.Long".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                return ValueKind.INTEGER;
-            }
-            return ValueKind.STRING;
+            return classifyAttribute((EAttribute)feature);
         }
         if (feature instanceof EReference)
         {
-            EReference ref = (EReference)feature;
-            // The synonym (and other localized strings) is a containment map-entry reference reached
-            // via getSynonym(); the data type is a contained TypeDescription. Both ARE assignable
-            // values. Every other reference - child collections (attributes/forms/...) and plain
-            // object references - is NOT a simple assignable value, so it is excluded (null).
-            if ("synonym".equals(ref.getName()) || isMapEntry(ref)) //$NON-NLS-1$
-            {
-                return ValueKind.LOCALIZED_STRING;
-            }
-            if (isTypeDescription(ref))
-            {
-                return ValueKind.TYPE_DESCRIPTION;
-            }
-            // A non-containment reference whose target is a metadata object (MdObject subtype) is a
-            // plain object reference, settable by FQN. Containment refs (child collections) and
-            // non-MdObject refs (e.g. the EObject-typed suppressObject) are excluded. Derived /
-            // transient / non-changeable refs are already filtered upstream by isAssignable.
-            EClass targetType = ref.getEReferenceType();
-            if (!ref.isContainment() && targetType != null
-                && MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(targetType))
-            {
-                return ref.isMany() ? ValueKind.MANY_REFERENCE : ValueKind.REFERENCE;
-            }
-            return null;
+            return classifyReference((EReference)feature);
+        }
+        return null;
+    }
+
+    /** Classifies an attribute feature into a scalar {@link ValueKind} (enum / boolean / integer / string). */
+    private static ValueKind classifyAttribute(EAttribute feature)
+    {
+        EClassifier type = feature.getEAttributeType();
+        if (type instanceof EEnum)
+        {
+            return ValueKind.ENUM;
+        }
+        String typeName = type != null ? type.getInstanceClassName() : null;
+        if ("boolean".equals(typeName) || "java.lang.Boolean".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return ValueKind.BOOLEAN;
+        }
+        if ("int".equals(typeName) || "java.lang.Integer".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
+            || "long".equals(typeName) || "java.lang.Long".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return ValueKind.INTEGER;
+        }
+        return ValueKind.STRING;
+    }
+
+    /**
+     * Classifies a reference feature: the localized synonym map and the contained TypeDescription are
+     * assignable values; a non-containment reference to an {@code MdObject} is a plain object reference
+     * (single or many); every other reference is excluded ({@code null}).
+     */
+    private static ValueKind classifyReference(EReference ref)
+    {
+        // The synonym (and other localized strings) is a containment map-entry reference reached
+        // via getSynonym(); the data type is a contained TypeDescription. Both ARE assignable
+        // values. Every other reference - child collections (attributes/forms/...) and plain
+        // object references - is NOT a simple assignable value, so it is excluded (null).
+        if ("synonym".equals(ref.getName()) || isMapEntry(ref)) //$NON-NLS-1$
+        {
+            return ValueKind.LOCALIZED_STRING;
+        }
+        if (isTypeDescription(ref))
+        {
+            return ValueKind.TYPE_DESCRIPTION;
+        }
+        // A non-containment reference whose target is a metadata object (MdObject subtype) is a
+        // plain object reference, settable by FQN. Containment refs (child collections) and
+        // non-MdObject refs (e.g. the EObject-typed suppressObject) are excluded. Derived /
+        // transient / non-changeable refs are already filtered upstream by isAssignable.
+        EClass targetType = ref.getEReferenceType();
+        if (!ref.isContainment() && targetType != null
+            && MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(targetType))
+        {
+            return ref.isMany() ? ValueKind.MANY_REFERENCE : ValueKind.REFERENCE;
         }
         return null;
     }
