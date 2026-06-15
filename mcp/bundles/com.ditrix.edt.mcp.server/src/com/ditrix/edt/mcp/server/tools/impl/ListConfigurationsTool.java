@@ -141,43 +141,7 @@ public class ListConfigurationsTool implements IMcpTool
                     continue;
                 }
 
-                Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("name", cfg.getName()); //$NON-NLS-1$
-                entry.put("type", typeId); //$NON-NLS-1$
-                entry.put(KEY_ATTACH, isAttach);
-
-                String appId = LaunchConfigUtils.getApplicationIdFor(cfg);
-                if (appId != null)
-                {
-                    entry.put("applicationId", appId); //$NON-NLS-1$
-                }
-                if (!project.isEmpty())
-                {
-                    entry.put("project", project); //$NON-NLS-1$
-                }
-
-                String alias = LaunchConfigUtils.readAttribute(cfg,
-                    LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, ""); //$NON-NLS-1$
-                if (!alias.isEmpty())
-                {
-                    entry.put("infobaseAlias", alias); //$NON-NLS-1$
-                }
-                String url = LaunchConfigUtils.readAttribute(cfg,
-                    LaunchConfigUtils.ATTR_DEBUG_SERVER_URL, ""); //$NON-NLS-1$
-                if (!url.isEmpty())
-                {
-                    entry.put("debugServerUrl", url); //$NON-NLS-1$
-                }
-
-                ILaunch liveLaunch = appId != null ? liveByAppId.get(appId) : null;
-                boolean running = liveLaunch != null;
-                entry.put("running", running); //$NON-NLS-1$
-                if (running)
-                {
-                    entry.put("mode", liveLaunch.getLaunchMode()); //$NON-NLS-1$
-                    entry.put("suspended", anyThreadSuspended(liveLaunch)); //$NON-NLS-1$
-                }
-                configs.add(entry);
+                configs.add(buildConfigEntry(cfg, typeId, isAttach, project, liveByAppId));
             }
 
             return ToolResult.success()
@@ -190,6 +154,54 @@ public class ListConfigurationsTool implements IMcpTool
             Activator.logError("Error in list_configurations", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Builds the JSON entry for one launch configuration: its name/type/attach flag plus any present
+     * applicationId, project, infobase alias and debug server URL, and — when a matching live launch
+     * exists — its running/mode/suspended state. The caller has already applied the type and project
+     * filters; this is pure entry assembly with no side effects.
+     */
+    private static Map<String, Object> buildConfigEntry(ILaunchConfiguration cfg, String typeId,
+        boolean isAttach, String project, Map<String, ILaunch> liveByAppId)
+    {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("name", cfg.getName()); //$NON-NLS-1$
+        entry.put("type", typeId); //$NON-NLS-1$
+        entry.put(KEY_ATTACH, isAttach);
+
+        String appId = LaunchConfigUtils.getApplicationIdFor(cfg);
+        if (appId != null)
+        {
+            entry.put("applicationId", appId); //$NON-NLS-1$
+        }
+        if (!project.isEmpty())
+        {
+            entry.put("project", project); //$NON-NLS-1$
+        }
+
+        String alias = LaunchConfigUtils.readAttribute(cfg,
+            LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, ""); //$NON-NLS-1$
+        if (!alias.isEmpty())
+        {
+            entry.put("infobaseAlias", alias); //$NON-NLS-1$
+        }
+        String url = LaunchConfigUtils.readAttribute(cfg,
+            LaunchConfigUtils.ATTR_DEBUG_SERVER_URL, ""); //$NON-NLS-1$
+        if (!url.isEmpty())
+        {
+            entry.put("debugServerUrl", url); //$NON-NLS-1$
+        }
+
+        ILaunch liveLaunch = appId != null ? liveByAppId.get(appId) : null;
+        boolean running = liveLaunch != null;
+        entry.put("running", running); //$NON-NLS-1$
+        if (running)
+        {
+            entry.put("mode", liveLaunch.getLaunchMode()); //$NON-NLS-1$
+            entry.put("suspended", anyThreadSuspended(liveLaunch)); //$NON-NLS-1$
+        }
+        return entry;
     }
 
     /**

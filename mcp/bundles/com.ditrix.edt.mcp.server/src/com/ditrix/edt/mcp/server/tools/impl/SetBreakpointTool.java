@@ -136,29 +136,45 @@ public class SetBreakpointTool implements IMcpTool
         try
         {
             IBreakpoint bp = BreakpointUtils.createLineBreakpoint(file, lineNumber);
-            long markerId = bp.getMarker() != null ? bp.getMarker().getId() : -1L;
-            boolean degraded = bp instanceof BreakpointUtils.MarkerOnlyBreakpoint;
-            Activator.logInfo("Breakpoint set: " + file.getFullPath() + ":" + lineNumber //$NON-NLS-1$ //$NON-NLS-2$
-                + (degraded ? " (degraded — marker-only)" : "")); //$NON-NLS-1$ //$NON-NLS-2$
-            ToolResult res = ToolResult.success()
-                .put("breakpointId", markerId) //$NON-NLS-1$
-                .put(McpKeys.MODULE_PATH, module)
-                .put(KEY_MODULE, module)
-                .put("resolvedFile", file.getFullPath().toString()) //$NON-NLS-1$
-                .put(KEY_LINE_NUMBER, lineNumber);
-            if (degraded)
-            {
-                res.put("degraded", true); //$NON-NLS-1$
-                res.put("warning", "EDT BSL breakpoint class not available — created a marker-only " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "breakpoint that may NOT trigger debug suspend events. " //$NON-NLS-1$
-                    + "Verify in EDT that the breakpoint appears in the Breakpoints view."); //$NON-NLS-1$
-            }
-            return res.toJson();
+            return buildSuccessResult(bp, file, module, lineNumber);
         }
         catch (Exception e)
         {
             Activator.logError("Failed to set breakpoint", e); //$NON-NLS-1$
             return ToolResult.error("Failed to set breakpoint: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Builds the success JSON for a created breakpoint, logging the outcome and
+     * flagging the degraded (marker-only) case. Pure with respect to caller
+     * state — reads only the supplied breakpoint/file/coordinates.
+     *
+     * @param bp the created breakpoint
+     * @param file the resolved module file
+     * @param module the module path/alias echoed back to the caller
+     * @param lineNumber the breakpoint line
+     * @return the success result JSON
+     */
+    private static String buildSuccessResult(IBreakpoint bp, IFile file, String module, int lineNumber)
+    {
+        long markerId = bp.getMarker() != null ? bp.getMarker().getId() : -1L;
+        boolean degraded = bp instanceof BreakpointUtils.MarkerOnlyBreakpoint;
+        Activator.logInfo("Breakpoint set: " + file.getFullPath() + ":" + lineNumber //$NON-NLS-1$ //$NON-NLS-2$
+            + (degraded ? " (degraded — marker-only)" : "")); //$NON-NLS-1$ //$NON-NLS-2$
+        ToolResult res = ToolResult.success()
+            .put("breakpointId", markerId) //$NON-NLS-1$
+            .put(McpKeys.MODULE_PATH, module)
+            .put(KEY_MODULE, module)
+            .put("resolvedFile", file.getFullPath().toString()) //$NON-NLS-1$
+            .put(KEY_LINE_NUMBER, lineNumber);
+        if (degraded)
+        {
+            res.put("degraded", true); //$NON-NLS-1$
+            res.put("warning", "EDT BSL breakpoint class not available — created a marker-only " //$NON-NLS-1$ //$NON-NLS-2$
+                + "breakpoint that may NOT trigger debug suspend events. " //$NON-NLS-1$
+                + "Verify in EDT that the breakpoint appears in the Breakpoints view."); //$NON-NLS-1$
+        }
+        return res.toJson();
     }
 }

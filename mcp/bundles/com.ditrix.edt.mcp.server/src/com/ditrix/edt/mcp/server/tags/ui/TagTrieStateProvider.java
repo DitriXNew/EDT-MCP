@@ -253,15 +253,9 @@ public class TagTrieStateProvider implements INavigatorContentProviderStateProvi
                         ((com._1c.g5.v8.dt.core.platform.IConfigurationAware) v8Project).getConfiguration();
                     if (configuration != null) {
                         // Search in Configuration.getSubsystems() for the matching subsystem
-                        for (com._1c.g5.v8.dt.metadata.mdclass.Subsystem subsystem : configuration.getSubsystems()) {
-                            if (subsystemName.equals(subsystem.getName())) {
-                                return subsystem;
-                            }
-                            // Also search in child subsystems (recursive)
-                            EObject found = findChildSubsystem(subsystem, subsystemName);
-                            if (found != null) {
-                                return found;
-                            }
+                        EObject found = findSubsystemInConfiguration(configuration, subsystemName);
+                        if (found != null) {
+                            return found;
                         }
                     }
                 }
@@ -271,7 +265,28 @@ public class TagTrieStateProvider implements INavigatorContentProviderStateProvi
         }
         return null;
     }
-    
+
+    /**
+     * Searches a Configuration's top-level subsystems (and, recursively, their
+     * child subsystems) for the one matching the given name.
+     *
+     * @return the matching subsystem, or {@code null} if none matches
+     */
+    private EObject findSubsystemInConfiguration(
+            com._1c.g5.v8.dt.metadata.mdclass.Configuration configuration, String subsystemName) {
+        for (com._1c.g5.v8.dt.metadata.mdclass.Subsystem subsystem : configuration.getSubsystems()) {
+            if (subsystemName.equals(subsystem.getName())) {
+                return subsystem;
+            }
+            // Also search in child subsystems (recursive)
+            EObject found = findChildSubsystem(subsystem, subsystemName);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
     /**
      * Recursively searches for a child subsystem by name.
      */

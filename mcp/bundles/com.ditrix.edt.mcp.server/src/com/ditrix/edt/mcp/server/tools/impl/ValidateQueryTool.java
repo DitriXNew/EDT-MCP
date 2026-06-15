@@ -219,62 +219,9 @@ public class ValidateQueryTool implements IMcpTool
                 return ToolResult.error("Failed to get resource validator").toJson(); //$NON-NLS-1$
             }
             
-            // Collect syntax errors from resource diagnostics
-            List<QueryIssue> issues = new ArrayList<>();
-            
-            for (Resource.Diagnostic error : resource.getErrors())
-            {
-                issues.add(new QueryIssue(
-                    "ERROR", //$NON-NLS-1$
-                    error.getMessage(),
-                    error.getLine(),
-                    error.getColumn(),
-                    -1
-                ));
-            }
-            
-            for (Resource.Diagnostic warning : resource.getWarnings())
-            {
-                issues.add(new QueryIssue(
-                    "WARNING", //$NON-NLS-1$
-                    warning.getMessage(),
-                    warning.getLine(),
-                    warning.getColumn(),
-                    -1
-                ));
-            }
-            
-            // Run full validation (semantic checks)
-            List<Issue> validationIssues = validator.validate(resource, CheckMode.ALL, CancelIndicator.NullImpl);
-            
-            for (Issue issue : validationIssues)
-            {
-                String severity;
-                switch (issue.getSeverity())
-                {
-                    case ERROR:
-                        severity = "ERROR"; //$NON-NLS-1$
-                        break;
-                    case WARNING:
-                        severity = "WARNING"; //$NON-NLS-1$
-                        break;
-                    case INFO:
-                        severity = "INFO"; //$NON-NLS-1$
-                        break;
-                    default:
-                        severity = "WARNING"; //$NON-NLS-1$
-                        break;
-                }
-                
-                issues.add(new QueryIssue(
-                    severity,
-                    issue.getMessage(),
-                    issue.getLineNumber() != null ? issue.getLineNumber() : -1,
-                    issue.getColumn() != null ? issue.getColumn() : -1,
-                    issue.getOffset() != null ? issue.getOffset() : -1
-                ));
-            }
-            
+            // Collect syntax errors from resource diagnostics and semantic checks
+            List<QueryIssue> issues = collectIssues(resource, validator);
+
             // Build the result
             return buildResult(issues, dcsMode);
         }
@@ -310,6 +257,73 @@ public class ValidateQueryTool implements IMcpTool
         }
     }
     
+    /**
+     * Collects syntax diagnostics (resource errors/warnings) and semantic
+     * validation issues into a single list, preserving the original ordering
+     * (errors, then warnings, then semantic issues).
+     *
+     * @param resource the loaded Xtext resource carrying syntax diagnostics
+     * @param validator the resource validator used for semantic checks
+     * @return the collected query issues
+     */
+    private static List<QueryIssue> collectIssues(XtextResource resource, IResourceValidator validator)
+    {
+        List<QueryIssue> issues = new ArrayList<>();
+
+        for (Resource.Diagnostic error : resource.getErrors())
+        {
+            issues.add(new QueryIssue(
+                "ERROR", //$NON-NLS-1$
+                error.getMessage(),
+                error.getLine(),
+                error.getColumn(),
+                -1
+            ));
+        }
+
+        for (Resource.Diagnostic warning : resource.getWarnings())
+        {
+            issues.add(new QueryIssue(
+                "WARNING", //$NON-NLS-1$
+                warning.getMessage(),
+                warning.getLine(),
+                warning.getColumn(),
+                -1
+            ));
+        }
+
+        // Run full validation (semantic checks)
+        List<Issue> validationIssues = validator.validate(resource, CheckMode.ALL, CancelIndicator.NullImpl);
+
+        for (Issue issue : validationIssues)
+        {
+            issues.add(new QueryIssue(
+                severityName(issue.getSeverity()),
+                issue.getMessage(),
+                issue.getLineNumber() != null ? issue.getLineNumber() : -1,
+                issue.getColumn() != null ? issue.getColumn() : -1,
+                issue.getOffset() != null ? issue.getOffset() : -1
+            ));
+        }
+
+        return issues;
+    }
+
+    /** Maps an Xtext issue {@link Severity} to the wire string (unknown/blank -> WARNING). */
+    private static String severityName(org.eclipse.xtext.diagnostics.Severity severity)
+    {
+        switch (severity)
+        {
+            case ERROR:
+                return "ERROR"; //$NON-NLS-1$
+            case INFO:
+                return "INFO"; //$NON-NLS-1$
+            case WARNING:
+            default:
+                return "WARNING"; //$NON-NLS-1$
+        }
+    }
+
     /**
      * Builds the JSON result from validation issues, via the shared
      * {@link ToolResult} builder (consistent with the tool's error paths and

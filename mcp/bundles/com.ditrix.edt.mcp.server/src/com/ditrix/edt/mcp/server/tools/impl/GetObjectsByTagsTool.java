@@ -143,41 +143,7 @@ public class GetObjectsByTagsTool implements IMcpTool
             }
             
             Set<String> objects = storage.getObjectsByTag(tagName);
-            
-            // Tag header with description
-            sb.append("## Tag: ").append(tag.getName()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("- **Color:** ").append(tag.getColor()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            
-            String description = tag.getDescription();
-            if (description != null && !description.isEmpty())
-            {
-                sb.append("- **Description:** ").append(description).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            
-            sb.append("- **Objects count:** ").append(objects.size()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            
-            if (objects.isEmpty())
-            {
-                sb.append("*No objects assigned to this tag*\n\n"); //$NON-NLS-1$
-            }
-            else
-            {
-                sb.append(MarkdownUtils.tableHeader("#", "Object FQN")); //$NON-NLS-1$ //$NON-NLS-2$
-
-                int count = 0;
-                for (String fqn : objects)
-                {
-                    if (count >= limit)
-                    {
-                        sb.append(MarkdownUtils.tableRow("...", //$NON-NLS-1$
-                            "*" + (objects.size() - limit) + " more objects (limit reached)*")); //$NON-NLS-1$ //$NON-NLS-2$
-                        break;
-                    }
-                    sb.append(MarkdownUtils.tableRow(String.valueOf(++count), fqn));
-                }
-                sb.append("\n"); //$NON-NLS-1$
-                totalObjects += Math.min(objects.size(), limit);
-            }
+            totalObjects += appendTagSection(sb, tag, objects, limit);
         }
         
         // Report not found tags
@@ -199,7 +165,56 @@ public class GetObjectsByTagsTool implements IMcpTool
         
         return sb.toString();
     }
-    
+
+    /**
+     * Appends a single tag's section (header, metadata and object table) to
+     * {@code sb} and returns the number of objects counted toward the summary
+     * total for this tag.
+     *
+     * @param sb the Markdown buffer to append to
+     * @param tag the resolved tag
+     * @param objects the FQNs assigned to the tag
+     * @param limit maximum objects to list for the tag
+     * @return objects counted toward the total ({@code 0} when the tag has none,
+     *         otherwise {@code min(objects.size(), limit)})
+     */
+    private int appendTagSection(StringBuilder sb, Tag tag, Set<String> objects, int limit)
+    {
+        // Tag header with description
+        sb.append("## Tag: ").append(tag.getName()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("- **Color:** ").append(tag.getColor()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String description = tag.getDescription();
+        if (description != null && !description.isEmpty())
+        {
+            sb.append("- **Description:** ").append(description).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        sb.append("- **Objects count:** ").append(objects.size()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        if (objects.isEmpty())
+        {
+            sb.append("*No objects assigned to this tag*\n\n"); //$NON-NLS-1$
+            return 0;
+        }
+
+        sb.append(MarkdownUtils.tableHeader("#", "Object FQN")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        int count = 0;
+        for (String fqn : objects)
+        {
+            if (count >= limit)
+            {
+                sb.append(MarkdownUtils.tableRow("...", //$NON-NLS-1$
+                    "*" + (objects.size() - limit) + " more objects (limit reached)*")); //$NON-NLS-1$ //$NON-NLS-2$
+                break;
+            }
+            sb.append(MarkdownUtils.tableRow(String.valueOf(++count), fqn));
+        }
+        sb.append("\n"); //$NON-NLS-1$
+        return Math.min(objects.size(), limit);
+    }
+
     @Override
     public ResponseType getResponseType()
     {

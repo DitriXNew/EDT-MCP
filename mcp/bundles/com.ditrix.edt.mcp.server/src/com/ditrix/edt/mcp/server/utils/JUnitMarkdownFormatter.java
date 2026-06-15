@@ -103,34 +103,49 @@ public final class JUnitMarkdownFormatter
         sb.append("\n## ").append(title).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         for (JUnitTestResults.TestCase tc : cases)
         {
-            sb.append("\n### ").append(tc.name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (tc.message != null && !tc.message.isEmpty())
+            appendCase(sb, tc, withTrace);
+        }
+    }
+
+    /**
+     * Renders a single test case (heading, optional message, optional location and compacted trace)
+     * into {@code sb}. Extracted verbatim from
+     * {@link #appendSection(StringBuilder, String, List, boolean)} to keep that method's complexity in
+     * check; this only appends to {@code sb} and changes no control flow.
+     *
+     * @param sb the target builder (appended to)
+     * @param tc the test case to render
+     * @param withTrace {@code true} to additionally render the source location and compacted trace
+     */
+    private static void appendCase(StringBuilder sb, JUnitTestResults.TestCase tc, boolean withTrace)
+    {
+        sb.append("\n### ").append(tc.name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (tc.message != null && !tc.message.isEmpty())
+        {
+            sb.append("**Message:** ").append(tc.message).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (withTrace && tc.trace != null)
+        {
+            // Surface the failing source location so the caller can chain
+            // straight into set_breakpoint / read_module_source.
+            FrameLocation loc = firstUserFrameLocation(tc.trace);
+            if (loc != null)
             {
-                sb.append("**Message:** ").append(tc.message).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            if (withTrace && tc.trace != null)
-            {
-                // Surface the failing source location so the caller can chain
-                // straight into set_breakpoint / read_module_source.
-                FrameLocation loc = firstUserFrameLocation(tc.trace);
-                if (loc != null)
+                sb.append("**Location:** ").append(loc.modulePath) //$NON-NLS-1$
+                    .append(':').append(loc.line);
+                if (loc.extension != null && !loc.extension.isEmpty())
                 {
-                    sb.append("**Location:** ").append(loc.modulePath) //$NON-NLS-1$
-                        .append(':').append(loc.line);
-                    if (loc.extension != null && !loc.extension.isEmpty())
-                    {
-                        sb.append(" (extension: ").append(loc.extension).append(')'); //$NON-NLS-1$
-                    }
-                    sb.append("\n"); //$NON-NLS-1$
+                    sb.append(" (extension: ").append(loc.extension).append(')'); //$NON-NLS-1$
                 }
+                sb.append("\n"); //$NON-NLS-1$
             }
-            if (withTrace && tc.trace != null && !tc.trace.trim().isEmpty())
+        }
+        if (withTrace && tc.trace != null && !tc.trace.trim().isEmpty())
+        {
+            String trace = compactTrace(tc.trace, tc.message);
+            if (!trace.isEmpty())
             {
-                String trace = compactTrace(tc.trace, tc.message);
-                if (!trace.isEmpty())
-                {
-                    sb.append("```\n").append(trace).append("\n```\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
+                sb.append("```\n").append(trace).append("\n```\n"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
     }

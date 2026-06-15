@@ -268,18 +268,11 @@ public class DebugLaunchTool implements IMcpTool
             }
 
             // For runtime-client configs, run the usual DB-update preflight.
-            if (!isAttach && updateBeforeLaunch && configProject != null && !configProject.isEmpty())
+            String preflightError =
+                runUpdatePreflight(isAttach, updateBeforeLaunch, configProject, effectiveAppId);
+            if (preflightError != null)
             {
-                String notReady = ProjectStateChecker.checkReadyOrError(configProject);
-                if (notReady != null)
-                {
-                    return ToolResult.error(notReady).toJson();
-                }
-                String updateError = updateDatabaseIfNeeded(configProject, effectiveAppId);
-                if (updateError != null)
-                {
-                    return ToolResult.error(updateError).toJson();
-                }
+                return preflightError;
             }
 
             String launchError = performLaunch(config, updateBeforeLaunch);
@@ -288,34 +281,69 @@ public class DebugLaunchTool implements IMcpTool
                 return ToolResult.error("Failed to launch debug session: " + launchError).toJson(); //$NON-NLS-1$
             }
 
-            ToolResult result = ToolResult.success()
-                .put(KEY_LAUNCH_CONFIGURATION, config.getName())
-                .put(KEY_CONFIGURATION_TYPE, typeId)
-                .put(KEY_ATTACH, isAttach)
-                .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
-                .put(KEY_STATUS, "launching") //$NON-NLS-1$
-                .put(McpKeys.MESSAGE, isAttach
-                    ? "Attach debug session is connecting — poll debug_status to confirm it is " //$NON-NLS-1$
-                        + "running, then wait_for_break to block until a breakpoint is hit." //$NON-NLS-1$
-                    : "Debug session is starting asynchronously. The 1C client may show startup " //$NON-NLS-1$
-                        + "dialogs (login / database update); this call does NOT wait for it. " //$NON-NLS-1$
-                        + "Poll debug_status until the session appears running, then use " //$NON-NLS-1$
-                        + "wait_for_break."); //$NON-NLS-1$
-            if (configProject != null && !configProject.isEmpty())
-            {
-                result.put(McpKeys.PROJECT, configProject);
-            }
-            if (effectiveAppId != null)
-            {
-                result.put(McpKeys.APPLICATION_ID, effectiveAppId);
-            }
-            return result.toJson();
+            return buildLaunchSuccess(config, typeId, isAttach, configProject, effectiveAppId);
         }
         catch (Exception e)
         {
             Activator.logError("Unexpected error during debug launch by name", e); //$NON-NLS-1$
             return ToolResult.error("Unexpected error: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Runtime-client DB-update preflight for the by-name path. Returns a ready
+     * error-JSON string when the project is not ready or the database update
+     * fails, or {@code null} to proceed. Behaviour is identical to the inline
+     * guard it replaces: same condition, same order, same exceptions propagate.
+     */
+    private String runUpdatePreflight(boolean isAttach, boolean updateBeforeLaunch, String configProject,
+        String effectiveAppId)
+    {
+        if (!isAttach && updateBeforeLaunch && configProject != null && !configProject.isEmpty())
+        {
+            String notReady = ProjectStateChecker.checkReadyOrError(configProject);
+            if (notReady != null)
+            {
+                return ToolResult.error(notReady).toJson();
+            }
+            String updateError = updateDatabaseIfNeeded(configProject, effectiveAppId);
+            if (updateError != null)
+            {
+                return ToolResult.error(updateError).toJson();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Builds the success response for the by-name launch path. Pure formatting of
+     * read-only inputs; no behavioural change relative to the inline builder.
+     */
+    private String buildLaunchSuccess(ILaunchConfiguration config, String typeId, boolean isAttach,
+        String configProject, String effectiveAppId)
+    {
+        ToolResult result = ToolResult.success()
+            .put(KEY_LAUNCH_CONFIGURATION, config.getName())
+            .put(KEY_CONFIGURATION_TYPE, typeId)
+            .put(KEY_ATTACH, isAttach)
+            .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(KEY_STATUS, "launching") //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, isAttach
+                ? "Attach debug session is connecting — poll debug_status to confirm it is " //$NON-NLS-1$
+                    + "running, then wait_for_break to block until a breakpoint is hit." //$NON-NLS-1$
+                : "Debug session is starting asynchronously. The 1C client may show startup " //$NON-NLS-1$
+                    + "dialogs (login / database update); this call does NOT wait for it. " //$NON-NLS-1$
+                    + "Poll debug_status until the session appears running, then use " //$NON-NLS-1$
+                    + "wait_for_break."); //$NON-NLS-1$
+        if (configProject != null && !configProject.isEmpty())
+        {
+            result.put(McpKeys.PROJECT, configProject);
+        }
+        if (effectiveAppId != null)
+        {
+            result.put(McpKeys.APPLICATION_ID, effectiveAppId);
+        }
+        return result.toJson();
     }
 
     /**

@@ -22,6 +22,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -350,45 +351,56 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         for (IRefactoringProblem problem : problems)
         {
-            Map<String, Object> problemMap = new java.util.LinkedHashMap<>();
-            problemMap.put("problemType", problem.getClass().getSimpleName()); //$NON-NLS-1$
-            // Best-effort description; never let a single odd problem abort the whole check.
-            try
-            {
-                if (problem instanceof CleanReferenceProblem crp)
-                {
-                    EObject refObj = crp.getReferencingObject();
-                    if (refObj instanceof IBmObject bmObj)
-                    {
-                        String refFqn = bmFqnSafe(bmObj);
-                        if (refFqn != null)
-                        {
-                            problemMap.put("referencingObject", refFqn); //$NON-NLS-1$
-                        }
-                    }
-                    EStructuralFeature feat = crp.getReference();
-                    if (feat != null)
-                    {
-                        problemMap.put("reference", feat.getName()); //$NON-NLS-1$
-                    }
-                }
-                EObject obj = problem.getObject();
-                if (obj instanceof IBmObject bmObj)
-                {
-                    String tgtFqn = bmFqnSafe(bmObj);
-                    if (tgtFqn != null)
-                    {
-                        problemMap.put("targetObject", tgtFqn); //$NON-NLS-1$
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                Activator.logError("Error describing refactoring problem", e); //$NON-NLS-1$
-            }
-            result.add(problemMap);
+            result.add(describeProblem(problem));
         }
         return result;
+    }
+
+    /**
+     * Describes a single refactoring {@link IRefactoringProblem} as a JSON-ready map: the problem type
+     * plus, best-effort, the referencing object / feature (for a {@link CleanReferenceProblem}) and the
+     * target object. Mirrors what the EDT/Configurator UI shows per blocking reference. Never throws on
+     * a single odd problem — a description failure is logged and the partial map is still returned.
+     */
+    private static Map<String, Object> describeProblem(IRefactoringProblem problem)
+    {
+        Map<String, Object> problemMap = new java.util.LinkedHashMap<>();
+        problemMap.put("problemType", problem.getClass().getSimpleName()); //$NON-NLS-1$
+        // Best-effort description; never let a single odd problem abort the whole check.
+        try
+        {
+            if (problem instanceof CleanReferenceProblem crp)
+            {
+                EObject refObj = crp.getReferencingObject();
+                if (refObj instanceof IBmObject bmObj)
+                {
+                    String refFqn = bmFqnSafe(bmObj);
+                    if (refFqn != null)
+                    {
+                        problemMap.put("referencingObject", refFqn); //$NON-NLS-1$
+                    }
+                }
+                EStructuralFeature feat = crp.getReference();
+                if (feat != null)
+                {
+                    problemMap.put("reference", feat.getName()); //$NON-NLS-1$
+                }
+            }
+            EObject obj = problem.getObject();
+            if (obj instanceof IBmObject bmObj)
+            {
+                String tgtFqn = bmFqnSafe(bmObj);
+                if (tgtFqn != null)
+                {
+                    problemMap.put("targetObject", tgtFqn); //$NON-NLS-1$
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error describing refactoring problem", e); //$NON-NLS-1$
+        }
+        return problemMap;
     }
 
     /**
@@ -620,15 +632,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         MdObject mdForm = FormStructureReader.resolveMdForm(config, formPath);
         if (mdForm == null)
         {
-            // Distinguish a missing owner from a missing form for a sharper message.
-            MdObject owner = MetadataTypeUtils.findObject(config, ref.ownerType, ref.ownerName);
-            if (owner == null)
-            {
-                return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Use get_metadata_objects to list available objects.").toJson(); //$NON-NLS-1$
-            }
-            return ToolResult.error("Form '" + ref.formName + "' not found on " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
-                + ". Use get_metadata_details to list the object's forms.").toJson(); //$NON-NLS-1$
+            return formObjectNotFoundError(config, ref);
         }
         if (!(mdForm instanceof IBmObject))
         {
@@ -673,25 +677,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.editContextFor(project, mdForm);
-            FormElementWriter.writeMdForm(fctx, "DeleteFormObject", (txMdForm, tx) -> //$NON-NLS-1$
-            {
-                EObject owner = txMdForm.eContainer();
-                // Detach the content Form top object (the BM store the attach created) before removing the
-                // MD-form, so no store-less top object is left orphaned in the namespace.
-                EObject content = FormElementWriter.getEditableForm(txMdForm);
-                if (content instanceof IBmObject)
-                {
-                    tx.detachTopObject((IBmObject)content);
-                }
-                // Clear any single-valued default-form reference on the owner that points at this form
-                // (defaultObjectForm / defaultListForm / ...), so removing the form leaves no dangling ref.
-                if (owner != null)
-                {
-                    clearReferencesTo(owner, txMdForm);
-                }
-                // Remove the MD-form from the owner's 'forms' containment list.
-                EcoreUtil.remove(txMdForm);
-            });
+            FormElementWriter.writeMdForm(fctx, "DeleteFormObject", //$NON-NLS-1$
+                DeleteMetadataTool::removeFormObjectInTx);
         }
         catch (Exception e)
         {
@@ -726,6 +713,50 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                         + "it).") //$NON-NLS-1$
                 + folderCleanupMessage(folderCleanup))
             .toJson();
+    }
+
+    /**
+     * Builds the "form object not found" error for {@link #deleteFormObject}: distinguishes a missing
+     * owner from a missing form (the form lookup failed) for a sharper message. Pure message selection,
+     * no mutation.
+     */
+    private static String formObjectNotFoundError(Configuration config, FormElementWriter.FormObjectRef ref)
+    {
+        // Distinguish a missing owner from a missing form for a sharper message.
+        MdObject owner = MetadataTypeUtils.findObject(config, ref.ownerType, ref.ownerName);
+        if (owner == null)
+        {
+            return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Use get_metadata_objects to list available objects.").toJson(); //$NON-NLS-1$
+        }
+        return ToolResult.error("Form '" + ref.formName + "' not found on " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Use get_metadata_details to list the object's forms.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The {@code confirm=true} write-transaction body for {@link #deleteFormObject}: detaches the
+     * content {@code Form} top object, clears any default-form reference the owner held to this form,
+     * and removes the MD-form from the owner's {@code forms} containment list. Runs inside the BM write
+     * transaction supplied by {@link FormElementWriter#writeMdForm}.
+     */
+    private static void removeFormObjectInTx(EObject txMdForm, IBmTransaction tx)
+    {
+        EObject owner = txMdForm.eContainer();
+        // Detach the content Form top object (the BM store the attach created) before removing the
+        // MD-form, so no store-less top object is left orphaned in the namespace.
+        EObject content = FormElementWriter.getEditableForm(txMdForm);
+        if (content instanceof IBmObject)
+        {
+            tx.detachTopObject((IBmObject)content);
+        }
+        // Clear any single-valued default-form reference on the owner that points at this form
+        // (defaultObjectForm / defaultListForm / ...), so removing the form leaves no dangling ref.
+        if (owner != null)
+        {
+            clearReferencesTo(owner, txMdForm);
+        }
+        // Remove the MD-form from the owner's 'forms' containment list.
+        EcoreUtil.remove(txMdForm);
     }
 
     /** Outcome of the orphan form-folder cleanup - never conflate "not found" with "removed". */

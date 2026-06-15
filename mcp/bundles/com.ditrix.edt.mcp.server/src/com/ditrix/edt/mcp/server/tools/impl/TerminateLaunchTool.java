@@ -731,48 +731,14 @@ public class TerminateLaunchTool implements IMcpTool
     private static String renderResults(List<TerminationResult> results, String configName,
             String projectName, String applicationId, boolean all, boolean includeAttach)
     {
-        int terminated = 0;
-        int detached = 0;
-        int timedOut = 0;
-        int errors = 0;
-        int alreadyTerminated = 0;
-        int removed = 0;
-        int staleCleaned = 0;
-        for (TerminationResult r : results)
-        {
-            if (r.removed)
-            {
-                removed++;
-            }
-            switch (r.code)
-            {
-                case R_TERMINATED:
-                case R_FORCE_TERMINATED:
-                    terminated++;
-                    break;
-                case R_DETACHED:
-                    detached++;
-                    break;
-                case R_TIMEOUT:
-                    timedOut++;
-                    break;
-                case R_ERROR:
-                    errors++;
-                    break;
-                case R_ALREADY_TERMINATED:
-                    alreadyTerminated++;
-                    // Stale entry (was already terminated, only lingered in the
-                    // manager) that this call actually evicted — report these
-                    // distinctly from real terminations.
-                    if (r.removed)
-                    {
-                        staleCleaned++;
-                    }
-                    break;
-                default:
-                    break;
-            }
-        }
+        Counts counts = countResults(results);
+        int terminated = counts.terminated;
+        int detached = counts.detached;
+        int timedOut = counts.timedOut;
+        int errors = counts.errors;
+        int alreadyTerminated = counts.alreadyTerminated;
+        int removed = counts.removed;
+        int staleCleaned = counts.staleCleaned;
 
         boolean hasIssues = timedOut > 0 || errors > 0;
         StringBuilder sb = new StringBuilder();
@@ -826,6 +792,59 @@ public class TerminateLaunchTool implements IMcpTool
         sb.append("\n> Only launches started from this EDT instance are affected. " //$NON-NLS-1$
             + "Externally launched 1C clients are not touched by this tool.\n"); //$NON-NLS-1$
         return sb.toString();
+    }
+
+    /** Aggregated per-outcome tallies for a batch of {@link TerminationResult}s. */
+    private static final class Counts
+    {
+        int terminated;
+        int detached;
+        int timedOut;
+        int errors;
+        int alreadyTerminated;
+        int removed;
+        int staleCleaned;
+    }
+
+    private static Counts countResults(List<TerminationResult> results)
+    {
+        Counts c = new Counts();
+        for (TerminationResult r : results)
+        {
+            if (r.removed)
+            {
+                c.removed++;
+            }
+            switch (r.code)
+            {
+                case R_TERMINATED:
+                case R_FORCE_TERMINATED:
+                    c.terminated++;
+                    break;
+                case R_DETACHED:
+                    c.detached++;
+                    break;
+                case R_TIMEOUT:
+                    c.timedOut++;
+                    break;
+                case R_ERROR:
+                    c.errors++;
+                    break;
+                case R_ALREADY_TERMINATED:
+                    c.alreadyTerminated++;
+                    // Stale entry (was already terminated, only lingered in the
+                    // manager) that this call actually evicted — report these
+                    // distinctly from real terminations.
+                    if (r.removed)
+                    {
+                        c.staleCleaned++;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        return c;
     }
 
     private static void renderSingle(StringBuilder sb, TerminationResult r)

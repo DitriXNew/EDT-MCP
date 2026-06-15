@@ -641,17 +641,31 @@ public class PlatformDocumentationService
         if (propTypes != null && !propTypes.isEmpty())
         {
             sb.append("**Type:** "); //$NON-NLS-1$
-            List<String> typeNames = new ArrayList<>();
-            for (TypeItem typeItem : propTypes)
-            {
-                String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
-                if (typeName != null)
-                {
-                    typeNames.add(typeName);
-                }
-            }
+            List<String> typeNames = collectTypeNames(propTypes, useRussian);
             sb.append(String.join(" | ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
+    }
+
+    /**
+     * Collects the localized display names of the given type items, in order,
+     * skipping items whose chosen name is {@code null}.
+     *
+     * @param types the type items to render (must not be {@code null})
+     * @param useRussian {@code true} to prefer the Russian name, {@code false} for English
+     * @return the collected non-{@code null} type names, possibly empty
+     */
+    private static List<String> collectTypeNames(EList<TypeItem> types, boolean useRussian)
+    {
+        List<String> typeNames = new ArrayList<>();
+        for (TypeItem typeItem : types)
+        {
+            String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
+            if (typeName != null)
+            {
+                typeNames.add(typeName);
+            }
+        }
+        return typeNames;
     }
 
     /**

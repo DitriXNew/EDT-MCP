@@ -906,6 +906,21 @@ public class MetadataReferenceService
                 return referenceFeature != null ? getFeatureLabel(referenceFeature) : null;
             }
 
+            return buildPathString(path);
+        }
+
+        /**
+         * Renders the EDT-style path string from the segment deque built by
+         * {@link #buildInnerPathEdtStyle}. Consumes the (already non-empty) deque
+         * head-first, exactly as the inline tail it was extracted from: same
+         * feature-label seeding, same null-segment skipping, same redundant
+         * "Items" collapsing, same empty-to-{@code null} mapping.
+         *
+         * @param path the non-empty segment deque, top object first
+         * @return the rendered path, or {@code null} when nothing renders
+         */
+        private String buildPathString(Deque<PathSegment> path)
+        {
             // Build path string exactly like EDT:
             // referenceName = featureLabel(topObjectPair.second)
             // for each segment: referenceName + "." + objectName + "." + featureLabel

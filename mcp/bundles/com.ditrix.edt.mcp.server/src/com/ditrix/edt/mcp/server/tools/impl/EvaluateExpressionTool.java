@@ -149,13 +149,7 @@ public class EvaluateExpressionTool implements IMcpTool
             }
             if (result.hasErrors())
             {
-                StringBuilder errs = new StringBuilder();
-                for (String e : result.getErrorMessages())
-                {
-                    if (errs.length() > 0) errs.append("; "); //$NON-NLS-1$
-                    errs.append(e);
-                }
-                return ToolResult.error(errs.toString()).toJson();
+                return ToolResult.error(joinErrorMessages(result.getErrorMessages())).toJson();
             }
 
             IValue value = result.getValue();
@@ -194,6 +188,21 @@ public class EvaluateExpressionTool implements IMcpTool
             Activator.logError("Error in evaluate_expression", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Joins watch-expression error messages into a single {@code "; "}-separated
+     * string, preserving the original order and separator.
+     */
+    private static String joinErrorMessages(String[] messages)
+    {
+        StringBuilder errs = new StringBuilder();
+        for (String e : messages)
+        {
+            if (errs.length() > 0) errs.append("; "); //$NON-NLS-1$
+            errs.append(e);
+        }
+        return errs.toString();
     }
 
 }

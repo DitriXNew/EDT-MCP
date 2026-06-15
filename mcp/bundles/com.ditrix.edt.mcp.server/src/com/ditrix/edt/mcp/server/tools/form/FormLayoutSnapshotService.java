@@ -518,21 +518,7 @@ public class FormLayoutSnapshotService
         }
         if (value instanceof Collection<?>)
         {
-            List<Object> values = new ArrayList<>();
-            for (Object item : (Collection<?>)value)
-            {
-                Object converted = convertFeatureValue(item);
-                if (converted != null)
-                {
-                    values.add(converted);
-                }
-                if (values.size() >= 50)
-                {
-                    values.add("..."); //$NON-NLS-1$
-                    break;
-                }
-            }
-            return values.isEmpty() ? null : values;
+            return convertCollectionValue((Collection<?>)value);
         }
 
         Map<String, Object> inspected = describeInspectableValue(value);
@@ -542,6 +528,31 @@ public class FormLayoutSnapshotService
         }
 
         return String.valueOf(value);
+    }
+
+    /**
+     * Converts a collection feature value element-by-element, capping the result
+     * at 50 entries with a trailing {@code "..."} marker. Behaviour is identical
+     * to the inline Collection branch it was extracted from: same element order,
+     * same null-skipping, same cap, same empty-to-{@code null} mapping.
+     */
+    private Object convertCollectionValue(Collection<?> collection)
+    {
+        List<Object> values = new ArrayList<>();
+        for (Object item : collection)
+        {
+            Object converted = convertFeatureValue(item);
+            if (converted != null)
+            {
+                values.add(converted);
+            }
+            if (values.size() >= 50)
+            {
+                values.add("..."); //$NON-NLS-1$
+                break;
+            }
+        }
+        return values.isEmpty() ? null : values;
     }
 
     private Object convertCategoriesHolder(Object value)

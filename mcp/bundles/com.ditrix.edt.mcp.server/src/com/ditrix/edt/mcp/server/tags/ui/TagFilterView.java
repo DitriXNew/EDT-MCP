@@ -595,39 +595,56 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             manager.add(new Action("Copy Selected (" + selection.size() + ")") {
                 @Override
                 public void run() {
-                    StringBuilder sb = new StringBuilder();
-                    for (Object obj : selection) {
-                        if (sb.length() > 0) {
-                            sb.append("\n");
-                        }
-                        // Copy simplified FQN as displayed
-                        if (obj instanceof ObjectEntry entry) {
-                            sb.append(simplifyFqn(entry.fqn()));
-                        } else {
-                            sb.append(String.valueOf(obj));
-                        }
-                    }
-                    copyToClipboard(sb.toString());
+                    copyToClipboard(buildSelectionClipboardText(selection));
                 }
             });
         }
-        
+
         // Copy All FQNs
         if (!filteredObjects.isEmpty()) {
             manager.add(new Action("Copy All (" + filteredObjects.size() + ")") {
                 @Override
                 public void run() {
-                    StringBuilder sb = new StringBuilder();
-                    for (ObjectEntry entry : filteredObjects) {
-                        if (sb.length() > 0) {
-                            sb.append("\n");
-                        }
-                        sb.append(simplifyFqn(entry.fqn()));
-                    }
-                    copyToClipboard(sb.toString());
+                    copyToClipboard(buildAllClipboardText());
                 }
             });
         }
+    }
+
+    /**
+     * Builds the newline-separated clipboard text for the current selection,
+     * using the simplified FQN for {@link ObjectEntry} elements and the raw
+     * string form otherwise. Pure: builds and returns the text only.
+     */
+    private String buildSelectionClipboardText(IStructuredSelection selection) {
+        StringBuilder sb = new StringBuilder();
+        for (Object obj : selection) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            // Copy simplified FQN as displayed
+            if (obj instanceof ObjectEntry entry) {
+                sb.append(simplifyFqn(entry.fqn()));
+            } else {
+                sb.append(String.valueOf(obj));
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Builds the newline-separated clipboard text of simplified FQNs for all
+     * filtered objects. Pure: builds and returns the text only.
+     */
+    private String buildAllClipboardText() {
+        StringBuilder sb = new StringBuilder();
+        for (ObjectEntry entry : filteredObjects) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append(simplifyFqn(entry.fqn()));
+        }
+        return sb.toString();
     }
     
     /**

@@ -238,34 +238,7 @@ public class ToolsTab
                 {
                     return;
                 }
-                Object element = event.getElement();
-                boolean checked = event.getChecked();
-
-                if (element instanceof ToolGroup group)
-                {
-                    for (String toolName : group.getToolNames())
-                    {
-                        if (checked)
-                        {
-                            disabledTools.remove(toolName);
-                        }
-                        else
-                        {
-                            disabledTools.add(toolName);
-                        }
-                    }
-                }
-                else if (element instanceof String toolName)
-                {
-                    if (checked)
-                    {
-                        disabledTools.remove(toolName);
-                    }
-                    else
-                    {
-                        disabledTools.add(toolName);
-                    }
-                }
+                applyCheckChange(event.getElement(), event.getChecked());
 
                 refreshCheckStates();
                 selectMatchingPreset();
@@ -309,6 +282,44 @@ public class ToolsTab
                 showDetailsForElement(selection.getFirstElement());
             }
         });
+    }
+
+    /**
+     * Applies a single checkbox change to {@link #disabledTools}: a checked element
+     * enables (removes from disabled) and an unchecked element disables (adds to
+     * disabled). A {@link ToolGroup} element fans the change out to all its tools;
+     * a {@link String} element is a single tool. Any other element type is ignored.
+     *
+     * @param element the changed tree element (a {@link ToolGroup} or tool-name {@link String})
+     * @param checked {@code true} when the element was checked (enabled)
+     */
+    private void applyCheckChange(Object element, boolean checked)
+    {
+        if (element instanceof ToolGroup group)
+        {
+            for (String toolName : group.getToolNames())
+            {
+                if (checked)
+                {
+                    disabledTools.remove(toolName);
+                }
+                else
+                {
+                    disabledTools.add(toolName);
+                }
+            }
+        }
+        else if (element instanceof String toolName)
+        {
+            if (checked)
+            {
+                disabledTools.remove(toolName);
+            }
+            else
+            {
+                disabledTools.add(toolName);
+            }
+        }
     }
 
     private void createCountLabel(Composite parent)

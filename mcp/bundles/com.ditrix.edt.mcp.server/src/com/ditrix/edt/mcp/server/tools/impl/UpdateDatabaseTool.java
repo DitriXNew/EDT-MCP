@@ -135,17 +135,10 @@ public class UpdateDatabaseTool implements IMcpTool
             JsonUtils.extractBooleanArgument(params, "terminateRunningClients", true); //$NON-NLS-1$
 
         boolean hasName = configName != null && !configName.isEmpty();
-        if (!hasName)
+        String argError = validateDirectArguments(hasName, projectName, applicationId);
+        if (argError != null)
         {
-            if (projectName == null || projectName.isEmpty())
-            {
-                return ToolResult.error("projectName is required (or pass launchConfigurationName)").toJson(); //$NON-NLS-1$
-            }
-            if (applicationId == null || applicationId.isEmpty())
-            {
-                return ToolResult.error("applicationId is required (or pass launchConfigurationName). " //$NON-NLS-1$
-                    + "Use get_applications or list_configurations.").toJson(); //$NON-NLS-1$
-            }
+            return argError;
         }
 
         // Resolve via launch config if name is given — it fixes the project + applicationId pair.
@@ -190,6 +183,37 @@ public class UpdateDatabaseTool implements IMcpTool
 
         return updateDatabase(projectName, applicationId, fullUpdate, confirm,
             terminateRunningClients);
+    }
+
+    /**
+     * Validates the directly supplied target arguments used when no launch
+     * configuration name is given. Returns a ready {@link ToolResult#error} JSON
+     * payload describing the first missing argument, or {@code null} when the
+     * arguments are acceptable. When {@code hasName} is {@code true} the target is
+     * derived from the launch configuration instead, so no direct argument is
+     * required and {@code null} is returned.
+     *
+     * @param hasName whether a launch configuration name was supplied
+     * @param projectName the directly supplied project name (may be {@code null})
+     * @param applicationId the directly supplied application ID (may be {@code null})
+     * @return error JSON when a required direct argument is missing, otherwise {@code null}
+     */
+    private static String validateDirectArguments(boolean hasName, String projectName,
+            String applicationId)
+    {
+        if (!hasName)
+        {
+            if (projectName == null || projectName.isEmpty())
+            {
+                return ToolResult.error("projectName is required (or pass launchConfigurationName)").toJson(); //$NON-NLS-1$
+            }
+            if (applicationId == null || applicationId.isEmpty())
+            {
+                return ToolResult.error("applicationId is required (or pass launchConfigurationName). " //$NON-NLS-1$
+                    + "Use get_applications or list_configurations.").toJson(); //$NON-NLS-1$
+            }
+        }
+        return null;
     }
 
     /**

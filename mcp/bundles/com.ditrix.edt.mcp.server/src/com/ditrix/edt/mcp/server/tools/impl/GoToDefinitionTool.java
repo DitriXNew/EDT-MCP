@@ -324,6 +324,18 @@ public class GoToDefinitionTool implements IMcpTool
             fm.put("qualifiedName", qualifiedPrefix + "." + method.getName()); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
+        return fm.wrapContent(buildMethodSource(includeSource, allLines, from, to, method));
+    }
+
+    /**
+     * Builds the fenced BSL source block for {@link #formatMethodDefinition}. When {@code includeSource}
+     * is false the result is empty. The preferred source is the {@code [from, to]} slice of the file
+     * lines; if the file could not be read ({@code allLines == null}) it falls back to the method's EMF
+     * {@code getText()}. Pure string assembly, no side effects.
+     */
+    private static String buildMethodSource(boolean includeSource, List<String> allLines, int from, int to,
+        Method method)
+    {
         StringBuilder sb = new StringBuilder();
         if (includeSource)
         {
@@ -352,8 +364,7 @@ public class GoToDefinitionTool implements IMcpTool
                 }
             }
         }
-
-        return fm.wrapContent(sb.toString());
+        return sb.toString();
     }
 
     /**

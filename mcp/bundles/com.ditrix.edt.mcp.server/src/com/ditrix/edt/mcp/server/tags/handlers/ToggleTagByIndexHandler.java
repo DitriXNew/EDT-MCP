@@ -70,19 +70,8 @@ public class ToggleTagByIndexHandler extends AbstractTagHandler {
         }
         
         // Group selected objects by project
-        List<ObjectInfo> objectsToProcess = new ArrayList<>();
-        for (Iterator<?> it = ssel.iterator(); it.hasNext();) {
-            Object element = it.next();
-            EObject mdObject = TagUtils.extractMdObject(element);
-            if (mdObject != null) {
-                IProject project = TagUtils.extractProjectFromElement(element);
-                String fqn = TagUtils.extractFqn(mdObject);
-                if (project != null && fqn != null) {
-                    objectsToProcess.add(new ObjectInfo(project, fqn));
-                }
-            }
-        }
-        
+        List<ObjectInfo> objectsToProcess = collectObjectsToProcess(ssel);
+
         if (objectsToProcess.isEmpty()) {
             return null;
         }
@@ -113,7 +102,32 @@ public class ToggleTagByIndexHandler extends AbstractTagHandler {
         
         return null;
     }
-    
+
+    /**
+     * Collects the resolvable metadata objects from the current structured
+     * selection, paired with their owning project. Behaviour is identical to the
+     * inline grouping loop it replaces: same iteration order, same null/fqn
+     * filtering, same resulting list.
+     *
+     * @param ssel the current structured selection
+     * @return the (possibly empty) list of objects to process
+     */
+    private List<ObjectInfo> collectObjectsToProcess(IStructuredSelection ssel) {
+        List<ObjectInfo> objectsToProcess = new ArrayList<>();
+        for (Iterator<?> it = ssel.iterator(); it.hasNext();) {
+            Object element = it.next();
+            EObject mdObject = TagUtils.extractMdObject(element);
+            if (mdObject != null) {
+                IProject project = TagUtils.extractProjectFromElement(element);
+                String fqn = TagUtils.extractFqn(mdObject);
+                if (project != null && fqn != null) {
+                    objectsToProcess.add(new ObjectInfo(project, fqn));
+                }
+            }
+        }
+        return objectsToProcess;
+    }
+
     /**
      * Record for storing object info during processing.
      */

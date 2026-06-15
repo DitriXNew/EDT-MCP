@@ -590,43 +590,7 @@ public final class LaunchLifecycleUtils
             {
                 continue;
             }
-            try
-            {
-                if (Activator.getDefault() == null)
-                {
-                    continue;
-                }
-                IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-                if (dtProjectManager == null)
-                {
-                    continue;
-                }
-                IDtProject dtProject = dtProjectManager.getDtProject(project);
-                if (dtProject == null)
-                {
-                    continue;
-                }
-                IDerivedDataManagerProvider ddProvider =
-                    Activator.getDefault().getDerivedDataManagerProvider();
-                if (ddProvider == null)
-                {
-                    continue;
-                }
-                IDerivedDataManager ddManager = ddProvider.get(dtProject);
-                if (ddManager == null)
-                {
-                    continue;
-                }
-                Activator.logInfo("Pre-launch: forcing derived-data recompute for project: " //$NON-NLS-1$
-                    + project.getName());
-                ddManager.recomputeAll();
-            }
-            catch (RuntimeException e)
-            {
-                // A recompute failure must never abort the launch — log and move on.
-                Activator.logError("Error forcing derived-data recompute for " //$NON-NLS-1$
-                    + project.getName(), e);
-            }
+            forceRecompute(project);
         }
 
         // Phase 2: drain the workspace-wide build job families once. This is not
@@ -643,6 +607,56 @@ public final class LaunchLifecycleUtils
                 continue;
             }
             BuildUtils.waitForDerivedData(project);
+        }
+    }
+
+    /**
+     * Forces a derived-data recompute for a single open project via the standard
+     * {@code IDtProjectManager -> IDerivedDataManagerProvider -> IDerivedDataManager}
+     * chain. Any missing EDT service makes this a no-op for the project, and a
+     * {@link RuntimeException} is logged and swallowed — a recompute failure must
+     * never abort the launch hot path.
+     *
+     * @param project an open project (callers guard {@code null}/closed projects)
+     */
+    private static void forceRecompute(IProject project)
+    {
+        try
+        {
+            if (Activator.getDefault() == null)
+            {
+                return;
+            }
+            IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
+            if (dtProjectManager == null)
+            {
+                return;
+            }
+            IDtProject dtProject = dtProjectManager.getDtProject(project);
+            if (dtProject == null)
+            {
+                return;
+            }
+            IDerivedDataManagerProvider ddProvider =
+                Activator.getDefault().getDerivedDataManagerProvider();
+            if (ddProvider == null)
+            {
+                return;
+            }
+            IDerivedDataManager ddManager = ddProvider.get(dtProject);
+            if (ddManager == null)
+            {
+                return;
+            }
+            Activator.logInfo("Pre-launch: forcing derived-data recompute for project: " //$NON-NLS-1$
+                + project.getName());
+            ddManager.recomputeAll();
+        }
+        catch (RuntimeException e)
+        {
+            // A recompute failure must never abort the launch — log and move on.
+            Activator.logError("Error forcing derived-data recompute for " //$NON-NLS-1$
+                + project.getName(), e);
         }
     }
 
@@ -1173,16 +1187,7 @@ public final class LaunchLifecycleUtils
 
             if (isInProgress(state))
             {
-                // Another caller (or a UI gesture) is already updating this IB.
-                // Wait (event-driven) until it actually applies — if we launched now,
-                // the run would execute a half-updated IB.
-                state = awaitUpdateState(appManager, application,
-                    s -> classify(s) == SyncCategory.SYNCED, syncApplyTimeoutMs);
-                if (isSynced(state))
-                {
-                    return Optional.empty();
-                }
-                return Optional.of(staleInfobaseError(state));
+                return awaitInProgressUpdate(appManager, application);
             }
 
             if (isSynced(state))
@@ -1212,51 +1217,99 @@ public final class LaunchLifecycleUtils
 
             // Phase B — IB needs an update (or state is UNKNOWN). Issue the update,
             // then await the UPDATE_STATE_CHANGED→UPDATED event before returning.
-            ExecutionContext context = new ExecutionContext();
-            Shell shell = grabActiveShell();
-            if (shell != null)
-            {
-                context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
-            }
-            Activator.logInfo("Pre-launch DB update: application=" + applicationId //$NON-NLS-1$
-                + ", stateBefore=" + state); //$NON-NLS-1$
-            ApplicationUpdateState after = appManager.update(application,
-                ApplicationUpdateType.INCREMENTAL, context, new NullProgressMonitor());
-            Activator.logInfo("Pre-launch DB update returned: stateAfter=" + after //$NON-NLS-1$
-                + " (now awaiting the UPDATE_STATE_CHANGED→UPDATED event)"); //$NON-NLS-1$
-
-            // Post-condition gate: the auto-chain promises the IB is actually in
-            // UPDATED state (the .cfe applied) before workingCopy.launch() runs.
-            // appManager.update() may return UPDATED (done) or a transitional
-            // BEING_UPDATED/UNKNOWN on the async path — those are awaited below.
-            // A …UPDATE_REQUIRED return, however, is TERMINAL: the update itself
-            // decided it cannot proceed without user action (e.g. an interactive
-            // restructure), so no further UPDATE_STATE_CHANGED transition can ever
-            // arrive. Awaiting SYNCED would stall the MCP call for the full apply
-            // timeout and then fail with the very same out-of-sync error — fail
-            // fast instead, restoring the old prompt-error behaviour.
-            if (needsUpdate(after))
-            {
-                return Optional.of(terminalOutOfSyncError(after));
-            }
-            if (!isSynced(after))
-            {
-                after = awaitUpdateState(appManager, application,
-                    s -> classify(s) == SyncCategory.SYNCED, syncApplyTimeoutMs);
-            }
-            if (isSynced(after))
-            {
-                Activator.logInfo("Pre-launch DB update applied: IB is UPDATED for application=" //$NON-NLS-1$
-                    + applicationId);
-                return Optional.empty();
-            }
-            return Optional.of(staleInfobaseError(after));
+            return performUpdateAndAwaitApplied(appManager, application, applicationId, state);
         }
         catch (ApplicationException e)
         {
             Activator.logError("Error during pre-launch DB update", e); //$NON-NLS-1$
             return Optional.of("Database update failed: " + e.getMessage()); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Handles the "another caller is already updating this IB" case: waits
+     * (event-driven) until the in-progress update actually applies, then reports
+     * success or the stale-infobase refusal. Launching while the update is mid-flight
+     * would execute a half-updated IB.
+     *
+     * @param appManager the EDT application manager (event source)
+     * @param application the application being updated by another caller
+     * @return {@link Optional#empty()} once the IB reaches SYNCED, otherwise the
+     *         stale-infobase error message
+     */
+    private static Optional<String> awaitInProgressUpdate(IApplicationManager appManager,
+        IApplication application)
+    {
+        ApplicationUpdateState state = awaitUpdateState(appManager, application,
+            s -> classify(s) == SyncCategory.SYNCED, syncApplyTimeoutMs);
+        if (isSynced(state))
+        {
+            return Optional.empty();
+        }
+        return Optional.of(staleInfobaseError(state));
+    }
+
+    /**
+     * Phase B of {@link #updateApplicationIfNeeded}: issues the incremental DB
+     * update and gates on the {@code UPDATE_STATE_CHANGED→UPDATED} event before
+     * returning, so a launch never runs against a not-yet-applied IB.
+     *
+     * <p>A terminal {@code …UPDATE_REQUIRED} return from {@code update()} fails fast
+     * (no further transition can arrive without user action); a transitional
+     * {@code BEING_UPDATED}/{@code UNKNOWN} is awaited up to {@link #syncApplyTimeoutMs}.
+     * {@link ApplicationException} is propagated to the caller's existing handler.
+     *
+     * @param appManager the EDT application manager
+     * @param application the application whose IB is updated
+     * @param applicationId the application id (for log messages)
+     * @param stateBefore the update state observed before issuing the update (logged)
+     * @return {@link Optional#empty()} once the IB is UPDATED, otherwise an
+     *         actionable out-of-sync error message
+     * @throws ApplicationException if the update call itself fails
+     */
+    private static Optional<String> performUpdateAndAwaitApplied(IApplicationManager appManager,
+        IApplication application, String applicationId, ApplicationUpdateState stateBefore)
+        throws ApplicationException
+    {
+        ExecutionContext context = new ExecutionContext();
+        Shell shell = grabActiveShell();
+        if (shell != null)
+        {
+            context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
+        }
+        Activator.logInfo("Pre-launch DB update: application=" + applicationId //$NON-NLS-1$
+            + ", stateBefore=" + stateBefore); //$NON-NLS-1$
+        ApplicationUpdateState after = appManager.update(application,
+            ApplicationUpdateType.INCREMENTAL, context, new NullProgressMonitor());
+        Activator.logInfo("Pre-launch DB update returned: stateAfter=" + after //$NON-NLS-1$
+            + " (now awaiting the UPDATE_STATE_CHANGED→UPDATED event)"); //$NON-NLS-1$
+
+        // Post-condition gate: the auto-chain promises the IB is actually in
+        // UPDATED state (the .cfe applied) before workingCopy.launch() runs.
+        // appManager.update() may return UPDATED (done) or a transitional
+        // BEING_UPDATED/UNKNOWN on the async path — those are awaited below.
+        // A …UPDATE_REQUIRED return, however, is TERMINAL: the update itself
+        // decided it cannot proceed without user action (e.g. an interactive
+        // restructure), so no further UPDATE_STATE_CHANGED transition can ever
+        // arrive. Awaiting SYNCED would stall the MCP call for the full apply
+        // timeout and then fail with the very same out-of-sync error — fail
+        // fast instead, restoring the old prompt-error behaviour.
+        if (needsUpdate(after))
+        {
+            return Optional.of(terminalOutOfSyncError(after));
+        }
+        if (!isSynced(after))
+        {
+            after = awaitUpdateState(appManager, application,
+                s -> classify(s) == SyncCategory.SYNCED, syncApplyTimeoutMs);
+        }
+        if (isSynced(after))
+        {
+            Activator.logInfo("Pre-launch DB update applied: IB is UPDATED for application=" //$NON-NLS-1$
+                + applicationId);
+            return Optional.empty();
+        }
+        return Optional.of(staleInfobaseError(after));
     }
 
     /**

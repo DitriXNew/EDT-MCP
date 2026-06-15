@@ -953,7 +953,27 @@ public final class EditorScreenshotHelper
         // mapping-root callback skips re-entrant rebuilds while the representation's rebuild lock is
         // held, so a single request can be dropped; re-requesting until the image is present makes the
         // wait robust.
-        deadline = System.currentTimeMillis() + timeoutMs;
+        return runAsyncRebuildFallback(representation, timeoutMs, display, baseline, requireNewInstance);
+    }
+
+    /**
+     * Fallback render wait used when the synchronous render hooks are not reachable on this EDT.
+     * Re-triggers the asynchronous rebuild and polls until a (fresh, when forced) non-empty image is
+     * available, performing one final check after the budget elapses. Extracted verbatim from
+     * {@link #ensureRenderedFormImage(Object, int, boolean)} to keep that method's complexity in check.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param timeoutMs maximum time to wait, in milliseconds
+     * @param display the current display used to pump the event loop (may be {@code null})
+     * @param baseline the image observed before the wait, used for freshness comparison
+     * @param requireNewInstance {@code true} to require a different {@code ImageData} instance than the
+     *            baseline (used when the stale buffer could not be cleared)
+     * @return {@code true} if a (fresh, when forced) non-empty image became available within the budget
+     */
+    private static boolean runAsyncRebuildFallback(Object representation, int timeoutMs, Display display,
+        ImageData baseline, boolean requireNewInstance)
+    {
+        long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline)
         {
             rebuildRepresentation(representation);

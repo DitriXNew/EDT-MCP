@@ -243,26 +243,10 @@ public class SymbolInfoService
             }
 
             // === Level 2: EObject analysis ===
-            IXtextDocument xtextDocument = xtextEditor.getDocument();
-            if (xtextDocument != null)
+            String eobjectResult = resolveEObjectInfoFromDocument(xtextEditor.getDocument(), offset);
+            if (eobjectResult != null && !eobjectResult.isEmpty())
             {
-                String eobjectResult = xtextDocument.readOnly(new IUnitOfWork<String, XtextResource>()
-                {
-                    @Override
-                    public String exec(XtextResource resource) throws Exception
-                    {
-                        if (resource == null)
-                        {
-                            return null;
-                        }
-                        return resolveEObjectInfo(resource, offset);
-                    }
-                });
-
-                if (eobjectResult != null && !eobjectResult.isEmpty())
-                {
-                    return eobjectResult;
-                }
+                return eobjectResult;
             }
 
             // Nothing found at this position
@@ -276,6 +260,32 @@ public class SymbolInfoService
                 page.closeEditor(editorPart, false);
             }
         }
+    }
+
+    /**
+     * Runs the Level-2 EObject analysis inside the Xtext document's read-only
+     * transaction. Returns {@code null} when the document or the parsed resource
+     * is unavailable, matching the previous inline behaviour (the caller then
+     * falls through to the next resolution step).
+     */
+    private String resolveEObjectInfoFromDocument(IXtextDocument xtextDocument, int offset) throws Exception
+    {
+        if (xtextDocument == null)
+        {
+            return null;
+        }
+        return xtextDocument.readOnly(new IUnitOfWork<String, XtextResource>()
+        {
+            @Override
+            public String exec(XtextResource resource) throws Exception
+            {
+                if (resource == null)
+                {
+                    return null;
+                }
+                return resolveEObjectInfo(resource, offset);
+            }
+        });
     }
 
     /**

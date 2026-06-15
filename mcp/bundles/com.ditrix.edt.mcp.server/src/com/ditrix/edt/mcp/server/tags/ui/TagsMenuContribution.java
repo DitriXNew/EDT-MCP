@@ -199,8 +199,33 @@ public class TagsMenuContribution extends CompoundContributionItem {
         @Override
         public void fill(Menu menu, int index) {
             MenuItem item = new MenuItem(menu, SWT.CHECK, index);
-            
-            // Build text with optional hotkey
+
+            item.setText(buildItemText());
+            item.setSelection(isChecked);
+
+            // Create image and dispose it when menu item is disposed
+            Image image = TagColorIconFactory.getCircularColorIconWithCheck(
+                color, 16, isChecked).createImage();
+            item.setImage(image);
+            item.addDisposeListener(e -> image.dispose());
+
+            item.addSelectionListener(new SelectionAdapter() {
+                @Override
+                public void widgetSelected(SelectionEvent e) {
+                    // Capture selection value before asyncExec since menu item may be disposed
+                    boolean selected = item.getSelection();
+                    Display.getCurrent().asyncExec(() -> applyTagToSelection(selected));
+                }
+            });
+        }
+
+        /**
+         * Builds the menu item label: the tag name, optionally followed by a tab and the configured
+         * hotkey. Extracted verbatim from {@link #fill(Menu, int)} to keep its complexity in check.
+         *
+         * @return the label text for the menu item
+         */
+        private String buildItemText() {
             String text = tagName;
             if (hotkeyIndex >= 1 && hotkeyIndex <= 10) {
                 String hotkey = getHotkeyString(hotkeyIndex);
@@ -208,44 +233,37 @@ public class TagsMenuContribution extends CompoundContributionItem {
                     text = tagName + "\t" + hotkey;
                 }
             }
-            item.setText(text);
-            item.setSelection(isChecked);
-            
-            // Create image and dispose it when menu item is disposed
-            Image image = TagColorIconFactory.getCircularColorIconWithCheck(
-                color, 16, isChecked).createImage();
-            item.setImage(image);
-            item.addDisposeListener(e -> image.dispose());
-            
-            item.addSelectionListener(new SelectionAdapter() {
-                @Override
-                public void widgetSelected(SelectionEvent e) {
-                    // Capture selection value before asyncExec since menu item may be disposed
-                    boolean selected = item.getSelection();
-                    Display.getCurrent().asyncExec(() -> {
-                        // Apply to all objects in all projects
-                        for (Map.Entry<IProject, List<String>> entry : objectsByProject.entrySet()) {
-                            IProject project = entry.getKey();
-                            List<String> fqns = entry.getValue();
-                            
-                            // Check if this project has this tag
-                            Tag tag = tagService.getTagStorage(project).getTagByName(tagName);
-                            if (tag == null) {
-                                // This project doesn't have this tag, skip
-                                continue;
-                            }
-                            
-                            for (String fqn : fqns) {
-                                if (selected) {
-                                    tagService.assignTag(project, fqn, tagName);
-                                } else {
-                                    tagService.unassignTag(project, fqn, tagName);
-                                }
-                            }
-                        }
-                    });
+            return text;
+        }
+
+        /**
+         * Applies (or removes) this tag for every selected object in every project that defines the tag.
+         * Extracted verbatim from the {@code asyncExec} body in {@link #fill(Menu, int)} to keep its
+         * complexity in check; the loop-local {@code continue} stays confined to this method.
+         *
+         * @param selected {@code true} to assign the tag, {@code false} to unassign it
+         */
+        private void applyTagToSelection(boolean selected) {
+            // Apply to all objects in all projects
+            for (Map.Entry<IProject, List<String>> entry : objectsByProject.entrySet()) {
+                IProject project = entry.getKey();
+                List<String> fqns = entry.getValue();
+
+                // Check if this project has this tag
+                Tag tag = tagService.getTagStorage(project).getTagByName(tagName);
+                if (tag == null) {
+                    // This project doesn't have this tag, skip
+                    continue;
                 }
-            });
+
+                for (String fqn : fqns) {
+                    if (selected) {
+                        tagService.assignTag(project, fqn, tagName);
+                    } else {
+                        tagService.unassignTag(project, fqn, tagName);
+                    }
+                }
+            }
         }
     }
     

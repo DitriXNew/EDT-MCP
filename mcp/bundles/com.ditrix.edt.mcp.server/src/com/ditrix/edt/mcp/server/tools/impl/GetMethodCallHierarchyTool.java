@@ -245,27 +245,54 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
 
             boolean candidateIsTarget = relToSrc.equalsIgnoreCase(modulePath);
-            for (Iterator<EObject> iter = candidateModule.eAllContents(); iter.hasNext();)
-            {
-                EObject obj = iter.next();
-                if (!(obj instanceof Invocation))
-                {
-                    continue;
-                }
-                Invocation inv = (Invocation)obj;
-                if (!invocationTargetsMethod(inv, methodUri, methodName, targetModuleName, candidateIsTarget))
-                {
-                    continue;
-                }
-                totalReferences++;
-                if (callers.size() < limit)
-                {
-                    callers.add(buildCallerInfo(inv, relToSrc, methodName));
-                }
-            }
+            totalReferences += scanCandidateInvocations(candidateModule, methodUri, methodName,
+                targetModuleName, candidateIsTarget, relToSrc, callers, limit);
         }
 
         return formatCallersOutput(modulePath, methodName, callers, limit, totalReferences);
+    }
+
+    /**
+     * Scans a single candidate module for invocations that resolve to the target method, appending a
+     * {@link CallerInfo} for each match (up to {@code limit} total across all candidates) into the
+     * shared {@code callers} list. Extracted verbatim from
+     * {@link #findCallers(String, String, String, int)} to keep that method's complexity in check; the
+     * loop-local {@code continue} statements stay confined to this scan.
+     *
+     * @param candidateModule the module to scan
+     * @param methodUri the URI of the target method
+     * @param methodName the target method name
+     * @param targetModuleName the simple name of the module declaring the target method
+     * @param candidateIsTarget {@code true} when this candidate is the module declaring the method
+     * @param relToSrc the candidate's source-relative path, used when building a {@link CallerInfo}
+     * @param callers the shared accumulator of matched callers (appended to, never reassigned)
+     * @param limit the maximum number of callers to retain in {@code callers}
+     * @return the number of invocations in this candidate that target the method
+     */
+    private int scanCandidateInvocations(Module candidateModule, URI methodUri, String methodName,
+        String targetModuleName, boolean candidateIsTarget, String relToSrc, List<CallerInfo> callers,
+        int limit)
+    {
+        int matched = 0;
+        for (Iterator<EObject> iter = candidateModule.eAllContents(); iter.hasNext();)
+        {
+            EObject obj = iter.next();
+            if (!(obj instanceof Invocation))
+            {
+                continue;
+            }
+            Invocation inv = (Invocation)obj;
+            if (!invocationTargetsMethod(inv, methodUri, methodName, targetModuleName, candidateIsTarget))
+            {
+                continue;
+            }
+            matched++;
+            if (callers.size() < limit)
+            {
+                callers.add(buildCallerInfo(inv, relToSrc, methodName));
+            }
+        }
+        return matched;
     }
 
     /**

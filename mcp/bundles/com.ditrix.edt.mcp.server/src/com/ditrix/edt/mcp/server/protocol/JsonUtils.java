@@ -267,29 +267,13 @@ public final class JsonUtils
         // Check if it's a JSON array
         if (value.startsWith("[")) //$NON-NLS-1$
         {
-            try
+            List<String> jsonResult = parseJsonStringArray(value);
+            if (jsonResult != null)
             {
-                JsonElement element = JsonParser.parseString(value);
-                if (element.isJsonArray())
-                {
-                    JsonArray array = element.getAsJsonArray();
-                    List<String> result = new ArrayList<>(array.size());
-                    for (JsonElement el : array)
-                    {
-                        if (el.isJsonPrimitive())
-                        {
-                            result.add(el.getAsString());
-                        }
-                    }
-                    return result;
-                }
-            }
-            catch (Exception e)
-            {
-                // Fall through to comma-separated parsing
+                return jsonResult;
             }
         }
-        
+
         // Parse as comma-separated
         List<String> result = new ArrayList<>();
         for (String part : value.split(",")) //$NON-NLS-1$
@@ -303,7 +287,39 @@ public final class JsonUtils
         
         return result.isEmpty() ? null : result;
     }
-    
+
+    /**
+     * Parses {@code value} (already known to start with {@code [}) as a JSON array of strings, keeping
+     * only primitive elements. Returns the resulting list (possibly empty) when {@code value} is a valid
+     * JSON array, or {@code null} when it is not an array or cannot be parsed — the {@code null} signals
+     * {@link #extractArrayArgument} to fall through to comma-separated parsing.
+     */
+    private static List<String> parseJsonStringArray(String value)
+    {
+        try
+        {
+            JsonElement element = JsonParser.parseString(value);
+            if (element.isJsonArray())
+            {
+                JsonArray array = element.getAsJsonArray();
+                List<String> result = new ArrayList<>(array.size());
+                for (JsonElement el : array)
+                {
+                    if (el.isJsonPrimitive())
+                    {
+                        result.add(el.getAsString());
+                    }
+                }
+                return result;
+            }
+        }
+        catch (Exception e)
+        {
+            // Fall through to comma-separated parsing
+        }
+        return null;
+    }
+
     /**
      * Extracts an array-of-objects argument from the params map. A complex argument arrives here as
      * its JSON text (the protocol layer re-serializes nested JSON values into the string map), so a
