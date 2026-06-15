@@ -322,64 +322,31 @@ public class CreateInfobaseTool implements IMcpTool
     private String createInfobase(String projectName, Path infobaseDir,
             String infobaseName, String platform, boolean setDefault, boolean register)
     {
-        // --- 1. Resolve project ---
-        ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.exists())
+        // --- 1-2. Resolve project + services ---
+        CreateContext context = resolveCreateContext(projectName);
+        if (context.error != null)
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return context.error;
         }
-        if (!ctx.isOpen())
-        {
-            return ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
-                + ". Open the project in EDT first.").toJson(); //$NON-NLS-1$
-        }
-        IProject project = ctx.project();
-
-        // --- 2. Acquire services ---
-        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
-        if (appManager == null)
-        {
-            return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
-        }
-
-        IInfobaseManager ibManager = Activator.getDefault().getInfobaseManager();
-        if (ibManager == null)
-        {
-            return ToolResult.error("IInfobaseManager service is not available. " //$NON-NLS-1$
-                + "Ensure EDT platform-services are running.").toJson(); //$NON-NLS-1$
-        }
-
-        IInfobaseAssociationManager assocManager =
-            Activator.getDefault().getInfobaseAssociationManager();
-        if (assocManager == null)
-        {
-            return ToolResult.error("IInfobaseAssociationManager service is not available. " //$NON-NLS-1$
-                + "Ensure EDT platform-services are running.").toJson(); //$NON-NLS-1$
-        }
+        IProject project = context.project;
+        IApplicationManager appManager = context.appManager;
+        IInfobaseManager ibManager = context.ibManager;
+        IInfobaseAssociationManager assocManager = context.assocManager;
 
         // --- 3. Auto-generate infobase name if omitted ---
         if (infobaseName == null || infobaseName.isEmpty())
         {
-            try
-            {
-                infobaseName = ibManager.generateInfobaseName();
-            }
-            catch (Exception e)
-            {
-                infobaseName = projectName + "_infobase"; //$NON-NLS-1$
-            }
+            infobaseName = generateDefaultInfobaseName(ibManager, projectName);
         }
 
         // --- 4. Prepare the directory ---
         if (register)
         {
             // mode=register: the infobase must already exist on disk; do NOT create it.
-            if (!Files.isDirectory(infobaseDir)
-                || !Files.isRegularFile(infobaseDir.resolve("1Cv8.1CD"))) //$NON-NLS-1$
+            String registerError = validateRegisterPath(infobaseDir);
+            if (registerError != null)
             {
-                return ToolResult.error("No file infobase found at '" + infobaseDir //$NON-NLS-1$
-                    + "' (expected a 1Cv8.1CD file). For mode='register' the path must point to an " //$NON-NLS-1$
-                    + "existing file infobase; use mode='create' to make a new one.").toJson(); //$NON-NLS-1$
+                return registerError;
             }
         }
         else
@@ -397,12 +364,7 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         // --- 5. Build the FILE infobase reference ---
-        InfobaseReference ibRef =
-            InfobaseReferences.newFileInfobaseReference(infobaseDir.toAbsolutePath().toString());
-        ibRef.setName(infobaseName);
-        // The reference MUST carry a UUID before perform(): the creation operation locks the
-        // infobase by its UUID very early (LockManager.getLock), which NPEs on a null id.
-        ibRef.setUuid(java.util.UUID.randomUUID());
+        InfobaseReference ibRef = buildInfobaseReference(infobaseDir, infobaseName);
 
         // --- 6. Create the database (create) or register the existing one (register) ---
         if (register)
@@ -436,16 +398,8 @@ public class CreateInfobaseTool implements IMcpTool
                     + "or use mode='register' for an existing infobase.").toJson(); //$NON-NLS-1$
             }
 
-            IInfobaseCreationOperation.Builder builder = new IInfobaseCreationOperation.Builder()
-                .infobaseReference(ibRef)
-                .createNew(true)
-                .addReference(true)
-                .arguments(ModelFactory.eINSTANCE.createCreateInfobaseArguments());
-            if (platform != null && !platform.isEmpty())
-            {
-                builder.platform(platform);
-            }
-            final IInfobaseCreationOperation.Descriptor descriptor = builder.build();
+            final IInfobaseCreationOperation.Descriptor descriptor =
+                buildCreationDescriptor(ibRef, platform);
 
             final IInfobaseCreationOperation finalOp = creationOp;
             final AtomicReference<Exception> jobError = new AtomicReference<>();
@@ -548,6 +502,156 @@ public class CreateInfobaseTool implements IMcpTool
         // --- 9. Read back and return ---
         return buildSuccessResult(projectName, infobaseDir, infobaseName,
             appManager, project, ibRef, setDefaultNote, register);
+    }
+
+    /**
+     * Resolves the configuration project and the platform services needed for a file-infobase
+     * creation (read-only). Returns a {@link CreateContext} whose {@code error} field carries the
+     * tool-result JSON for the SAME early-return cases the inline code produced (project missing /
+     * closed; {@code IApplicationManager} / {@code IInfobaseManager} / {@code IInfobaseAssociationManager}
+     * unavailable); otherwise {@code error} is {@code null} and the service fields are populated.
+     */
+    private static CreateContext resolveCreateContext(String projectName)
+    {
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return CreateContext.error(
+                ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
+        }
+        if (!ctx.isOpen())
+        {
+            return CreateContext.error(ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+                + ". Open the project in EDT first.").toJson()); //$NON-NLS-1$
+        }
+
+        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
+        if (appManager == null)
+        {
+            return CreateContext.error(
+                ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
+        }
+
+        IInfobaseManager ibManager = Activator.getDefault().getInfobaseManager();
+        if (ibManager == null)
+        {
+            return CreateContext.error(ToolResult.error("IInfobaseManager service is not available. " //$NON-NLS-1$
+                + "Ensure EDT platform-services are running.").toJson()); //$NON-NLS-1$
+        }
+
+        IInfobaseAssociationManager assocManager =
+            Activator.getDefault().getInfobaseAssociationManager();
+        if (assocManager == null)
+        {
+            return CreateContext.error(ToolResult.error(
+                "IInfobaseAssociationManager service is not available. " //$NON-NLS-1$
+                + "Ensure EDT platform-services are running.").toJson()); //$NON-NLS-1$
+        }
+
+        return CreateContext.of(ctx.project(), appManager, ibManager, assocManager);
+    }
+
+    /**
+     * Auto-generates a display name for a new infobase when none was supplied: EDT's
+     * {@code IInfobaseManager.generateInfobaseName()}, falling back to {@code <projectName>_infobase}
+     * on any failure. Read-only — name generation has no side effect on the infobase.
+     */
+    private static String generateDefaultInfobaseName(IInfobaseManager ibManager, String projectName)
+    {
+        try
+        {
+            return ibManager.generateInfobaseName();
+        }
+        catch (Exception e)
+        {
+            return projectName + "_infobase"; //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Validates (read-only) that {@code infobaseDir} already contains a file infobase, for
+     * mode='register'. Returns the SAME error tool-result JSON the inline check produced when no
+     * {@code 1Cv8.1CD} is present, or {@code null} when the path is a valid existing file infobase.
+     */
+    private static String validateRegisterPath(Path infobaseDir)
+    {
+        if (!Files.isDirectory(infobaseDir)
+            || !Files.isRegularFile(infobaseDir.resolve("1Cv8.1CD"))) //$NON-NLS-1$
+        {
+            return ToolResult.error("No file infobase found at '" + infobaseDir //$NON-NLS-1$
+                + "' (expected a 1Cv8.1CD file). For mode='register' the path must point to an " //$NON-NLS-1$
+                + "existing file infobase; use mode='create' to make a new one.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Builds the FILE {@link InfobaseReference} for the new infobase (read-only construction). The
+     * reference MUST carry a UUID before {@code perform()}: the creation operation locks the infobase
+     * by its UUID very early ({@code LockManager.getLock}), which NPEs on a null id.
+     */
+    private static InfobaseReference buildInfobaseReference(Path infobaseDir, String infobaseName)
+    {
+        InfobaseReference ibRef =
+            InfobaseReferences.newFileInfobaseReference(infobaseDir.toAbsolutePath().toString());
+        ibRef.setName(infobaseName);
+        ibRef.setUuid(java.util.UUID.randomUUID());
+        return ibRef;
+    }
+
+    /**
+     * Builds the {@link IInfobaseCreationOperation.Descriptor} for the create Job (read-only
+     * construction — no platform call is made here). The optional platform mask is applied only when
+     * non-empty, identical to the inline builder.
+     */
+    private static IInfobaseCreationOperation.Descriptor buildCreationDescriptor(InfobaseReference ibRef,
+            String platform)
+    {
+        IInfobaseCreationOperation.Builder builder = new IInfobaseCreationOperation.Builder()
+            .infobaseReference(ibRef)
+            .createNew(true)
+            .addReference(true)
+            .arguments(ModelFactory.eINSTANCE.createCreateInfobaseArguments());
+        if (platform != null && !platform.isEmpty())
+        {
+            builder.platform(platform);
+        }
+        return builder.build();
+    }
+
+    /**
+     * Holder for the project + platform services resolved by {@link #resolveCreateContext(String)}.
+     * When {@code error} is non-null it carries a ready tool-result JSON and the other fields are unset;
+     * otherwise {@code error} is {@code null} and the fields are populated.
+     */
+    private static final class CreateContext
+    {
+        final String error;
+        final IProject project;
+        final IApplicationManager appManager;
+        final IInfobaseManager ibManager;
+        final IInfobaseAssociationManager assocManager;
+
+        private CreateContext(String error, IProject project, IApplicationManager appManager,
+                IInfobaseManager ibManager, IInfobaseAssociationManager assocManager)
+        {
+            this.error = error;
+            this.project = project;
+            this.appManager = appManager;
+            this.ibManager = ibManager;
+            this.assocManager = assocManager;
+        }
+
+        static CreateContext error(String error)
+        {
+            return new CreateContext(error, null, null, null, null);
+        }
+
+        static CreateContext of(IProject project, IApplicationManager appManager,
+                IInfobaseManager ibManager, IInfobaseAssociationManager assocManager)
+        {
+            return new CreateContext(null, project, appManager, ibManager, assocManager);
+        }
     }
 
     /**
@@ -1025,69 +1129,11 @@ public class CreateInfobaseTool implements IMcpTool
             String infobaseName, int actualPort, String webUrl, boolean setDefault,
             IApplicationManager appManager, IProject project)
     {
-        JsonArray appsArray = new JsonArray();
-        String newAppId = null;
-        IApplication newApp = null;
-
-        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
-        {
-            appsArray = new JsonArray();
-            newAppId = null;
-            newApp = null;
-
-            try
-            {
-                List<IApplication> applications = appManager.getApplications(project);
-                if (applications != null)
-                {
-                    for (IApplication app : applications)
-                    {
-                        JsonObject appObj = new JsonObject();
-                        appObj.addProperty("id", app.getId()); //$NON-NLS-1$
-                        appObj.addProperty("name", app.getName()); //$NON-NLS-1$
-                        String typeId = app.getType() != null ? app.getType().getId() : null;
-                        if (typeId != null)
-                        {
-                            appObj.addProperty("type", typeId); //$NON-NLS-1$
-                        }
-                        addUpdateState(appObj, appManager, app);
-                        // Identify the JUST-created standalone server by its name (a wst-server app whose
-                        // name matches the new infobase) — NOT merely the first wst-server app, which could
-                        // be a pre-existing standalone server already bound to this project.
-                        if (newAppId == null && StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId)
-                            && infobaseName.equals(app.getName()))
-                        {
-                            newAppId = app.getId();
-                            newApp = app;
-                        }
-                        appsArray.add(appObj);
-                    }
-                }
-            }
-            catch (ApplicationException e)
-            {
-                Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
-                break;
-            }
-
-            if (newAppId != null)
-            {
-                break;
-            }
-
-            if (poll < READ_BACK_MAX_POLLS - 1)
-            {
-                try
-                {
-                    Thread.sleep(READ_BACK_POLL_DELAY_MS);
-                }
-                catch (InterruptedException ie)
-                {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        }
+        // Read back the applications (bounded re-poll) and locate the just-created wst-server.
+        ServerReadBack readBack = pollForNewServerApplication(appManager, project, infobaseName);
+        JsonArray appsArray = readBack.appsArray;
+        String newAppId = readBack.newAppId;
+        IApplication newApp = readBack.newApp;
 
         // Optionally set the new standalone server as the project's default application. A wst-server
         // application is an ordinary IApplication, so the same setDefaultApplication API the file path
@@ -1140,7 +1186,108 @@ public class CreateInfobaseTool implements IMcpTool
             result.put(McpKeys.APPLICATION_ID, newAppId);
         }
 
-        String message = "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
+        result.put(McpKeys.MESSAGE, buildStandaloneServerMessage(projectName, infobaseDir,
+            infobaseName, actualPort, webUrl, setDefaultNote));
+
+        return result.toJson();
+    }
+
+    /**
+     * Reads back the project's applications with the same short bounded re-poll the file path uses
+     * (to absorb the provision-delegate listener race) and locates the JUST-created standalone server
+     * — a {@code wst-server} application whose name matches {@code infobaseName} (NOT merely the first
+     * wst-server, which could be a pre-existing one). Read-only: it only reads applications and builds
+     * the {@code appsArray} echo. Returns a {@link ServerReadBack} carrying the JSON array plus the new
+     * application id/handle ({@code null} when not found within the poll budget).
+     */
+    private static ServerReadBack pollForNewServerApplication(IApplicationManager appManager,
+            IProject project, String infobaseName)
+    {
+        JsonArray appsArray = new JsonArray();
+        String newAppId = null;
+        IApplication newApp = null;
+
+        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
+        {
+            appsArray = new JsonArray();
+            newAppId = null;
+            newApp = null;
+
+            try
+            {
+                List<IApplication> applications = appManager.getApplications(project);
+                if (applications != null)
+                {
+                    for (IApplication app : applications)
+                    {
+                        appsArray.add(toApplicationJson(appManager, app));
+                        // Identify the JUST-created standalone server by its name (a wst-server app whose
+                        // name matches the new infobase) — NOT merely the first wst-server app, which could
+                        // be a pre-existing standalone server already bound to this project.
+                        String typeId = app.getType() != null ? app.getType().getId() : null;
+                        if (newAppId == null && StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId)
+                            && infobaseName.equals(app.getName()))
+                        {
+                            newAppId = app.getId();
+                            newApp = app;
+                        }
+                    }
+                }
+            }
+            catch (ApplicationException e)
+            {
+                Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
+                break;
+            }
+
+            if (newAppId != null)
+            {
+                break;
+            }
+
+            if (poll < READ_BACK_MAX_POLLS - 1)
+            {
+                try
+                {
+                    Thread.sleep(READ_BACK_POLL_DELAY_MS);
+                }
+                catch (InterruptedException ie)
+                {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return new ServerReadBack(appsArray, newAppId, newApp);
+    }
+
+    /**
+     * Builds the {@code applications} echo entry for a single application: id, name, optional type and
+     * update state — the same shape as {@code get_applications}. Read-only.
+     */
+    private static JsonObject toApplicationJson(IApplicationManager appManager, IApplication app)
+    {
+        JsonObject appObj = new JsonObject();
+        appObj.addProperty("id", app.getId()); //$NON-NLS-1$
+        appObj.addProperty("name", app.getName()); //$NON-NLS-1$
+        String typeId = app.getType() != null ? app.getType().getId() : null;
+        if (typeId != null)
+        {
+            appObj.addProperty("type", typeId); //$NON-NLS-1$
+        }
+        addUpdateState(appObj, appManager, app);
+        return appObj;
+    }
+
+    /**
+     * Builds the human-readable status message for the standalone-server success result (read-only
+     * string assembly). Byte-for-byte identical to the inline message; appends {@code setDefaultNote}
+     * when non-null.
+     */
+    private static String buildStandaloneServerMessage(String projectName, Path infobaseDir,
+            String infobaseName, int actualPort, String webUrl, String setDefaultNote)
+    {
+        return "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
             + "' created at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
             + "' and bound to project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
             + (actualPort > 0 ? " (web port " + actualPort + ")" : "") + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -1149,9 +1296,24 @@ public class CreateInfobaseTool implements IMcpTool
             + "run_yaxunit_tests with updateBeforeLaunch=true) rather than a bare update_database, " //$NON-NLS-1$
             + "which would start the server in RUN mode." //$NON-NLS-1$
             + (setDefaultNote != null ? setDefaultNote : ""); //$NON-NLS-1$
-        result.put(McpKeys.MESSAGE, message);
+    }
 
-        return result.toJson();
+    /**
+     * Holder for the standalone-server read-back: the {@code applications} JSON echo plus the
+     * just-created server's id/handle ({@code null} when it was not found within the poll budget).
+     */
+    private static final class ServerReadBack
+    {
+        final JsonArray appsArray;
+        final String newAppId;
+        final IApplication newApp;
+
+        ServerReadBack(JsonArray appsArray, String newAppId, IApplication newApp)
+        {
+            this.appsArray = appsArray;
+            this.newAppId = newAppId;
+            this.newApp = newApp;
+        }
     }
 
     /**

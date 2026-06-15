@@ -132,6 +132,34 @@ public class PlatformDocumentationService
         // Note: For platform types like Array, ValueTable, the types are
         // directly available from IEObjectDescription without needing project ResourceSet.
 
+        IEObjectProvider typeProvider = selectTypeProvider(version);
+        if (typeProvider == null)
+        {
+            return ToolResult.error("Could not get type provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
+        }
+
+        // Find type by iterating through all type descriptions
+        List<String> availableTypes = new ArrayList<>();
+        Type foundType = findType(typeProvider, typeName, availableTypes);
+
+        // If not found, show available types
+        if (foundType == null)
+        {
+            return buildNotFoundBanner("Type not found: ", typeName, "types", availableTypes); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        // Build documentation from resolved Type
+        return buildTypeDocumentation(foundType, memberName, memberType, limit, useRussian);
+    }
+
+    /**
+     * Selects the type provider for the given version: prefers TYPE (platform types like Array,
+     * ValueTable) and falls back to TYPE_ITEM when the TYPE provider is empty (some EDT versions).
+     *
+     * @return the selected provider, or {@code null} when neither is available
+     */
+    private IEObjectProvider selectTypeProvider(Version version)
+    {
         // Get type provider using TYPE (not TYPE_ITEM - TYPE gives us platform types like ValueTable)
         IEObjectProvider.Registry registry = IEObjectProvider.Registry.INSTANCE;
 
@@ -155,91 +183,118 @@ public class PlatformDocumentationService
         {
             typeProvider = typeItemProvider; // Fall back to TYPE_ITEM
         }
+        return typeProvider;
+    }
 
-        if (typeProvider == null)
-        {
-            return ToolResult.error("Could not get type provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
-        }
-
-        // Find type by iterating through all type descriptions
-        Type foundType = null;
-        List<String> availableTypes = new ArrayList<>();
-
+    /**
+     * Iterates the provider's descriptions looking for {@code typeName} (case-insensitive, matching
+     * either the full qualified name or its last segment), collecting up to the first 30 names into
+     * {@code availableTypes} for the not-found banner.
+     *
+     * @param availableTypes out-param populated with up to 30 candidate names, in iteration order
+     * @return the resolved (non-proxy) {@link Type}, or {@code null} when not found
+     */
+    private Type findType(IEObjectProvider typeProvider, String typeName, List<String> availableTypes)
+    {
         Iterable<IEObjectDescription> descriptions = typeProvider.getEObjectDescriptions(null);
-        if (descriptions != null)
+        if (descriptions == null)
         {
-            for (IEObjectDescription desc : descriptions)
+            return null;
+        }
+        for (IEObjectDescription desc : descriptions)
+        {
+            // Get last segment of qualified name (e.g., "DocumentRef" from "some.package.DocumentRef")
+            String fullName = desc.getName().toString();
+            String lastSegment = desc.getName().getLastSegment();
+
+            // Collect first 30 types for debugging (show full name)
+            if (availableTypes.size() < 30)
             {
-                // Get last segment of qualified name (e.g., "DocumentRef" from "some.package.DocumentRef")
-                String fullName = desc.getName().toString();
-                String lastSegment = desc.getName().getLastSegment();
+                availableTypes.add(lastSegment != null ? lastSegment : fullName);
+            }
 
-                // Collect first 30 types for debugging (show full name)
-                if (availableTypes.size() < 30)
+            // Check if this is the type we're looking for (case-insensitive, check both full and last segment)
+            if (fullName.equalsIgnoreCase(typeName) ||
+                (lastSegment != null && lastSegment.equalsIgnoreCase(typeName)))
+            {
+                Type resolvedType = resolveDescriptionAsType(desc);
+                if (resolvedType != null)
                 {
-                    availableTypes.add(lastSegment != null ? lastSegment : fullName);
-                }
-
-                // Check if this is the type we're looking for (case-insensitive, check both full and last segment)
-                if (fullName.equalsIgnoreCase(typeName) ||
-                    (lastSegment != null && lastSegment.equalsIgnoreCase(typeName)))
-                {
-                    // Get the object - for platform types from TYPE provider,
-                    // these should be fully resolved objects, not proxies
-                    EObject resolved = desc.getEObjectOrProxy();
-
-                    if (resolved instanceof Type)
-                    {
-                        // If still a proxy, we can use the EcoreUtil registry to resolve
-                        if (resolved.eIsProxy())
-                        {
-                            org.eclipse.emf.common.util.URI uri = desc.getEObjectURI();
-                            try
-                            {
-                                // Try to resolve via platform resource
-                                org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet =
-                                    new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
-                                resolved = EcoreUtil.resolve(resolved, tempResourceSet);
-                            }
-                            catch (Exception e)
-                            {
-                                Activator.logError("Error resolving type proxy: " + uri, e); //$NON-NLS-1$
-                            }
-                        }
-
-                        if (!resolved.eIsProxy())
-                        {
-                            foundType = (Type) resolved;
-                            break;
-                        }
-                    }
+                    return resolvedType;
                 }
             }
         }
+        return null;
+    }
 
-        // If not found, show available types
-        if (foundType == null)
+    /**
+     * Resolves a matched description to a non-proxy {@link Type}, attempting EcoreUtil proxy
+     * resolution via a temporary resource set when needed (errors are logged, not thrown).
+     *
+     * @return the resolved {@link Type}, or {@code null} when the object is not a Type or stays a proxy
+     */
+    private Type resolveDescriptionAsType(IEObjectDescription desc)
+    {
+        // Get the object - for platform types from TYPE provider,
+        // these should be fully resolved objects, not proxies
+        EObject resolved = desc.getEObjectOrProxy();
+
+        if (resolved instanceof Type)
         {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Error: Type not found: ").append(typeName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("Available types (first ").append(availableTypes.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            for (String availType : availableTypes)
+            // If still a proxy, we can use the EcoreUtil registry to resolve
+            if (resolved.eIsProxy())
             {
-                sb.append("- ").append(availType).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                org.eclipse.emf.common.util.URI uri = desc.getEObjectURI();
+                try
+                {
+                    // Try to resolve via platform resource
+                    org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet =
+                        new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
+                    resolved = EcoreUtil.resolve(resolved, tempResourceSet);
+                }
+                catch (Exception e)
+                {
+                    Activator.logError("Error resolving type proxy: " + uri, e); //$NON-NLS-1$
+                }
             }
-            if (availableTypes.isEmpty())
-            {
-                sb.append("(no types found - provider may be empty)\n"); //$NON-NLS-1$
-            }
-            else if (availableTypes.size() >= 30)
-            {
-                sb.append("... (more available)\n"); //$NON-NLS-1$
-            }
-            return sb.toString();
-        }
 
-        // Build documentation from resolved Type
-        return buildTypeDocumentation(foundType, memberName, memberType, limit, useRussian);
+            if (!resolved.eIsProxy())
+            {
+                return (Type) resolved;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Builds the soft "not found" banner: an {@code "Error: <subject><name>"} line followed by the
+     * collected available items (or an empty-provider note / "more available" hint). The exact text
+     * matches the previous inline builders so {@link #isNotFoundBanner} still recognises it.
+     *
+     * @param subject the not-found phrase incl. trailing separator (e.g. {@code "Type not found: "})
+     * @param name the looked-up name appended after {@code subject}
+     * @param itemsLabel the plural noun used in the "Available &lt;itemsLabel&gt; (first N)" heading
+     * @param available the collected candidate names
+     * @return the rendered banner string
+     */
+    private String buildNotFoundBanner(String subject, String name, String itemsLabel, List<String> available)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Error: ").append(subject).append(name).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("Available ").append(itemsLabel).append(" (first ").append(available.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String item : available)
+        {
+            sb.append("- ").append(item).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (available.isEmpty())
+        {
+            sb.append("(no ").append(itemsLabel).append(" found - provider may be empty)\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else if (available.size() >= 30)
+        {
+            sb.append("... (more available)\n"); //$NON-NLS-1$
+        }
+        return sb.toString();
     }
 
     /**
@@ -739,6 +794,28 @@ public class PlatformDocumentationService
             return ToolResult.error("Could not get method provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
         }
 
+        ResourceSet resourceSet = findAnyProjectResourceSet();
+
+        // Search for the function
+        List<String> availableMethods = new ArrayList<>();
+        Method foundMethod = findBuiltinMethod(methodProvider, functionName, resourceSet, availableMethods);
+
+        // If not found, show available methods
+        if (foundMethod == null)
+        {
+            return buildBuiltinNotFoundBanner(functionName, availableMethods);
+        }
+
+        // Build documentation for the found method
+        return buildBuiltinMethodDocumentation(foundMethod, useRussian);
+    }
+
+    /**
+     * Finds the first non-{@code null} project {@link ResourceSet} (used to resolve proxies),
+     * iterating the open V8 projects. Returns {@code null} when no provider / project yields one.
+     */
+    private ResourceSet findAnyProjectResourceSet()
+    {
         // Get ResourceSet for resolving proxies
         ResourceSet resourceSet = null;
         BmAwareResourceSetProvider resourceSetProvider = Activator.getDefault().getResourceSetProvider();
@@ -754,80 +831,114 @@ public class PlatformDocumentationService
                 }
             }
         }
+        return resourceSet;
+    }
 
-        // Search for the function
-        Method foundMethod = null;
-        List<String> availableMethods = new ArrayList<>();
-
+    /**
+     * Iterates the provider's descriptions looking for a global method named {@code functionName}
+     * (case-insensitive, by last segment), collecting up to the first 30 names into
+     * {@code availableMethods} for the not-found banner.
+     *
+     * @param resourceSet resource set used to resolve a matched proxy (may be {@code null})
+     * @param availableMethods out-param populated with up to 30 candidate names, in iteration order
+     * @return the resolved (non-proxy) {@link Method}, or {@code null} when not found
+     */
+    private Method findBuiltinMethod(IEObjectProvider methodProvider, String functionName,
+                                     ResourceSet resourceSet, List<String> availableMethods)
+    {
         Iterable<IEObjectDescription> descriptions = methodProvider.getEObjectDescriptions(null);
-        if (descriptions != null)
+        if (descriptions == null)
         {
-            for (IEObjectDescription desc : descriptions)
+            return null;
+        }
+        for (IEObjectDescription desc : descriptions)
+        {
+            String methodName = desc.getName().getLastSegment();
+            if (methodName == null)
             {
-                String methodName = desc.getName().getLastSegment();
-                if (methodName == null)
-                {
-                    methodName = desc.getName().toString();
-                }
+                methodName = desc.getName().toString();
+            }
 
-                // Collect some methods for suggestions
-                if (availableMethods.size() < 30)
-                {
-                    availableMethods.add(methodName);
-                }
+            // Collect some methods for suggestions
+            if (availableMethods.size() < 30)
+            {
+                availableMethods.add(methodName);
+            }
 
-                // Check if this is the function we're looking for (case-insensitive)
-                if (methodName.equalsIgnoreCase(functionName))
+            // Check if this is the function we're looking for (case-insensitive)
+            if (methodName.equalsIgnoreCase(functionName))
+            {
+                Method resolvedMethod = resolveDescriptionAsMethod(desc, resourceSet);
+                if (resolvedMethod != null)
                 {
-                    EObject resolved = desc.getEObjectOrProxy();
-                    if (resolved != null)
-                    {
-                        // Try to resolve proxy
-                        if (resolved.eIsProxy() && resourceSet != null)
-                        {
-                            resolved = EcoreUtil.resolve(resolved, resourceSet);
-                        }
-                        else if (resolved.eIsProxy())
-                        {
-                            // Try with temp resource set
-                            org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet =
-                                new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
-                            resolved = EcoreUtil.resolve(resolved, tempResourceSet);
-                        }
-
-                        if (resolved instanceof Method && !resolved.eIsProxy())
-                        {
-                            foundMethod = (Method) resolved;
-                            break;
-                        }
-                    }
+                    return resolvedMethod;
                 }
             }
         }
+        return null;
+    }
 
-        // If not found, show available methods
-        if (foundMethod == null)
+    /**
+     * Resolves a matched description to a non-proxy {@link Method}, preferring the given
+     * {@code resourceSet} and otherwise a temporary one for proxy resolution.
+     *
+     * @return the resolved {@link Method}, or {@code null} when the object is absent, not a Method,
+     *         or stays a proxy
+     */
+    private Method resolveDescriptionAsMethod(IEObjectDescription desc, ResourceSet resourceSet)
+    {
+        EObject resolved = desc.getEObjectOrProxy();
+        if (resolved == null)
         {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Error: Built-in function not found: ").append(functionName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("Available global methods (first ").append(availableMethods.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            for (String availMethod : availableMethods)
-            {
-                sb.append("- ").append(availMethod).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            if (availableMethods.isEmpty())
-            {
-                sb.append("(no methods found - provider may be empty)\n"); //$NON-NLS-1$
-            }
-            else if (availableMethods.size() >= 30)
-            {
-                sb.append("... (more available)\n"); //$NON-NLS-1$
-            }
-            return sb.toString();
+            return null;
+        }
+        // Try to resolve proxy
+        if (resolved.eIsProxy() && resourceSet != null)
+        {
+            resolved = EcoreUtil.resolve(resolved, resourceSet);
+        }
+        else if (resolved.eIsProxy())
+        {
+            // Try with temp resource set
+            org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet =
+                new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
+            resolved = EcoreUtil.resolve(resolved, tempResourceSet);
         }
 
-        // Build documentation for the found method
-        return buildBuiltinMethodDocumentation(foundMethod, useRussian);
+        if (resolved instanceof Method && !resolved.eIsProxy())
+        {
+            return (Method) resolved;
+        }
+        return null;
+    }
+
+    /**
+     * Builds the built-in-function not-found banner. Mirrors the previous inline text exactly: the
+     * heading reads "Available global methods" while the empty-provider note reads "(no methods
+     * found ...)", so it cannot reuse {@link #buildNotFoundBanner} (single label).
+     *
+     * @param functionName the looked-up function name
+     * @param available the collected candidate global-method names
+     * @return the rendered banner string
+     */
+    private String buildBuiltinNotFoundBanner(String functionName, List<String> available)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Error: Built-in function not found: ").append(functionName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("Available global methods (first ").append(available.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String availMethod : available)
+        {
+            sb.append("- ").append(availMethod).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (available.isEmpty())
+        {
+            sb.append("(no methods found - provider may be empty)\n"); //$NON-NLS-1$
+        }
+        else if (available.size() >= 30)
+        {
+            sb.append("... (more available)\n"); //$NON-NLS-1$
+        }
+        return sb.toString();
     }
 
     /**

@@ -520,21 +520,36 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         {
             return;
         }
-        
-        McpServer server = Activator.getDefault() != null ? 
+
+        McpServer server = Activator.getDefault() != null ?
             Activator.getDefault().getMcpServer() : null;
-        
+
         boolean running = server != null && server.isRunning();
         long requestCount = server != null ? server.getRequestCount() : 0;
         int port = server != null ? server.getPort() : 0;
         String currentTool = server != null ? server.getCurrentToolName() : null;
         boolean isExecuting = currentTool != null;
         long executionSeconds = server != null ? server.getToolExecutionSeconds() : 0;
-        
+
         // Toggle blink state for animation effect
         blinkState = !blinkState;
-        
-        // Update circle image - yellow blinking when executing, green when running, grey when stopped
+
+        updateCircleImage(isExecuting, running);
+        updateStatusLabel(isExecuting, currentTool);
+        updateCounterLabel(isExecuting, executionSeconds, requestCount);
+
+        String tooltip = buildTooltip(isExecuting, running, currentTool, port, requestCount);
+        applyTooltip(tooltip);
+
+        container.layout(true);
+    }
+
+    /**
+     * Updates the circle indicator image: yellow blinking when executing, green
+     * when running, grey when stopped.
+     */
+    private void updateCircleImage(boolean isExecuting, boolean running)
+    {
         if (circleLabel != null && !circleLabel.isDisposed())
         {
             if (isExecuting)
@@ -547,14 +562,20 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
                 circleLabel.setImage(running ? greenImage : greyImage);
             }
         }
-        
-        // Update status label - show tool name when executing
+    }
+
+    /**
+     * Updates the status label: shows the (possibly truncated) tool name when
+     * executing, otherwise "MCP" with an optional new-release hint.
+     */
+    private void updateStatusLabel(boolean isExecuting, String currentTool)
+    {
         if (statusLabel != null && !statusLabel.isDisposed())
         {
             if (isExecuting)
             {
                 // Add MCP: prefix and truncate tool name if too long
-                String displayName = currentTool.length() > TOOL_NAME_MAX_LENGTH 
+                String displayName = currentTool.length() > TOOL_NAME_MAX_LENGTH
                     ? "MCP: " + currentTool.substring(0, TOOL_NAME_MAX_LENGTH - 3) + "..." //$NON-NLS-1$ //$NON-NLS-2$
                     : "MCP: " + currentTool; //$NON-NLS-1$
                 statusLabel.setText(displayName);
@@ -565,8 +586,14 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
                 statusLabel.setText(updateAvail ? "MCP New release" : "MCP"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
-        
-        // Update counter - show elapsed time during execution, otherwise request count
+    }
+
+    /**
+     * Updates the counter label: elapsed time during execution, otherwise the
+     * request count in brackets.
+     */
+    private void updateCounterLabel(boolean isExecuting, long executionSeconds, long requestCount)
+    {
         if (counterLabel != null && !counterLabel.isDisposed())
         {
             if (isExecuting)
@@ -581,18 +608,25 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
                 counterLabel.setText("[" + requestCount + "]"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
-        
-        // Update tooltip
+    }
+
+    /**
+     * Builds the status tooltip text for the current server state, appending an
+     * update notification when one is available. Pure: builds and returns text only.
+     */
+    private String buildTooltip(boolean isExecuting, boolean running, String currentTool,
+        int port, long requestCount)
+    {
         String tooltip;
         if (isExecuting)
         {
             tooltip = "MCP Server: Executing " + currentTool +
-                "\nPort: " + port + "\nRequests: " + requestCount + 
+                "\nPort: " + port + "\nRequests: " + requestCount +
                 "\nVersion: " + McpConstants.PLUGIN_VERSION + "\nAuthor: " + McpConstants.AUTHOR;
         }
         else if (running)
         {
-            tooltip = "MCP Server: Running on port " + port + "\nRequests: " + requestCount + 
+            tooltip = "MCP Server: Running on port " + port + "\nRequests: " + requestCount +
                 "\nVersion: " + McpConstants.PLUGIN_VERSION + "\nAuthor: " + McpConstants.AUTHOR +
                 "\nClick for options";
         }
@@ -608,7 +642,14 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             tooltip += "\n\u26A0 New version available: " + latestVer //$NON-NLS-1$
                 + "\nClick circle \u2192 download option"; //$NON-NLS-1$
         }
-        
+        return tooltip;
+    }
+
+    /**
+     * Applies the given tooltip text to all status-bar labels that are alive.
+     */
+    private void applyTooltip(String tooltip)
+    {
         if (circleLabel != null && !circleLabel.isDisposed())
         {
             circleLabel.setToolTipText(tooltip);
@@ -621,8 +662,6 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         {
             counterLabel.setToolTipText(tooltip);
         }
-        
-        container.layout(true);
     }
 
     @Override

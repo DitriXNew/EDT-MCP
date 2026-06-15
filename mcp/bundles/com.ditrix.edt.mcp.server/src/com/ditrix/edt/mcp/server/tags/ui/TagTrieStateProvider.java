@@ -153,87 +153,125 @@ public class TagTrieStateProvider implements INavigatorContentProviderStateProvi
                     EObjectTrie trie = new EObjectTrie();
 
                     for (String fqn : matchingFqns) {
-                        try {
-                            // FQN format: TypeName.ObjectName or TypeName.ObjectName.SubTypeName.SubName
-                            // e.g., "Document.SalesOrder", "CommonModule.Common", "Catalog.Products.Attribute.Name"
-                            
-                            String[] parts = fqn.split("\\.");
-                            if (parts.length < 2) {
-                                continue;
-                            }
-                            
-                            // Get top-level object FQN (TypeName.ObjectName)
-                            String topFqn = parts[0] + "." + parts[1];
-                            QualifiedName topQualifiedName = QualifiedName.create(parts[0], parts[1]);
-                            
-                            // Add path to Trie - this creates both the type folder and object node
-                            trie.addPath(topQualifiedName);
-                            
-                            // Resolve top object and set it in the Trie
-                            EObject topObject = null;
-                            
-                            // Special handling for Subsystems - they are not top-level BM objects
-                            // They are contained in Configuration.getSubsystems()
-                            // Using hardcoded "Subsystem" as the EClass name
-                            if ("Subsystem".equals(parts[0])) {
-                                topObject = resolveSubsystem(project, parts[1]);
-                                if (topObject != null) {
-                                    trie.setEObject(topQualifiedName, topObject);
-                                }
-                            } else {
-                                // Standard top-level object resolution
-                                IBmObject bmObject = transaction.getTopObjectByFqn(topFqn);
-                                if (bmObject != null) {
-                                    topObject = (EObject) bmObject;
-                                    trie.setEObject(topQualifiedName, topObject);
-                                }
-                            }
-                            
-                            // If FQN has more parts (nested objects), add those paths too
-                            if (parts.length > 2) {
-                                // Add the full path for nested objects
-                                QualifiedName fullQualifiedName = QualifiedName.create(parts);
-                                trie.addPath(fullQualifiedName);
-                                
-                                // Try to resolve nested object
-                                if (topObject != null) {
-                                    EObject nestedObject = EObjectFqnNavigator.resolveNestedObject((EObject) topObject, parts, 2);
-                                    if (nestedObject != null) {
-                                        trie.setEObject(fullQualifiedName, nestedObject);
-                                    }
-                                }
-                            }
-                        } catch (Exception e) {
-                            Activator.logError("Error adding FQN to Trie: " + fqn, e);
-                        }
+                        addFqnToTrie(trie, fqn, project, transaction);
                     }
-                    
-                    // Add Configuration to make the tree traversable
-                    try {
-                        com._1c.g5.v8.dt.core.platform.IV8ProjectManager v8ProjectManager = 
-                            Activator.getDefault().getV8ProjectManager();
-                        if (v8ProjectManager != null) {
-                            com._1c.g5.v8.dt.core.platform.IV8Project v8Project = 
-                                v8ProjectManager.getProject(project);
-                            if (v8Project instanceof com._1c.g5.v8.dt.core.platform.IConfigurationAware) {
-                                com._1c.g5.v8.dt.metadata.mdclass.Configuration configuration = 
-                                    ((com._1c.g5.v8.dt.core.platform.IConfigurationAware) v8Project).getConfiguration();
-                                if (configuration != null) {
-                                    QualifiedName configQName = QualifiedName.create("Configuration", configuration.getName());
-                                    trie.addPath(configQName);
-                                    trie.setEObject(configQName, (EObject) configuration);
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        Activator.logError("Error adding Configuration to Trie", e);
-                    }
-                    
+
+                    addConfigurationToTrie(trie, project);
+
                     return trie;
             });
         } catch (Exception e) {
             Activator.logError("Error building Trie", e);
             return null;
+        }
+    }
+
+    /**
+     * Adds a single tagged FQN to the Trie, creating the type folder and object
+     * node and resolving the top (and any nested) object. Errors are logged and
+     * swallowed so one bad FQN does not abort the whole build.
+     */
+    private void addFqnToTrie(EObjectTrie trie, String fqn, IProject project,
+            com._1c.g5.v8.bm.core.IBmTransaction transaction) {
+        try {
+            // FQN format: TypeName.ObjectName or TypeName.ObjectName.SubTypeName.SubName
+            // e.g., "Document.SalesOrder", "CommonModule.Common", "Catalog.Products.Attribute.Name"
+
+            String[] parts = fqn.split("\\.");
+            if (parts.length < 2) {
+                return;
+            }
+
+            // Get top-level object FQN (TypeName.ObjectName)
+            String topFqn = parts[0] + "." + parts[1];
+            QualifiedName topQualifiedName = QualifiedName.create(parts[0], parts[1]);
+
+            // Add path to Trie - this creates both the type folder and object node
+            trie.addPath(topQualifiedName);
+
+            // Resolve top object and set it in the Trie
+            EObject topObject = resolveAndSetTopObject(trie, parts, topFqn, topQualifiedName, project, transaction);
+
+            // If FQN has more parts (nested objects), add those paths too
+            if (parts.length > 2) {
+                addNestedObjectToTrie(trie, parts, topObject);
+            }
+        } catch (Exception e) {
+            Activator.logError("Error adding FQN to Trie: " + fqn, e);
+        }
+    }
+
+    /**
+     * Resolves the top-level object for the given FQN parts and, when found,
+     * sets it on the Trie node.
+     *
+     * @return the resolved top object, or {@code null} if it could not be resolved
+     */
+    private EObject resolveAndSetTopObject(EObjectTrie trie, String[] parts, String topFqn,
+            QualifiedName topQualifiedName, IProject project,
+            com._1c.g5.v8.bm.core.IBmTransaction transaction) {
+        EObject topObject = null;
+
+        // Special handling for Subsystems - they are not top-level BM objects
+        // They are contained in Configuration.getSubsystems()
+        // Using hardcoded "Subsystem" as the EClass name
+        if ("Subsystem".equals(parts[0])) {
+            topObject = resolveSubsystem(project, parts[1]);
+            if (topObject != null) {
+                trie.setEObject(topQualifiedName, topObject);
+            }
+        } else {
+            // Standard top-level object resolution
+            IBmObject bmObject = transaction.getTopObjectByFqn(topFqn);
+            if (bmObject != null) {
+                topObject = (EObject) bmObject;
+                trie.setEObject(topQualifiedName, topObject);
+            }
+        }
+        return topObject;
+    }
+
+    /**
+     * Adds the full nested-object path to the Trie and, when the top object is
+     * available, resolves and sets the nested object on its node.
+     */
+    private void addNestedObjectToTrie(EObjectTrie trie, String[] parts, EObject topObject) {
+        // Add the full path for nested objects
+        QualifiedName fullQualifiedName = QualifiedName.create(parts);
+        trie.addPath(fullQualifiedName);
+
+        // Try to resolve nested object
+        if (topObject != null) {
+            EObject nestedObject = EObjectFqnNavigator.resolveNestedObject(topObject, parts, 2);
+            if (nestedObject != null) {
+                trie.setEObject(fullQualifiedName, nestedObject);
+            }
+        }
+    }
+
+    /**
+     * Adds the project's Configuration node to the Trie so the resulting tree is
+     * traversable. Errors are logged and swallowed.
+     */
+    private void addConfigurationToTrie(EObjectTrie trie, IProject project) {
+        try {
+            com._1c.g5.v8.dt.core.platform.IV8ProjectManager v8ProjectManager =
+                Activator.getDefault().getV8ProjectManager();
+            if (v8ProjectManager != null) {
+                com._1c.g5.v8.dt.core.platform.IV8Project v8Project =
+                    v8ProjectManager.getProject(project);
+                if (v8Project instanceof com._1c.g5.v8.dt.core.platform.IConfigurationAware) {
+                    com._1c.g5.v8.dt.metadata.mdclass.Configuration configuration =
+                        ((com._1c.g5.v8.dt.core.platform.IConfigurationAware) v8Project).getConfiguration();
+                    if (configuration != null) {
+                        QualifiedName configQName = QualifiedName.create("Configuration", configuration.getName());
+                        trie.addPath(configQName);
+                        trie.setEObject(configQName, (EObject) configuration);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Activator.logError("Error adding Configuration to Trie", e);
         }
     }
     

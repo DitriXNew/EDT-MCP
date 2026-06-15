@@ -300,104 +300,22 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return ToolResult.error("Launch manager is not available").toJson(); //$NON-NLS-1$
             }
 
-            // updateScope is ARGUMENT-validated as early as possible: when the caller
-            // named the project directly, a typo'd extension name fails fast with the
-            // available names BEFORE launch-config resolution — so the validation is
-            // reachable (and e2e-testable) without a launch configuration or a live
-            // infobase. The same validation inside prepareForFreshLaunch stays as the
-            // backstop for the by-name call style, where the project is only known
-            // after the config resolves. Gated on updateBeforeLaunch because
-            // updateScope only applies to the auto-chain; gated on the project
-            // existing so an unknown project keeps its established no-config sentinel.
-            if (updateBeforeLaunch && projectName != null && !projectName.isEmpty())
+            String earlyScopeError = validateUpdateScopeEarly(projectName, updateScope, updateBeforeLaunch);
+            if (earlyScopeError != null)
             {
-                ProjectContext scopeCtx = ProjectContext.of(projectName);
-                if (scopeCtx.exists())
-                {
-                    String scopeError =
-                        LaunchLifecycleUtils.validateUpdateScope(scopeCtx.project(), updateScope);
-                    if (scopeError != null)
-                    {
-                        return ToolResult.error(scopeError).toJson();
-                    }
-                }
+                return earlyScopeError;
             }
 
-            ILaunchConfiguration matchingConfig = LaunchConfigUtils.resolveLaunchConfig(
-                    launchManager, configName, projectName, applicationId);
-            if (matchingConfig == null)
+            LaunchContext context = resolveLaunchContext(launchManager, configName, projectName, applicationId);
+            if (context.error != null)
             {
-                boolean hasName = configName != null && !configName.isEmpty();
-                return hasName
-                    ? ToolResult.error("Launch configuration not found: '" + configName + "'. " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "Use list_configurations to see what's available.").toJson() //$NON-NLS-1$
-                    : buildNoConfigError(launchManager,
-                        launchManager.getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID),
-                        projectName, applicationId);
+                return context.error;
             }
-            if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(matchingConfig)))
-            {
-                return ToolResult.error("Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
-                    + "' is not a runtime-client config — YAXUnit tests require one.").toJson(); //$NON-NLS-1$
-            }
-
-            // Derive effective project/application from the resolved config.
-            String effectiveProject = LaunchConfigUtils.readAttribute(matchingConfig,
-                LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            String effectiveAppId = LaunchConfigUtils.readAttribute(matchingConfig,
-                LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
-            if (projectName == null || projectName.isEmpty())
-            {
-                projectName = effectiveProject;
-            }
-            if (applicationId == null || applicationId.isEmpty())
-            {
-                applicationId = effectiveAppId;
-            }
-            if (projectName == null || projectName.isEmpty())
-            {
-                return ToolResult.error("Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
-                    + "' has no project attribute set").toJson(); //$NON-NLS-1$
-            }
-
-            String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-            if (notReadyError != null)
-            {
-                return ToolResult.error(notReadyError).toJson();
-            }
-
-            ProjectContext ctx = ProjectContext.of(projectName);
-            if (!ctx.exists())
-            {
-                return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
-            }
-
-            if (!ctx.isOpen())
-            {
-                return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
-            }
-            IProject project = ctx.project();
-
-            IApplicationManager appManager = Activator.getDefault().getApplicationManager();
-            if (appManager == null)
-            {
-                return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
-            }
-
-            // A runtime-client launch config may carry no applicationId (it was not
-            // bound to an application). Fall back to the project's default application
-            // so updateBeforeLaunch has a target and the EDT launch delegate does not
-            // pop its blocking "Update infobase before launch?" modal.
-            applicationId = LaunchLifecycleUtils.resolveDefaultApplicationId(project, applicationId, appManager);
-
-            if (applicationId != null && !applicationId.isEmpty())
-            {
-                String appError = validateApplicationExists(appManager, project, applicationId);
-                if (appError != null)
-                {
-                    return appError;
-                }
-            }
+            ILaunchConfiguration matchingConfig = context.config;
+            projectName = context.projectName;
+            applicationId = context.applicationId;
+            IProject project = context.project;
+            IApplicationManager appManager = context.appManager;
 
             // DEBUG mode shares the whole setup above (resolve/validate/effective
             // project+app), then spawns a DEBUG launch and returns at once for
@@ -419,83 +337,22 @@ public class RunYaxunitTestsTool implements IMcpTool
             ILaunch existing = ACTIVE_LAUNCHES.get(runKey);
             if (existing != null)
             {
-                if (existing.isTerminated())
-                {
-                    // Remove + read under the per-IB lock so remove-then-read is ATOMIC against a
-                    // concurrent identical call that falls through to a fresh launch: that path holds
-                    // the SAME lock for cleanupTempDir(reportDir) + spawn, so it cannot wipe reportDir
-                    // between this thread's remove and read. With the remove OUTSIDE the lock, a racer
-                    // could observe ACTIVE_LAUNCHES already empty, take the lock first, cleanupTempDir
-                    // the fresh run's dir and delete junit.xml before this thread reads it — a spurious
-                    // "no JUnit XML" error. pollLaunch's sibling read guards the same way (see there).
-                    // remove(runKey, existing) is by identity — it never drops a newer launch a racing
-                    // identical call may have put under the same runKey since the get() above. Worst
-                    // case still degrades from a torn parse to a clean null; findJunitXml + readResults
-                    // are fast (ms), so contention is negligible.
-                    synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
-                    {
-                        ACTIVE_LAUNCHES.remove(runKey, existing);
-                        PENDING_FETCH.remove(runKey);
-                        File junitXml = findJunitXml(reportDir);
-                        if (junitXml != null)
-                        {
-                            return readResults(junitXml);
-                        }
-                        return ToolResult.error("Previous launch finished but no JUnit XML found in " //$NON-NLS-1$
-                                + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
-                    }
-                }
-                String pollResult = pollLaunch(existing, reportDir, timeout, runKey,
+                return handleExistingLaunch(existing, reportDir, timeout, runKey,
                         projectName, applicationId);
-                if (pollResult != null)
-                {
-                    // Result delivered — forget any Pending bookkeeping so the next call re-runs.
-                    PENDING_FETCH.remove(runKey);
-                    return pollResult;
-                }
-                // Still running past the window — remember the key so a re-call can fetch the result.
-                PENDING_FETCH.add(runKey);
-                return buildPendingMessage(reportDir);
             }
 
             // No active launch. Deliver a previously reported Pending result EXACTLY ONCE: a re-call
             // fetching the result of a run that finished after a Pending response gets the report;
             // any later call with the same key falls through to a fresh run. There is NO time-based
             // cache, so a genuine re-run always re-executes the tests.
-            // Consume + read under the per-IB lock so a concurrent identical call that falls through to
-            // a fresh launch cannot cleanupTempDir(reportDir) mid-read — the fresh-run path holds the
-            // SAME lock for cleanup+spawn. A racer blocked here finds PENDING_FETCH already drained and
-            // proceeds to a fresh run; worst case degrades from a torn parse to a clean null.
-            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+            String pendingResult = tryDeliverPendingResult(runKey, reportDir, projectName, applicationId);
+            if (pendingResult != null)
             {
-                if (PENDING_FETCH.remove(runKey))
-                {
-                    File pending = findJunitXml(reportDir);
-                    if (pending != null)
-                    {
-                        Activator.logInfo("Delivering completed YAXUnit result for pending runKey=" + runKey); //$NON-NLS-1$
-                        return readResults(pending);
-                    }
-                    // Pending was reported but no report materialised (the launch died without writing
-                    // junit.xml) — fall through and start a fresh run.
-                }
+                return pendingResult;
             }
 
             // Phase 1 (quick, JVM-wide): try to reuse an active launch for this runKey.
-            ILaunch launch = null;
-            synchronized (ACTIVE_LAUNCHES)
-            {
-                ILaunch concurrent = ACTIVE_LAUNCHES.get(runKey);
-                if (concurrent != null && !concurrent.isTerminated())
-                {
-                    Activator.logInfo("Reusing active YAXUnit launch for runKey=" + runKey); //$NON-NLS-1$
-                    launch = concurrent;
-                }
-                else if (concurrent != null)
-                {
-                    ACTIVE_LAUNCHES.remove(runKey);
-                }
-            }
+            ILaunch launch = reuseActiveLaunch(runKey);
 
             // Phase 2: pre-launch preparation (terminate stale launch + recompute
             // + DB update) runs in a background Job under a 25-second budget.
@@ -634,6 +491,289 @@ public class RunYaxunitTestsTool implements IMcpTool
             Activator.logError("Unexpected error running YAXUnit tests", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
         }
+    }
+
+    /**
+     * Resolved launch context produced by {@link #resolveLaunchContext}: either a
+     * ready {@link ToolResult#error} JSON payload in {@link #error} (the caller
+     * returns it verbatim) or the fully derived launch inputs (config, effective
+     * project/application names, project handle and application manager).
+     */
+    private static final class LaunchContext
+    {
+        final String error;
+        final ILaunchConfiguration config;
+        final String projectName;
+        final String applicationId;
+        final IProject project;
+        final IApplicationManager appManager;
+
+        /** Failure result — only {@link #error} is meaningful. */
+        static LaunchContext failure(String error)
+        {
+            return new LaunchContext(error, null, null, null, null, null);
+        }
+
+        /** Success result — {@link #error} is {@code null}. */
+        static LaunchContext success(ILaunchConfiguration config, String projectName,
+                String applicationId, IProject project, IApplicationManager appManager)
+        {
+            return new LaunchContext(null, config, projectName, applicationId, project, appManager);
+        }
+
+        private LaunchContext(String error, ILaunchConfiguration config, String projectName,
+                String applicationId, IProject project, IApplicationManager appManager)
+        {
+            this.error = error;
+            this.config = config;
+            this.projectName = projectName;
+            this.applicationId = applicationId;
+            this.project = project;
+            this.appManager = appManager;
+        }
+    }
+
+    /**
+     * Argument-validates {@code updateScope} as early as possible: when the caller
+     * named the project directly a typo'd extension name fails fast with the
+     * available names BEFORE launch-config resolution, so the validation is
+     * reachable (and e2e-testable) without a launch configuration or a live
+     * infobase. The same validation inside {@code prepareForFreshLaunch} stays as
+     * the backstop for the by-name call style, where the project is only known
+     * after the config resolves. Gated on {@code updateBeforeLaunch} because
+     * {@code updateScope} only applies to the auto-chain; gated on the project
+     * existing so an unknown project keeps its established no-config sentinel.
+     *
+     * @return a ready {@link ToolResult#error} JSON payload to return verbatim, or
+     *         {@code null} when the scope is valid (or the guard does not apply)
+     */
+    private static String validateUpdateScopeEarly(String projectName, String updateScope,
+            boolean updateBeforeLaunch)
+    {
+        if (updateBeforeLaunch && projectName != null && !projectName.isEmpty())
+        {
+            ProjectContext scopeCtx = ProjectContext.of(projectName);
+            if (scopeCtx.exists())
+            {
+                String scopeError =
+                    LaunchLifecycleUtils.validateUpdateScope(scopeCtx.project(), updateScope);
+                if (scopeError != null)
+                {
+                    return ToolResult.error(scopeError).toJson();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves and validates the runtime-client launch configuration and derives
+     * the effective project/application from it (read-only — no launch is spawned).
+     * Mirrors the exact early-return errors the inline flow produced; on success the
+     * returned {@link LaunchContext} carries the resolved config, the possibly
+     * config-derived project/application names, the project handle and the
+     * application manager (with the project's default application substituted for a
+     * missing applicationId).
+     *
+     * @return a {@link LaunchContext} whose {@link LaunchContext#error} is non-{@code null}
+     *         when the caller must return that JSON payload, otherwise a populated success
+     */
+    private LaunchContext resolveLaunchContext(ILaunchManager launchManager, String configName,
+            String projectName, String applicationId)
+    {
+        ILaunchConfiguration matchingConfig = LaunchConfigUtils.resolveLaunchConfig(
+                launchManager, configName, projectName, applicationId);
+        if (matchingConfig == null)
+        {
+            boolean hasName = configName != null && !configName.isEmpty();
+            return LaunchContext.failure(hasName
+                ? ToolResult.error("Launch configuration not found: '" + configName + "'. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Use list_configurations to see what's available.").toJson() //$NON-NLS-1$
+                : buildNoConfigError(launchManager,
+                    launchManager.getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID),
+                    projectName, applicationId));
+        }
+        if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(matchingConfig)))
+        {
+            return LaunchContext.failure(ToolResult.error("Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
+                + "' is not a runtime-client config — YAXUnit tests require one.").toJson()); //$NON-NLS-1$
+        }
+
+        // Derive effective project/application from the resolved config.
+        String effectiveProject = LaunchConfigUtils.readAttribute(matchingConfig,
+            LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+        String effectiveAppId = LaunchConfigUtils.readAttribute(matchingConfig,
+            LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+        if (projectName == null || projectName.isEmpty())
+        {
+            projectName = effectiveProject;
+        }
+        if (applicationId == null || applicationId.isEmpty())
+        {
+            applicationId = effectiveAppId;
+        }
+        if (projectName == null || projectName.isEmpty())
+        {
+            return LaunchContext.failure(ToolResult.error("Launch configuration '" + matchingConfig.getName() //$NON-NLS-1$
+                + "' has no project attribute set").toJson()); //$NON-NLS-1$
+        }
+
+        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
+        if (notReadyError != null)
+        {
+            return LaunchContext.failure(ToolResult.error(notReadyError).toJson());
+        }
+
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return LaunchContext.failure(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
+        }
+
+        if (!ctx.isOpen())
+        {
+            return LaunchContext.failure(ToolResult.error("Project is closed: " + projectName).toJson()); //$NON-NLS-1$
+        }
+        IProject project = ctx.project();
+
+        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
+        if (appManager == null)
+        {
+            return LaunchContext.failure(
+                ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
+        }
+
+        // A runtime-client launch config may carry no applicationId (it was not
+        // bound to an application). Fall back to the project's default application
+        // so updateBeforeLaunch has a target and the EDT launch delegate does not
+        // pop its blocking "Update infobase before launch?" modal.
+        applicationId = LaunchLifecycleUtils.resolveDefaultApplicationId(project, applicationId, appManager);
+
+        if (applicationId != null && !applicationId.isEmpty())
+        {
+            String appError = validateApplicationExists(appManager, project, applicationId);
+            if (appError != null)
+            {
+                return LaunchContext.failure(appError);
+            }
+        }
+
+        return LaunchContext.success(matchingConfig, projectName, applicationId, project, appManager);
+    }
+
+    /**
+     * Handles a run-key that already has a launch tracked in {@link #ACTIVE_LAUNCHES}:
+     * if it terminated, evicts it and reads the report (or reports a missing one);
+     * otherwise polls up to {@code timeout}s and returns the parsed report or a
+     * Pending message. Does NOT spawn a launch — it only reads results and updates
+     * the {@link #ACTIVE_LAUNCHES}/{@link #PENDING_FETCH} tracking maps, exactly as
+     * the inline branch did.
+     * <p>
+     * The terminated remove + read runs under the per-IB lock so remove-then-read is
+     * ATOMIC against a concurrent identical call that falls through to a fresh launch:
+     * that path holds the SAME lock for cleanupTempDir(reportDir) + spawn, so it cannot
+     * wipe reportDir between this thread's remove and read. With the remove OUTSIDE the
+     * lock, a racer could observe ACTIVE_LAUNCHES already empty, take the lock first,
+     * cleanupTempDir the fresh run's dir and delete junit.xml before this thread reads it
+     * — a spurious "no JUnit XML" error. pollLaunch's sibling read guards the same way
+     * (see there). remove(runKey, existing) is by identity — it never drops a newer launch
+     * a racing identical call may have put under the same runKey since the get() above.
+     * Worst case still degrades from a torn parse to a clean null; findJunitXml + readResults
+     * are fast (ms), so contention is negligible.
+     *
+     * @return the Markdown report, a structured error, or a Pending message — always non-{@code null}
+     */
+    private String handleExistingLaunch(ILaunch existing, Path reportDir, int timeout, String runKey,
+            String projectName, String applicationId) throws InterruptedException
+    {
+        if (existing.isTerminated())
+        {
+            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+            {
+                ACTIVE_LAUNCHES.remove(runKey, existing);
+                PENDING_FETCH.remove(runKey);
+                File junitXml = findJunitXml(reportDir);
+                if (junitXml != null)
+                {
+                    return readResults(junitXml);
+                }
+                return ToolResult.error("Previous launch finished but no JUnit XML found in " //$NON-NLS-1$
+                        + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
+            }
+        }
+        String pollResult = pollLaunch(existing, reportDir, timeout, runKey,
+                projectName, applicationId);
+        if (pollResult != null)
+        {
+            // Result delivered — forget any Pending bookkeeping so the next call re-runs.
+            PENDING_FETCH.remove(runKey);
+            return pollResult;
+        }
+        // Still running past the window — remember the key so a re-call can fetch the result.
+        PENDING_FETCH.add(runKey);
+        return buildPendingMessage(reportDir);
+    }
+
+    /**
+     * Delivers a previously reported Pending result EXACTLY ONCE: a re-call fetching
+     * the result of a run that finished after a Pending response gets the report;
+     * any later call with the same key falls through to a fresh run. Reads the report
+     * only (no launch is spawned) and consumes the {@link #PENDING_FETCH} entry.
+     * <p>
+     * Consume + read run under the per-IB lock so a concurrent identical call that falls
+     * through to a fresh launch cannot cleanupTempDir(reportDir) mid-read — the fresh-run
+     * path holds the SAME lock for cleanup+spawn. A racer blocked here finds PENDING_FETCH
+     * already drained and proceeds to a fresh run; worst case degrades from a torn parse to
+     * a clean null.
+     *
+     * @return the parsed report when a pending result was delivered, or {@code null}
+     *         when the caller should fall through and start a fresh run (no pending
+     *         entry, or the launch died without writing junit.xml)
+     */
+    private String tryDeliverPendingResult(String runKey, Path reportDir, String projectName,
+            String applicationId)
+    {
+        synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+        {
+            if (PENDING_FETCH.remove(runKey))
+            {
+                File pending = findJunitXml(reportDir);
+                if (pending != null)
+                {
+                    Activator.logInfo("Delivering completed YAXUnit result for pending runKey=" + runKey); //$NON-NLS-1$
+                    return readResults(pending);
+                }
+                // Pending was reported but no report materialised (the launch died without writing
+                // junit.xml) — fall through and start a fresh run.
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Phase 1 reuse check (read-only — no launch is spawned): under JVM-wide sync,
+     * returns the active launch tracked for {@code runKey} when it is still running,
+     * or {@code null} when there is none. A tracked-but-terminated entry is evicted
+     * from {@link #ACTIVE_LAUNCHES} so the caller proceeds to a fresh launch.
+     *
+     * @return the reusable running launch, or {@code null} when none can be reused
+     */
+    private static ILaunch reuseActiveLaunch(String runKey)
+    {
+        synchronized (ACTIVE_LAUNCHES)
+        {
+            ILaunch concurrent = ACTIVE_LAUNCHES.get(runKey);
+            if (concurrent != null && !concurrent.isTerminated())
+            {
+                Activator.logInfo("Reusing active YAXUnit launch for runKey=" + runKey); //$NON-NLS-1$
+                return concurrent;
+            }
+            if (concurrent != null)
+            {
+                ACTIVE_LAUNCHES.remove(runKey);
+            }
+        }
+        return null;
     }
 
     /**

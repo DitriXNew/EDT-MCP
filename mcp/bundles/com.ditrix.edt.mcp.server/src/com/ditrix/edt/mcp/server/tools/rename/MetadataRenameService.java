@@ -879,64 +879,106 @@ public class MetadataRenameService
             Object modifiedElement = bmChange.getModifiedElement();
             if (modifiedElement instanceof IBmObject bmObject)
             {
-                EStructuralFeature feature = getBmChangeFeature(bmChange);
-                if (feature != null)
-                {
-                    for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
-                    {
-                        ExactMatchInfo info = exactMatches.get(getModelMatchKey(bmObject.bmGetId(), feature,
-                            leafEdit.getOffset(), leafEdit.getLength()));
-                        if (info != null)
-                        {
-                            matches.put(getExactMatchIdentity(info), info);
-                        }
-                    }
-                }
-
-                String projectName = bmChange.getProjectName();
-                String objectFqn = bmObject.bmGetFqn();
-                for (ExactMatchInfo info : exactMatches.values())
-                {
-                    if (info == null || info.filePath == null)
-                    {
-                        continue;
-                    }
-                    if (!Objects.equals(info.project, projectName) || !Objects.equals(info.fqn, objectFqn))
-                    {
-                        continue;
-                    }
-                    for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
-                    {
-                        if (containsOffset(leafEdit, info.matchOffset))
-                        {
-                            matches.put(getExactMatchIdentity(info), info);
-                            break;
-                        }
-                    }
-                }
+                collectBmChangeMatches(bmChange, bmObject, exactMatches, matches);
             }
         }
         IFile file = getIFile(change);
         TextEdit edit = getChangeEdit(change);
         if (file != null && edit != null)
         {
-            for (ExactMatchInfo info : exactMatches.values())
+            collectFileChangeMatches(file, edit, exactMatches, matches);
+        }
+        return new ArrayList<>(matches.values());
+    }
+
+    /**
+     * Collects the exact matches that belong to a {@link BmObjectTextContentChange}: model matches
+     * keyed by (object, feature, offset, length) and file-backed matches whose project / FQN equal the
+     * change's and whose offset falls inside one of the change's leaf edits. Pure lookup - adds the
+     * hits into {@code matches} keyed by their identity (no model mutation).
+     */
+    private void collectBmChangeMatches(BmObjectTextContentChange<?> bmChange, IBmObject bmObject,
+        Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
+    {
+        EStructuralFeature feature = getBmChangeFeature(bmChange);
+        if (feature != null)
+        {
+            collectBmModelKeyMatches(bmChange, bmObject, feature, exactMatches, matches);
+        }
+        collectBmFileOffsetMatches(bmChange, bmObject, exactMatches, matches);
+    }
+
+    /**
+     * Adds the file-backed exact matches whose (object, feature, offset, length) key equals a leaf edit
+     * of the BM change. Pure lookup - no model mutation.
+     */
+    private void collectBmModelKeyMatches(BmObjectTextContentChange<?> bmChange, IBmObject bmObject,
+        EStructuralFeature feature, Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
+    {
+        for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
+        {
+            ExactMatchInfo info = exactMatches.get(getModelMatchKey(bmObject.bmGetId(), feature,
+                leafEdit.getOffset(), leafEdit.getLength()));
+            if (info != null)
             {
-                if (info == null || info.filePath == null || !info.filePath.equals(file.getFullPath().toString()))
+                matches.put(getExactMatchIdentity(info), info);
+            }
+        }
+    }
+
+    /**
+     * Adds the file-backed exact matches whose project / FQN equal the BM change's and whose offset
+     * falls inside one of the change's leaf edits. Pure lookup - no model mutation.
+     */
+    private void collectBmFileOffsetMatches(BmObjectTextContentChange<?> bmChange, IBmObject bmObject,
+        Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
+    {
+        String projectName = bmChange.getProjectName();
+        String objectFqn = bmObject.bmGetFqn();
+        for (ExactMatchInfo info : exactMatches.values())
+        {
+            if (info == null || info.filePath == null)
+            {
+                continue;
+            }
+            if (!Objects.equals(info.project, projectName) || !Objects.equals(info.fqn, objectFqn))
+            {
+                continue;
+            }
+            for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
+            {
+                if (containsOffset(leafEdit, info.matchOffset))
                 {
-                    continue;
-                }
-                for (TextEdit leafEdit : getLeafEdits(edit))
-                {
-                    if (containsOffset(leafEdit, info.matchOffset))
-                    {
-                        matches.put(getExactMatchIdentity(info), info);
-                        break;
-                    }
+                    matches.put(getExactMatchIdentity(info), info);
+                    break;
                 }
             }
         }
-        return new ArrayList<>(matches.values());
+    }
+
+    /**
+     * Collects the exact matches that belong to a plain source-file change: file-backed matches whose
+     * path equals {@code file} and whose offset falls inside one of the change's leaf edits. Pure
+     * lookup - adds the hits into {@code matches} keyed by their identity (no model mutation).
+     */
+    private void collectFileChangeMatches(IFile file, TextEdit edit,
+        Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
+    {
+        for (ExactMatchInfo info : exactMatches.values())
+        {
+            if (info == null || info.filePath == null || !info.filePath.equals(file.getFullPath().toString()))
+            {
+                continue;
+            }
+            for (TextEdit leafEdit : getLeafEdits(edit))
+            {
+                if (containsOffset(leafEdit, info.matchOffset))
+                {
+                    matches.put(getExactMatchIdentity(info), info);
+                    break;
+                }
+            }
+        }
     }
 
     private void logPreviewMapping(Change change, String fqn, String project, int exactMatchesCount)
