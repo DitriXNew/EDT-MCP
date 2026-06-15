@@ -576,28 +576,22 @@ public class FormLayoutSnapshotService
         {
             return "Auto"; //$NON-NLS-1$
         }
-        if ("V8Border".equals(value.getClass().getSimpleName())) //$NON-NLS-1$
+        // A V8Border with an unset mCoreBorder renders as the "Auto" sentinel. Detect it by the
+        // PRESENCE of the public mCoreBorder field, not the class name: V8Border is a platform-internal
+        // type not on our classpath (instanceof impossible), and a name match is fragile. Any value
+        // without that field simply falls through to the generic conversion.
+        try
         {
-            Object mCoreBorder = getPublicFieldValue(value, "mCoreBorder"); //$NON-NLS-1$
-            if (mCoreBorder == null)
+            if (value.getClass().getField("mCoreBorder").get(value) == null) //$NON-NLS-1$
             {
                 return "Auto"; //$NON-NLS-1$
             }
         }
-        return convertFeatureValue(value);
-    }
-
-    private Object getPublicFieldValue(Object value, String fieldName)
-    {
-        try
-        {
-            Field field = value.getClass().getField(fieldName);
-            return field.get(value);
-        }
         catch (ReflectiveOperationException e)
         {
-            return null;
+            // No public mCoreBorder field on this value — not a border sentinel; fall through.
         }
+        return convertFeatureValue(value);
     }
 
     private Map<String, Object> describeInspectableValue(Object value)
