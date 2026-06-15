@@ -121,12 +121,12 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     private static String getConfigurationPropertiesInternal(String projectName)
     {
         Activator.logInfo("getConfigurationPropertiesInternal: Starting..."); //$NON-NLS-1$
-        
+
         try
         {
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
             IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-            
+
             if (dtProjectManager == null || v8ProjectManager == null)
             {
                 Activator.logInfo("getConfigurationProperties: Project managers not available"); //$NON-NLS-1$
@@ -137,80 +137,16 @@ public class GetConfigurationPropertiesTool implements IMcpTool
             // are IConfigurationAware and expose getConfiguration(), so resolve against
             // that shared interface (NOT the narrower IConfigurationProject, which
             // excludes extensions and made this tool error on a valid extension).
-            IConfigurationAware configProject = null;
-            IProject matchedProject = null;
-            boolean matchedIsExtension = false;
+            MatchedConfiguration matched = resolveConfigurationProject(projectName,
+                dtProjectManager, v8ProjectManager);
 
-            // Find project by name or get first configuration project
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            IProject[] projects = workspace.getRoot().getProjects();
-
-            for (IProject project : projects)
+            if (matched.configProject == null)
             {
-                if (!project.isOpen())
-                {
-                    continue;
-                }
-
-                IDtProject dtProject = dtProjectManager.getDtProject(project);
-                if (dtProject == null)
-                {
-                    continue;
-                }
-
-                IV8Project v8Project = v8ProjectManager.getProject(dtProject);
-                if (!(v8Project instanceof IConfigurationAware))
-                {
-                    continue;
-                }
-
-                if (projectName == null || projectName.isEmpty())
-                {
-                    // Default (no name given): the first base CONFIGURATION project — an
-                    // extension is not a sensible "default configuration", so skip it here.
-                    if (v8Project instanceof IConfigurationProject)
-                    {
-                        configProject = (IConfigurationAware) v8Project;
-                        matchedProject = project;
-                        break;
-                    }
-                }
-                else if (project.getName().equals(projectName))
-                {
-                    // Explicit name: accept a base configuration OR an extension.
-                    configProject = (IConfigurationAware) v8Project;
-                    matchedProject = project;
-                    matchedIsExtension = v8Project instanceof IExtensionProject;
-                    break;
-                }
-            }
-            
-            if (configProject == null)
-            {
-                if (projectName != null && !projectName.isEmpty())
-                {
-                    // Distinguish "no such project" from "exists but is not a
-                    // configuration project" so the message is accurate; both name
-                    // the value and point at list_projects as the next step.
-                    if (!ProjectContext.of(projectName).exists())
-                    {
-                        return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
-                    }
-                    // Exists but exposes no 1C configuration — neither a base
-                    // configuration nor an extension (both are IConfigurationAware).
-                    return ToolResult.error("Project '" + projectName //$NON-NLS-1$
-                        + "' does not expose a 1C configuration (not a configuration or extension project). " //$NON-NLS-1$
-                        + "Use list_projects to see available projects.").toJson(); //$NON-NLS-1$
-                }
-                // No projectName given and the workspace holds no configuration
-                // project at all — nothing to name; keep the message clear and tell
-                // the caller how to discover projects.
-                return ToolResult.error("No configuration project found in the workspace. " //$NON-NLS-1$
-                    + "Use list_projects to see available projects.").toJson(); //$NON-NLS-1$
+                return configProjectNotFoundError(projectName);
             }
 
             // Get configuration object
-            Configuration configuration = configProject.getConfiguration();
+            Configuration configuration = matched.configProject.getConfiguration();
             if (configuration == null)
             {
                 return ToolResult.error("Configuration object not available").toJson(); //$NON-NLS-1$
@@ -222,90 +158,17 @@ public class GetConfigurationPropertiesTool implements IMcpTool
             // ToolResult.error(...).toJson() above and are delivered as structured
             // JSON via the protocol diversion, independent of this YAML body.
             StringBuilder yaml = new StringBuilder();
-            appendScalar(yaml, "name", configuration.getName()); //$NON-NLS-1$
-            appendMap(yaml, "synonym", toLocalizedMap(configuration.getSynonym())); //$NON-NLS-1$
-            appendScalar(yaml, "comment", configuration.getComment()); //$NON-NLS-1$
-
-            if (configuration.getScriptVariant() != null)
-            {
-                appendScalar(yaml, "scriptVariant", configuration.getScriptVariant().toString()); //$NON-NLS-1$
-            }
-            if (configuration.getDefaultRunMode() != null)
-            {
-                appendScalar(yaml, "defaultRunMode", configuration.getDefaultRunMode().toString()); //$NON-NLS-1$
-            }
-            if (configuration.getDataLockControlMode() != null)
-            {
-                appendScalar(yaml, "dataLockControlMode", configuration.getDataLockControlMode().toString()); //$NON-NLS-1$
-            }
-            if (configuration.getCompatibilityMode() != null)
-            {
-                appendScalar(yaml, "compatibilityMode", configuration.getCompatibilityMode().toString()); //$NON-NLS-1$
-            }
-            if (configuration.getModalityUseMode() != null)
-            {
-                appendScalar(yaml, "modalityUseMode", configuration.getModalityUseMode().toString()); //$NON-NLS-1$
-            }
-            if (configuration.getInterfaceCompatibilityMode() != null)
-            {
-                appendScalar(yaml, "interfaceCompatibilityMode", configuration.getInterfaceCompatibilityMode().toString()); //$NON-NLS-1$
-            }
-            if (configuration.getObjectAutonumerationMode() != null)
-            {
-                appendScalar(yaml, "objectAutonumerationMode", configuration.getObjectAutonumerationMode().toString()); //$NON-NLS-1$
-            }
-
-            // Use purposes (list)
-            List<String> usePurposes = new ArrayList<>();
-            if (configuration.getUsePurposes() != null)
-            {
-                for (Object purpose : configuration.getUsePurposes())
-                {
-                    usePurposes.add(purpose.toString());
-                }
-            }
-            appendList(yaml, "usePurposes", usePurposes); //$NON-NLS-1$
-
-            // Localized / vendor fields (empty maps omitted)
-            appendMap(yaml, "briefInformation", toLocalizedMap(configuration.getBriefInformation())); //$NON-NLS-1$
-            appendMap(yaml, "detailedInformation", toLocalizedMap(configuration.getDetailedInformation())); //$NON-NLS-1$
-            appendScalar(yaml, "vendor", configuration.getVendor()); //$NON-NLS-1$
-            appendScalar(yaml, "version", configuration.getVersion()); //$NON-NLS-1$
-            appendMap(yaml, "copyright", toLocalizedMap(configuration.getCopyright())); //$NON-NLS-1$
-            appendMap(yaml, "vendorInformationAddress", toLocalizedMap(configuration.getVendorInformationAddress())); //$NON-NLS-1$
-            appendMap(yaml, "configurationInformationAddress", toLocalizedMap(configuration.getConfigurationInformationAddress())); //$NON-NLS-1$
-
-            // Default language: report the language CODE (ru/en — the synonym map key)
-            // plus its human-readable name.
-            if (configuration.getDefaultLanguage() != null)
-            {
-                appendScalar(yaml, "defaultLanguage", configuration.getDefaultLanguage().getLanguageCode()); //$NON-NLS-1$
-                appendScalar(yaml, "defaultLanguageName", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
-            }
+            appendConfigurationProperties(yaml, configuration);
 
             // Extension-specific properties — emitted only for a configuration
             // EXTENSION (a base configuration has no name prefix / purpose / extension
             // compatibility mode), so a base config's output is unchanged.
-            if (matchedIsExtension)
+            if (matched.isExtension)
             {
-                // A synthetic marker that this project is a configuration EXTENSION.
-                // NB this is NOT the EMF MdObject.getObjectBelonging() property (that
-                // returns Adopted/Native per object) — it is a project-kind hint.
-                appendScalar(yaml, "projectKind", "Extension"); //$NON-NLS-1$ //$NON-NLS-2$
-                appendScalar(yaml, "namePrefix", configuration.getNamePrefix()); //$NON-NLS-1$
-                if (configuration.getConfigurationExtensionPurpose() != null)
-                {
-                    appendScalar(yaml, "configurationExtensionPurpose", //$NON-NLS-1$
-                        configuration.getConfigurationExtensionPurpose().toString());
-                }
-                if (configuration.getConfigurationExtensionCompatibilityMode() != null)
-                {
-                    appendScalar(yaml, "configurationExtensionCompatibilityMode", //$NON-NLS-1$
-                        configuration.getConfigurationExtensionCompatibilityMode().toString());
-                }
+                appendExtensionProperties(yaml, configuration);
             }
 
-            appendScalar(yaml, McpKeys.PROJECT_NAME, matchedProject.getName());
+            appendScalar(yaml, McpKeys.PROJECT_NAME, matched.project.getName());
 
             return yaml.toString();
         }
@@ -313,6 +176,214 @@ public class GetConfigurationPropertiesTool implements IMcpTool
         {
             Activator.logError("Failed to get configuration properties", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
+        }
+    }
+
+    /**
+     * Holder threading the resolved configuration project, its workspace project and
+     * whether the match is a configuration EXTENSION out of {@link #resolveConfigurationProject}.
+     * When no project matched, {@link #configProject} is {@code null}.
+     */
+    private static final class MatchedConfiguration
+    {
+        private final IConfigurationAware configProject;
+        private final IProject project;
+        private final boolean isExtension;
+
+        private MatchedConfiguration(IConfigurationAware configProject, IProject project, boolean isExtension)
+        {
+            this.configProject = configProject;
+            this.project = project;
+            this.isExtension = isExtension;
+        }
+    }
+
+    /**
+     * Resolves the configuration project to report. With no name, returns the first base
+     * CONFIGURATION project (extensions are skipped — an extension is not a sensible
+     * "default configuration"). With a name, accepts a base configuration OR an extension
+     * whose project name matches. Returns a holder with a {@code null} configProject when
+     * nothing matched (the caller turns that into the appropriate error).
+     *
+     * @param projectName optional project name filter
+     * @param dtProjectManager the DT project manager
+     * @param v8ProjectManager the V8 project manager
+     * @return the matched-configuration holder (never null; configProject may be null)
+     */
+    private static MatchedConfiguration resolveConfigurationProject(String projectName,
+        IDtProjectManager dtProjectManager, IV8ProjectManager v8ProjectManager)
+    {
+        IWorkspace workspace = ResourcesPlugin.getWorkspace();
+        IProject[] projects = workspace.getRoot().getProjects();
+
+        for (IProject project : projects)
+        {
+            if (!project.isOpen())
+            {
+                continue;
+            }
+
+            IDtProject dtProject = dtProjectManager.getDtProject(project);
+            if (dtProject == null)
+            {
+                continue;
+            }
+
+            IV8Project v8Project = v8ProjectManager.getProject(dtProject);
+            if (!(v8Project instanceof IConfigurationAware))
+            {
+                continue;
+            }
+
+            if (projectName == null || projectName.isEmpty())
+            {
+                // Default (no name given): the first base CONFIGURATION project — an
+                // extension is not a sensible "default configuration", so skip it here.
+                if (v8Project instanceof IConfigurationProject)
+                {
+                    return new MatchedConfiguration((IConfigurationAware) v8Project, project, false);
+                }
+            }
+            else if (project.getName().equals(projectName))
+            {
+                // Explicit name: accept a base configuration OR an extension.
+                return new MatchedConfiguration((IConfigurationAware) v8Project, project,
+                    v8Project instanceof IExtensionProject);
+            }
+        }
+
+        return new MatchedConfiguration(null, null, false);
+    }
+
+    /**
+     * Builds the error returned when no configuration project resolved, distinguishing
+     * "no such project", "exists but exposes no 1C configuration" and "workspace has no
+     * configuration project at all" so the message is accurate. Always travels as
+     * structured JSON via {@link ToolResult#error}.
+     *
+     * @param projectName the requested project name (may be null/empty)
+     * @return the JSON error payload
+     */
+    private static String configProjectNotFoundError(String projectName)
+    {
+        if (projectName != null && !projectName.isEmpty())
+        {
+            // Distinguish "no such project" from "exists but is not a
+            // configuration project" so the message is accurate; both name
+            // the value and point at list_projects as the next step.
+            if (!ProjectContext.of(projectName).exists())
+            {
+                return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            }
+            // Exists but exposes no 1C configuration — neither a base
+            // configuration nor an extension (both are IConfigurationAware).
+            return ToolResult.error("Project '" + projectName //$NON-NLS-1$
+                + "' does not expose a 1C configuration (not a configuration or extension project). " //$NON-NLS-1$
+                + "Use list_projects to see available projects.").toJson(); //$NON-NLS-1$
+        }
+        // No projectName given and the workspace holds no configuration
+        // project at all — nothing to name; keep the message clear and tell
+        // the caller how to discover projects.
+        return ToolResult.error("No configuration project found in the workspace. " //$NON-NLS-1$
+            + "Use list_projects to see available projects.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Appends the common (non-extension) configuration properties to the YAML body in
+     * the exact order/format used for both base configurations and extensions. Null
+     * scalars and empty localized maps are omitted by the append* helpers.
+     *
+     * @param yaml the YAML accumulator
+     * @param configuration the configuration object to read from
+     */
+    private static void appendConfigurationProperties(StringBuilder yaml, Configuration configuration)
+    {
+        appendScalar(yaml, "name", configuration.getName()); //$NON-NLS-1$
+        appendMap(yaml, "synonym", toLocalizedMap(configuration.getSynonym())); //$NON-NLS-1$
+        appendScalar(yaml, "comment", configuration.getComment()); //$NON-NLS-1$
+
+        if (configuration.getScriptVariant() != null)
+        {
+            appendScalar(yaml, "scriptVariant", configuration.getScriptVariant().toString()); //$NON-NLS-1$
+        }
+        if (configuration.getDefaultRunMode() != null)
+        {
+            appendScalar(yaml, "defaultRunMode", configuration.getDefaultRunMode().toString()); //$NON-NLS-1$
+        }
+        if (configuration.getDataLockControlMode() != null)
+        {
+            appendScalar(yaml, "dataLockControlMode", configuration.getDataLockControlMode().toString()); //$NON-NLS-1$
+        }
+        if (configuration.getCompatibilityMode() != null)
+        {
+            appendScalar(yaml, "compatibilityMode", configuration.getCompatibilityMode().toString()); //$NON-NLS-1$
+        }
+        if (configuration.getModalityUseMode() != null)
+        {
+            appendScalar(yaml, "modalityUseMode", configuration.getModalityUseMode().toString()); //$NON-NLS-1$
+        }
+        if (configuration.getInterfaceCompatibilityMode() != null)
+        {
+            appendScalar(yaml, "interfaceCompatibilityMode", configuration.getInterfaceCompatibilityMode().toString()); //$NON-NLS-1$
+        }
+        if (configuration.getObjectAutonumerationMode() != null)
+        {
+            appendScalar(yaml, "objectAutonumerationMode", configuration.getObjectAutonumerationMode().toString()); //$NON-NLS-1$
+        }
+
+        // Use purposes (list)
+        List<String> usePurposes = new ArrayList<>();
+        if (configuration.getUsePurposes() != null)
+        {
+            for (Object purpose : configuration.getUsePurposes())
+            {
+                usePurposes.add(purpose.toString());
+            }
+        }
+        appendList(yaml, "usePurposes", usePurposes); //$NON-NLS-1$
+
+        // Localized / vendor fields (empty maps omitted)
+        appendMap(yaml, "briefInformation", toLocalizedMap(configuration.getBriefInformation())); //$NON-NLS-1$
+        appendMap(yaml, "detailedInformation", toLocalizedMap(configuration.getDetailedInformation())); //$NON-NLS-1$
+        appendScalar(yaml, "vendor", configuration.getVendor()); //$NON-NLS-1$
+        appendScalar(yaml, "version", configuration.getVersion()); //$NON-NLS-1$
+        appendMap(yaml, "copyright", toLocalizedMap(configuration.getCopyright())); //$NON-NLS-1$
+        appendMap(yaml, "vendorInformationAddress", toLocalizedMap(configuration.getVendorInformationAddress())); //$NON-NLS-1$
+        appendMap(yaml, "configurationInformationAddress", toLocalizedMap(configuration.getConfigurationInformationAddress())); //$NON-NLS-1$
+
+        // Default language: report the language CODE (ru/en — the synonym map key)
+        // plus its human-readable name.
+        if (configuration.getDefaultLanguage() != null)
+        {
+            appendScalar(yaml, "defaultLanguage", configuration.getDefaultLanguage().getLanguageCode()); //$NON-NLS-1$
+            appendScalar(yaml, "defaultLanguageName", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Appends the configuration-EXTENSION-only properties (project-kind marker, name
+     * prefix, extension purpose and extension compatibility mode). Called only when the
+     * matched project is an extension, so base-configuration output is unchanged.
+     *
+     * @param yaml the YAML accumulator
+     * @param configuration the extension configuration object to read from
+     */
+    private static void appendExtensionProperties(StringBuilder yaml, Configuration configuration)
+    {
+        // A synthetic marker that this project is a configuration EXTENSION.
+        // NB this is NOT the EMF MdObject.getObjectBelonging() property (that
+        // returns Adopted/Native per object) — it is a project-kind hint.
+        appendScalar(yaml, "projectKind", "Extension"); //$NON-NLS-1$ //$NON-NLS-2$
+        appendScalar(yaml, "namePrefix", configuration.getNamePrefix()); //$NON-NLS-1$
+        if (configuration.getConfigurationExtensionPurpose() != null)
+        {
+            appendScalar(yaml, "configurationExtensionPurpose", //$NON-NLS-1$
+                configuration.getConfigurationExtensionPurpose().toString());
+        }
+        if (configuration.getConfigurationExtensionCompatibilityMode() != null)
+        {
+            appendScalar(yaml, "configurationExtensionCompatibilityMode", //$NON-NLS-1$
+                configuration.getConfigurationExtensionCompatibilityMode().toString());
         }
     }
     

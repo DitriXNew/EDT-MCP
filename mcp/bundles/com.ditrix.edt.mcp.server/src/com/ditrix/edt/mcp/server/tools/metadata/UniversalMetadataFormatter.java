@@ -361,7 +361,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         {
             addSectionHeader(sb, name);
         }
-        
+
         // An Origin column is added only when at least one attribute is ADOPTED (an extension's
         // adopted object whose attribute(s) override the base) - marking which attribute is
         // overridden (core (adopted)) vs the extension's own (extension). A base configuration
@@ -369,112 +369,127 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         boolean showOrigin = anyAdopted(items);
         if (full)
         {
-            // Extended format with 10 columns (+ Origin when adopted attributes are present)
-            java.util.List<String> headers = new java.util.ArrayList<>(java.util.Arrays.asList(
-                "Name", SYNONYM_TOKEN, "Type", "Indexing", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
-            if (showOrigin)
-            {
-                headers.add(ORIGIN_TOKEN);
-            }
-            startTable(sb, headers.toArray(new String[0]));
-
-            for (Object item : items)
-            {
-                if (item instanceof BasicFeature)
-                {
-                    BasicFeature attr = (BasicFeature) item;
-
-                    // Get indexing if it's DbObjectAttribute
-                    String indexing = DASH;
-                    if (attr instanceof DbObjectAttribute)
-                    {
-                        indexing = formatEnum(((DbObjectAttribute) attr).getIndexing());
-                    }
-
-                    // Get password mode using EMF reflection (it's in BasicFeature but not in interface)
-                    String passwordMode = NO;
-                    try
-                    {
-                        java.lang.reflect.Method method = attr.getClass().getMethod("isPasswordMode"); //$NON-NLS-1$
-                        Boolean pwdMode = (Boolean) method.invoke(attr);
-                        passwordMode = formatBoolean(pwdMode != null ? pwdMode : false);
-                    }
-                    catch (Exception e)
-                    {
-                        // Method doesn't exist or error - use default
-                    }
-
-                    // Get multiLine using EMF reflection
-                    String multiLine = NO;
-                    try
-                    {
-                        java.lang.reflect.Method method = attr.getClass().getMethod("isMultiLine"); //$NON-NLS-1$
-                        Boolean mlMode = (Boolean) method.invoke(attr);
-                        multiLine = formatBoolean(mlMode != null ? mlMode : false);
-                    }
-                    catch (Exception e)
-                    {
-                        // Method doesn't exist or error - use default
-                    }
-
-                    // Get fullTextSearch if it's DbObjectAttribute
-                    String fullTextSearch = DASH;
-                    if (attr instanceof DbObjectAttribute)
-                    {
-                        fullTextSearch = formatEnum(((DbObjectAttribute) attr).getFullTextSearch());
-                    }
-
-                    java.util.List<String> cells = new java.util.ArrayList<>(java.util.Arrays.asList(
-                        attr.getName(),
-                        getSynonym(attr.getSynonym(), language),
-                        formatType(attr.getType()),
-                        indexing,
-                        formatEnum(attr.getFillChecking()),
-                        fullTextSearch,
-                        passwordMode,
-                        multiLine,
-                        formatEnum(attr.getQuickChoice()),
-                        formatEnum(attr.getCreateOnInput())));
-                    if (showOrigin)
-                    {
-                        cells.add(originCell(attr));
-                    }
-                    addTableRow(sb, cells.toArray(new String[0]));
-                }
-            }
+            formatAttributesExtended(sb, items, showOrigin, language);
         }
         else
         {
-            // Compact format - Name, Synonym, Type (+ Origin when adopted attributes are present)
-            if (showOrigin)
-            {
-                startTable(sb, "Name", SYNONYM_TOKEN, "Type", ORIGIN_TOKEN); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else
-            {
-                startTable(sb, "Name", SYNONYM_TOKEN, "Type"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            formatAttributesCompact(sb, items, showOrigin, language);
+        }
+    }
 
-            for (Object item : items)
+    /**
+     * Renders the extended (full=true) attribute table: a 10-column layout (plus an Origin column
+     * when {@code showOrigin}). Header and per-row rendering match the original inline code exactly.
+     */
+    private void formatAttributesExtended(StringBuilder sb, Collection<?> items, boolean showOrigin, String language)
+    {
+        // Extended format with 10 columns (+ Origin when adopted attributes are present)
+        java.util.List<String> headers = new java.util.ArrayList<>(java.util.Arrays.asList(
+            "Name", SYNONYM_TOKEN, "Type", "Indexing", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
+        if (showOrigin)
+        {
+            headers.add(ORIGIN_TOKEN);
+        }
+        startTable(sb, headers.toArray(new String[0]));
+
+        for (Object item : items)
+        {
+            if (item instanceof BasicFeature)
             {
-                if (item instanceof BasicFeature)
+                BasicFeature attr = (BasicFeature) item;
+
+                // Get indexing if it's DbObjectAttribute
+                String indexing = DASH;
+                if (attr instanceof DbObjectAttribute)
                 {
-                    BasicFeature attr = (BasicFeature) item;
-                    if (showOrigin)
-                    {
-                        addTableRow(sb,
-                            attr.getName(),
-                            getSynonym(attr.getSynonym(), language),
-                            formatType(attr.getType()),
-                            originCell(attr));
-                    }
-                    else
-                    {
-                        addTableRow(sb,
-                            attr.getName(),
-                            getSynonym(attr.getSynonym(), language),
-                            formatType(attr.getType()));
-                    }
+                    indexing = formatEnum(((DbObjectAttribute) attr).getIndexing());
+                }
+
+                String passwordMode = formatReflectiveBoolean(attr, "isPasswordMode"); //$NON-NLS-1$
+                String multiLine = formatReflectiveBoolean(attr, "isMultiLine"); //$NON-NLS-1$
+
+                // Get fullTextSearch if it's DbObjectAttribute
+                String fullTextSearch = DASH;
+                if (attr instanceof DbObjectAttribute)
+                {
+                    fullTextSearch = formatEnum(((DbObjectAttribute) attr).getFullTextSearch());
+                }
+
+                java.util.List<String> cells = new java.util.ArrayList<>(java.util.Arrays.asList(
+                    attr.getName(),
+                    getSynonym(attr.getSynonym(), language),
+                    formatType(attr.getType()),
+                    indexing,
+                    formatEnum(attr.getFillChecking()),
+                    fullTextSearch,
+                    passwordMode,
+                    multiLine,
+                    formatEnum(attr.getQuickChoice()),
+                    formatEnum(attr.getCreateOnInput())));
+                if (showOrigin)
+                {
+                    cells.add(originCell(attr));
+                }
+                addTableRow(sb, cells.toArray(new String[0]));
+            }
+        }
+    }
+
+    /**
+     * Reads a boolean-returning method (e.g. {@code isPasswordMode} / {@code isMultiLine}) that lives
+     * in BasicFeature but not in the API interface, via reflection. Returns {@link #NO} when the
+     * method is absent or any error occurs, matching the original default. Never throws.
+     */
+    private String formatReflectiveBoolean(BasicFeature attr, String methodName)
+    {
+        try
+        {
+            java.lang.reflect.Method method = attr.getClass().getMethod(methodName);
+            Boolean flag = (Boolean) method.invoke(attr);
+            return formatBoolean(flag != null ? flag : false);
+        }
+        catch (Exception e)
+        {
+            // Method doesn't exist or error - use default
+            return NO;
+        }
+    }
+
+    /**
+     * Renders the compact (full=false) attribute table: Name, Synonym, Type (plus an Origin column
+     * when {@code showOrigin}). Output matches the original inline code exactly.
+     */
+    private void formatAttributesCompact(StringBuilder sb, Collection<?> items, boolean showOrigin, String language)
+    {
+        // Compact format - Name, Synonym, Type (+ Origin when adopted attributes are present)
+        if (showOrigin)
+        {
+            startTable(sb, "Name", SYNONYM_TOKEN, "Type", ORIGIN_TOKEN); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            startTable(sb, "Name", SYNONYM_TOKEN, "Type"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        for (Object item : items)
+        {
+            if (item instanceof BasicFeature)
+            {
+                BasicFeature attr = (BasicFeature) item;
+                if (showOrigin)
+                {
+                    addTableRow(sb,
+                        attr.getName(),
+                        getSynonym(attr.getSynonym(), language),
+                        formatType(attr.getType()),
+                        originCell(attr));
+                }
+                else
+                {
+                    addTableRow(sb,
+                        attr.getName(),
+                        getSynonym(attr.getSynonym(), language),
+                        formatType(attr.getType()));
                 }
             }
         }

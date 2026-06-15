@@ -200,82 +200,25 @@ public class DeleteInfobaseTool implements IMcpTool
     private String deleteInfobase(String projectName, String applicationId, String infobaseName,
             boolean deleteRegistration, boolean deleteDatabaseFiles, boolean confirm)
     {
-        // --- Resolve project ---
-        ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.exists())
+        // --- Resolve project + services ---
+        DeleteContext context = resolveContext(projectName);
+        if (context.error != null)
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return context.error;
         }
-        if (!ctx.isOpen())
-        {
-            return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
-        }
-        IProject project = ctx.project();
-
-        // --- Acquire services ---
-        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
-        if (appManager == null)
-        {
-            return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
-        }
-
-        IInfobaseAssociationManager assocManager =
-            Activator.getDefault().getInfobaseAssociationManager();
-        if (assocManager == null)
-        {
-            return ToolResult.error("IInfobaseAssociationManager service is not available.").toJson(); //$NON-NLS-1$
-        }
-
-        IInfobaseManager ibManager = Activator.getDefault().getInfobaseManager();
-        // ibManager is optional — only needed for deleteRegistration=true; null checked below.
+        IProject project = context.project;
+        IApplicationManager appManager = context.appManager;
+        IInfobaseAssociationManager assocManager = context.assocManager;
+        IInfobaseManager ibManager = context.ibManager;
 
         // --- Find the target application ---
-        IApplication targetApp = null;
-
-        if (applicationId != null && !applicationId.isEmpty())
+        TargetApplication target =
+            resolveTargetApplication(appManager, project, projectName, applicationId, infobaseName);
+        if (target.error != null)
         {
-            Optional<IApplication> found =
-                appManager.getApplication(project, applicationId);
-            if (!found.isPresent())
-            {
-                return ToolResult.error("Application not found: '" + applicationId //$NON-NLS-1$
-                    + "' for project '" + projectName //$NON-NLS-1$
-                    + "'. Use get_applications to list available application IDs.").toJson(); //$NON-NLS-1$
-            }
-            targetApp = found.get();
+            return target.error;
         }
-        else
-        {
-            // Find by display name among the project's infobase-type OR standalone-server applications.
-            try
-            {
-                List<IApplication> apps = appManager.getApplications(project);
-                if (apps != null)
-                {
-                    for (IApplication app : apps)
-                    {
-                        String appTypeId = app.getType() != null ? app.getType().getId() : null;
-                        if (infobaseName.equals(app.getName())
-                            && (INFOBASE_APP_TYPE.equals(appTypeId)
-                                || StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(appTypeId)))
-                        {
-                            targetApp = app;
-                            break;
-                        }
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                return ToolResult.error("Error listing applications: " + e.getMessage()).toJson(); //$NON-NLS-1$
-            }
-            if (targetApp == null)
-            {
-                return ToolResult.error("Infobase with name '" + infobaseName //$NON-NLS-1$
-                    + "' not found in project '" + projectName //$NON-NLS-1$
-                    + "'. Use get_applications to list available infobases.").toJson(); //$NON-NLS-1$
-            }
-        }
+        IApplication targetApp = target.app;
 
         // Standalone-server (wst-server) applications: the inverse of
         // create_infobase applicationKind=standaloneServer. Handled by a dedicated path.
@@ -310,21 +253,8 @@ public class DeleteInfobaseTool implements IMcpTool
         // --- Confirm-preview gate ---
         if (!confirm)
         {
-            return ToolResult.success()
-                .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
-                .put(KEY_CONFIRMATION_REQUIRED, true)
-                .put(McpKeys.PROJECT, projectName)
-                .put(McpKeys.APPLICATION_ID, resolvedId)
-                .put(KEY_INFOBASE_NAME, resolvedName)
-                .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-                .put(McpKeys.MESSAGE, "PREVIEW: this would dissociate infobase '" + resolvedName //$NON-NLS-1$
-                    + "' from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
-                    + (deleteRegistration
-                        ? " AND deregister it from the EDT infobases list" //$NON-NLS-1$
-                        : " (EDT infobases list entry kept)") //$NON-NLS-1$
-                    + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
-                    + ". Re-call with confirm=true to apply.") //$NON-NLS-1$
-                .toJson();
+            return buildPreviewResult(projectName, resolvedId, resolvedName, deleteRegistration,
+                deleteDatabaseFiles, dbDir, dbSharedWithOthers);
         }
 
         // --- Perform deletion ---
@@ -366,23 +296,8 @@ public class DeleteInfobaseTool implements IMcpTool
                     // Non-fatal: return success but note the partial deletion. We deliberately do NOT
                     // delete the database files here even if requested — deregistration failed, so the
                     // safe choice is to leave the data and say so explicitly (schema-consistent).
-                    return ToolResult.success()
-                        .put(McpKeys.ACTION, VAL_DELETED)
-                        .put(McpKeys.PROJECT, projectName)
-                        .put(McpKeys.APPLICATION_ID, resolvedId)
-                        .put(KEY_INFOBASE_NAME, resolvedName)
-                        .put(KEY_DELETE_REGISTRATION, false)
-                        .put(KEY_DATABASE_FILES_DELETED, false)
-                        .put(McpKeys.MESSAGE, "Infobase '" + resolvedName //$NON-NLS-1$
-                            + "' was dissociated from project '" + projectName //$NON-NLS-1$
-                            + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
-                            + e.getMessage()
-                            + ". You can remove it manually from the Infobases view in EDT." //$NON-NLS-1$
-                            + (deleteDatabaseFiles
-                                ? " The database files on disk were KEPT (deregistration failed); " //$NON-NLS-1$
-                                    + "remove the directory manually if intended." //$NON-NLS-1$
-                                : "")) //$NON-NLS-1$
-                        .toJson();
+                    return buildDeregisterFailedResult(projectName, resolvedId, resolvedName,
+                        deleteDatabaseFiles, e);
                 }
             }
         }
@@ -399,6 +314,171 @@ public class DeleteInfobaseTool implements IMcpTool
         Activator.logInfo("delete_infobase: done, resolvedId=" + resolvedId //$NON-NLS-1$
             + " (dbFilesDeleted=" + dbFilesDeleted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
+        return buildDeleteSuccessResult(projectName, resolvedId, resolvedName, deleteRegistration,
+            deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers);
+    }
+
+    /**
+     * Resolves the configuration project and the platform services needed for a file-infobase
+     * deletion (read-only). Returns a {@link DeleteContext} whose {@code error} field carries the
+     * tool-result JSON for the SAME early-return cases the inline code produced (project missing /
+     * closed, {@code IApplicationManager} / {@code IInfobaseAssociationManager} unavailable);
+     * otherwise {@code error} is {@code null} and the service fields are populated. The optional
+     * {@code ibManager} (only needed for deleteRegistration) may be {@code null} with no error.
+     */
+    private static DeleteContext resolveContext(String projectName)
+    {
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return DeleteContext.error(ToolResult.error(
+                ProjectContext.notFoundMessage(projectName)).toJson());
+        }
+        if (!ctx.isOpen())
+        {
+            return DeleteContext.error(
+                ToolResult.error("Project is closed: " + projectName).toJson()); //$NON-NLS-1$
+        }
+
+        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
+        if (appManager == null)
+        {
+            return DeleteContext.error(
+                ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
+        }
+
+        IInfobaseAssociationManager assocManager =
+            Activator.getDefault().getInfobaseAssociationManager();
+        if (assocManager == null)
+        {
+            return DeleteContext.error(ToolResult.error(
+                "IInfobaseAssociationManager service is not available.").toJson()); //$NON-NLS-1$
+        }
+
+        // ibManager is optional — only needed for deleteRegistration=true; null checked at use.
+        IInfobaseManager ibManager = Activator.getDefault().getInfobaseManager();
+
+        return DeleteContext.of(ctx.project(), appManager, assocManager, ibManager);
+    }
+
+    /**
+     * Finds the application to remove (read-only) either by {@code applicationId} (exact lookup) or,
+     * when no id is given, by {@code infobaseName} among the project's file-infobase OR
+     * standalone-server applications. Returns a {@link TargetApplication} whose {@code error} field
+     * carries the tool-result JSON for the SAME early-return cases the inline code produced
+     * (application id not found, error listing applications, name not found); otherwise {@code error}
+     * is {@code null} and {@code app} is the resolved application.
+     */
+    private static TargetApplication resolveTargetApplication(IApplicationManager appManager,
+            IProject project, String projectName, String applicationId, String infobaseName)
+    {
+        if (applicationId != null && !applicationId.isEmpty())
+        {
+            Optional<IApplication> found = appManager.getApplication(project, applicationId);
+            if (!found.isPresent())
+            {
+                return TargetApplication.error(ToolResult.error("Application not found: '" //$NON-NLS-1$
+                    + applicationId + "' for project '" + projectName //$NON-NLS-1$
+                    + "'. Use get_applications to list available application IDs.").toJson()); //$NON-NLS-1$
+            }
+            return TargetApplication.of(found.get());
+        }
+
+        // Find by display name among the project's infobase-type OR standalone-server applications.
+        IApplication targetApp = null;
+        try
+        {
+            List<IApplication> apps = appManager.getApplications(project);
+            if (apps != null)
+            {
+                for (IApplication app : apps)
+                {
+                    String appTypeId = app.getType() != null ? app.getType().getId() : null;
+                    if (infobaseName.equals(app.getName())
+                        && (INFOBASE_APP_TYPE.equals(appTypeId)
+                            || StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(appTypeId)))
+                    {
+                        targetApp = app;
+                        break;
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            return TargetApplication.error(
+                ToolResult.error("Error listing applications: " + e.getMessage()).toJson()); //$NON-NLS-1$
+        }
+        if (targetApp == null)
+        {
+            return TargetApplication.error(ToolResult.error("Infobase with name '" + infobaseName //$NON-NLS-1$
+                + "' not found in project '" + projectName //$NON-NLS-1$
+                + "'. Use get_applications to list available infobases.").toJson()); //$NON-NLS-1$
+        }
+        return TargetApplication.of(targetApp);
+    }
+
+    /**
+     * Builds the confirm-preview tool-result JSON for a file infobase (no change is made). Byte-for-byte
+     * identical to the inline preview the {@code !confirm} gate produced.
+     */
+    private static String buildPreviewResult(String projectName, String resolvedId, String resolvedName,
+            boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir, boolean dbSharedWithOthers)
+    {
+        return ToolResult.success()
+            .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
+            .put(KEY_CONFIRMATION_REQUIRED, true)
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, resolvedId)
+            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+            .put(McpKeys.MESSAGE, "PREVIEW: this would dissociate infobase '" + resolvedName //$NON-NLS-1$
+                + "' from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + (deleteRegistration
+                    ? " AND deregister it from the EDT infobases list" //$NON-NLS-1$
+                    : " (EDT infobases list entry kept)") //$NON-NLS-1$
+                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
+                + ". Re-call with confirm=true to apply.") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * Builds the tool-result JSON for the partial-success case where the infobase was dissociated but
+     * could NOT be deregistered from the EDT list. Byte-for-byte identical to the inline result the
+     * deregister-failure catch produced; the database files are reported as KEPT (the safe choice when
+     * deregistration failed). Read-only — the dissociation has already happened at the call site.
+     */
+    private static String buildDeregisterFailedResult(String projectName, String resolvedId,
+            String resolvedName, boolean deleteDatabaseFiles, Exception e)
+    {
+        return ToolResult.success()
+            .put(McpKeys.ACTION, VAL_DELETED)
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, resolvedId)
+            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(KEY_DELETE_REGISTRATION, false)
+            .put(KEY_DATABASE_FILES_DELETED, false)
+            .put(McpKeys.MESSAGE, "Infobase '" + resolvedName //$NON-NLS-1$
+                + "' was dissociated from project '" + projectName //$NON-NLS-1$
+                + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
+                + e.getMessage()
+                + ". You can remove it manually from the Infobases view in EDT." //$NON-NLS-1$
+                + (deleteDatabaseFiles
+                    ? " The database files on disk were KEPT (deregistration failed); " //$NON-NLS-1$
+                        + "remove the directory manually if intended." //$NON-NLS-1$
+                    : "")) //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * Builds the final success tool-result JSON after a file infobase was removed. Byte-for-byte
+     * identical to the inline result the success path produced. Read-only — all mutations
+     * (dissociate / deregister / file deletion) have already happened at the call site.
+     */
+    private static String buildDeleteSuccessResult(String projectName, String resolvedId,
+            String resolvedName, boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir,
+            boolean dbFilesDeleted, boolean dbSharedWithOthers)
+    {
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, projectName)
@@ -410,8 +490,71 @@ public class DeleteInfobaseTool implements IMcpTool
                 + "' removed from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteRegistration ? " and deregistered from the EDT infobases list." //$NON-NLS-1$
                     : " (EDT infobases list entry kept).") //$NON-NLS-1$
-                + databaseResultNote(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers)) //$NON-NLS-1$
+                + databaseResultNote(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers))
             .toJson();
+    }
+
+    /**
+     * Holder for the project + platform services resolved by {@link #resolveContext(String)}. When
+     * {@code error} is non-null it carries a ready tool-result JSON and the other fields are unset;
+     * otherwise {@code error} is {@code null} and the fields are populated (ibManager may be null).
+     */
+    private static final class DeleteContext
+    {
+        final String error;
+        final IProject project;
+        final IApplicationManager appManager;
+        final IInfobaseAssociationManager assocManager;
+        final IInfobaseManager ibManager;
+
+        private DeleteContext(String error, IProject project, IApplicationManager appManager,
+                IInfobaseAssociationManager assocManager, IInfobaseManager ibManager)
+        {
+            this.error = error;
+            this.project = project;
+            this.appManager = appManager;
+            this.assocManager = assocManager;
+            this.ibManager = ibManager;
+        }
+
+        static DeleteContext error(String error)
+        {
+            return new DeleteContext(error, null, null, null, null);
+        }
+
+        static DeleteContext of(IProject project, IApplicationManager appManager,
+                IInfobaseAssociationManager assocManager, IInfobaseManager ibManager)
+        {
+            return new DeleteContext(null, project, appManager, assocManager, ibManager);
+        }
+    }
+
+    /**
+     * Holder for the application resolved by
+     * {@link #resolveTargetApplication(IApplicationManager, IProject, String, String, String)}. When
+     * {@code error} is non-null it carries a ready tool-result JSON and {@code app} is {@code null};
+     * otherwise {@code error} is {@code null} and {@code app} is the resolved application.
+     */
+    private static final class TargetApplication
+    {
+        final String error;
+        final IApplication app;
+
+        private TargetApplication(String error, IApplication app)
+        {
+            this.error = error;
+            this.app = app;
+        }
+
+        static TargetApplication error(String error)
+        {
+            return new TargetApplication(error, null);
+        }
+
+        static TargetApplication of(IApplication app)
+        {
+            return new TargetApplication(null, app);
+        }
     }
 
     /**

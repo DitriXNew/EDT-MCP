@@ -933,24 +933,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         switch (info.valueKind)
         {
             case LOCALIZED_STRING:
-            {
-                if (value == null || value.isEmpty())
-                {
-                    return requireValueError(name);
-                }
-                String code;
-                try
-                {
-                    code = MetadataLanguageUtils.resolveSynonymLanguage(config, value,
-                        asString(prop.get("language")), "'" + name + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                }
-                catch (IllegalArgumentException e)
-                {
-                    return ToolResult.error(e.getMessage()).toJson();
-                }
-                out.add(PreparedChange.localized(info.feature, code, normReport.apply(name, value)));
-                return null;
-            }
+                return prepareLocalized(config, name, value, prop, info, out, normReport);
             case ENUM:
             {
                 EEnumLiteral literal = MetadataPropertyIntrospector.resolveEnumLiteral(info.feature, value);
@@ -985,77 +968,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return null;
             }
             case TYPE_DESCRIPTION:
-            {
-                if (version == null)
-                {
-                    return ToolResult.error("Cannot resolve the platform version needed to build a " //$NON-NLS-1$
-                        + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                MetadataTypeBuilder.Result tr =
-                    MetadataTypeBuilder.build(prop.get(KEY_VALUE), config, version);
-                if (tr.error != null)
-                {
-                    return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                out.add(PreparedChange.scalar(info.feature, tr.typeDescription));
-                return null;
-            }
+                return prepareTypeDescription(config, version, name, prop, info, out);
             case REFERENCE:
-            {
-                if (value == null || value.isEmpty())
-                {
-                    return requireValueError(name);
-                }
-                MdObject targetMd = resolveReferenceTarget(config, value);
-                String vErr = validateReferenceTarget(name, info.feature, targetMd, value);
-                if (vErr != null)
-                {
-                    return vErr;
-                }
-                out.add(PreparedChange.reference(info.feature, ((IBmObject)targetMd).bmGetId()));
-                return null;
-            }
+                return prepareReference(config, name, value, info, out);
             case MANY_REFERENCE:
-            {
-                JsonElement raw = prop.get(KEY_VALUE);
-                if (raw == null || !raw.isJsonArray())
-                {
-                    return ToolResult.error("'" + name + "' is a list reference: provide 'value' as an " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "array of FQNs, e.g. [\"Catalog.Products\", \"Document.Order\"].").toJson(); //$NON-NLS-1$
-                }
-                List<Long> ids = new ArrayList<>();
-                for (JsonElement el : raw.getAsJsonArray())
-                {
-                    String fqn = (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
-                    if (fqn == null || fqn.isEmpty())
-                    {
-                        return ToolResult.error("Each entry of the '" + name + "' list must be a " //$NON-NLS-1$ //$NON-NLS-2$
-                            + "non-empty FQN string.").toJson(); //$NON-NLS-1$
-                    }
-                    MdObject t = resolveReferenceTarget(config, fqn);
-                    String vErr = validateReferenceTarget(name, info.feature, t, fqn);
-                    if (vErr != null)
-                    {
-                        return vErr;
-                    }
-                    ids.add(((IBmObject)t).bmGetId());
-                }
-                out.add(PreparedChange.manyReference(info.feature, ids));
-                return null;
-            }
+                return prepareManyReference(config, name, prop, info, out);
             case STYLE_VALUE:
-            {
-                StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE));
-                if (sv.error != null)
-                {
-                    return ToolResult.error("Invalid StyleItem '" + name + "': " + sv.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                // The style item's `type` (Color / Font) is kept consistent with the value it holds, so
-                // the change sets both the `value` and the sibling `type` feature in one shot.
-                EStructuralFeature typeFeature = target.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
-                out.add(PreparedChange.styleValue(info.feature, typeFeature, sv.value, sv.type));
-                return null;
-            }
+                return prepareStyleValue(name, prop, target, info, out);
             case STRING:
             default:
                 if (value == null || value.isEmpty())
@@ -1066,6 +985,136 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     normalizeStringPropertyValue(name, value, normReport)));
                 return null;
         }
+    }
+
+    /**
+     * Validates a {@code LOCALIZED_STRING} property (resolving its synonym language code) and, on
+     * success, appends the prepared localized change to {@code out}. Returns a JSON error on failure,
+     * or {@code null} on success. Read-only: it only builds and queues the change (no model mutation).
+     */
+    private String prepareLocalized(Configuration config, String name, String value, JsonObject prop,
+        PropertyInfo info, List<PreparedChange> out, MdNameNormalizer.Report normReport)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return requireValueError(name);
+        }
+        String code;
+        try
+        {
+            code = MetadataLanguageUtils.resolveSynonymLanguage(config, value,
+                asString(prop.get("language")), "'" + name + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
+        out.add(PreparedChange.localized(info.feature, code, normReport.apply(name, value)));
+        return null;
+    }
+
+    /**
+     * Validates a {@code TYPE_DESCRIPTION} property (building the type description for the resolved
+     * platform version) and, on success, appends the prepared scalar change to {@code out}. Returns a
+     * JSON error on failure, or {@code null} on success. Read-only: it only builds and queues the
+     * change (no model mutation).
+     */
+    private String prepareTypeDescription(Configuration config, Version version, String name,
+        JsonObject prop, PropertyInfo info, List<PreparedChange> out)
+    {
+        if (version == null)
+        {
+            return ToolResult.error("Cannot resolve the platform version needed to build a " //$NON-NLS-1$
+                + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        MetadataTypeBuilder.Result tr =
+            MetadataTypeBuilder.build(prop.get(KEY_VALUE), config, version);
+        if (tr.error != null)
+        {
+            return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        out.add(PreparedChange.scalar(info.feature, tr.typeDescription));
+        return null;
+    }
+
+    /**
+     * Validates a single-valued {@code REFERENCE} property (resolving and type-checking its FQN target)
+     * and, on success, appends the prepared reference change to {@code out}. Returns a JSON error on
+     * failure, or {@code null} on success. Read-only: it only builds and queues the change (no model
+     * mutation).
+     */
+    private String prepareReference(Configuration config, String name, String value, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return requireValueError(name);
+        }
+        MdObject targetMd = resolveReferenceTarget(config, value);
+        String vErr = validateReferenceTarget(name, info.feature, targetMd, value);
+        if (vErr != null)
+        {
+            return vErr;
+        }
+        out.add(PreparedChange.reference(info.feature, ((IBmObject)targetMd).bmGetId()));
+        return null;
+    }
+
+    /**
+     * Validates a {@code MANY_REFERENCE} property (the value must be a JSON array of non-empty FQNs,
+     * each resolving and type-checking) and, on success, appends the prepared list-reference change to
+     * {@code out}. Returns a JSON error on failure, or {@code null} on success. Read-only: it only
+     * builds and queues the change (no model mutation).
+     */
+    private String prepareManyReference(Configuration config, String name, JsonObject prop,
+        PropertyInfo info, List<PreparedChange> out)
+    {
+        JsonElement raw = prop.get(KEY_VALUE);
+        if (raw == null || !raw.isJsonArray())
+        {
+            return ToolResult.error("'" + name + "' is a list reference: provide 'value' as an " //$NON-NLS-1$ //$NON-NLS-2$
+                + "array of FQNs, e.g. [\"Catalog.Products\", \"Document.Order\"].").toJson(); //$NON-NLS-1$
+        }
+        List<Long> ids = new ArrayList<>();
+        for (JsonElement el : raw.getAsJsonArray())
+        {
+            String fqn = (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
+            if (fqn == null || fqn.isEmpty())
+            {
+                return ToolResult.error("Each entry of the '" + name + "' list must be a " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "non-empty FQN string.").toJson(); //$NON-NLS-1$
+            }
+            MdObject t = resolveReferenceTarget(config, fqn);
+            String vErr = validateReferenceTarget(name, info.feature, t, fqn);
+            if (vErr != null)
+            {
+                return vErr;
+            }
+            ids.add(((IBmObject)t).bmGetId());
+        }
+        out.add(PreparedChange.manyReference(info.feature, ids));
+        return null;
+    }
+
+    /**
+     * Validates a {@code STYLE_VALUE} property (building the StyleItem Color / Font value) and, on
+     * success, appends the prepared style-value change to {@code out} (which also keeps the sibling
+     * {@code type} feature consistent with the value). Returns a JSON error on failure, or {@code null}
+     * on success. Read-only: it only builds and queues the change (no model mutation).
+     */
+    private String prepareStyleValue(String name, JsonObject prop, EObject target, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE));
+        if (sv.error != null)
+        {
+            return ToolResult.error("Invalid StyleItem '" + name + "': " + sv.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        // The style item's `type` (Color / Font) is kept consistent with the value it holds, so
+        // the change sets both the `value` and the sibling `type` feature in one shot.
+        EStructuralFeature typeFeature = target.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
+        out.add(PreparedChange.styleValue(info.feature, typeFeature, sv.value, sv.type));
+        return null;
     }
 
     /**
