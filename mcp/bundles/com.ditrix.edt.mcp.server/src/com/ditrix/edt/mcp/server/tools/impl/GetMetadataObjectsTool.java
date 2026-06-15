@@ -72,7 +72,9 @@ public class GetMetadataObjectsTool implements IMcpTool
     private static final String TYPE_COMMON_ATTRIBUTES = "commonattributes"; //$NON-NLS-1$
     private static final String TYPE_EVENT_SUBSCRIPTIONS = "eventsubscriptions"; //$NON-NLS-1$
     private static final String TYPE_SCHEDULED_JOBS = "scheduledjobs"; //$NON-NLS-1$
-    
+
+    private static final String LIMIT = "limit"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -102,7 +104,7 @@ public class GetMetadataObjectsTool implements IMcpTool
                 "eventSubscriptions, scheduledJobs") //$NON-NLS-1$
             .stringProperty("nameFilter", //$NON-NLS-1$
                 "Case-insensitive substring matched against Name only (not Synonym)") //$NON-NLS-1$
-            .integerProperty("limit", //$NON-NLS-1$
+            .integerProperty(LIMIT,
                 "Max rows (default from preferences: 100, max 1000)") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
@@ -149,8 +151,8 @@ public class GetMetadataObjectsTool implements IMcpTool
         // Note: language will be resolved from configuration default if null/empty
 
         int defaultLimit = ToolParameterSettings.getInstance()
-            .getParameterValue(NAME, "limit", 100); //$NON-NLS-1$
-        int limit = JsonUtils.extractIntArgument(params, "limit", defaultLimit); //$NON-NLS-1$
+            .getParameterValue(NAME, LIMIT, 100);
+        int limit = JsonUtils.extractIntArgument(params, LIMIT, defaultLimit);
         limit = Pagination.clampLimit(limit, 1000);
 
         // Execute on UI thread

@@ -64,6 +64,25 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  */
 public class MetadataRenameService
 {
+    /** Em dash placeholder rendered in markdown table cells with no value. */
+    private static final String DASH = "\u2014"; //$NON-NLS-1$
+
+    /** Change-point type tag for BSL reference changes. */
+    private static final String BSL_REF = "bslRef"; //$NON-NLS-1$
+
+    /** Reflective method name: Guice injector instance lookup. */
+    private static final String GET_INSTANCE = "getInstance"; //$NON-NLS-1$
+
+    /** Reflective method name: file accessor on a modified element / search match. */
+    private static final String GET_FILE = "getFile"; //$NON-NLS-1$
+
+    /** Xtext rename element context interface class name. */
+    private static final String IRENAME_ELEMENT_CONTEXT_CLASS =
+        "org.eclipse.xtext.ui.refactoring.ui.IRenameElementContext"; //$NON-NLS-1$
+
+    /** EDT search-core SearchIn enum class name. */
+    private static final String SEARCH_IN_CLASS = "com._1c.g5.v8.dt.search.core.SearchIn"; //$NON-NLS-1$
+
     public String rename(String projectName, String objectFqn, String newName,
         boolean confirm, java.util.Set<Integer> disableIndices, int maxResults)
     {
@@ -126,7 +145,7 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings, int maxResults)
     {
         Map<String, ExactMatchInfo> exactMatches = buildExactMatchInfo(project, targetObject, newName);
-        List<ChangePoint> edtBslPreviewChanges = buildEdtBslPreviewChanges(project, targetObject, newName, exactMatches);
+        List<ChangePoint> edtBslPreviewChanges = buildEdtBslPreviewChanges(targetObject, newName, exactMatches);
         String oldName = targetObject.getName();
 
         // Phase 1: collect all changes and problems
@@ -234,11 +253,11 @@ public class MetadataRenameService
             ChangePoint cp = allChanges.get(i);
             String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$
             String optionalMark = cp.optional ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
-            String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : "\u2014"; //$NON-NLS-1$
-            String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : "\u2014"; //$NON-NLS-1$
-            String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : "\u2014"; //$NON-NLS-1$
-                        String column = cp.columnNumber > 0 ? String.valueOf(cp.columnNumber) : "\u2014"; //$NON-NLS-1$
-            String description = cp.description != null ? escapeMarkdownCell(cp.description) : "\u2014"; //$NON-NLS-1$
+            String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : DASH;
+            String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : DASH;
+            String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : DASH;
+                        String column = cp.columnNumber > 0 ? String.valueOf(cp.columnNumber) : DASH;
+            String description = cp.description != null ? escapeMarkdownCell(cp.description) : DASH;
             sb.append("| ").append(cp.index) //$NON-NLS-1$
               .append(" | ").append(cp.type) //$NON-NLS-1$
               .append(" | ").append(description) //$NON-NLS-1$
@@ -429,7 +448,7 @@ public class MetadataRenameService
                     String exactFqn = exactMatch.fqn != null ? exactMatch.fqn : fqn;
                     String exactProject = exactMatch.project != null ? exactMatch.project : project;
                     result.add(new ChangePoint(
-                        leafIndex, "bslRef", exactFqn, exactProject, //$NON-NLS-1$
+                        leafIndex, BSL_REF, exactFqn, exactProject,
                         change.getName(), optional, change.isEnabled(), refactoringTitle,
                         exactMatch.lineNumber, exactMatch.columnNumber, exactMatch.codeContext, exactMatch.methodName));
                 }
@@ -468,7 +487,7 @@ public class MetadataRenameService
                                     matchedMethodName = findContainingMethodText(content, matchedLineNumber);
                                 }
                                 result.add(new ChangePoint(
-                                    leafIndex, "bslRef", fqn, project, //$NON-NLS-1$
+                                    leafIndex, BSL_REF, fqn, project,
                                     change.getName(), optional, change.isEnabled(), refactoringTitle,
                                     matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
                             }
@@ -517,7 +536,7 @@ public class MetadataRenameService
                                         matchedMethodName = findContainingMethodText(content, matchedLineNumber);
                                     }
                                     result.add(new ChangePoint(
-                                        leafIndex, "bslRef", fqn, project, //$NON-NLS-1$
+                                        leafIndex, BSL_REF, fqn, project,
                                         change.getName(), optional, change.isEnabled(), refactoringTitle,
                                         matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
                                 }
@@ -543,7 +562,7 @@ public class MetadataRenameService
             }
 
             result.add(new ChangePoint(
-                indexCounter[0]++, "bslRef", fqn, project, //$NON-NLS-1$
+                indexCounter[0]++, BSL_REF, fqn, project,
                 change.getName(), optional, change.isEnabled(), refactoringTitle,
                 lineNumber, columnNumber, codeContext, methodName));
         }
@@ -554,16 +573,16 @@ public class MetadataRenameService
         try
         {
             Object bslInjector = getBslInjector();
-            Object renameProvider = invokeMethod(bslInjector, "getInstance", new Class<?>[] {Class.class}, //$NON-NLS-1$
+            Object renameProvider = invokeMethod(bslInjector, GET_INSTANCE, new Class<?>[] {Class.class},
                 getClassOrThrow("com._1c.g5.v8.dt.bsl.bm.ui.refactoring.BslBmRenameRefactoringProvider")); //$NON-NLS-1$
             Object renameContext = createRenameElementContext(targetObject);
             Object refactoring = invokeMethod(renameProvider, "getRenameRefactoring", new Class<?>[] { //$NON-NLS-1$
-                getClassOrThrow("org.eclipse.xtext.ui.refactoring.ui.IRenameElementContext")}, renameContext); //$NON-NLS-1$
+                getClassOrThrow(IRENAME_ELEMENT_CONTEXT_CLASS)}, renameContext);
             Object processor = refactoring != null ? invokeNoArg(refactoring, "getProcessor") : null; //$NON-NLS-1$
             if (processor == null)
             {
                 processor = invokeMethod(renameProvider, "getRenameProcessor", new Class<?>[] { //$NON-NLS-1$
-                getClassOrThrow("org.eclipse.xtext.ui.refactoring.ui.IRenameElementContext")}, renameContext); //$NON-NLS-1$
+                getClassOrThrow(IRENAME_ELEMENT_CONTEXT_CLASS)}, renameContext);
             }
             if (processor == null)
             {
@@ -584,11 +603,11 @@ public class MetadataRenameService
                 return Map.of();
             }
 
-            Object supplier = invokeMethod(bslInjector, "getInstance", new Class<?>[] {Class.class}, //$NON-NLS-1$
+            Object supplier = invokeMethod(bslInjector, GET_INSTANCE, new Class<?>[] {Class.class},
                 getClassOrThrow("com._1c.g5.v8.dt.bsl.bm.ui.refactoring.BslTextSearchRefactoringSupplier")); //$NON-NLS-1$
 
             Object searchInjector = getSearchCoreInjector();
-            Object factory = invokeMethod(searchInjector, "getInstance", new Class<?>[] {Class.class}, //$NON-NLS-1$
+            Object factory = invokeMethod(searchInjector, GET_INSTANCE, new Class<?>[] {Class.class},
                 getClassOrThrow("com._1c.g5.v8.dt.search.core.refactoring.TextSearchRefactoringParticipantFactory")); //$NON-NLS-1$
             Object participant = invokeMethod(factory, "create", new Class<?>[] {String.class, EObject.class, //$NON-NLS-1$
                 getClassOrThrow("com._1c.g5.v8.dt.search.core.refactoring.ITextSearchRefactoringSupplier")}, //$NON-NLS-1$
@@ -600,9 +619,9 @@ public class MetadataRenameService
             Object searchScopeSettings = getClassOrThrow("com._1c.g5.v8.dt.search.core.TextSearchScopeSettings") //$NON-NLS-1$
                 .getConstructor()
                 .newInstance();
-            Object modules = getEnumConstant("com._1c.g5.v8.dt.search.core.SearchIn", "MODULES"); //$NON-NLS-1$ //$NON-NLS-2$
-            Object dcs = getEnumConstant("com._1c.g5.v8.dt.search.core.SearchIn", "DCS"); //$NON-NLS-1$ //$NON-NLS-2$
-            Object dynamicListQuery = getEnumConstant("com._1c.g5.v8.dt.search.core.SearchIn", "DYNAMIC_LIST_QUERY"); //$NON-NLS-1$ //$NON-NLS-2$
+            Object modules = getEnumConstant(SEARCH_IN_CLASS, "MODULES"); //$NON-NLS-1$
+            Object dcs = getEnumConstant(SEARCH_IN_CLASS, "DCS"); //$NON-NLS-1$
+            Object dynamicListQuery = getEnumConstant(SEARCH_IN_CLASS, "DYNAMIC_LIST_QUERY"); //$NON-NLS-1$
             invokeMethod(searchScopeSettings, "addSearchIn", new Class<?>[] {modules.getClass().arrayType()}, //$NON-NLS-1$
                 (Object) arrayOf(modules.getClass(), modules, dcs, dynamicListQuery));
             @SuppressWarnings("unchecked")
@@ -638,8 +657,7 @@ public class MetadataRenameService
             Collection<?> matches = (Collection<?>) invokeMethod(supplier, "getMatches", //$NON-NLS-1$
                 new Class<?>[] {Change.class, getClassOrThrow("com._1c.g5.v8.dt.search.core.SimpleSearchResultCollector")}, //$NON-NLS-1$
                 normalChange, collector);
-            Map<String, ExactMatchInfo> exactMatchMap = toExactMatchMap(matches);
-            return exactMatchMap;
+            return toExactMatchMap(matches);
         }
         catch (Exception e)
         {
@@ -648,17 +666,17 @@ public class MetadataRenameService
         }
     }
 
-    private List<ChangePoint> buildEdtBslPreviewChanges(IProject project, MdObject targetObject, String newName,
+    private List<ChangePoint> buildEdtBslPreviewChanges(MdObject targetObject, String newName,
         Map<String, ExactMatchInfo> exactMatches)
     {
         try
         {
             Object bslInjector = getBslInjector();
-            Object renameProvider = invokeMethod(bslInjector, "getInstance", new Class<?>[] {Class.class}, //$NON-NLS-1$
+            Object renameProvider = invokeMethod(bslInjector, GET_INSTANCE, new Class<?>[] {Class.class},
                 getClassOrThrow("com._1c.g5.v8.dt.bsl.bm.ui.refactoring.BslBmRenameRefactoringProvider")); //$NON-NLS-1$
             Object renameContext = createRenameElementContext(targetObject);
             Object refactoring = invokeMethod(renameProvider, "getRenameRefactoring", new Class<?>[] { //$NON-NLS-1$
-                getClassOrThrow("org.eclipse.xtext.ui.refactoring.ui.IRenameElementContext")}, renameContext); //$NON-NLS-1$
+                getClassOrThrow(IRENAME_ELEMENT_CONTEXT_CLASS)}, renameContext);
             if (refactoring == null)
             {
                 return List.of();
@@ -717,7 +735,7 @@ public class MetadataRenameService
         List<Integer> bslIndices = new ArrayList<>();
         for (int i = 0; i < allChanges.size(); i++)
         {
-            if ("bslRef".equals(allChanges.get(i).type)) //$NON-NLS-1$
+            if (BSL_REF.equals(allChanges.get(i).type))
             {
                 bslIndices.add(Integer.valueOf(i));
             }
@@ -757,7 +775,7 @@ public class MetadataRenameService
                 ExactMatchInfo info = createFileExactMatchInfo(match);
                 if (info != null)
                 {
-                    IFile file = (IFile) invokeNoArg(match, "getFile"); //$NON-NLS-1$
+                    IFile file = (IFile) invokeNoArg(match, GET_FILE);
                     int fileOffset = ((Number) invokeNoArg(match, "getFileOffset")).intValue(); //$NON-NLS-1$
                     int textLength = ((Number) invokeNoArg(match, "getTextLength")).intValue(); //$NON-NLS-1$
                     result.put(getFileMatchKey(file, fileOffset, textLength), info);
@@ -783,7 +801,7 @@ public class MetadataRenameService
     {
         try
         {
-            IFile file = (IFile) invokeNoArg(match, "getFile"); //$NON-NLS-1$
+            IFile file = (IFile) invokeNoArg(match, GET_FILE);
             if (file == null)
             {
                 return null;
@@ -1157,7 +1175,7 @@ public class MetadataRenameService
     private static Object getBslInjector() throws Exception
     {
         Class<?> activatorClass = getClassOrThrow("com._1c.g5.v8.dt.bsl.ui.internal.BslActivator"); //$NON-NLS-1$
-        Object activator = activatorClass.getMethod("getInstance").invoke(null); //$NON-NLS-1$
+        Object activator = activatorClass.getMethod(GET_INSTANCE).invoke(null);
         return activatorClass.getMethod("getInjector", String.class).invoke(activator, //$NON-NLS-1$
             "com._1c.g5.v8.dt.bsl.Bsl"); //$NON-NLS-1$
     }
@@ -1204,7 +1222,7 @@ public class MetadataRenameService
         {
             return null;
         }
-        Object fileObject = invokeNoArg(modifiedElement, "getFile"); //$NON-NLS-1$
+        Object fileObject = invokeNoArg(modifiedElement, GET_FILE);
         return fileObject instanceof IFile file ? file : null;
     }
 

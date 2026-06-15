@@ -49,7 +49,13 @@ public class ValidateQueryTool implements IMcpTool
     
     /** URI used to look up the QlDcs language IResourceServiceProvider */
     private static final URI QLDCS_LOOKUP_URI = URI.createURI("/nopr/querywizard_validate.qldcs"); //$NON-NLS-1$
-    
+
+    private static final String PROJECT_NAME = "projectName"; //$NON-NLS-1$
+    private static final String QUERY_TEXT = "queryText"; //$NON-NLS-1$
+    private static final String DCS_MODE = "dcsMode"; //$NON-NLS-1$
+    private static final String ERROR = "ERROR"; //$NON-NLS-1$
+    private static final String WARNING = "WARNING"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -69,12 +75,12 @@ public class ValidateQueryTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(PROJECT_NAME,
                 "EDT project name (required).", true) //$NON-NLS-1$
-            .stringProperty("queryText", //$NON-NLS-1$
+            .stringProperty(QUERY_TEXT,
                 "Full 1C query text to validate (required), e.g. 'SELECT Ref FROM Catalog.Products'.", //$NON-NLS-1$
                 true)
-            .booleanProperty("dcsMode", //$NON-NLS-1$
+            .booleanProperty(DCS_MODE,
                 "true for Data Composition System queries (allows DCS-specific syntax). Default: false.") //$NON-NLS-1$
             .build();
     }
@@ -85,7 +91,7 @@ public class ValidateQueryTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("valid", "true when the query has zero issues") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty("dcsMode", "Whether DCS validation mode was used") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(DCS_MODE, "Whether DCS validation mode was used") //$NON-NLS-1$
             .integerProperty("errorCount", "Number of ERROR-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("warningCount", "Number of WARNING-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("infoCount", "Number of INFO-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
@@ -103,11 +109,11 @@ public class ValidateQueryTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String queryText = JsonUtils.extractStringArgument(params, "queryText"); //$NON-NLS-1$
-        boolean dcsMode = JsonUtils.extractBooleanArgument(params, "dcsMode", false); //$NON-NLS-1$
-        
-        String err = JsonUtils.requireArguments(params, "projectName", "queryText"); //$NON-NLS-1$ //$NON-NLS-2$
+        String projectName = JsonUtils.extractStringArgument(params, PROJECT_NAME);
+        String queryText = JsonUtils.extractStringArgument(params, QUERY_TEXT);
+        boolean dcsMode = JsonUtils.extractBooleanArgument(params, DCS_MODE, false);
+
+        String err = JsonUtils.requireArguments(params, PROJECT_NAME, QUERY_TEXT);
         if (err != null)
         {
             return err;
@@ -225,7 +231,7 @@ public class ValidateQueryTool implements IMcpTool
             for (Resource.Diagnostic error : resource.getErrors())
             {
                 issues.add(new QueryIssue(
-                    "ERROR", //$NON-NLS-1$
+                    ERROR,
                     error.getMessage(),
                     error.getLine(),
                     error.getColumn(),
@@ -236,7 +242,7 @@ public class ValidateQueryTool implements IMcpTool
             for (Resource.Diagnostic warning : resource.getWarnings())
             {
                 issues.add(new QueryIssue(
-                    "WARNING", //$NON-NLS-1$
+                    WARNING,
                     warning.getMessage(),
                     warning.getLine(),
                     warning.getColumn(),
@@ -253,16 +259,16 @@ public class ValidateQueryTool implements IMcpTool
                 switch (issue.getSeverity())
                 {
                     case ERROR:
-                        severity = "ERROR"; //$NON-NLS-1$
+                        severity = ERROR;
                         break;
                     case WARNING:
-                        severity = "WARNING"; //$NON-NLS-1$
+                        severity = WARNING;
                         break;
                     case INFO:
                         severity = "INFO"; //$NON-NLS-1$
                         break;
                     default:
-                        severity = "WARNING"; //$NON-NLS-1$
+                        severity = WARNING;
                         break;
                 }
                 
@@ -345,11 +351,11 @@ public class ValidateQueryTool implements IMcpTool
 
         return ToolResult.success()
             .put("valid", issues.isEmpty()) //$NON-NLS-1$
-            .put("dcsMode", dcsMode) //$NON-NLS-1$
+            .put(DCS_MODE, dcsMode)
             .put("errorCount", //$NON-NLS-1$
-                issues.stream().filter(i -> "ERROR".equals(i.severity)).count()) //$NON-NLS-1$
+                issues.stream().filter(i -> ERROR.equals(i.severity)).count())
             .put("warningCount", //$NON-NLS-1$
-                issues.stream().filter(i -> "WARNING".equals(i.severity)).count()) //$NON-NLS-1$
+                issues.stream().filter(i -> WARNING.equals(i.severity)).count())
             .put("infoCount", //$NON-NLS-1$
                 issues.stream().filter(i -> "INFO".equals(i.severity)).count()) //$NON-NLS-1$
             .put("issues", issueList) //$NON-NLS-1$

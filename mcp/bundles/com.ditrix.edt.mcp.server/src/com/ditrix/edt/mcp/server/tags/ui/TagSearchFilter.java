@@ -102,6 +102,7 @@ public class TagSearchFilter extends ViewerFilter {
      * Default constructor for extension factory.
      */
     public TagSearchFilter() {
+        // No initialization needed; required by the extension factory.
     }
     
     /**
@@ -219,13 +220,13 @@ public class TagSearchFilter extends ViewerFilter {
         }
         
         // Use the shared filtering logic
-        return selectByMatchingFqns(viewer, parentElement, element);
+        return selectByMatchingFqns(parentElement, element);
     }
     
     /**
      * Shared filtering logic - checks if element matches the current matching FQNs.
      */
-    private boolean selectByMatchingFqns(Viewer viewer, Object parentElement, Object element) {
+    private boolean selectByMatchingFqns(Object parentElement, Object element) {
         // If no matching FQNs, show everything
         if (matchingFqns.isEmpty() && matchingFqnsByProject.isEmpty()) {
             return true;

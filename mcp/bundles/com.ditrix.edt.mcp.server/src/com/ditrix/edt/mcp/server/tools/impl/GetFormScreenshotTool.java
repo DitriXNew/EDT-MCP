@@ -28,6 +28,9 @@ public class GetFormScreenshotTool implements IMcpTool
     public static final String NAME = "get_form_screenshot"; //$NON-NLS-1$
     private static final String WYSIWYG_VIEWER_FIELD = "wysiwygViewer"; //$NON-NLS-1$
 
+    /** Input param: form FQN to open and capture. */
+    private static final String KEY_FORM_PATH = "formPath"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -49,7 +52,7 @@ public class GetFormScreenshotTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", //$NON-NLS-1$
                 "EDT project name. Required when formPath is specified.") //$NON-NLS-1$
-            .stringProperty("formPath", //$NON-NLS-1$
+            .stringProperty(KEY_FORM_PATH,
                 "Form FQN (e.g. 'Catalog.Products.Forms.ItemForm' or 'CommonForm.MyForm'); " + //$NON-NLS-1$
                 "if omitted, captures the active form editor.") //$NON-NLS-1$
             .booleanProperty("refresh", //$NON-NLS-1$
@@ -67,7 +70,7 @@ public class GetFormScreenshotTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String formPath = params.get("formPath"); //$NON-NLS-1$
+        String formPath = params.get(KEY_FORM_PATH);
         if (formPath != null && !formPath.isEmpty())
         {
             String[] parts = formPath.split("\\."); //$NON-NLS-1$
@@ -83,7 +86,7 @@ public class GetFormScreenshotTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String formPath = JsonUtils.extractStringArgument(params, "formPath"); //$NON-NLS-1$
+        String formPath = JsonUtils.extractStringArgument(params, KEY_FORM_PATH);
         boolean refresh = "true".equalsIgnoreCase(JsonUtils.extractStringArgument(params, "refresh")); //$NON-NLS-1$ //$NON-NLS-2$
 
         if (formPath != null && !formPath.isEmpty()

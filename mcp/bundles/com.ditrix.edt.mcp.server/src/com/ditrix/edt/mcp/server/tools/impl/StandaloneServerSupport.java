@@ -265,21 +265,21 @@ final class StandaloneServerSupport
             {
                 return null;
             }
-            // FILE database (or its create-template subclass FileCreateTemplateDatabase) carries the
-            // on-disk directory in getConfigDirectory(); an RDBMS database has no local directory.
-            boolean isFile = false;
-            for (Class<?> k = db.getClass(); k != null && !isFile; k = k.getSuperclass())
+            // A FILE database (and its create-template subclass FileCreateTemplateDatabase) carries the
+            // on-disk directory in getConfigDirectory(); an RDBMS database has neither that method nor a
+            // local directory. Detect the file kind by the PRESENCE of getConfigDirectory() rather than
+            // by the class name: the type is platform-internal and intentionally not imported (no
+            // Require-Bundle), so instanceof is impossible, and a name match would be fragile.
+            Object dir;
+            try
             {
-                if ("FileDatabase".equals(k.getSimpleName())) //$NON-NLS-1$
-                {
-                    isFile = true;
-                }
+                dir = db.getClass().getMethod("getConfigDirectory").invoke(db); //$NON-NLS-1$
             }
-            if (!isFile)
+            catch (NoSuchMethodException e)
             {
+                // Not a file-backed database — nothing on the local disk to resolve.
                 return null;
             }
-            Object dir = db.getClass().getMethod("getConfigDirectory").invoke(db); //$NON-NLS-1$
             return (dir instanceof String) ? (String)dir : null;
         }
         catch (Throwable t)

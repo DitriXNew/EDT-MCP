@@ -40,6 +40,11 @@ import com.sun.net.httpserver.HttpHandler;
  */
 public class McpHttpHandler implements HttpHandler
 {
+    private static final String CONTENT_TYPE = "Content-Type"; //$NON-NLS-1$
+    private static final String TEXT_EVENT_STREAM = "text/event-stream"; //$NON-NLS-1$
+    private static final String CONNECTION = "Connection"; //$NON-NLS-1$
+    private static final String KEEP_ALIVE = "keep-alive"; //$NON-NLS-1$
+
     /** Event ID counter for SSE - AtomicLong for thread safety across concurrent SSE streams */
     private final AtomicLong eventIdCounter = new AtomicLong(0);
 
@@ -324,7 +329,7 @@ public class McpHttpHandler implements HttpHandler
 
         // Check if client accepts SSE
         String acceptHeader = exchange.getRequestHeaders().getFirst("Accept"); //$NON-NLS-1$
-        boolean acceptsSse = acceptHeader != null && acceptHeader.contains("text/event-stream"); //$NON-NLS-1$
+        boolean acceptsSse = acceptHeader != null && acceptHeader.contains(TEXT_EVENT_STREAM);
 
         if (acceptsSse)
         {
@@ -338,8 +343,8 @@ public class McpHttpHandler implements HttpHandler
             {
                 exchange.getResponseHeaders().add(McpConstants.HEADER_SESSION_ID, generateSessionId());
             }
-            exchange.getResponseHeaders().add("Content-Type", "application/json"); //$NON-NLS-1$ //$NON-NLS-2$
-            exchange.getResponseHeaders().add("Connection", "keep-alive"); //$NON-NLS-1$ //$NON-NLS-2$
+            exchange.getResponseHeaders().add(CONTENT_TYPE, "application/json"); //$NON-NLS-1$
+            exchange.getResponseHeaders().add(CONNECTION, KEEP_ALIVE);
             HttpTransport.sendResponse(exchange, 200, response);
         }
     }
@@ -358,9 +363,9 @@ public class McpHttpHandler implements HttpHandler
      */
     private void sendSseResponse(HttpExchange exchange, String response, boolean isInitialize) throws IOException
     {
-        exchange.getResponseHeaders().add("Content-Type", "text/event-stream"); //$NON-NLS-1$ //$NON-NLS-2$
+        exchange.getResponseHeaders().add(CONTENT_TYPE, TEXT_EVENT_STREAM);
         exchange.getResponseHeaders().add("Cache-Control", "no-cache"); //$NON-NLS-1$ //$NON-NLS-2$
-        exchange.getResponseHeaders().add("Connection", "keep-alive"); //$NON-NLS-1$ //$NON-NLS-2$
+        exchange.getResponseHeaders().add(CONNECTION, KEEP_ALIVE);
 
         // Add session ID for initialize response
         if (isInitialize)
@@ -395,13 +400,13 @@ public class McpHttpHandler implements HttpHandler
     {
         String acceptHeader = exchange.getRequestHeaders().getFirst("Accept"); //$NON-NLS-1$
 
-        if (acceptHeader != null && acceptHeader.contains("text/event-stream")) //$NON-NLS-1$
+        if (acceptHeader != null && acceptHeader.contains(TEXT_EVENT_STREAM))
         {
             Activator.logInfo("SSE GET request received - opening SSE stream"); //$NON-NLS-1$
 
-            exchange.getResponseHeaders().add("Content-Type", "text/event-stream"); //$NON-NLS-1$ //$NON-NLS-2$
+            exchange.getResponseHeaders().add(CONTENT_TYPE, TEXT_EVENT_STREAM);
             exchange.getResponseHeaders().add("Cache-Control", "no-cache"); //$NON-NLS-1$ //$NON-NLS-2$
-            exchange.getResponseHeaders().add("Connection", "keep-alive"); //$NON-NLS-1$ //$NON-NLS-2$
+            exchange.getResponseHeaders().add(CONNECTION, KEEP_ALIVE);
             exchange.sendResponseHeaders(200, 0);
 
             // Register the stream so the server can PUSH notifications to it (e.g.
@@ -453,7 +458,7 @@ public class McpHttpHandler implements HttpHandler
                 McpConstants.PLUGIN_VERSION,
                 GetEdtVersionTool.getEdtVersion(),
                 McpConstants.PROTOCOL_VERSION);
-            exchange.getResponseHeaders().add("Content-Type", "application/json"); //$NON-NLS-1$ //$NON-NLS-2$
+            exchange.getResponseHeaders().add(CONTENT_TYPE, "application/json"); //$NON-NLS-1$
             HttpTransport.sendResponse(exchange, 200, response);
         }
     }

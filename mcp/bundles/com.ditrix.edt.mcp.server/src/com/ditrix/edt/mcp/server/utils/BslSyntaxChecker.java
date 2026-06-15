@@ -210,7 +210,6 @@ public final class BslSyntaxChecker
             if (TRY_START.matcher(trimmed).find())
             {
                 stack.push(new String[] { TAG_TRY, String.valueOf(lineNum) });
-                continue;
             }
         }
 

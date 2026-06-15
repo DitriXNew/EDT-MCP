@@ -58,6 +58,15 @@ public class SearchInCodeTool implements IMcpTool
     private static final String MODE_COUNT = "count"; //$NON-NLS-1$
     private static final String MODE_FILES = "files"; //$NON-NLS-1$
 
+    /** Input param: lines of context before/after each match. */
+    private static final String KEY_CONTEXT_LINES = "contextLines"; //$NON-NLS-1$
+
+    /** Closing quote of a heading echoing the query, followed by a blank line. */
+    private static final String QUOTE_NEWLINES = "\"\n\n"; //$NON-NLS-1$
+
+    /** Markdown prefix for inline warnings in the rendered output. */
+    private static final String WARNING_PREFIX = "**Warning:** "; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -92,7 +101,7 @@ public class SearchInCodeTool implements IMcpTool
                 "Max matches returned with context. Default: 100, max: 500") //$NON-NLS-1$
             .integerProperty(KEY_MAX_RESULTS,
                 "Deprecated alias for 'limit'. Default: 100, max: 500") //$NON-NLS-1$
-            .integerProperty("contextLines", //$NON-NLS-1$
+            .integerProperty(KEY_CONTEXT_LINES,
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
             .stringProperty("fileMask", //$NON-NLS-1$
                 "Filter by module path substring (e.g. 'CommonModules' or 'Documents/SalesOrder')") //$NON-NLS-1$
@@ -138,12 +147,12 @@ public class SearchInCodeTool implements IMcpTool
         int configuredMaxResults = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, KEY_MAX_RESULTS, DEFAULT_MAX_RESULTS);
         int configuredContextLines = ToolParameterSettings.getInstance()
-            .getParameterValue(NAME, "contextLines", DEFAULT_CONTEXT_LINES); //$NON-NLS-1$
+            .getParameterValue(NAME, KEY_CONTEXT_LINES, DEFAULT_CONTEXT_LINES);
         // Canonical param is "limit" (consistent with other paginated tools);
         // "maxResults" is kept as a deprecated alias (precedence: limit, then maxResults).
         int maxResultsAlias = JsonUtils.extractIntArgument(params, KEY_MAX_RESULTS, configuredMaxResults);
         int maxResults = JsonUtils.extractIntArgument(params, "limit", maxResultsAlias); //$NON-NLS-1$
-        int contextLines = JsonUtils.extractIntArgument(params, "contextLines", configuredContextLines); //$NON-NLS-1$
+        int contextLines = JsonUtils.extractIntArgument(params, KEY_CONTEXT_LINES, configuredContextLines);
         String fileMask = JsonUtils.extractStringArgument(params, "fileMask"); //$NON-NLS-1$
         String metadataType = JsonUtils.extractStringArgument(params, "metadataType"); //$NON-NLS-1$
         String outputMode = JsonUtils.extractStringArgument(params, "outputMode"); //$NON-NLS-1$
@@ -252,13 +261,13 @@ public class SearchInCodeTool implements IMcpTool
     private String formatCountOutput(String query, SearchCollector collector)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append("## Search Count for \"").append(query).append("\"\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("## Search Count for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
         sb.append("**Total matches:** ").append(collector.totalMatches); //$NON-NLS-1$
         sb.append(" in **").append(collector.totalMatchedFiles).append("** files\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
         if (collector.skippedFiles > 0)
         {
-            sb.append("**Warning:** ").append(collector.skippedFiles) //$NON-NLS-1$
+            sb.append(WARNING_PREFIX).append(collector.skippedFiles)
               .append(" file(s) could not be read\n"); //$NON-NLS-1$
         }
         if (collector.wasInterrupted())
@@ -274,13 +283,13 @@ public class SearchInCodeTool implements IMcpTool
     private String formatFilesOutput(String query, SearchCollector collector)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append("## Search Files for \"").append(query).append("\"\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("## Search Files for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
         sb.append("**Total matches:** ").append(collector.totalMatches); //$NON-NLS-1$
         sb.append(" in **").append(collector.totalMatchedFiles).append("** files\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
         if (collector.skippedFiles > 0)
         {
-            sb.append("**Warning:** ").append(collector.skippedFiles) //$NON-NLS-1$
+            sb.append(WARNING_PREFIX).append(collector.skippedFiles)
               .append(" file(s) could not be read\n\n"); //$NON-NLS-1$
         }
         if (collector.wasInterrupted())
@@ -310,7 +319,7 @@ public class SearchInCodeTool implements IMcpTool
     private String formatFullOutput(String query, SearchCollector collector)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append("## Search Results for \"").append(query).append("\"\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("## Search Results for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
 
         int totalMatches = collector.totalMatches;
         int totalFiles = collector.totalMatchedFiles;
@@ -323,7 +332,7 @@ public class SearchInCodeTool implements IMcpTool
 
         if (collector.skippedFiles > 0)
         {
-            sb.append("**Warning:** ").append(collector.skippedFiles) //$NON-NLS-1$
+            sb.append(WARNING_PREFIX).append(collector.skippedFiles)
               .append(" file(s) could not be read (check EDT Error Log)\n"); //$NON-NLS-1$
         }
         if (collector.wasInterrupted())

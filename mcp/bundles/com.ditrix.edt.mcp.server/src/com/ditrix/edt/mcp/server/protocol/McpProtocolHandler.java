@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.protocol;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
@@ -64,7 +65,8 @@ public class McpProtocolHandler
      * before any initialize (and for a client that sends no capabilities) is the
      * permissive default — in particular structuredContent stays emitted.
      */
-    private volatile ClientCapabilities clientCapabilities = ClientCapabilities.ABSENT;
+    private final AtomicReference<ClientCapabilities> clientCapabilities =
+        new AtomicReference<>(ClientCapabilities.ABSENT);
 
     /**
      * Creates a new protocol handler.
@@ -84,7 +86,7 @@ public class McpProtocolHandler
      */
     public ClientCapabilities getClientCapabilities()
     {
-        return clientCapabilities;
+        return clientCapabilities.get();
     }
     
     /**
@@ -129,7 +131,7 @@ public class McpProtocolHandler
                 // store it server-scoped so later tools/call (and future protocol
                 // features) can gate on it. Absent / malformed capabilities resolve
                 // to ClientCapabilities.ABSENT, which keeps every default permissive.
-                clientCapabilities = parseClientCapabilities(request);
+                clientCapabilities.set(parseClientCapabilities(request));
                 return buildInitializeResponse(requestId, clientVersion);
             }
             
@@ -329,7 +331,7 @@ public class McpProtocolHandler
                 // no-regression guarantee. Only a client that EXPLICITLY declared it
                 // cannot accept structuredContent suppresses it; the JSON payload is
                 // then delivered as text so the data is still returned.
-                if (!clientCapabilities.allowsStructuredContent())
+                if (!clientCapabilities.get().allowsStructuredContent())
                 {
                     return buildToolCallTextResponse(result, requestId);
                 }
