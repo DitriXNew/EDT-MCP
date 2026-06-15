@@ -50,6 +50,12 @@ public class GoToDefinitionTool implements IMcpTool
     /** Input param: the symbol to resolve (qualified method, bare method, or metadata FQN). */
     private static final String KEY_SYMBOL = "symbol"; //$NON-NLS-1$
 
+    /** Opening fence for a BSL code block. */
+    private static final String BSL_CODE_FENCE_OPEN = "```bsl\n"; //$NON-NLS-1$
+
+    /** Closing fence for a code block. */
+    private static final String CODE_FENCE_CLOSE = "```\n"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -329,12 +335,12 @@ public class GoToDefinitionTool implements IMcpTool
         {
             if (allLines != null)
             {
-                sb.append("```bsl\n"); //$NON-NLS-1$
+                sb.append(BSL_CODE_FENCE_OPEN);
                 for (int i = from - 1; i < to; i++)
                 {
                     sb.append(allLines.get(i)).append('\n');
                 }
-                sb.append("```\n"); //$NON-NLS-1$
+                sb.append(CODE_FENCE_CLOSE);
             }
             else
             {
@@ -342,13 +348,13 @@ public class GoToDefinitionTool implements IMcpTool
                 String sourceText = BslModuleUtils.getSourceText(method);
                 if (sourceText != null)
                 {
-                    sb.append("```bsl\n"); //$NON-NLS-1$
+                    sb.append(BSL_CODE_FENCE_OPEN);
                     sb.append(sourceText);
                     if (!sourceText.endsWith("\n")) //$NON-NLS-1$
                     {
                         sb.append('\n');
                     }
-                    sb.append("```\n"); //$NON-NLS-1$
+                    sb.append(CODE_FENCE_CLOSE);
                 }
             }
         }
@@ -410,12 +416,12 @@ public class GoToDefinitionTool implements IMcpTool
             StringBuilder sb = new StringBuilder();
             if (includeSource)
             {
-                sb.append("```bsl\n"); //$NON-NLS-1$
+                sb.append(BSL_CODE_FENCE_OPEN);
                 for (int i = methodStart; i <= methodEnd; i++)
                 {
                     sb.append(allLines.get(i)).append('\n');
                 }
-                sb.append("```\n"); //$NON-NLS-1$
+                sb.append(CODE_FENCE_CLOSE);
             }
 
             return fm.wrapContent(sb.toString());

@@ -58,6 +58,13 @@ public class GenerateTranslationStringsTool implements IMcpTool
     private static final String FILL_UP_FROM_PROVIDER = "FROM_PROVIDER"; //$NON-NLS-1$
     private static final String V8_CONFIGURATION_NATURE = "com._1c.g5.v8.dt.core.V8ConfigurationNature"; //$NON-NLS-1$
 
+    private static final String TARGET_LANGUAGES = "targetLanguages"; //$NON-NLS-1$
+    private static final String STORAGE_ID = "storageId"; //$NON-NLS-1$
+    private static final String COLLECT_INTERFACE = "collectInterface"; //$NON-NLS-1$
+    private static final String COLLECT_MODEL = "collectModel"; //$NON-NLS-1$
+    private static final String COLLECT_MODEL_TYPE = "collectModelType"; //$NON-NLS-1$
+    private static final String FILL_UP_TYPE = "fillUpType"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -82,17 +89,17 @@ public class GenerateTranslationStringsTool implements IMcpTool
             .stringProperty(McpKeys.PROJECT_NAME,
                 "Configuration project name (V8ConfigurationNature), not a dictionary storage project. Required.", //$NON-NLS-1$
                 true)
-            .stringArrayProperty("targetLanguages", //$NON-NLS-1$
+            .stringArrayProperty(TARGET_LANGUAGES,
                 "Target language codes to generate, e.g. [\"en\"]. Required.", true) //$NON-NLS-1$
-            .stringProperty("storageId", //$NON-NLS-1$
+            .stringProperty(STORAGE_ID,
                 "Storage ID to write keys into (see get_translation_project_info). Default: \"edit:default\".") //$NON-NLS-1$
-            .booleanProperty("collectInterface", //$NON-NLS-1$
+            .booleanProperty(COLLECT_INTERFACE,
                 "Generate interface (.lstr) keys. Default: true.") //$NON-NLS-1$
-            .booleanProperty("collectModel", //$NON-NLS-1$
+            .booleanProperty(COLLECT_MODEL,
                 "Generate model (.trans) keys. Default: true.") //$NON-NLS-1$
-            .stringProperty("collectModelType", //$NON-NLS-1$
+            .stringProperty(COLLECT_MODEL_TYPE,
                 "Model mode: ANY | NONE | COMPUTED_ONLY | UNKNOWN_ONLY | TAGS_ONLY. Default: ANY.") //$NON-NLS-1$
-            .stringProperty("fillUpType", //$NON-NLS-1$
+            .stringProperty(FILL_UP_TYPE,
                 "Pre-fill source: NOT_FILLUP | FROM_SOURCE_LANGUAGE | FROM_PROVIDER. Default: NOT_FILLUP.") //$NON-NLS-1$
             .stringProperty("providerId", //$NON-NLS-1$
                 "Translation provider ID; required only when fillUpType=FROM_PROVIDER (see get_translation_project_info).") //$NON-NLS-1$
@@ -109,12 +116,12 @@ public class GenerateTranslationStringsTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
-        List<String> targetLanguages = JsonUtils.extractArrayArgument(params, "targetLanguages"); //$NON-NLS-1$
-        String storageId = JsonUtils.extractStringArgument(params, "storageId"); //$NON-NLS-1$
-        boolean collectInterface = JsonUtils.extractBooleanArgument(params, "collectInterface", true); //$NON-NLS-1$
-        boolean collectModel = JsonUtils.extractBooleanArgument(params, "collectModel", true); //$NON-NLS-1$
-        String collectModelType = JsonUtils.extractStringArgument(params, "collectModelType"); //$NON-NLS-1$
-        String fillUpType = JsonUtils.extractStringArgument(params, "fillUpType"); //$NON-NLS-1$
+        List<String> targetLanguages = JsonUtils.extractArrayArgument(params, TARGET_LANGUAGES);
+        String storageId = JsonUtils.extractStringArgument(params, STORAGE_ID);
+        boolean collectInterface = JsonUtils.extractBooleanArgument(params, COLLECT_INTERFACE, true);
+        boolean collectModel = JsonUtils.extractBooleanArgument(params, COLLECT_MODEL, true);
+        String collectModelType = JsonUtils.extractStringArgument(params, COLLECT_MODEL_TYPE);
+        String fillUpType = JsonUtils.extractStringArgument(params, FILL_UP_TYPE);
         String providerId = JsonUtils.extractStringArgument(params, "providerId"); //$NON-NLS-1$
 
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
@@ -236,12 +243,12 @@ public class GenerateTranslationStringsTool implements IMcpTool
             return FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
                 .put(McpKeys.PROJECT, projectName)
-                .put("targetLanguages", String.join(", ", targetLanguages)) //$NON-NLS-1$ //$NON-NLS-2$
-                .put("storageId", storageId) //$NON-NLS-1$
-                .put("collectInterface", collectInterface) //$NON-NLS-1$
-                .put("collectModel", collectModel) //$NON-NLS-1$
-                .put("collectModelType", collectModelType) //$NON-NLS-1$
-                .put("fillUpType", fillUpType) //$NON-NLS-1$
+                .put(TARGET_LANGUAGES, String.join(", ", targetLanguages)) //$NON-NLS-1$
+                .put(STORAGE_ID, storageId)
+                .put(COLLECT_INTERFACE, collectInterface)
+                .put(COLLECT_MODEL, collectModel)
+                .put(COLLECT_MODEL_TYPE, collectModelType)
+                .put(FILL_UP_TYPE, fillUpType)
                 .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
                 .wrapContent("Translation strings generated."); //$NON-NLS-1$
         }

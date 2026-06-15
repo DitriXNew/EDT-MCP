@@ -34,7 +34,9 @@ import com.ditrix.edt.mcp.server.tags.TagUtils;
  * Only enabled for top-level metadata objects (with FQN like Type.Name).
  */
 public class AddToGroupHandler extends AbstractHandler {
-    
+
+    private static final String ADD_TO_GROUP = "Add to Group";
+
     @Override
     public void setEnabled(Object evaluationContext) {
         // Check if selection contains at least one top-level object
@@ -97,7 +99,7 @@ public class AddToGroupHandler extends AbstractHandler {
         }
         
         if (selectedObjects.isEmpty() || project == null || objectType == null) {
-            MessageDialog.openWarning(shell, "Add to Group", 
+            MessageDialog.openWarning(shell, ADD_TO_GROUP,
                 "Please select one or more top-level metadata objects to add to a group.");
             return null;
         }
@@ -110,7 +112,7 @@ public class AddToGroupHandler extends AbstractHandler {
             .toList();
         
         if (matchingGroups.isEmpty()) {
-            MessageDialog.openInformation(shell, "Add to Group", 
+            MessageDialog.openInformation(shell, ADD_TO_GROUP,
                 "No groups exist for " + objectType + ".\n" +
                 "Create a group first using 'New Group...' on the " + objectType + " folder.");
             return null;
@@ -126,7 +128,7 @@ public class AddToGroupHandler extends AbstractHandler {
                 return super.getText(element);
             }
         });
-        dialog.setTitle("Add to Group");
+        dialog.setTitle(ADD_TO_GROUP);
         dialog.setMessage("Select target group for " + objectType + ":");
         dialog.setElements(matchingGroups.toArray());
         dialog.setMultipleSelection(false);
@@ -163,10 +165,10 @@ public class AddToGroupHandler extends AbstractHandler {
         
         // Show result
         if (successCount > 0) {
-            MessageDialog.openInformation(shell, "Add to Group", 
+            MessageDialog.openInformation(shell, ADD_TO_GROUP,
                 "Added " + successCount + " object(s) to group '" + targetGroup.getName() + "'.");
         } else if (failCount > 0) {
-            MessageDialog.openWarning(shell, "Add to Group", 
+            MessageDialog.openWarning(shell, ADD_TO_GROUP,
                 "Failed to add objects. They may already be in the group.");
         }
         

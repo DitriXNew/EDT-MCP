@@ -39,6 +39,9 @@ public class ReadModuleSourceTool implements IMcpTool
 {
     public static final String NAME = "read_module_source"; //$NON-NLS-1$
 
+    private static final String START_LINE = "startLine"; //$NON-NLS-1$
+    private static final String END_LINE = "endLine"; //$NON-NLS-1$
+
     /** Fallback when the {@code maxLines} tool parameter is not configured */
     private static final int DEFAULT_MAX_LINES = 500;
 
@@ -66,9 +69,9 @@ public class ReadModuleSourceTool implements IMcpTool
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty(McpKeys.MODULE_PATH,
                 "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
-            .integerProperty("startLine", //$NON-NLS-1$
+            .integerProperty(START_LINE,
                 "First line, 1-based inclusive; omit to read from the start.") //$NON-NLS-1$
-            .integerProperty("endLine", //$NON-NLS-1$
+            .integerProperty(END_LINE,
                 "Last line, 1-based inclusive; omit to read to the end.") //$NON-NLS-1$
             .build();
     }
@@ -103,8 +106,8 @@ public class ReadModuleSourceTool implements IMcpTool
 
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
-        int startLine = JsonUtils.extractIntArgument(params, "startLine", -1); //$NON-NLS-1$
-        int endLine = JsonUtils.extractIntArgument(params, "endLine", -1); //$NON-NLS-1$
+        int startLine = JsonUtils.extractIntArgument(params, START_LINE, -1);
+        int endLine = JsonUtils.extractIntArgument(params, END_LINE, -1);
 
         err = JsonUtils.requireArgument(params, McpKeys.MODULE_PATH, ". Example: 'CommonModules/MyModule/Module.bsl'"); //$NON-NLS-1$
         if (err != null)
@@ -216,8 +219,8 @@ public class ReadModuleSourceTool implements IMcpTool
 
         if (totalLines > 0)
         {
-            fm.put("startLine", from) //$NON-NLS-1$
-                .put("endLine", to); //$NON-NLS-1$
+            fm.put(START_LINE, from)
+                .put(END_LINE, to);
         }
 
         fm.put("totalLines", totalLines); //$NON-NLS-1$

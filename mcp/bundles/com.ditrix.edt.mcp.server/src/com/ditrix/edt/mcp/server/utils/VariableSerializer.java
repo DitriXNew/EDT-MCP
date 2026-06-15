@@ -29,6 +29,12 @@ public final class VariableSerializer
     /** Hard cap for serialised string values to keep MCP responses sane. */
     public static final int MAX_VALUE_LENGTH = 500;
 
+    /** DTO key: the variable's serialised value. */
+    private static final String KEY_VALUE = "value"; //$NON-NLS-1$
+
+    /** DTO key: whether the value can be expanded into child variables. */
+    private static final String KEY_HAS_CHILDREN = "hasChildren"; //$NON-NLS-1$
+
     private VariableSerializer()
     {
     }
@@ -108,16 +114,16 @@ public final class VariableSerializer
         catch (Exception ex)
         {
             dto.put("type", "<unknown>"); //$NON-NLS-1$ //$NON-NLS-2$
-            dto.put("value", "<error: " + ex.getMessage() + ">"); //$NON-NLS-1$ //$NON-NLS-2$
-            dto.put("hasChildren", false); //$NON-NLS-1$
+            dto.put(KEY_VALUE, "<error: " + ex.getMessage() + ">"); //$NON-NLS-1$
+            dto.put(KEY_HAS_CHILDREN, false);
             return dto;
         }
 
         if (value == null)
         {
             dto.put("type", "Undefined"); //$NON-NLS-1$ //$NON-NLS-2$
-            dto.put("value", null); //$NON-NLS-1$
-            dto.put("hasChildren", false); //$NON-NLS-1$
+            dto.put(KEY_VALUE, null);
+            dto.put(KEY_HAS_CHILDREN, false);
             return dto;
         }
 
@@ -135,13 +141,13 @@ public final class VariableSerializer
         }
         if (stringValue != null && stringValue.length() > MAX_VALUE_LENGTH)
         {
-            dto.put("value", stringValue.substring(0, MAX_VALUE_LENGTH)); //$NON-NLS-1$
+            dto.put(KEY_VALUE, stringValue.substring(0, MAX_VALUE_LENGTH));
             dto.put("truncated", true); //$NON-NLS-1$
             dto.put("fullLength", stringValue.length()); //$NON-NLS-1$
         }
         else
         {
-            dto.put("value", stringValue); //$NON-NLS-1$
+            dto.put(KEY_VALUE, stringValue);
         }
 
         boolean hasChildren;
@@ -153,7 +159,7 @@ public final class VariableSerializer
         {
             hasChildren = false;
         }
-        dto.put("hasChildren", hasChildren); //$NON-NLS-1$
+        dto.put(KEY_HAS_CHILDREN, hasChildren);
         if (hasChildren)
         {
             // Hint for the caller: pass this name as expandPath (or append it

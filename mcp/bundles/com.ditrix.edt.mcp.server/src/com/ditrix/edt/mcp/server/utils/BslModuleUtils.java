@@ -89,6 +89,9 @@ public final class BslModuleUtils
      */
     public static final String SOURCE_FOLDER = "src"; //$NON-NLS-1$
 
+    /** Default charset for BSL files in EDT (always UTF-8). */
+    private static final String UTF_8 = "UTF-8"; //$NON-NLS-1$
+
     /**
      * Resolves a module path (relative to the project's source folder) to an IFile.
      * Centralizes the source-folder assumption that every module tool previously
@@ -437,7 +440,7 @@ public final class BslModuleUtils
                 input.reset();
             }
             // BSL files in EDT are always UTF-8
-            String charset = "UTF-8"; //$NON-NLS-1$
+            String charset = UTF_8;
             if (!isUtf8Bom)
             {
                 try
@@ -446,7 +449,7 @@ public final class BslModuleUtils
                 }
                 catch (Exception ce)
                 {
-                    charset = "UTF-8"; //$NON-NLS-1$
+                    charset = UTF_8;
                 }
             }
             try (BufferedReader reader = new BufferedReader(
@@ -502,7 +505,7 @@ public final class BslModuleUtils
             {
                 input.reset();
             }
-            String charset = "UTF-8"; //$NON-NLS-1$
+            String charset = UTF_8;
             if (!isUtf8Bom)
             {
                 try
@@ -511,7 +514,7 @@ public final class BslModuleUtils
                 }
                 catch (Exception ce)
                 {
-                    charset = "UTF-8"; //$NON-NLS-1$
+                    charset = UTF_8;
                 }
             }
             try (InputStreamReader reader = new InputStreamReader(input, charset))
