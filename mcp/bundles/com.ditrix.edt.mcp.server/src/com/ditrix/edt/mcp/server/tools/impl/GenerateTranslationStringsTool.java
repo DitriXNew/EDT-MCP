@@ -247,7 +247,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return CliReflectionErrors.toErrorJson(e, "LanguageTool", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
+            return CliReflectionErrors.toErrorJson(e, "Generate translation strings", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 

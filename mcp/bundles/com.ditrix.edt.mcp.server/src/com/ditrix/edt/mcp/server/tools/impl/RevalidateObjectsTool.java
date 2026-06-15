@@ -53,6 +53,9 @@ public class RevalidateObjectsTool implements IMcpTool
     /** Input param: list of object FQNs to revalidate (empty = full project). */
     private static final String KEY_OBJECTS = "objects"; //$NON-NLS-1$
 
+    /** Result {@code mode} value: a targeted object-list revalidation (vs. full project). */
+    private static final String MODE_OBJECTS = "objects"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -311,7 +314,7 @@ public class RevalidateObjectsTool implements IMcpTool
             .put("tool", NAME) //$NON-NLS-1$
             .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
             .put("project", projectName) //$NON-NLS-1$
-            .put("mode", KEY_OBJECTS) //$NON-NLS-1$
+            .put("mode", MODE_OBJECTS) //$NON-NLS-1$
             .put("objectsRequested", objectFqns.size()) //$NON-NLS-1$
             .put("objectsFound", found.size()); //$NON-NLS-1$
 

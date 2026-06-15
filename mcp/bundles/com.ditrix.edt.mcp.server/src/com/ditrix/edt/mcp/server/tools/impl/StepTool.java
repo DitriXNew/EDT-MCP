@@ -41,6 +41,9 @@ public class StepTool implements IMcpTool
     /** Output key: reason when a suspend was not hit. */
     private static final String KEY_REASON = "reason"; //$NON-NLS-1$
 
+    /** {@link #KEY_REASON} value: the wait window elapsed without a suspend. */
+    private static final String REASON_TIMEOUT = "timeout"; //$NON-NLS-1$
+
     private static final int DEFAULT_TIMEOUT = 30;
 
     /** Hard cap on the wait window, prevents a worker thread blocking for hours. */
@@ -202,7 +205,7 @@ public class StepTool implements IMcpTool
                 {
                     return ToolResult.success()
                         .put("hit", false) //$NON-NLS-1$
-                        .put(KEY_REASON, KEY_TIMEOUT)
+                        .put(KEY_REASON, REASON_TIMEOUT)
                         .put(McpKeys.APPLICATION_ID, appId)
                         .put(KEY_THREAD_ID, threadId)
                         .put("serverTarget", true) //$NON-NLS-1$
@@ -219,7 +222,7 @@ public class StepTool implements IMcpTool
             {
                 return ToolResult.success()
                     .put("hit", false) //$NON-NLS-1$
-                    .put(KEY_REASON, KEY_TIMEOUT)
+                    .put(KEY_REASON, REASON_TIMEOUT)
                     .put(McpKeys.APPLICATION_ID, appId)
                     .put(KEY_THREAD_ID, threadId)
                     .toJson();
