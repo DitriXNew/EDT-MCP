@@ -512,23 +512,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         {
             EObject obj = iter.next();
 
-            String calledName = null;
-            int line = 0;
-
-            if (obj instanceof Invocation)
-            {
-                Invocation inv = (Invocation) obj;
-                EObject methodAccess = inv.getMethodAccess();
-                if (methodAccess instanceof StaticFeatureAccess)
-                {
-                    calledName = ((StaticFeatureAccess) methodAccess).getName();
-                }
-                else if (methodAccess instanceof DynamicFeatureAccess)
-                {
-                    calledName = ((DynamicFeatureAccess) methodAccess).getName();
-                }
-                line = BslModuleUtils.getStartLine(inv);
-            }
+            String calledName = resolveInvocationName(obj);
 
             if (calledName != null && !calledName.isEmpty())
             {
@@ -536,32 +520,71 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
                 if (callees.size() < limit)
                 {
-                    CalleeInfo callee = new CalleeInfo();
-                    callee.calledMethodName = calledName;
-                    callee.line = line;
-
-                    // Get source text around the invocation
-                    INode node = NodeModelUtils.findActualNodeFor(obj);
-                    if (node != null)
-                    {
-                        String text = node.getText();
-                        if (text != null)
-                        {
-                            text = stripCommentLines(text);
-                            if (text.length() > 100)
-                            {
-                                text = smartTruncateCall(text, calledName);
-                            }
-                            callee.callCode = text;
-                        }
-                    }
-
-                    callees.add(callee);
+                    callees.add(buildCalleeInfo(obj, calledName));
                 }
             }
         }
 
         return formatCalleesOutput(modulePath, methodName, callees, totalInvocations);
+    }
+
+    /**
+     * Returns the called method name for an AST node when it is an {@link Invocation} whose
+     * method access is a static or dynamic feature access; otherwise {@code null}. Extracted from
+     * {@link #findCallees(String, String, String, int)} to keep that loop's complexity in check.
+     *
+     * @param obj the AST node to inspect
+     * @return the invoked method name, or {@code null} when the node is not a recognized invocation
+     */
+    private String resolveInvocationName(EObject obj)
+    {
+        if (!(obj instanceof Invocation))
+        {
+            return null;
+        }
+        EObject methodAccess = ((Invocation) obj).getMethodAccess();
+        if (methodAccess instanceof StaticFeatureAccess)
+        {
+            return ((StaticFeatureAccess) methodAccess).getName();
+        }
+        if (methodAccess instanceof DynamicFeatureAccess)
+        {
+            return ((DynamicFeatureAccess) methodAccess).getName();
+        }
+        return null;
+    }
+
+    /**
+     * Builds a {@link CalleeInfo} for a matched invocation node: records the called method name and
+     * line, then attaches a compacted call snippet from the node's source text. Extracted from
+     * {@link #findCallees(String, String, String, int)}.
+     *
+     * @param obj the invocation AST node
+     * @param calledName the resolved called method name
+     * @return the populated callee info
+     */
+    private CalleeInfo buildCalleeInfo(EObject obj, String calledName)
+    {
+        CalleeInfo callee = new CalleeInfo();
+        callee.calledMethodName = calledName;
+        callee.line = BslModuleUtils.getStartLine(obj);
+
+        // Get source text around the invocation
+        INode node = NodeModelUtils.findActualNodeFor(obj);
+        if (node != null)
+        {
+            String text = node.getText();
+            if (text != null)
+            {
+                text = stripCommentLines(text);
+                if (text.length() > 100)
+                {
+                    text = smartTruncateCall(text, calledName);
+                }
+                callee.callCode = text;
+            }
+        }
+        return callee;
     }
 
     // ========== Helper methods ==========

@@ -469,91 +469,108 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     private void formatTabularSectionsExtended(StringBuilder sb, String name, Collection<?> items, boolean full, String language)
     {
         addSectionHeader(sb, name);
-        
+
         for (Object item : items)
         {
             if (item instanceof BasicTabularSection)
             {
                 BasicTabularSection ts = (BasicTabularSection) item;
-                
+
                 // Sub-header for this tabular section
                 sb.append("\n#### ").append(ts.getName()).append("\n\n");
-                
-                // Properties table for the TS itself
-                startTable(sb, "Property", VALUE_TOKEN);
-                addPropertyRow(sb, "Name", ts.getName());
-                addPropertyRow(sb, SYNONYM_TOKEN, getSynonym(ts.getSynonym(), language));
-                
-                String comment = ts.getComment();
-                if (comment != null && !comment.isEmpty())
+
+                formatTabularSectionProperties(sb, ts, language);
+                formatTabularSectionAttributes(sb, ts, full, language);
+            }
+        }
+    }
+
+    /**
+     * Renders the properties table of a single tabular section (Name, Synonym, optional Comment /
+     * Tool Tip, Fill Checking, and the reflective Use / Line Number Length rows).
+     */
+    private void formatTabularSectionProperties(StringBuilder sb, BasicTabularSection ts, String language)
+    {
+        // Properties table for the TS itself
+        startTable(sb, "Property", VALUE_TOKEN);
+        addPropertyRow(sb, "Name", ts.getName());
+        addPropertyRow(sb, SYNONYM_TOKEN, getSynonym(ts.getSynonym(), language));
+
+        String comment = ts.getComment();
+        if (comment != null && !comment.isEmpty())
+        {
+            addPropertyRow(sb, "Comment", comment);
+        }
+
+        // Tool Tip
+        String toolTip = getSynonym(ts.getToolTip(), language);
+        if (toolTip != null && !toolTip.isEmpty())
+        {
+            addPropertyRow(sb, "Tool Tip", toolTip);
+        }
+
+        // Fill Checking
+        addPropertyRow(sb, "Fill Checking", formatEnum(ts.getFillChecking()));
+
+        // Use (via reflection, available in HierarchicalDbObjectTabularSection)
+        try
+        {
+            java.lang.reflect.Method method = ts.getClass().getMethod("getUse");
+            Object use = method.invoke(ts);
+            if (use != null)
+            {
+                addPropertyRow(sb, "Use", formatEnum(use));
+            }
+        }
+        catch (Exception e)
+        {
+            // Method doesn't exist - skip
+        }
+
+        // LineNumberLength (via reflection)
+        try
+        {
+            java.lang.reflect.Method method = ts.getClass().getMethod("getLineNumberLength");
+            Object lineNumLen = method.invoke(ts);
+            if (lineNumLen != null)
+            {
+                addPropertyRow(sb, "Line Number Length", lineNumLen.toString());
+            }
+        }
+        catch (Exception e)
+        {
+            // Method doesn't exist - skip
+        }
+    }
+
+    /**
+     * Renders the attributes sub-table of a single tabular section, resolving the attributes
+     * collection via EMF reflection. No output is produced when the section has no attributes.
+     */
+    private void formatTabularSectionAttributes(StringBuilder sb, BasicTabularSection ts, boolean full, String language)
+    {
+        // Get attributes collection via EMF reflection
+        try
+        {
+            EObject eObj = (EObject) ts;
+            EStructuralFeature attrFeature = eObj.eClass().getEStructuralFeature("attributes");
+            if (attrFeature != null)
+            {
+                Object attrValue = eObj.eGet(attrFeature);
+                if (attrValue instanceof Collection && !((Collection<?>) attrValue).isEmpty())
                 {
-                    addPropertyRow(sb, "Comment", comment);
-                }
-                
-                // Tool Tip
-                String toolTip = getSynonym(ts.getToolTip(), language);
-                if (toolTip != null && !toolTip.isEmpty())
-                {
-                    addPropertyRow(sb, "Tool Tip", toolTip);
-                }
-                
-                // Fill Checking
-                addPropertyRow(sb, "Fill Checking", formatEnum(ts.getFillChecking()));
-                
-                // Use (via reflection, available in HierarchicalDbObjectTabularSection)
-                try
-                {
-                    java.lang.reflect.Method method = ts.getClass().getMethod("getUse");
-                    Object use = method.invoke(ts);
-                    if (use != null)
-                    {
-                        addPropertyRow(sb, "Use", formatEnum(use));
-                    }
-                }
-                catch (Exception e)
-                {
-                    // Method doesn't exist - skip
-                }
-                
-                // LineNumberLength (via reflection)
-                try
-                {
-                    java.lang.reflect.Method method = ts.getClass().getMethod("getLineNumberLength");
-                    Object lineNumLen = method.invoke(ts);
-                    if (lineNumLen != null)
-                    {
-                        addPropertyRow(sb, "Line Number Length", lineNumLen.toString());
-                    }
-                }
-                catch (Exception e)
-                {
-                    // Method doesn't exist - skip
-                }
-                
-                // Get attributes collection via EMF reflection
-                try
-                {
-                    EObject eObj = (EObject) ts;
-                    EStructuralFeature attrFeature = eObj.eClass().getEStructuralFeature("attributes");
-                    if (attrFeature != null)
-                    {
-                        Object attrValue = eObj.eGet(attrFeature);
-                        if (attrValue instanceof Collection && !((Collection<?>) attrValue).isEmpty())
-                        {
-                            Collection<?> attributes = (Collection<?>) attrValue;
-                            
-                            // Format attributes of this tabular section
-                            sb.append("\n**Attributes:**\n\n");
-                            formatAttributesCollection(sb, "", attributes, full, language);
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    // Error getting attributes - skip
-                    System.err.println("Error formatting tabular section attributes: " + e.getMessage());
+                    Collection<?> attributes = (Collection<?>) attrValue;
+
+                    // Format attributes of this tabular section
+                    sb.append("\n**Attributes:**\n\n");
+                    formatAttributesCollection(sb, "", attributes, full, language);
                 }
             }
+        }
+        catch (Exception e)
+        {
+            // Error getting attributes - skip
+            System.err.println("Error formatting tabular section attributes: " + e.getMessage());
         }
     }
     

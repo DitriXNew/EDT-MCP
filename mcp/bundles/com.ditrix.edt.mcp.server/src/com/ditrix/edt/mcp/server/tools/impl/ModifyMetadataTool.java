@@ -212,47 +212,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // re-navigate to the leaf's owner BY NAME inside the tx - this is what lets a member of a
         // NESTED object (e.g. a tabular-section attribute) be modified, not just a direct member.
         final String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        final long topBmId;
-        final EStructuralFeature memberFeature;
-        final String memberName;
-        if (node.topLevel)
+        BmFetchPlan plan = resolveBmFetchPlan(config, node, target, parts);
+        if (plan.error != null)
         {
-            if (!(target instanceof IBmObject))
-            {
-                return ToolResult.error("Target is not a BM object").toJson(); //$NON-NLS-1$
-            }
-            topBmId = ((IBmObject)target).bmGetId();
-            memberFeature = null;
-            memberName = null;
+            return plan.error;
         }
-        else
-        {
-            MdObject topObject = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
-            if (!(topObject instanceof IBmObject))
-            {
-                return ToolResult.error("Top object is not a BM object").toJson(); //$NON-NLS-1$
-            }
-            topBmId = ((IBmObject)topObject).bmGetId();
-            memberFeature = node.feature;
-            memberName = target.getName();
-        }
+        final long topBmId = plan.topBmId;
+        final EStructuralFeature memberFeature = plan.memberFeature;
+        final String memberName = plan.memberName;
 
         // The platform version is needed only to build a 'type' value; resolve it best-effort (a
         // missing version is reported only if a 'type' property is actually set).
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
-        final Version version = v8Project != null ? v8Project.getVersion() : null;
+        final Version version = resolvePlatformVersion(ctx);
 
         // Validate every property against the introspected schema BEFORE any write (fail fast, no
         // partial mutation). On success, collect the prepared changes to apply inside the tx.
         List<PreparedChange> changes = new ArrayList<>();
-        for (JsonObject prop : properties)
+        String prepErr = validateAndPrepare(config, version, target, properties, changes, normReport);
+        if (prepErr != null)
         {
-            String pErr = prepare(config, version, target, prop, changes, normReport);
-            if (pErr != null)
-            {
-                return pErr;
-            }
+            return prepErr;
         }
 
         // The top object that owns the node's .mdo file.
@@ -272,25 +251,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
-                EObject top = (EObject)tx.getObjectById(topBmId);
-                if (top == null)
-                {
-                    throw new RuntimeException("Target not found in transaction"); //$NON-NLS-1$
-                }
-                EObject applyTo = top;
-                if (memberFeature != null)
-                {
-                    EObject owner = MetadataNodeResolver.resolveOwnerInTx(top, parts);
-                    if (owner == null)
-                    {
-                        throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$
-                    }
-                    applyTo = childByName(owner, memberFeature, memberName);
-                    if (applyTo == null)
-                    {
-                        throw new RuntimeException("Member not found in transaction: " + memberName); //$NON-NLS-1$
-                    }
-                }
+                EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
                 for (PreparedChange change : changes)
                 {
                     change.applyTo(applyTo, tx);
@@ -306,11 +267,77 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, topFqn);
 
+        List<String> applied = appliedFeatureNames(changes);
+        return buildModifiedResult(normFqn, applied, persisted, normReport);
+    }
+
+    /**
+     * Resolves the platform {@link Version} for the project best-effort (used only to build a 'type'
+     * value): {@code null} when the V8 project manager or project is unavailable. Side-effect-free
+     * helper extracted from {@link #executeOnUiThread}.
+     */
+    private static Version resolvePlatformVersion(ProjectContext ctx)
+    {
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
+        return v8Project != null ? v8Project.getVersion() : null;
+    }
+
+    /**
+     * Re-navigates to the EObject that the prepared changes must be applied to, INSIDE the write
+     * transaction: re-fetches the TOP object by {@code topBmId} and, for a member, re-navigates to
+     * the leaf's owner and then to the leaf BY NAME. Read-only resolution (no eSet) - the actual
+     * mutation stays in the caller's apply loop. Throws the SAME {@link RuntimeException}s as before
+     * (target / owner / member not found), which propagate to the same catch and roll the tx back.
+     * Extracted verbatim from {@link #executeOnUiThread}'s transaction body.
+     */
+    private static EObject resolveApplyTarget(IBmTransaction tx, long topBmId,
+        EStructuralFeature memberFeature, String memberName, String[] parts)
+    {
+        EObject top = (EObject)tx.getObjectById(topBmId);
+        if (top == null)
+        {
+            throw new RuntimeException("Target not found in transaction"); //$NON-NLS-1$
+        }
+        if (memberFeature == null)
+        {
+            return top;
+        }
+        EObject owner = MetadataNodeResolver.resolveOwnerInTx(top, parts);
+        if (owner == null)
+        {
+            throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$
+        }
+        EObject applyTo = childByName(owner, memberFeature, memberName);
+        if (applyTo == null)
+        {
+            throw new RuntimeException("Member not found in transaction: " + memberName); //$NON-NLS-1$
+        }
+        return applyTo;
+    }
+
+    /**
+     * Collects the feature names of the applied changes, in order. Pure helper extracted from
+     * {@link #executeOnUiThread}.
+     */
+    private static List<String> appliedFeatureNames(List<PreparedChange> changes)
+    {
         List<String> applied = new ArrayList<>();
         for (PreparedChange change : changes)
         {
             applied.add(change.featureName());
         }
+        return applied;
+    }
+
+    /**
+     * Builds the success JSON for a completed modify (action / fqn / applied / persisted, the
+     * normalization report and the confirmation message). Pure helper extracted from
+     * {@link #executeOnUiThread}; the same shape used by the form-member branch.
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
+        MdNameNormalizer.Report normReport)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -320,6 +347,78 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return result
             .put(McpKeys.MESSAGE, "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .toJson();
+    }
+
+    /**
+     * Holds the BM re-fetch strategy resolved for the modify transaction: the {@code topBmId} of the
+     * re-fetchable top object plus, for a member node, the owning {@code memberFeature} and the leaf's
+     * {@code memberName} to re-navigate by name inside the tx. {@link #error} is non-null (a ready JSON
+     * error) when the target / top object is not a BM object.
+     */
+    private static final class BmFetchPlan
+    {
+        private long topBmId;
+        private EStructuralFeature memberFeature;
+        private String memberName;
+        private String error;
+    }
+
+    /**
+     * Resolves the BM re-fetch strategy for the modify transaction (see {@link BmFetchPlan}). Only TOP
+     * objects are re-fetchable by bmId; for a member the TOP object's bmId is captured and the leaf is
+     * re-navigated by name inside the tx. Side-effect-free: it only reads ids / features. Extracted
+     * verbatim from {@link #executeOnUiThread}; the caller re-checks {@link BmFetchPlan#error} and
+     * returns it unchanged, preserving the original error cases.
+     */
+    private static BmFetchPlan resolveBmFetchPlan(Configuration config,
+        MetadataNodeResolver.MetadataNode node, MdObject target, String[] parts)
+    {
+        BmFetchPlan plan = new BmFetchPlan();
+        if (node.topLevel)
+        {
+            if (!(target instanceof IBmObject))
+            {
+                plan.error = ToolResult.error("Target is not a BM object").toJson(); //$NON-NLS-1$
+                return plan;
+            }
+            plan.topBmId = ((IBmObject)target).bmGetId();
+            plan.memberFeature = null;
+            plan.memberName = null;
+        }
+        else
+        {
+            MdObject topObject = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
+            if (!(topObject instanceof IBmObject))
+            {
+                plan.error = ToolResult.error("Top object is not a BM object").toJson(); //$NON-NLS-1$
+                return plan;
+            }
+            plan.topBmId = ((IBmObject)topObject).bmGetId();
+            plan.memberFeature = node.feature;
+            plan.memberName = target.getName();
+        }
+        return plan;
+    }
+
+    /**
+     * Validates every property against the introspected schema BEFORE any write (fail fast, no partial
+     * mutation), appending a {@link PreparedChange} for each. Returns the first property's JSON error,
+     * or {@code null} when all validated. Side-effect-free apart from populating {@code changes};
+     * extracted verbatim from {@link #executeOnUiThread} so a failure returns the SAME error in the
+     * SAME case, before the BM transaction runs.
+     */
+    private String validateAndPrepare(Configuration config, Version version, MdObject target,
+        List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport)
+    {
+        for (JsonObject prop : properties)
+        {
+            String pErr = prepare(config, version, target, prop, changes, normReport);
+            if (pErr != null)
+            {
+                return pErr;
+            }
+        }
+        return null;
     }
 
     /**

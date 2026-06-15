@@ -892,26 +892,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private String createFormHandler(String projectName, String normFqn,
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties, String callType)
     {
-        String procName = null;
-        for (JsonObject prop : properties)
+        String[] procNameHolder = new String[1];
+        String propError = parseHandlerProperties(properties, procNameHolder);
+        if (propError != null)
         {
-            String pName = asString(prop.get("name")); //$NON-NLS-1$
-            if (pName == null || pName.isEmpty())
-            {
-                return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
-            }
-            switch (pName.toLowerCase())
-            {
-                case "procedure": //$NON-NLS-1$
-                case "handler": //$NON-NLS-1$
-                    procName = asString(prop.get(KEY_VALUE));
-                    break;
-                default:
-                    return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' is not supported for a form " //$NON-NLS-1$
-                        + "handler. Use 'procedure' (the BSL handler procedure name; defaults to the " //$NON-NLS-1$
-                        + "event name).").toJson(); //$NON-NLS-1$
-            }
+            return propError;
         }
+        String procName = procNameHolder[0];
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -997,6 +984,50 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create form handler: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
+        return buildHandlerResult(ref, normFqn, eventName, fProc, callType, extensionHandler,
+            createdKind[0], persisted);
+    }
+
+    /**
+     * Parses the handler {@code properties} array, resolving the optional BSL procedure name from a
+     * {@code procedure} / {@code handler} property into {@code procNameHolder[0]}. Side-effect-free:
+     * returns a JSON error string when a property is malformed or unsupported, or {@code null} on
+     * success (the same error JSON the caller would otherwise have returned inline).
+     */
+    private String parseHandlerProperties(List<JsonObject> properties, String[] procNameHolder)
+    {
+        for (JsonObject prop : properties)
+        {
+            String pName = asString(prop.get("name")); //$NON-NLS-1$
+            if (pName == null || pName.isEmpty())
+            {
+                return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
+            }
+            switch (pName.toLowerCase())
+            {
+                case "procedure": //$NON-NLS-1$
+                case "handler": //$NON-NLS-1$
+                    procNameHolder[0] = asString(prop.get(KEY_VALUE));
+                    break;
+                default:
+                    return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' is not supported for a form " //$NON-NLS-1$
+                        + "handler. Use 'procedure' (the BSL handler procedure name; defaults to the " //$NON-NLS-1$
+                        + "event name).").toJson(); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Builds the success JSON for a created form event handler (location string, message and result
+     * fields). Side-effect-free: pure formatting of the already-applied change.
+     *
+     * @param createdKind the kind reported by the writer ({@code null} =&gt; {@code "EventHandler"})
+     */
+    private String buildHandlerResult(FormElementWriter.FormMemberRef ref, String normFqn,
+        String eventName, String fProc, String callType, boolean extensionHandler,
+        String createdKind, boolean persisted)
+    {
         String location = ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath; //$NON-NLS-1$
         String effectiveProc = (fProc == null || fProc.isEmpty()) ? eventName : fProc;
         String message;
@@ -1013,7 +1044,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("kind", createdKind[0] != null ? createdKind[0] : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("kind", createdKind != null ? createdKind : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
             .put("name", eventName) //$NON-NLS-1$
             .put(KEY_PERSISTED, persisted)
             .put(McpKeys.MESSAGE, message);
@@ -1411,21 +1442,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
          */
         static CommonModuleFlags resolve(Map<String, String> params)
         {
-            String kindToken = JsonUtils.extractStringArgument(params, KEY_COMMON_MODULE_KIND);
-            CommonModuleKind kind;
-            if (kindToken == null || kindToken.trim().isEmpty())
-            {
-                kind = CommonModuleKind.SERVER;
-            }
-            else
-            {
-                kind = CommonModuleKind.fromToken(kindToken.trim());
-                if (kind == null)
-                {
-                    throw new IllegalArgumentException("Unknown commonModuleKind '" + kindToken //$NON-NLS-1$
-                        + "'. Supported: " + CommonModuleKind.quotedList() + "."); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
+            CommonModuleKind kind =
+                resolveKind(JsonUtils.extractStringArgument(params, KEY_COMMON_MODULE_KIND));
 
             boolean serverCall = JsonUtils.extractBooleanArgument(params, "serverCall", false); //$NON-NLS-1$
             boolean privileged = JsonUtils.extractBooleanArgument(params, "privileged", false); //$NON-NLS-1$
@@ -1437,8 +1455,42 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 serverCall = true;
             }
 
-            // --- Cross-flag validation (clear, actionable messages) ---
+            validateModifiers(kind, serverCall, privileged, reuse);
 
+            boolean cached = reuse == ReturnValuesReuse.DURING_SESSION;
+            return toCanonicalFlags(kind, serverCall, privileged, cached);
+        }
+
+        /**
+         * Resolves the {@code commonModuleKind} token (defaulting to {@code Server} when blank) to
+         * its {@link CommonModuleKind}. Side-effect-free.
+         *
+         * @throws IllegalArgumentException if the token is non-blank but unknown
+         */
+        private static CommonModuleKind resolveKind(String kindToken)
+        {
+            if (kindToken == null || kindToken.trim().isEmpty())
+            {
+                return CommonModuleKind.SERVER;
+            }
+            CommonModuleKind kind = CommonModuleKind.fromToken(kindToken.trim());
+            if (kind == null)
+            {
+                throw new IllegalArgumentException("Unknown commonModuleKind '" + kindToken //$NON-NLS-1$
+                    + "'. Supported: " + CommonModuleKind.quotedList() + "."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return kind;
+        }
+
+        /**
+         * Cross-flag validation with clear, actionable messages. Rejects modifier/kind combinations
+         * that have no standards-compliant (validator-accepted) flag set. Side-effect-free.
+         *
+         * @throws IllegalArgumentException if the requested combination is invalid
+         */
+        private static void validateModifiers(CommonModuleKind kind, boolean serverCall,
+            boolean privileged, ReturnValuesReuse reuse)
+        {
             boolean serverSideKind = kind == CommonModuleKind.SERVER
                 || kind == CommonModuleKind.SERVER_CALL
                 || kind == CommonModuleKind.CLIENT_SERVER;
@@ -1492,13 +1544,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         + "it is not valid for kind '" + kind.token() + "'."); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
+        }
 
-            // --- Map (kind, modifiers) to a canonical, validator-accepted combo ---
-            // Flags order: clientManaged, clientOrdinary, server, serverCall, externalConnection,
-            // global, privileged, reuse.
-
-            boolean cached = reuse == ReturnValuesReuse.DURING_SESSION;
-
+        /**
+         * Maps a validated {@code (kind, modifiers)} combination to its canonical,
+         * validator-accepted flag set. Side-effect-free.
+         *
+         * <p>Flags order: clientManaged, clientOrdinary, server, serverCall, externalConnection,
+         * global, privileged, reuse.
+         */
+        private static CommonModuleFlags toCanonicalFlags(CommonModuleKind kind, boolean serverCall,
+            boolean privileged, boolean cached)
+        {
             switch (kind)
             {
             case SERVER:

@@ -1423,34 +1423,7 @@ public class MetadataRenameService
         // Apply disableIndices by traversing items and their native changes
         if (!disableIndices.isEmpty())
         {
-            int[] indexCounter = {0};
-            for (IRefactoring refactoring : refactorings)
-            {
-                Collection<IRefactoringItem> items = refactoring.getItems();
-                if (items == null)
-                    continue;
-                for (IRefactoringItem item : items)
-                {
-                    if (item instanceof INativeChangeRefactoringItem nativeItem)
-                    {
-                        Change nativeChange = nativeItem.getNativeChange();
-                        if (nativeChange != null)
-                        {
-                            applyDisableToChange(nativeChange, disableIndices, indexCounter);
-                        }
-                        // If all leaf changes under this native item are disabled, uncheck the item itself
-                        if (nativeChange != null && nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
-                        {
-                            nativeItem.setChecked(false);
-                        }
-                    }
-                    else
-                    {
-                        // Regular rename item — not skippable (non-optional), just advance index
-                        indexCounter[0]++;
-                    }
-                }
-            }
+            applyDisableIndices(refactorings, disableIndices);
         }
 
         List<String> performed = new ArrayList<>();
@@ -1470,6 +1443,58 @@ public class MetadataRenameService
             }
         }
 
+        return renderExecutedReport(objectFqn, newName, disableIndices, performed, errors);
+    }
+
+    /**
+     * Toggles the LTK change-tree flags for the requested {@code disableIndices} BEFORE the rename is
+     * performed: walks every refactoring item, disables the matching leaf changes (via
+     * {@link #applyDisableToChange}) and unchecks an optional native item whose leaves are all
+     * disabled. Mutates the in-memory refactoring objects' enabled/checked state only - it does NOT
+     * perform the rename. Extracted verbatim from {@link #performRename} so it runs at the same point
+     * under the same {@code !disableIndices.isEmpty()} guard.
+     */
+    private void applyDisableIndices(Collection<IRefactoring> refactorings,
+        java.util.Set<Integer> disableIndices)
+    {
+        int[] indexCounter = {0};
+        for (IRefactoring refactoring : refactorings)
+        {
+            Collection<IRefactoringItem> items = refactoring.getItems();
+            if (items == null)
+                continue;
+            for (IRefactoringItem item : items)
+            {
+                if (item instanceof INativeChangeRefactoringItem nativeItem)
+                {
+                    Change nativeChange = nativeItem.getNativeChange();
+                    if (nativeChange != null)
+                    {
+                        applyDisableToChange(nativeChange, disableIndices, indexCounter);
+                    }
+                    // If all leaf changes under this native item are disabled, uncheck the item itself
+                    if (nativeChange != null && nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
+                    {
+                        nativeItem.setChecked(false);
+                    }
+                }
+                else
+                {
+                    // Regular rename item — not skippable (non-optional), just advance index
+                    indexCounter[0]++;
+                }
+            }
+        }
+    }
+
+    /**
+     * Renders the markdown report for a performed rename: the YAML front matter (counts), the
+     * "Rename Completed" header, the performed-titles and error lists, and the skipped-change-points
+     * note. Pure string building with no side effects; extracted verbatim from {@link #performRename}.
+     */
+    private static String renderExecutedReport(String objectFqn, String newName,
+        java.util.Set<Integer> disableIndices, List<String> performed, List<String> errors)
+    {
         StringBuilder sb = new StringBuilder();
         sb.append("---\n"); //$NON-NLS-1$
         sb.append("action: executed\n"); //$NON-NLS-1$

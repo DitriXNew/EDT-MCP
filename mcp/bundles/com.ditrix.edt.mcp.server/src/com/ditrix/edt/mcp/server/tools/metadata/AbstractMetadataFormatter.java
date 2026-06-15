@@ -385,79 +385,28 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
      */
     protected void formatDynamicPropertiesSeparated(StringBuilder sb, EObject eObject, String language)
     {
-        List<EStructuralFeature> features = eObject.eClass().getEAllStructuralFeatures();
-        
         // Collect simple attributes and references separately
         List<EAttribute> simpleAttributes = new ArrayList<>();
         List<EReference> singleReferences = new ArrayList<>();
-        List<EReference> containmentReferences = new ArrayList<>();
         List<EReference> crossReferences = new ArrayList<>();
-        
-        for (EStructuralFeature feature : features)
-        {
-            if (feature.isDerived() || feature.isTransient() || feature.isVolatile())
-            {
-                continue;
-            }
-            if (!eObject.eIsSet(feature))
-            {
-                continue;
-            }
-            
-            if (feature instanceof EAttribute)
-            {
-                simpleAttributes.add((EAttribute) feature);
-            }
-            else if (feature instanceof EReference)
-            {
-                EReference ref = (EReference) feature;
-                if (ref.isContainment())
-                {
-                    containmentReferences.add(ref);
-                }
-                else if (!ref.isMany())
-                {
-                    singleReferences.add(ref);
-                }
-                else
-                {
-                    crossReferences.add(ref);
-                }
-            }
-        }
-        
+        classifySetFeatures(eObject, simpleAttributes, singleReferences, crossReferences);
+
         // Format simple attributes
         if (!simpleAttributes.isEmpty())
         {
             addSectionHeader(sb, "Properties"); //$NON-NLS-1$
             startTable(sb, PROPERTY, VALUE);
-            for (EAttribute attr : simpleAttributes)
-            {
-                Object value = eObject.eGet(attr);
-                String valueStr = formatDynamicValue(value, language);
-                if (valueStr != null && !valueStr.isEmpty() && !valueStr.equals(DASH))
-                {
-                    addPropertyRow(sb, formatFeatureName(attr.getName()), valueStr);
-                }
-            }
+            appendFeatureValueRows(sb, eObject, simpleAttributes, language);
         }
-        
+
         // Format single references (forms, modules, etc.)
         if (!singleReferences.isEmpty())
         {
             addSectionHeader(sb, "References"); //$NON-NLS-1$
             startTable(sb, PROPERTY, VALUE);
-            for (EReference ref : singleReferences)
-            {
-                Object value = eObject.eGet(ref);
-                String valueStr = formatDynamicValue(value, language);
-                if (valueStr != null && !valueStr.isEmpty() && !valueStr.equals(DASH))
-                {
-                    addPropertyRow(sb, formatFeatureName(ref.getName()), valueStr);
-                }
-            }
+            appendFeatureValueRows(sb, eObject, singleReferences, language);
         }
-        
+
         // Format cross-references (lists of references)
         if (!crossReferences.isEmpty())
         {
@@ -470,8 +419,86 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
                 }
             }
         }
-        
+
         // Note: containment references are typically handled separately (attributes, tabular sections, etc.)
+    }
+
+    /**
+     * Sorts the set, stored structural features of an object into the buckets used by
+     * {@link #formatDynamicPropertiesSeparated}: simple attributes, single (non-many)
+     * non-containment references, and many (cross) non-containment references.
+     * Derived/transient/volatile and unset features are skipped, and containment
+     * references are intentionally dropped (handled separately). Bucket population
+     * order matches the original inline loop exactly.
+     *
+     * @param eObject the object whose features are inspected
+     * @param simpleAttributes receives the set {@link EAttribute}s
+     * @param singleReferences receives the set single non-containment references
+     * @param crossReferences receives the set many non-containment references
+     */
+    private static void classifySetFeatures(EObject eObject, List<EAttribute> simpleAttributes,
+        List<EReference> singleReferences, List<EReference> crossReferences)
+    {
+        List<EStructuralFeature> features = eObject.eClass().getEAllStructuralFeatures();
+        for (EStructuralFeature feature : features)
+        {
+            if (feature.isDerived() || feature.isTransient() || feature.isVolatile())
+            {
+                continue;
+            }
+            if (!eObject.eIsSet(feature))
+            {
+                continue;
+            }
+
+            if (feature instanceof EAttribute)
+            {
+                simpleAttributes.add((EAttribute) feature);
+            }
+            else if (feature instanceof EReference)
+            {
+                EReference ref = (EReference) feature;
+                if (ref.isContainment())
+                {
+                    // Containment references are typically handled separately.
+                    continue;
+                }
+                if (!ref.isMany())
+                {
+                    singleReferences.add(ref);
+                }
+                else
+                {
+                    crossReferences.add(ref);
+                }
+            }
+        }
+    }
+
+    /**
+     * Appends a Property/Value row for each given feature whose formatted value is
+     * non-empty (skipping {@code null}, empty and {@link #DASH} values), matching the
+     * inline attribute/single-reference rendering blocks in
+     * {@link #formatDynamicPropertiesSeparated}. The table header must already have
+     * been emitted by the caller.
+     *
+     * @param sb the table being built
+     * @param eObject the object whose feature values are read
+     * @param features the features to render, in order
+     * @param language language for synonym rendering
+     */
+    private void appendFeatureValueRows(StringBuilder sb, EObject eObject,
+        List<? extends EStructuralFeature> features, String language)
+    {
+        for (EStructuralFeature feature : features)
+        {
+            Object value = eObject.eGet(feature);
+            String valueStr = formatDynamicValue(value, language);
+            if (valueStr != null && !valueStr.isEmpty() && !valueStr.equals(DASH))
+            {
+                addPropertyRow(sb, formatFeatureName(feature.getName()), valueStr);
+            }
+        }
     }
     
     /**
@@ -484,19 +511,10 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         Object firstItem = collection.iterator().next();
         if (firstItem instanceof java.util.Map.Entry)
         {
-            // For EMap collections like Synonym, ObjectPresentation - format as key-value table
-            addSectionHeader(sb, formatFeatureName(name) + " (" + collection.size() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
-            startTable(sb, "Language", VALUE); //$NON-NLS-1$
-            for (Object item : collection)
-            {
-                java.util.Map.Entry entry = (java.util.Map.Entry) item;
-                String key = entry.getKey() != null ? entry.getKey().toString() : DASH;
-                String value = entry.getValue() != null ? entry.getValue().toString() : DASH;
-                addTableRow(sb, key, value);
-            }
+            formatEntryCollection(sb, name, collection);
             return;
         }
-        
+
         addSectionHeader(sb, formatFeatureName(name) + " (" + collection.size() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
         boolean first = true;
@@ -510,7 +528,6 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         {
             if (item instanceof MdObject)
             {
-                MdObject mdObj = (MdObject) item;
                 if (first)
                 {
                     startTable(sb, "FQN", SYNONYM); //$NON-NLS-1$
@@ -521,36 +538,18 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
                     mdOmitted++;
                     continue;
                 }
-                // Show full FQN: Type.Name (e.g. Catalog.Products)
-                String fqn = mdObj.eClass().getName() + "." + mdObj.getName(); //$NON-NLS-1$
-                addTableRow(sb, fqn, getSynonym(mdObj.getSynonym(), language));
+                appendMdObjectRow(sb, (MdObject) item, language);
                 mdRendered++;
             }
             else if (item instanceof EObject)
             {
-                if (first)
-                {
-                    sb.append("- "); //$NON-NLS-1$
-                    first = false;
-                }
-                else
-                {
-                    sb.append(", "); //$NON-NLS-1$
-                }
-                sb.append(formatEObjectReference((EObject) item));
+                appendInlineReference(sb, first, formatEObjectReference((EObject) item));
+                first = false;
             }
             else if (item != null)
             {
-                if (first)
-                {
-                    sb.append("- "); //$NON-NLS-1$
-                    first = false;
-                }
-                else
-                {
-                    sb.append(", "); //$NON-NLS-1$
-                }
-                sb.append(item.toString());
+                appendInlineReference(sb, first, item.toString());
+                first = false;
             }
         }
         if (mdOmitted > 0)
@@ -561,6 +560,71 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         {
             sb.append("\n\n"); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Renders an {@code EMap}-style collection of {@link java.util.Map.Entry} items
+     * (such as Synonym or ObjectPresentation) as a Language/Value table, exactly as
+     * the inline EMap branch of {@link #formatReferenceCollection} did. Null keys and
+     * values are rendered as {@link #DASH}.
+     *
+     * @param sb the buffer being built
+     * @param name the raw feature name used for the section header
+     * @param collection the entry collection (must be non-empty with Map.Entry items)
+     */
+    @SuppressWarnings("rawtypes")
+    private void formatEntryCollection(StringBuilder sb, String name, Collection<?> collection)
+    {
+        // For EMap collections like Synonym, ObjectPresentation - format as key-value table
+        addSectionHeader(sb, formatFeatureName(name) + " (" + collection.size() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        startTable(sb, "Language", VALUE); //$NON-NLS-1$
+        for (Object item : collection)
+        {
+            java.util.Map.Entry entry = (java.util.Map.Entry) item;
+            String key = entry.getKey() != null ? entry.getKey().toString() : DASH;
+            String value = entry.getValue() != null ? entry.getValue().toString() : DASH;
+            addTableRow(sb, key, value);
+        }
+    }
+
+    /**
+     * Appends a single FQN/Synonym table row for a referencing {@link MdObject}, using
+     * its {@code Type.Name} fully-qualified name (e.g. {@code Catalog.Products}) and
+     * localized synonym. Matches the MdObject branch of
+     * {@link #formatReferenceCollection}.
+     *
+     * @param sb the table being built
+     * @param mdObj the referencing metadata object
+     * @param language language for synonym rendering
+     */
+    private void appendMdObjectRow(StringBuilder sb, MdObject mdObj, String language)
+    {
+        // Show full FQN: Type.Name (e.g. Catalog.Products)
+        String fqn = mdObj.eClass().getName() + "." + mdObj.getName(); //$NON-NLS-1$
+        addTableRow(sb, fqn, getSynonym(mdObj.getSynonym(), language));
+    }
+
+    /**
+     * Appends one item to the inline, comma-separated reference list used for
+     * non-{@link MdObject} entries in {@link #formatReferenceCollection}: the first
+     * rendered item is prefixed with {@code "- "} and subsequent items with
+     * {@code ", "}.
+     *
+     * @param sb the buffer being built
+     * @param first {@code true} if no inline item has been emitted yet
+     * @param text the already-formatted item text to append
+     */
+    private void appendInlineReference(StringBuilder sb, boolean first, String text)
+    {
+        if (first)
+        {
+            sb.append("- "); //$NON-NLS-1$
+        }
+        else
+        {
+            sb.append(", "); //$NON-NLS-1$
+        }
+        sb.append(text);
     }
     
     /**
@@ -608,79 +672,118 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         // Handle EObject references using EObjectInspector
         if (value instanceof EObject)
         {
-            EObject eObj = (EObject) value;
-            
-            // Use EObjectInspector to determine the best format style
-            EObjectInspector.FormatStyle style = EObjectInspector.getFormatStyle(eObj);
-            
-            switch (style)
-            {
-                case SIMPLE_VALUE:
-                    // Simple wrapper (like StandardCommandGroup) - get primary value
-                    return EObjectInspector.getPrimaryValueAsString(eObj);
-                    
-                case REFERENCE:
-                    // MdObject reference - show as Type.Name
-                    return EObjectInspector.formatReference(eObj);
-                    
-                case EXPAND:
-                    // Complex object - show basic info (expansion handled elsewhere)
-                    return EObjectInspector.formatReference(eObj);
-                    
-                default:
-                    return EObjectInspector.formatReference(eObj);
-            }
+            return formatEObjectValue((EObject) value);
         }
-        
+
         // Handle collections
         if (value instanceof Collection)
         {
-            Collection<?> coll = (Collection<?>) value;
-            if (coll.isEmpty())
-            {
-                return DASH;
-            }
-            // For small collections, show inline
-            if (coll.size() <= 5)
-            {
-                StringBuilder sb = new StringBuilder();
-                for (Object item : coll)
-                {
-                    if (sb.length() > 0) sb.append(", "); //$NON-NLS-1$
-                    
-                    // Handle Map.Entry (LocalStringMapEntry, etc.)
-                    if (item instanceof java.util.Map.Entry)
-                    {
-                        java.util.Map.Entry<?, ?> entry = (java.util.Map.Entry<?, ?>) item;
-                        Object entryValue = entry.getValue();
-                        if (entryValue != null)
-                        {
-                            sb.append(entryValue.toString());
-                        }
-                    }
-                    else if (item instanceof MdObject)
-                    {
-                        // Show full FQN: Type.Name (e.g. Catalog.Products)
-                        MdObject mdObj = (MdObject) item;
-                        sb.append(mdObj.eClass().getName()).append(".").append(mdObj.getName()); //$NON-NLS-1$
-                    }
-                    else if (item instanceof EObject)
-                    {
-                        sb.append(formatEObjectReference((EObject) item));
-                    }
-                    else if (item != null)
-                    {
-                        sb.append(item.toString());
-                    }
-                }
-                return sb.toString();
-            }
-            // For larger collections, just show count
-            return "[" + coll.size() + " items]"; //$NON-NLS-1$ //$NON-NLS-2$
+            return formatCollectionValue((Collection<?>) value);
         }
-        
+
         // Default: toString
         return value.toString();
+    }
+
+    /**
+     * Formats a single {@link EObject} value via {@link EObjectInspector}, choosing the
+     * rendering by its detected {@code FormatStyle}: a simple wrapper yields its primary
+     * value, every other style (reference, expand, default) yields the formatted
+     * reference. Matches the inline EObject switch of {@link #formatDynamicValue}.
+     *
+     * @param eObj the object to render (non-{@code null})
+     * @return the formatted value string
+     */
+    private static String formatEObjectValue(EObject eObj)
+    {
+        // Use EObjectInspector to determine the best format style
+        EObjectInspector.FormatStyle style = EObjectInspector.getFormatStyle(eObj);
+
+        switch (style)
+        {
+            case SIMPLE_VALUE:
+                // Simple wrapper (like StandardCommandGroup) - get primary value
+                return EObjectInspector.getPrimaryValueAsString(eObj);
+
+            case REFERENCE:
+                // MdObject reference - show as Type.Name
+                return EObjectInspector.formatReference(eObj);
+
+            case EXPAND:
+                // Complex object - show basic info (expansion handled elsewhere)
+                return EObjectInspector.formatReference(eObj);
+
+            default:
+                return EObjectInspector.formatReference(eObj);
+        }
+    }
+
+    /**
+     * Formats a collection value for {@link #formatDynamicValue}: empty yields
+     * {@link #DASH}; up to five items are joined inline (per-item via
+     * {@link #formatCollectionItem}); larger collections collapse to an
+     * {@code [N items]} count. Behavior is identical to the inline collection branch.
+     *
+     * @param coll the collection to render (non-{@code null})
+     * @return the formatted value string
+     */
+    private String formatCollectionValue(Collection<?> coll)
+    {
+        if (coll.isEmpty())
+        {
+            return DASH;
+        }
+        // For small collections, show inline
+        if (coll.size() <= 5)
+        {
+            StringBuilder sb = new StringBuilder();
+            for (Object item : coll)
+            {
+                if (sb.length() > 0) sb.append(", "); //$NON-NLS-1$
+                formatCollectionItem(sb, item);
+            }
+            return sb.toString();
+        }
+        // For larger collections, just show count
+        return "[" + coll.size() + " items]"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Appends one inline-collection item to {@code sb}, dispatching on its runtime type
+     * exactly as the inner loop of {@link #formatDynamicValue} did: a {@link java.util.Map.Entry}
+     * contributes its non-null value, an {@link MdObject} its {@code Type.Name} FQN, any
+     * other {@link EObject} its formatted reference, and any other non-null item its
+     * {@code toString()}. The leading separator is the caller's responsibility.
+     *
+     * @param sb the buffer being built
+     * @param item the item to render (may be {@code null}, in which case nothing is appended)
+     */
+    private void formatCollectionItem(StringBuilder sb, Object item)
+    {
+        // Handle Map.Entry (LocalStringMapEntry, etc.)
+        if (item instanceof java.util.Map.Entry)
+        {
+            java.util.Map.Entry<?, ?> entry = (java.util.Map.Entry<?, ?>) item;
+            Object entryValue = entry.getValue();
+            if (entryValue != null)
+            {
+                sb.append(entryValue.toString());
+            }
+        }
+        else if (item instanceof MdObject)
+        {
+            // Show full FQN: Type.Name (e.g. Catalog.Products)
+            MdObject mdObj = (MdObject) item;
+            sb.append(mdObj.eClass().getName()).append(".").append(mdObj.getName()); //$NON-NLS-1$
+        }
+        else if (item instanceof EObject)
+        {
+            sb.append(formatEObjectReference((EObject) item));
+        }
+        else if (item != null)
+        {
+            sb.append(item.toString());
+        }
     }
     
     /**

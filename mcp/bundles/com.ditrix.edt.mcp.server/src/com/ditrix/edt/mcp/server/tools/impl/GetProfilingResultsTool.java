@@ -182,78 +182,15 @@ public class GetProfilingResultsTool implements IMcpTool
             Method getDurability = timeHolderClass.getMethod("getDurability"); //$NON-NLS-1$
             Method getPureDurability = timeHolderClass.getMethod("getPureDurability"); //$NON-NLS-1$
 
+            ProfilingReflection refl = new ProfilingReflection(getResultName, getTotalDurability,
+                getProfilingResults, getFrequency, getModuleName, getLineNo, getPercentage,
+                getDurability, getPureDurability, getLine, getMethodSignature);
+
             List<Map<String, Object>> resultSummaries = new ArrayList<>();
 
             for (Object result : results)
             {
-                Map<String, Object> summary = new LinkedHashMap<>();
-                String name = (String) getResultName.invoke(result);
-                double totalDur = ((Number) getTotalDurability.invoke(result)).doubleValue();
-                summary.put("name", name); //$NON-NLS-1$
-                summary.put("totalDurability", Math.round(totalDur * 1000.0) / 1000.0); //$NON-NLS-1$
-
-                List<?> lineResults = (List<?>) getProfilingResults.invoke(result);
-                if (lineResults == null)
-                {
-                    summary.put("lines", 0); //$NON-NLS-1$
-                    resultSummaries.add(summary);
-                    continue;
-                }
-
-                // Group by module
-                Map<String, List<Map<String, Object>>> moduleGroups = new LinkedHashMap<>();
-                for (Object lr : lineResults)
-                {
-                    long freq = (long) getFrequency.invoke(lr);
-                    if (freq < minFrequency)
-                    {
-                        continue;
-                    }
-
-                    String modName = (String) getModuleName.invoke(lr);
-                    if (modName == null) modName = "?"; //$NON-NLS-1$
-
-                    if (moduleFilter != null && !moduleFilter.isEmpty()
-                        && !modName.toLowerCase().contains(moduleFilter.toLowerCase()))
-                    {
-                        continue;
-                    }
-
-                    List<Map<String, Object>> lines = moduleGroups.computeIfAbsent(modName,
-                        k -> new ArrayList<>());
-
-                    if (lines.size() >= MAX_LINES_PER_MODULE)
-                    {
-                        continue; // cap per module
-                    }
-
-                    Map<String, Object> lineInfo = new LinkedHashMap<>();
-                    lineInfo.put("line", getLineNo.invoke(lr)); //$NON-NLS-1$
-                    lineInfo.put("calls", freq); //$NON-NLS-1$
-                    lineInfo.put("pct", Math.round(((Number) getPercentage.invoke(lr)).doubleValue() * 100.0) / 100.0); //$NON-NLS-1$
-
-                    // Verbose per-line extras only in detailed: the secondary timing columns
-                    // and the source text + method signature. concise keeps line/calls/pct.
-                    if (detailed)
-                    {
-                        lineInfo.put("dur", Math.round(((Number) getDurability.invoke(lr)).doubleValue() * 1000.0) / 1000.0); //$NON-NLS-1$
-                        lineInfo.put("pureDur", Math.round(((Number) getPureDurability.invoke(lr)).doubleValue() * 1000.0) / 1000.0); //$NON-NLS-1$
-
-                        String code = (String) getLine.invoke(lr);
-                        if (code != null && code.length() > 120)
-                        {
-                            code = code.substring(0, 120) + "..."; //$NON-NLS-1$
-                        }
-                        lineInfo.put("code", code); //$NON-NLS-1$
-                        lineInfo.put("method", getMethodSignature.invoke(lr)); //$NON-NLS-1$
-                    }
-
-                    lines.add(lineInfo);
-                }
-
-                summary.put("moduleCount", moduleGroups.size()); //$NON-NLS-1$
-                summary.put("modules", moduleGroups); //$NON-NLS-1$
-                resultSummaries.add(summary);
+                resultSummaries.add(summarizeResult(result, refl, moduleFilter, minFrequency, detailed));
             }
 
             return ToolResult.success()
@@ -302,5 +239,129 @@ public class GetProfilingResultsTool implements IMcpTool
             latest = results.get(results.size() - 1);
         }
         return List.of(latest);
+    }
+
+    /**
+     * Builds the summary map for a single {@code IProfilingResult}: its name/totalDurability plus
+     * the per-module groups of qualifying lines. When the result exposes no line data, the summary
+     * carries {@code lines=0} and no modules — exactly as the inline loop did before.
+     */
+    private static Map<String, Object> summarizeResult(Object result, ProfilingReflection refl,
+        String moduleFilter, int minFrequency, boolean detailed) throws Exception
+    {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        String name = (String) refl.getResultName.invoke(result);
+        double totalDur = ((Number) refl.getTotalDurability.invoke(result)).doubleValue();
+        summary.put("name", name); //$NON-NLS-1$
+        summary.put("totalDurability", Math.round(totalDur * 1000.0) / 1000.0); //$NON-NLS-1$
+
+        List<?> lineResults = (List<?>) refl.getProfilingResults.invoke(result);
+        if (lineResults == null)
+        {
+            summary.put("lines", 0); //$NON-NLS-1$
+            return summary;
+        }
+
+        // Group by module
+        Map<String, List<Map<String, Object>>> moduleGroups = new LinkedHashMap<>();
+        for (Object lr : lineResults)
+        {
+            long freq = (long) refl.getFrequency.invoke(lr);
+            if (freq < minFrequency)
+            {
+                continue;
+            }
+
+            String modName = (String) refl.getModuleName.invoke(lr);
+            if (modName == null) modName = "?"; //$NON-NLS-1$
+
+            if (moduleFilter != null && !moduleFilter.isEmpty()
+                && !modName.toLowerCase().contains(moduleFilter.toLowerCase()))
+            {
+                continue;
+            }
+
+            List<Map<String, Object>> lines = moduleGroups.computeIfAbsent(modName,
+                k -> new ArrayList<>());
+
+            if (lines.size() >= MAX_LINES_PER_MODULE)
+            {
+                continue; // cap per module
+            }
+
+            lines.add(buildLineInfo(lr, freq, refl, detailed));
+        }
+
+        summary.put("moduleCount", moduleGroups.size()); //$NON-NLS-1$
+        summary.put("modules", moduleGroups); //$NON-NLS-1$
+        return summary;
+    }
+
+    /**
+     * Builds the per-line info map for one {@code ILineProfilingResult}. The verbose timing columns
+     * and the (truncated) source text + method signature are emitted only in {@code detailed} mode;
+     * concise mode keeps just line/calls/pct.
+     */
+    private static Map<String, Object> buildLineInfo(Object lr, long freq, ProfilingReflection refl,
+        boolean detailed) throws Exception
+    {
+        Map<String, Object> lineInfo = new LinkedHashMap<>();
+        lineInfo.put("line", refl.getLineNo.invoke(lr)); //$NON-NLS-1$
+        lineInfo.put("calls", freq); //$NON-NLS-1$
+        lineInfo.put("pct", Math.round(((Number) refl.getPercentage.invoke(lr)).doubleValue() * 100.0) / 100.0); //$NON-NLS-1$
+
+        // Verbose per-line extras only in detailed: the secondary timing columns
+        // and the source text + method signature. concise keeps line/calls/pct.
+        if (detailed)
+        {
+            lineInfo.put("dur", Math.round(((Number) refl.getDurability.invoke(lr)).doubleValue() * 1000.0) / 1000.0); //$NON-NLS-1$
+            lineInfo.put("pureDur", Math.round(((Number) refl.getPureDurability.invoke(lr)).doubleValue() * 1000.0) / 1000.0); //$NON-NLS-1$
+
+            String code = (String) refl.getLine.invoke(lr);
+            if (code != null && code.length() > 120)
+            {
+                code = code.substring(0, 120) + "..."; //$NON-NLS-1$
+            }
+            lineInfo.put("code", code); //$NON-NLS-1$
+            lineInfo.put("method", refl.getMethodSignature.invoke(lr)); //$NON-NLS-1$
+        }
+
+        return lineInfo;
+    }
+
+    /**
+     * Immutable holder for the reflective {@code Method} handles used while summarizing a profiling
+     * result. Groups them so the per-result / per-line helpers keep a small signature.
+     */
+    private static final class ProfilingReflection
+    {
+        final Method getResultName;
+        final Method getTotalDurability;
+        final Method getProfilingResults;
+        final Method getFrequency;
+        final Method getModuleName;
+        final Method getLineNo;
+        final Method getPercentage;
+        final Method getDurability;
+        final Method getPureDurability;
+        final Method getLine;
+        final Method getMethodSignature;
+
+        ProfilingReflection(Method getResultName, Method getTotalDurability, Method getProfilingResults,
+            Method getFrequency, Method getModuleName, Method getLineNo, Method getPercentage,
+            Method getDurability, Method getPureDurability, Method getLine, Method getMethodSignature)
+        {
+            this.getResultName = getResultName;
+            this.getTotalDurability = getTotalDurability;
+            this.getProfilingResults = getProfilingResults;
+            this.getFrequency = getFrequency;
+            this.getModuleName = getModuleName;
+            this.getLineNo = getLineNo;
+            this.getPercentage = getPercentage;
+            this.getDurability = getDurability;
+            this.getPureDurability = getPureDurability;
+            this.getLine = getLine;
+            this.getMethodSignature = getMethodSignature;
+        }
     }
 }

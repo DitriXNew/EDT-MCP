@@ -68,60 +68,21 @@ public class GetEdtVersionTool implements IMcpTool
             {
                 return buildId;
             }
-            
+
             // Method 2: via Eclipse product
-            if (Platform.getProduct() != null)
+            String productVersion = versionFromProduct();
+            if (productVersion != null)
             {
-                Bundle productBundle = Platform.getProduct().getDefiningBundle();
-                if (productBundle != null)
-                {
-                    String version = productBundle.getVersion().toString();
-                    String marketingVersion = convertToMarketingVersion(version);
-                    if (marketingVersion != null)
-                    {
-                        return marketingVersion + " (" + version + ")"; //$NON-NLS-1$ //$NON-NLS-2$
-                    }
-                    return version;
-                }
+                return productVersion;
             }
-            
-            // Method 3: search for EDT RCP bundle
-            Bundle coreBundle = Platform.getBundle("org.eclipse.core.runtime"); //$NON-NLS-1$
-            if (coreBundle != null && coreBundle.getBundleContext() != null)
+
+            // Methods 3 & 4: search the installed bundles for an EDT bundle
+            String bundleVersion = versionFromBundles();
+            if (bundleVersion != null)
             {
-                Bundle[] bundles = coreBundle.getBundleContext().getBundles();
-                for (Bundle bundle : bundles)
-                {
-                    String symbolicName = bundle.getSymbolicName();
-                    if (symbolicName != null && symbolicName.equals("com._1c.g5.v8.dt.rcp")) //$NON-NLS-1$
-                    {
-                        String version = bundle.getVersion().toString();
-                        String marketingVersion = convertToMarketingVersion(version);
-                        if (marketingVersion != null)
-                        {
-                            return marketingVersion + " (" + version + ")"; //$NON-NLS-1$ //$NON-NLS-2$
-                        }
-                        return version;
-                    }
-                }
-                
-                // Method 4: search for any EDT bundle
-                for (Bundle bundle : bundles)
-                {
-                    String symbolicName = bundle.getSymbolicName();
-                    if (symbolicName != null && symbolicName.startsWith("com._1c.g5.v8.dt")) //$NON-NLS-1$
-                    {
-                        String version = bundle.getVersion().toString();
-                        String marketingVersion = convertToMarketingVersion(version);
-                        if (marketingVersion != null)
-                        {
-                            return marketingVersion + " (" + version + ")"; //$NON-NLS-1$ //$NON-NLS-2$
-                        }
-                        return version;
-                    }
-                }
+                return bundleVersion;
             }
-            
+
             // Method 5: via system property
             String product = System.getProperty("eclipse.product"); //$NON-NLS-1$
             if (product != null)
@@ -133,8 +94,83 @@ public class GetEdtVersionTool implements IMcpTool
         {
             Activator.logError("Failed to get EDT version", e); //$NON-NLS-1$
         }
-        
+
         return "Unknown"; //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves the version string from the running Eclipse product's defining bundle.
+     *
+     * @return the (possibly marketing-formatted) version, or {@code null} when no product
+     *     or defining bundle is available
+     */
+    private static String versionFromProduct()
+    {
+        if (Platform.getProduct() != null)
+        {
+            Bundle productBundle = Platform.getProduct().getDefiningBundle();
+            if (productBundle != null)
+            {
+                return formatVersion(productBundle.getVersion().toString());
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Searches the installed bundles for an EDT bundle: first the EDT RCP bundle
+     * ({@code com._1c.g5.v8.dt.rcp}), then any bundle whose symbolic name starts with
+     * {@code com._1c.g5.v8.dt}.
+     *
+     * @return the (possibly marketing-formatted) version of the first matching bundle,
+     *     or {@code null} when none is found
+     */
+    private static String versionFromBundles()
+    {
+        Bundle coreBundle = Platform.getBundle("org.eclipse.core.runtime"); //$NON-NLS-1$
+        if (coreBundle == null || coreBundle.getBundleContext() == null)
+        {
+            return null;
+        }
+        Bundle[] bundles = coreBundle.getBundleContext().getBundles();
+
+        // Method 3: search for EDT RCP bundle
+        for (Bundle bundle : bundles)
+        {
+            String symbolicName = bundle.getSymbolicName();
+            if (symbolicName != null && symbolicName.equals("com._1c.g5.v8.dt.rcp")) //$NON-NLS-1$
+            {
+                return formatVersion(bundle.getVersion().toString());
+            }
+        }
+
+        // Method 4: search for any EDT bundle
+        for (Bundle bundle : bundles)
+        {
+            String symbolicName = bundle.getSymbolicName();
+            if (symbolicName != null && symbolicName.startsWith("com._1c.g5.v8.dt")) //$NON-NLS-1$
+            {
+                return formatVersion(bundle.getVersion().toString());
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Formats an OSGi version: when a marketing version can be derived, returns
+     * {@code "<marketing> (<version>)"}; otherwise returns the raw version unchanged.
+     *
+     * @param version the raw OSGi version string
+     * @return the formatted version string
+     */
+    private static String formatVersion(String version)
+    {
+        String marketingVersion = convertToMarketingVersion(version);
+        if (marketingVersion != null)
+        {
+            return marketingVersion + " (" + version + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return version;
     }
     
     /**

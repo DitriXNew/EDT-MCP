@@ -121,106 +121,165 @@ public final class BslSyntaxChecker
 
         for (int i = 0; i < lines.size(); i++)
         {
-            String line = lines.get(i);
             int lineNum = i + 1;
 
-            // Skip empty lines
-            if (line.trim().isEmpty())
+            String trimmed = preprocessLine(lines.get(i));
+            if (trimmed == null)
             {
                 continue;
-            }
-
-            // Skip lines that are entirely a comment
-            String trimmed = line.trim();
-            if (trimmed.startsWith("//")) //$NON-NLS-1$
-            {
-                continue;
-            }
-
-            // Skip multiline string continuation lines (start with |)
-            if (trimmed.startsWith("|")) //$NON-NLS-1$
-            {
-                continue;
-            }
-
-            // Remove inline comment (everything after //)
-            // Known limitation: // inside string literals (e.g. URLs like "https://...")
-            // will be treated as a comment start. This is acceptable because keywords
-            // are matched at line start (^\s*keyword\b), so truncation does not affect results.
-            int commentIdx = trimmed.indexOf("//"); //$NON-NLS-1$
-            if (commentIdx > 0)
-            {
-                trimmed = trimmed.substring(0, commentIdx);
             }
 
             // Check closing keywords FIRST
-            if (END_PROCEDURE.matcher(trimmed).find())
+            if (handleClosingKeyword(trimmed, lineNum, stack, errors))
             {
-                popAndCheck(stack, TAG_PROCEDURE, "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B/EndProcedure", lineNum, errors); //$NON-NLS-1$
-                continue;
-            }
-            if (END_FUNCTION.matcher(trimmed).find())
-            {
-                popAndCheck(stack, TAG_FUNCTION, "\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438/EndFunction", lineNum, errors); //$NON-NLS-1$
-                continue;
-            }
-            if (END_IF.matcher(trimmed).find())
-            {
-                popAndCheck(stack, TAG_IF, "\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438/EndIf", lineNum, errors); //$NON-NLS-1$
-                continue;
-            }
-            if (END_DO.matcher(trimmed).find())
-            {
-                popAndCheck(stack, TAG_LOOP, "\u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430/EndDo", lineNum, errors); //$NON-NLS-1$
-                continue;
-            }
-            if (END_TRY.matcher(trimmed).find())
-            {
-                popAndCheck(stack, TAG_TRY, "\u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438/EndTry", lineNum, errors); //$NON-NLS-1$
                 continue;
             }
 
             // Check opening keywords
-            if (PROCEDURE_START.matcher(trimmed).find())
-            {
-                stack.push(new String[] { TAG_PROCEDURE, String.valueOf(lineNum) });
-                continue;
-            }
-            if (FUNCTION_START.matcher(trimmed).find())
-            {
-                stack.push(new String[] { TAG_FUNCTION, String.valueOf(lineNum) });
-                continue;
-            }
-            // If but NOT ElsIf
-            if (IF_START.matcher(trimmed).find() && !ELSIF_PATTERN.matcher(trimmed).find())
-            {
-                stack.push(new String[] { TAG_IF, String.valueOf(lineNum) });
-                continue;
-            }
-            if (WHILE_START.matcher(trimmed).find())
-            {
-                stack.push(new String[] { TAG_LOOP, String.valueOf(lineNum) });
-                continue;
-            }
-            if (FOR_START.matcher(trimmed).find())
-            {
-                stack.push(new String[] { TAG_LOOP, String.valueOf(lineNum) });
-                continue;
-            }
-            if (TRY_START.matcher(trimmed).find())
-            {
-                stack.push(new String[] { TAG_TRY, String.valueOf(lineNum) });
-            }
+            handleOpeningKeyword(trimmed, lineNum, stack);
         }
 
-        // Report unclosed blocks
+        reportUnclosedBlocks(stack, errors);
+
+        return new CheckResult(errors.isEmpty(), errors);
+    }
+
+    /**
+     * Normalize a source line for keyword matching: trims it, skips blank/comment/string
+     * continuation lines, and strips any inline comment.
+     *
+     * @param line the raw source line
+     * @return the trimmed line ready for matching, or {@code null} if the line must be skipped
+     */
+    private static String preprocessLine(String line)
+    {
+        // Skip empty lines
+        if (line.trim().isEmpty())
+        {
+            return null;
+        }
+
+        // Skip lines that are entirely a comment
+        String trimmed = line.trim();
+        if (trimmed.startsWith("//")) //$NON-NLS-1$
+        {
+            return null;
+        }
+
+        // Skip multiline string continuation lines (start with |)
+        if (trimmed.startsWith("|")) //$NON-NLS-1$
+        {
+            return null;
+        }
+
+        // Remove inline comment (everything after //)
+        // Known limitation: // inside string literals (e.g. URLs like "https://...")
+        // will be treated as a comment start. This is acceptable because keywords
+        // are matched at line start (^\s*keyword\b), so truncation does not affect results.
+        int commentIdx = trimmed.indexOf("//"); //$NON-NLS-1$
+        if (commentIdx > 0)
+        {
+            trimmed = trimmed.substring(0, commentIdx);
+        }
+        return trimmed;
+    }
+
+    /**
+     * Match a closing block keyword on the line and, if found, pop the matching opening
+     * block from the stack (recording any mismatch).
+     *
+     * @param trimmed the preprocessed line
+     * @param lineNum the 1-based line number
+     * @param stack the open-block stack
+     * @param errors the accumulated error messages
+     * @return true if a closing keyword was matched and handled
+     */
+    private static boolean handleClosingKeyword(String trimmed, int lineNum,
+        Deque<String[]> stack, List<String> errors)
+    {
+        if (END_PROCEDURE.matcher(trimmed).find())
+        {
+            popAndCheck(stack, TAG_PROCEDURE, "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B/EndProcedure", lineNum, errors); //$NON-NLS-1$
+            return true;
+        }
+        if (END_FUNCTION.matcher(trimmed).find())
+        {
+            popAndCheck(stack, TAG_FUNCTION, "\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438/EndFunction", lineNum, errors); //$NON-NLS-1$
+            return true;
+        }
+        if (END_IF.matcher(trimmed).find())
+        {
+            popAndCheck(stack, TAG_IF, "\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438/EndIf", lineNum, errors); //$NON-NLS-1$
+            return true;
+        }
+        if (END_DO.matcher(trimmed).find())
+        {
+            popAndCheck(stack, TAG_LOOP, "\u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430/EndDo", lineNum, errors); //$NON-NLS-1$
+            return true;
+        }
+        if (END_TRY.matcher(trimmed).find())
+        {
+            popAndCheck(stack, TAG_TRY, "\u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438/EndTry", lineNum, errors); //$NON-NLS-1$
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Match an opening block keyword on the line and, if found, push the corresponding
+     * open block onto the stack.
+     *
+     * @param trimmed the preprocessed line
+     * @param lineNum the 1-based line number
+     * @param stack the open-block stack
+     */
+    private static void handleOpeningKeyword(String trimmed, int lineNum, Deque<String[]> stack)
+    {
+        if (PROCEDURE_START.matcher(trimmed).find())
+        {
+            stack.push(new String[] { TAG_PROCEDURE, String.valueOf(lineNum) });
+            return;
+        }
+        if (FUNCTION_START.matcher(trimmed).find())
+        {
+            stack.push(new String[] { TAG_FUNCTION, String.valueOf(lineNum) });
+            return;
+        }
+        // If but NOT ElsIf
+        if (IF_START.matcher(trimmed).find() && !ELSIF_PATTERN.matcher(trimmed).find())
+        {
+            stack.push(new String[] { TAG_IF, String.valueOf(lineNum) });
+            return;
+        }
+        if (WHILE_START.matcher(trimmed).find())
+        {
+            stack.push(new String[] { TAG_LOOP, String.valueOf(lineNum) });
+            return;
+        }
+        if (FOR_START.matcher(trimmed).find())
+        {
+            stack.push(new String[] { TAG_LOOP, String.valueOf(lineNum) });
+            return;
+        }
+        if (TRY_START.matcher(trimmed).find())
+        {
+            stack.push(new String[] { TAG_TRY, String.valueOf(lineNum) });
+        }
+    }
+
+    /**
+     * Drain the open-block stack, appending an "unclosed" error for each remaining block.
+     *
+     * @param stack the open-block stack
+     * @param errors the accumulated error messages
+     */
+    private static void reportUnclosedBlocks(Deque<String[]> stack, List<String> errors)
+    {
         while (!stack.isEmpty())
         {
             String[] entry = stack.pop();
             errors.add("Unclosed " + tagToKeyword(entry[0]) + " from line " + entry[1]); //$NON-NLS-1$ //$NON-NLS-2$
         }
-
-        return new CheckResult(errors.isEmpty(), errors);
     }
 
     private static void popAndCheck(Deque<String[]> stack, String expectedTag,

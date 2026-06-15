@@ -1286,61 +1286,22 @@ public class CreateInfobaseTool implements IMcpTool
         {
             appsArray = new JsonArray();
             newAppId = null;
+            String[] newAppIdHolder = new String[1];
 
-            try
+            if (!readBackApplications(appManager, project, ibRef, appsArray, newAppIdHolder))
             {
-                List<IApplication> applications = appManager.getApplications(project);
-                if (applications != null)
-                {
-                    for (IApplication app : applications)
-                    {
-                        JsonObject appObj = new JsonObject();
-                        appObj.addProperty("id", app.getId()); //$NON-NLS-1$
-                        appObj.addProperty("name", app.getName()); //$NON-NLS-1$
-                        if (app.getType() != null)
-                        {
-                            appObj.addProperty("type", app.getType().getId()); //$NON-NLS-1$
-                        }
-                        addUpdateState(appObj, appManager, app);
-                        // Identify the newly created application by matching the infobase reference.
-                        if (newAppId == null
-                            && app instanceof IInfobaseApplication
-                            && INFOBASE_APP_TYPE.equals(
-                                app.getType() != null ? app.getType().getId() : null))
-                        {
-                            IInfobaseApplication ibApp = (IInfobaseApplication) app;
-                            if (ibApp.getInfobase() != null
-                                && matchesRef(ibApp.getInfobase(), ibRef))
-                            {
-                                newAppId = app.getId();
-                            }
-                        }
-                        appsArray.add(appObj);
-                    }
-                }
+                break; // Read failed (logged) — stop re-polling.
             }
-            catch (ApplicationException e)
-            {
-                Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
-                break;
-            }
+            newAppId = newAppIdHolder[0];
 
             if (newAppId != null)
             {
                 break; // Found the new application — no need to re-poll.
             }
 
-            if (poll < READ_BACK_MAX_POLLS - 1)
+            if (poll < READ_BACK_MAX_POLLS - 1 && !sleepBetweenPolls())
             {
-                try
-                {
-                    Thread.sleep(READ_BACK_POLL_DELAY_MS);
-                }
-                catch (InterruptedException ie)
-                {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+                break; // Interrupted — stop re-polling.
             }
         }
 
@@ -1365,6 +1326,84 @@ public class CreateInfobaseTool implements IMcpTool
         result.put(McpKeys.MESSAGE, message);
 
         return result.toJson();
+    }
+
+    /**
+     * Reads the project's applications once, populating {@code appsArray} with one JSON object per
+     * application and storing the matched new-infobase application id in {@code newAppIdHolder[0]}
+     * (left {@code null} when not yet visible). Read-only.
+     *
+     * @return {@code true} if the read completed (whether or not the new application was found),
+     *         {@code false} if reading the applications failed (already logged) so the caller stops
+     *         re-polling
+     */
+    private static boolean readBackApplications(IApplicationManager appManager, IProject project,
+            InfobaseReference ibRef, JsonArray appsArray, String[] newAppIdHolder)
+    {
+        try
+        {
+            List<IApplication> applications = appManager.getApplications(project);
+            if (applications != null)
+            {
+                for (IApplication app : applications)
+                {
+                    JsonObject appObj = new JsonObject();
+                    appObj.addProperty("id", app.getId()); //$NON-NLS-1$
+                    appObj.addProperty("name", app.getName()); //$NON-NLS-1$
+                    if (app.getType() != null)
+                    {
+                        appObj.addProperty("type", app.getType().getId()); //$NON-NLS-1$
+                    }
+                    addUpdateState(appObj, appManager, app);
+                    // Identify the newly created application by matching the infobase reference.
+                    if (newAppIdHolder[0] == null && isMatchingNewInfobaseApp(app, ibRef))
+                    {
+                        newAppIdHolder[0] = app.getId();
+                    }
+                    appsArray.add(appObj);
+                }
+            }
+            return true;
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
+            return false;
+        }
+    }
+
+    /**
+     * Whether the application is the newly created FILE infobase application, identified by type and
+     * a connection-string match against {@code ibRef}. Read-only.
+     */
+    private static boolean isMatchingNewInfobaseApp(IApplication app, InfobaseReference ibRef)
+    {
+        if (!(app instanceof IInfobaseApplication)
+            || !INFOBASE_APP_TYPE.equals(app.getType() != null ? app.getType().getId() : null))
+        {
+            return false;
+        }
+        IInfobaseApplication ibApp = (IInfobaseApplication) app;
+        return ibApp.getInfobase() != null && matchesRef(ibApp.getInfobase(), ibRef);
+    }
+
+    /**
+     * Sleeps {@link #READ_BACK_POLL_DELAY_MS} between read-back polls. Returns {@code false} (with
+     * the thread's interrupt flag restored) if interrupted, so the caller stops re-polling — mirrors
+     * the original inline {@code Thread.sleep} / interrupt handling.
+     */
+    private static boolean sleepBetweenPolls()
+    {
+        try
+        {
+            Thread.sleep(READ_BACK_POLL_DELAY_MS);
+            return true;
+        }
+        catch (InterruptedException ie)
+        {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /**

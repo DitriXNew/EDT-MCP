@@ -227,40 +227,10 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
             if (service == null) {
                 break;
             }
-            
+
             try {
                 WatchKey key = service.take();
-                java.nio.file.Path settingsPath;
-                
-                synchronized (watcherLock) {
-                    settingsPath = watchKeyToPath.get(key);
-                }
-                
-                if (settingsPath != null) {
-                    for (WatchEvent<?> event : key.pollEvents()) {
-                        if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
-                            continue;
-                        }
-                        
-                        @SuppressWarnings("unchecked")
-                        WatchEvent<java.nio.file.Path> pathEvent = (WatchEvent<java.nio.file.Path>) event;
-                        java.nio.file.Path fileName = pathEvent.context();
-                        
-                        if (GroupConstants.GROUPS_FILE.equals(fileName.toString())) {
-                            java.nio.file.Path projectPath = settingsPath.getParent();
-                            if (projectPath != null) {
-                                refreshProjectGroups(projectPath.getFileName().toString());
-                            }
-                        }
-                    }
-                }
-                
-                boolean valid = key.reset();
-                if (!valid) {
-                    synchronized (watcherLock) {
-                        watchKeyToPath.remove(key);
-                    }
-                }
+                processWatchKey(key);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
@@ -268,6 +238,58 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
                 if (!shutdown.get()) {
                     Activator.logError("Error in file watcher", e);
                 }
+            }
+        }
+    }
+
+    /**
+     * Processes the pending events of a single watch key: refreshes affected project groups and
+     * resets the key (dropping it from the registry when it is no longer valid). Extracted from
+     * {@link #runFileWatcher()} to keep that loop's complexity in check; carries no checked
+     * exception of its own.
+     */
+    private void processWatchKey(WatchKey key) {
+        java.nio.file.Path settingsPath;
+
+        synchronized (watcherLock) {
+            settingsPath = watchKeyToPath.get(key);
+        }
+
+        if (settingsPath != null) {
+            for (WatchEvent<?> event : key.pollEvents()) {
+                processWatchEvent(event, settingsPath);
+            }
+        }
+
+        boolean valid = key.reset();
+        if (!valid) {
+            synchronized (watcherLock) {
+                watchKeyToPath.remove(key);
+            }
+        }
+    }
+
+    /**
+     * Handles a single watch event: when it refers to the groups file, refreshes the owning
+     * project's groups. Overflow events are ignored. Extracted from {@link #processWatchKey(WatchKey)}
+     * to keep its nesting shallow.
+     *
+     * @param event the watch event to handle
+     * @param settingsPath the watched {@code .settings} directory the event originated from
+     */
+    private void processWatchEvent(WatchEvent<?> event, java.nio.file.Path settingsPath) {
+        if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
+            return;
+        }
+
+        @SuppressWarnings("unchecked")
+        WatchEvent<java.nio.file.Path> pathEvent = (WatchEvent<java.nio.file.Path>) event;
+        java.nio.file.Path fileName = pathEvent.context();
+
+        if (GroupConstants.GROUPS_FILE.equals(fileName.toString())) {
+            java.nio.file.Path projectPath = settingsPath.getParent();
+            if (projectPath != null) {
+                refreshProjectGroups(projectPath.getFileName().toString());
             }
         }
     }

@@ -373,63 +373,81 @@ public class ListModulesTool implements IMcpTool
         {
             if (member instanceof IFile)
             {
-                IFile file = (IFile) member;
-                if (file.getName().endsWith(".bsl")) //$NON-NLS-1$
-                {
-                    String fullPath = file.getProjectRelativePath().toString();
-                    String modulePath = fullPath.startsWith("src/") //$NON-NLS-1$
-                        ? fullPath.substring(4) : fullPath;
-
-                    String[] segments = modulePath.split("/"); //$NON-NLS-1$
-                    if (segments.length < 2)
-                    {
-                        continue;
-                    }
-
-                    String collectionName = segments[0];
-                    String parentName;
-                    String parentType;
-
-                    if (CONFIGURATION.equals(collectionName))
-                    {
-                        parentName = CONFIGURATION;
-                        parentType = CONFIGURATION;
-                    }
-                    else
-                    {
-                        parentName = segments[1];
-                        parentType = mapCollectionToParentType(collectionName);
-                    }
-
-                    if (objectName != null && !objectName.isEmpty()
-                        && !parentName.equalsIgnoreCase(objectName))
-                    {
-                        continue;
-                    }
-
-                    if (nameFilter != null && !nameFilter.isEmpty()
-                        && !modulePath.toLowerCase().contains(nameFilter.toLowerCase()))
-                    {
-                        continue;
-                    }
-
-                    String basePath = CONFIGURATION.equals(collectionName)
-                        ? collectionName : collectionName + "/" + parentName; //$NON-NLS-1$
-                    String moduleType = determineModuleType(modulePath, basePath);
-
-                    ModuleInfo info = new ModuleInfo();
-                    info.modulePath = modulePath;
-                    info.moduleType = moduleType;
-                    info.parentType = parentType;
-                    info.parentName = parentName;
-                    modules.add(info);
-                }
+                addScannedBslFile((IFile) member, modules, objectName, nameFilter);
             }
             else if (member instanceof IContainer)
             {
                 scanBslFilesRecursive((IContainer) member, modules, objectName, nameFilter, depth + 1);
             }
         }
+    }
+
+    /**
+     * Handles a single file member of the filesystem scan in {@link #scanBslFilesRecursive}:
+     * a non-.bsl file, a file with too few path segments, or a file failing the
+     * {@code objectName}/{@code nameFilter} is ignored; otherwise a {@link ModuleInfo} is
+     * added to {@code modules}. Extracted verbatim from the scan's per-file branch; each
+     * original loop {@code continue} (skip this file) becomes an early {@code return} here.
+     *
+     * @param file the file member to consider
+     * @param modules target list for collected module info
+     * @param objectName optional filter by parent object name (case-insensitive)
+     * @param nameFilter optional filter by module path substring (case-insensitive)
+     */
+    private void addScannedBslFile(IFile file, List<ModuleInfo> modules,
+                                    String objectName, String nameFilter)
+    {
+        if (!file.getName().endsWith(".bsl")) //$NON-NLS-1$
+        {
+            return;
+        }
+        String fullPath = file.getProjectRelativePath().toString();
+        String modulePath = fullPath.startsWith("src/") //$NON-NLS-1$
+            ? fullPath.substring(4) : fullPath;
+
+        String[] segments = modulePath.split("/"); //$NON-NLS-1$
+        if (segments.length < 2)
+        {
+            return;
+        }
+
+        String collectionName = segments[0];
+        String parentName;
+        String parentType;
+
+        if (CONFIGURATION.equals(collectionName))
+        {
+            parentName = CONFIGURATION;
+            parentType = CONFIGURATION;
+        }
+        else
+        {
+            parentName = segments[1];
+            parentType = mapCollectionToParentType(collectionName);
+        }
+
+        if (objectName != null && !objectName.isEmpty()
+            && !parentName.equalsIgnoreCase(objectName))
+        {
+            return;
+        }
+
+        if (nameFilter != null && !nameFilter.isEmpty()
+            && !modulePath.toLowerCase().contains(nameFilter.toLowerCase()))
+        {
+            return;
+        }
+
+        String basePath = CONFIGURATION.equals(collectionName)
+            ? collectionName : collectionName + "/" + parentName; //$NON-NLS-1$
+        String moduleType = determineModuleType(modulePath, basePath);
+
+        ModuleInfo info = new ModuleInfo();
+        info.modulePath = modulePath;
+        info.moduleType = moduleType;
+        info.parentType = parentType;
+        info.parentName = parentName;
+        modules.add(info);
     }
 
     private static String mapCollectionToParentType(String collectionName)

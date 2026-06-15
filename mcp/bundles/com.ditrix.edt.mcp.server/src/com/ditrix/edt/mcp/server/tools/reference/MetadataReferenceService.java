@@ -167,7 +167,29 @@ public class MetadataReferenceService
         // Separate BSL and metadata references
         java.util.Map<String, List<Integer>> bslModuleLines = new java.util.TreeMap<>();
         List<ReferenceInfo> metadataRefs = new ArrayList<>();
+        partitionReferences(allRefs, bslModuleLines, metadataRefs);
 
+        // Sort metadata references by sourcePath
+        metadataRefs.sort((a, b) -> {
+            String pathA = a.sourcePath != null ? a.sourcePath : ""; //$NON-NLS-1$
+            String pathB = b.sourcePath != null ? b.sourcePath : ""; //$NON-NLS-1$
+            return pathA.compareToIgnoreCase(pathB);
+        });
+
+        appendMetadataRefs(sb, metadataRefs);
+        appendBslModules(sb, bslModuleLines);
+
+        return sb.toString();
+    }
+
+    /**
+     * Splits the flat reference list into BSL lines grouped by module path (into
+     * {@code bslModuleLines}) and metadata references (into {@code metadataRefs}), preserving the
+     * original iteration order. Pure helper extracted from {@link #formatOutput}.
+     */
+    private static void partitionReferences(List<ReferenceInfo> allRefs,
+        java.util.Map<String, List<Integer>> bslModuleLines, List<ReferenceInfo> metadataRefs)
+    {
         for (ReferenceInfo ref : allRefs)
         {
             if (ref.isBslReference)
@@ -181,15 +203,15 @@ public class MetadataReferenceService
                 metadataRefs.add(ref);
             }
         }
+    }
 
-        // Sort metadata references by sourcePath
-        metadataRefs.sort((a, b) -> {
-            String pathA = a.sourcePath != null ? a.sourcePath : ""; //$NON-NLS-1$
-            String pathB = b.sourcePath != null ? b.sourcePath : ""; //$NON-NLS-1$
-            return pathA.compareToIgnoreCase(pathB);
-        });
-
-        // Output metadata references
+    /**
+     * Appends the (already sorted) metadata references to {@code sb} as a markdown bullet list,
+     * stripping a leading slash from the display path and adding the feature when present. Pure
+     * helper extracted from {@link #formatOutput}.
+     */
+    private static void appendMetadataRefs(StringBuilder sb, List<ReferenceInfo> metadataRefs)
+    {
         for (ReferenceInfo ref : metadataRefs)
         {
             String displayPath = ref.sourcePath;
@@ -205,47 +227,65 @@ public class MetadataReferenceService
             }
             sb.append("\n"); //$NON-NLS-1$
         }
+    }
 
-        // Output BSL references grouped by module
-        if (!bslModuleLines.isEmpty())
+    /**
+     * Appends the BSL references grouped by module (the "### BSL Modules" section) to {@code sb}:
+     * for each module path it sorts the line numbers, strips a leading slash, and renders them as
+     * {@code [Line X; Line Y; ...]}. Does nothing when there are no BSL references. Pure helper
+     * extracted from {@link #formatOutput}.
+     */
+    private static void appendBslModules(StringBuilder sb,
+        java.util.Map<String, List<Integer>> bslModuleLines)
+    {
+        if (bslModuleLines.isEmpty())
         {
-            sb.append("\n### BSL Modules\n\n"); //$NON-NLS-1$
-
-            for (java.util.Map.Entry<String, List<Integer>> entry : bslModuleLines.entrySet())
-            {
-                String modulePath = entry.getKey();
-                List<Integer> lines = entry.getValue();
-
-                // Sort lines
-                lines.sort(Integer::compareTo);
-
-                // Remove leading slash if present
-                if (modulePath != null && modulePath.startsWith("/")) //$NON-NLS-1$
-                {
-                    modulePath = modulePath.substring(1);
-                }
-
-                sb.append("- ").append(modulePath); //$NON-NLS-1$
-
-                // Format lines as [Line X; Line Y; ...]
-                if (!lines.isEmpty())
-                {
-                    sb.append(" ["); //$NON-NLS-1$
-                    for (int i = 0; i < lines.size(); i++)
-                    {
-                        if (i > 0)
-                        {
-                            sb.append("; "); //$NON-NLS-1$
-                        }
-                        sb.append("Line ").append(lines.get(i)); //$NON-NLS-1$
-                    }
-                    sb.append("]"); //$NON-NLS-1$
-                }
-                sb.append("\n"); //$NON-NLS-1$
-            }
+            return;
         }
+        sb.append("\n### BSL Modules\n\n"); //$NON-NLS-1$
 
-        return sb.toString();
+        for (java.util.Map.Entry<String, List<Integer>> entry : bslModuleLines.entrySet())
+        {
+            String modulePath = entry.getKey();
+            List<Integer> lines = entry.getValue();
+
+            // Sort lines
+            lines.sort(Integer::compareTo);
+
+            // Remove leading slash if present
+            if (modulePath != null && modulePath.startsWith("/")) //$NON-NLS-1$
+            {
+                modulePath = modulePath.substring(1);
+            }
+
+            sb.append("- ").append(modulePath); //$NON-NLS-1$
+
+            // Format lines as [Line X; Line Y; ...]
+            appendBslLines(sb, lines);
+            sb.append("\n"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Appends a module's line numbers as {@code [Line X; Line Y; ...]} to {@code sb}, or nothing
+     * when the list is empty. Pure helper extracted from {@link #formatOutput}.
+     */
+    private static void appendBslLines(StringBuilder sb, List<Integer> lines)
+    {
+        if (lines.isEmpty())
+        {
+            return;
+        }
+        sb.append(" ["); //$NON-NLS-1$
+        for (int i = 0; i < lines.size(); i++)
+        {
+            if (i > 0)
+            {
+                sb.append("; "); //$NON-NLS-1$
+            }
+            sb.append("Line ").append(lines.get(i)); //$NON-NLS-1$
+        }
+        sb.append("]"); //$NON-NLS-1$
     }
 
     /**

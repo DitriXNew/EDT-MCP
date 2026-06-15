@@ -222,25 +222,75 @@ public final class EObjectInspector
         {
             return null;
         }
-        
+
         EClass eClass = eObj.eClass();
-        
+
         // 1. Look for enum attributes first (highest priority)
+        Object enumValue = findEnumAttributeValue(eObj, eClass);
+        if (enumValue != null)
+        {
+            return enumValue;
+        }
+
+        // 2. Look for known primary value feature names
+        Object namedFeatureValue = findNamedPrimaryFeatureValue(eObj, eClass);
+        if (namedFeatureValue != null)
+        {
+            return namedFeatureValue;
+        }
+
+        // 3. Try 'name' feature
+        Object nameValue = findNameFeatureValue(eObj, eClass);
+        if (nameValue != null)
+        {
+            return nameValue;
+        }
+
+        // 4. First non-derived, non-name attribute that is set
+        Object firstSetAttr = findFirstSetNonNameAttribute(eObj, eClass);
+        if (firstSetAttr != null)
+        {
+            return firstSetAttr;
+        }
+
+        // 5. Fallback to class name
+        return eClass.getName();
+    }
+
+    /**
+     * Find the value of the first non-derived enum attribute that is set.
+     *
+     * @param eObj the owning EObject
+     * @param eClass the EObject's class
+     * @return the enum value, or {@code null} if no enum attribute holds a value
+     */
+    private static Object findEnumAttributeValue(EObject eObj, EClass eClass)
+    {
         for (EAttribute attr : eClass.getEAllAttributes())
         {
             if (attr.isDerived() || attr.isTransient())
             {
                 continue;
             }
-            
+
             Object value = eObj.eGet(attr);
             if (value != null && value.getClass().isEnum())
             {
                 return value;
             }
         }
-        
-        // 2. Look for known primary value feature names
+        return null;
+    }
+
+    /**
+     * Find the value of the first known primary-value feature (category, group, type, value).
+     *
+     * @param eObj the owning EObject
+     * @param eClass the EObject's class
+     * @return the feature value, or {@code null} if none of the known features is set
+     */
+    private static Object findNamedPrimaryFeatureValue(EObject eObj, EClass eClass)
+    {
         for (String featureName : PRIMARY_VALUE_FEATURE_NAMES)
         {
             EStructuralFeature f = eClass.getEStructuralFeature(featureName);
@@ -253,8 +303,18 @@ public final class EObjectInspector
                 }
             }
         }
-        
-        // 3. Try 'name' feature
+        return null;
+    }
+
+    /**
+     * Find the value of the 'name' feature when it is set and non-empty.
+     *
+     * @param eObj the owning EObject
+     * @param eClass the EObject's class
+     * @return the name value, or {@code null} if the feature is absent, unset, or empty
+     */
+    private static Object findNameFeatureValue(EObject eObj, EClass eClass)
+    {
         EStructuralFeature nameFeature = eClass.getEStructuralFeature("name"); //$NON-NLS-1$
         if (nameFeature != null && eObj.eIsSet(nameFeature))
         {
@@ -264,8 +324,18 @@ public final class EObjectInspector
                 return name;
             }
         }
-        
-        // 4. First non-derived, non-name attribute that is set
+        return null;
+    }
+
+    /**
+     * Find the value of the first set, non-derived attribute that is not a name attribute.
+     *
+     * @param eObj the owning EObject
+     * @param eClass the EObject's class
+     * @return the attribute value, or {@code null} if no such attribute holds a value
+     */
+    private static Object findFirstSetNonNameAttribute(EObject eObj, EClass eClass)
+    {
         for (EAttribute attr : eClass.getEAllAttributes())
         {
             if (attr.isDerived() || attr.isTransient())
@@ -286,9 +356,7 @@ public final class EObjectInspector
                 }
             }
         }
-        
-        // 5. Fallback to class name
-        return eClass.getName();
+        return null;
     }
     
     /**

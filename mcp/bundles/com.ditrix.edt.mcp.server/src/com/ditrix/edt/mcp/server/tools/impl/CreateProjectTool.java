@@ -327,6 +327,112 @@ public class CreateProjectTool implements IMcpTool
         }
 
         // 3. Validate kind-specific parameter constraints
+        String constraintErr = validateKindConstraints(projectKind, isExtension, isExternalObjects,
+            versionStr, baseProjectName, prefix, purposeStr, compatModeStr, synonym, comment, scriptVariantStr);
+        if (constraintErr != null)
+        {
+            return constraintErr;
+        }
+
+        // 4. Validate 'name'
+        if (configName != null)
+        {
+            configName = configName.trim();
+        }
+        String nameErr = validateName(configName);
+        if (nameErr != null)
+        {
+            return nameErr;
+        }
+
+        // 5. Trim projectName if provided
+        projectName = normalizeProjectName(projectName);
+
+        // Normalize empties
+        if (prefix == null)
+        {
+            prefix = ""; //$NON-NLS-1$
+        }
+        if (compatModeStr != null && compatModeStr.isEmpty())
+        {
+            compatModeStr = null;
+        }
+        if (versionStr != null && versionStr.isEmpty())
+        {
+            versionStr = null;
+        }
+
+        // Dispatch to kind-specific handler
+        if (isExtension)
+        {
+            return executeExtension(configName, projectName, baseProjectName, prefix, synonym, comment,
+                purposeStr, compatModeStr, standardChecks, commonChecks);
+        }
+        else if (isConfiguration)
+        {
+            return executeConfiguration(configName, projectName, versionStr, synonym, comment,
+                scriptVariantStr, standardChecks, commonChecks);
+        }
+        else
+        {
+            return executeExternalObjects(configName, projectName, versionStr, scriptVariantStr,
+                standardChecks, commonChecks);
+        }
+    }
+
+    /**
+     * Validates the (already trimmed) Configuration name: must be non-blank and a valid
+     * 1C identifier.
+     *
+     * @param configName the trimmed name (may be {@code null})
+     * @return a ready-to-return JSON error string when invalid, or {@code null} when valid
+     */
+    private static String validateName(String configName)
+    {
+        if (configName == null || configName.isEmpty())
+        {
+            return ToolResult.error("'name' must not be blank.").toJson(); //$NON-NLS-1$
+        }
+        if (!isValidIdentifier(configName))
+        {
+            return ToolResult.error("Invalid name '" + configName //$NON-NLS-1$
+                + "'. A name must start with a letter or underscore and contain only " //$NON-NLS-1$
+                + "letters, digits and underscores (Cyrillic letters are allowed).").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Trims the supplied EDT project name and collapses a now-empty value to {@code null}
+     * so the kind handlers fall back to their default-name derivation.
+     *
+     * @param projectName the raw project name (may be {@code null})
+     * @return the trimmed project name, or {@code null} when absent or blank
+     */
+    private static String normalizeProjectName(String projectName)
+    {
+        if (projectName != null)
+        {
+            projectName = projectName.trim();
+        }
+        if (projectName != null && projectName.isEmpty())
+        {
+            projectName = null;
+        }
+        return projectName;
+    }
+
+    /**
+     * Validates the kind-specific parameter constraints (which parameters are allowed for
+     * which {@code projectKind}) plus the strict scriptVariant value check.
+     *
+     * @return a ready-to-return JSON error string when a constraint is violated, or
+     *     {@code null} when all constraints pass
+     */
+    private static String validateKindConstraints(String projectKind, boolean isExtension,
+        boolean isExternalObjects, String versionStr, String baseProjectName, String prefix,
+        String purposeStr, String compatModeStr, String synonym, String comment, String scriptVariantStr)
+    {
         if (isExtension && versionStr != null && !versionStr.isEmpty())
         {
             return ToolResult.error(
@@ -377,63 +483,7 @@ public class CreateProjectTool implements IMcpTool
             return ToolResult.error("Invalid scriptVariant value: '" + scriptVariantStr //$NON-NLS-1$
                 + "'. Allowed values: 'Russian', 'English'.").toJson(); //$NON-NLS-1$
         }
-
-        // 4. Validate 'name'
-        if (configName != null)
-        {
-            configName = configName.trim();
-        }
-        if (configName == null || configName.isEmpty())
-        {
-            return ToolResult.error("'name' must not be blank.").toJson(); //$NON-NLS-1$
-        }
-        if (!isValidIdentifier(configName))
-        {
-            return ToolResult.error("Invalid name '" + configName //$NON-NLS-1$
-                + "'. A name must start with a letter or underscore and contain only " //$NON-NLS-1$
-                + "letters, digits and underscores (Cyrillic letters are allowed).").toJson(); //$NON-NLS-1$
-        }
-
-        // 5. Trim projectName if provided
-        if (projectName != null)
-        {
-            projectName = projectName.trim();
-        }
-        if (projectName != null && projectName.isEmpty())
-        {
-            projectName = null;
-        }
-
-        // Normalize empties
-        if (prefix == null)
-        {
-            prefix = ""; //$NON-NLS-1$
-        }
-        if (compatModeStr != null && compatModeStr.isEmpty())
-        {
-            compatModeStr = null;
-        }
-        if (versionStr != null && versionStr.isEmpty())
-        {
-            versionStr = null;
-        }
-
-        // Dispatch to kind-specific handler
-        if (isExtension)
-        {
-            return executeExtension(configName, projectName, baseProjectName, prefix, synonym, comment,
-                purposeStr, compatModeStr, standardChecks, commonChecks);
-        }
-        else if (isConfiguration)
-        {
-            return executeConfiguration(configName, projectName, versionStr, synonym, comment,
-                scriptVariantStr, standardChecks, commonChecks);
-        }
-        else
-        {
-            return executeExternalObjects(configName, projectName, versionStr, scriptVariantStr,
-                standardChecks, commonChecks);
-        }
+        return null;
     }
 
     // ─────────────────────── EXTENSION path ──────────────────────────────────
@@ -811,38 +861,7 @@ public class CreateProjectTool implements IMcpTool
         // Ensure the configuration has a default Language (per ConfigurationWizard recipe)
         // If fillDefaultReferences already produced a language, reuse it; otherwise create one.
         String effectiveLangCode = langCode;
-        if (!config.getLanguages().isEmpty())
-        {
-            // Align the existing language to the requested script variant
-            Language existingLang = config.getLanguages().get(0);
-            existingLang.setName(langName);
-            existingLang.setLanguageCode(langCode);
-            EMap<String, String> existingSynonym = existingLang.getSynonym();
-            if (existingSynonym != null)
-            {
-                existingSynonym.clear();
-                existingSynonym.put(langCode, langName);
-            }
-            if (config.getDefaultLanguage() == null)
-            {
-                config.setDefaultLanguage(existingLang);
-            }
-        }
-        else
-        {
-            // Create a Language exactly per R3 recipe
-            Language lang = MdClassFactory.eINSTANCE.createLanguage();
-            lang.setUuid(UUID.randomUUID());
-            lang.setName(langName);
-            lang.setLanguageCode(langCode);
-            EMap<String, String> langSynonym = lang.getSynonym();
-            if (langSynonym != null)
-            {
-                langSynonym.put(langCode, langName);
-            }
-            config.getLanguages().add(lang);
-            config.setDefaultLanguage(lang);
-        }
+        setupConfigurationLanguage(config, langCode, langName);
 
         // Optional attributes
         if (comment != null && !comment.isEmpty())
@@ -891,25 +910,8 @@ public class CreateProjectTool implements IMcpTool
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full configuration response
-            ToolResult slowResult = ToolResult.success()
-                .put(McpKeys.ACTION, VAL_CREATED)
-                .put(McpKeys.PROJECT, finalEffectiveProjectName)
-                .put(KEY_PROJECT_KIND, KIND_CONFIGURATION)
-                .put("name", configName) //$NON-NLS-1$
-                .put(KEY_SCRIPT_VARIANT, finalScriptVariant.getLiteral())
-                .put(KEY_VERSION, finalVersion.toString())
-                .put(KEY_STATE, VAL_CREATED)
-                .put(KEY_CODESTYLE, slowPathCodestyleMap())
-                .put(McpKeys.MESSAGE, "Configuration project '" + finalEffectiveProjectName //$NON-NLS-1$
-                    + "' created (creation completed past the " //$NON-NLS-1$
-                    + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
-            // Mirror the normal success path: report when the synonym could not be applied.
-            if (!synonymApplied)
-            {
-                slowResult.put(KEY_SYNONYM_NOTE,
-                    "Synonym was not applied: synonym map was not available on the new Configuration."); //$NON-NLS-1$
-            }
-            return slowResult.toJson();
+            return buildConfigurationSlowResponse(finalEffectiveProjectName, configName,
+                finalScriptVariant, finalVersion, synonymApplied);
         }
         if (jobResult.errorJson != null)
         {
@@ -947,6 +949,83 @@ public class CreateProjectTool implements IMcpTool
                 "Synonym was not applied: synonym map was not available on the new Configuration."); //$NON-NLS-1$
         }
         return result.toJson();
+    }
+
+    /**
+     * Ensures the new standalone configuration has a default {@link Language} aligned to the
+     * requested script variant (per the ConfigurationWizard recipe). If
+     * {@code fillDefaultReferences} already produced a language it is realigned in place;
+     * otherwise a new language is created and made the default.
+     *
+     * @param config the in-memory Configuration model object being built
+     * @param langCode the language code to apply (e.g. {@code "ru"} or {@code "en"})
+     * @param langName the language name to apply (e.g. {@code "Russian"} or {@code "English"})
+     */
+    private static void setupConfigurationLanguage(Configuration config, String langCode, String langName)
+    {
+        if (!config.getLanguages().isEmpty())
+        {
+            // Align the existing language to the requested script variant
+            Language existingLang = config.getLanguages().get(0);
+            existingLang.setName(langName);
+            existingLang.setLanguageCode(langCode);
+            EMap<String, String> existingSynonym = existingLang.getSynonym();
+            if (existingSynonym != null)
+            {
+                existingSynonym.clear();
+                existingSynonym.put(langCode, langName);
+            }
+            if (config.getDefaultLanguage() == null)
+            {
+                config.setDefaultLanguage(existingLang);
+            }
+        }
+        else
+        {
+            // Create a Language exactly per R3 recipe
+            Language lang = MdClassFactory.eINSTANCE.createLanguage();
+            lang.setUuid(UUID.randomUUID());
+            lang.setName(langName);
+            lang.setLanguageCode(langCode);
+            EMap<String, String> langSynonym = lang.getSynonym();
+            if (langSynonym != null)
+            {
+                langSynonym.put(langCode, langName);
+            }
+            config.getLanguages().add(lang);
+            config.setDefaultLanguage(lang);
+        }
+    }
+
+    /**
+     * Builds the configuration slow-path response (creation completed past the wait window).
+     * Mirrors the normal success path, including the synonym note when the synonym could not
+     * be applied.
+     *
+     * @return the response JSON string
+     */
+    private static String buildConfigurationSlowResponse(String effectiveProjectName, String configName,
+        ScriptVariant scriptVariant, Version version, boolean synonymApplied)
+    {
+        ToolResult slowResult = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put(McpKeys.PROJECT, effectiveProjectName)
+            .put(KEY_PROJECT_KIND, KIND_CONFIGURATION)
+            .put("name", configName) //$NON-NLS-1$
+            .put(KEY_SCRIPT_VARIANT, scriptVariant.getLiteral())
+            .put(KEY_VERSION, version.toString())
+            .put(KEY_STATE, VAL_CREATED)
+            .put(KEY_CODESTYLE, slowPathCodestyleMap())
+            .put(McpKeys.MESSAGE, "Configuration project '" + effectiveProjectName //$NON-NLS-1$
+                + "' created (creation completed past the " //$NON-NLS-1$
+                + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
+        // Mirror the normal success path: report when the synonym could not be applied.
+        if (!synonymApplied)
+        {
+            slowResult.put(KEY_SYNONYM_NOTE,
+                "Synonym was not applied: synonym map was not available on the new Configuration."); //$NON-NLS-1$
+        }
+        return slowResult.toJson();
     }
 
     // ─────────────────────── EXTERNAL OBJECTS path ───────────────────────────
@@ -1014,28 +1093,8 @@ public class CreateProjectTool implements IMcpTool
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full externalObjects response
-            ToolResult slowResult = ToolResult.success()
-                .put(McpKeys.ACTION, VAL_CREATED)
-                .put(McpKeys.PROJECT, finalEffectiveProjectName)
-                .put(KEY_PROJECT_KIND, KIND_EXTERNAL_OBJECTS)
-                .put("name", configName) //$NON-NLS-1$
-                .put(KEY_VERSION, finalVersion.toString())
-                .put(KEY_STATE, VAL_CREATED)
-                .put(KEY_CODESTYLE, slowPathCodestyleMap())
-                .put(McpKeys.MESSAGE, "External objects project '" + finalEffectiveProjectName //$NON-NLS-1$
-                    + "' created (creation completed past the " //$NON-NLS-1$
-                    + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
-            if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
-            {
-                // Emit canonical literal (normalized from user input casing)
-                ScriptVariant slowSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
-                    ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
-                slowResult.put(KEY_SCRIPT_VARIANT, slowSv.getLiteral());
-                String slowScriptNote =
-                    "setScriptVariant skipped: creation exceeded the wait window; set the project preferences manually if needed."; //$NON-NLS-1$
-                slowResult.put(KEY_SCRIPT_VARIANT_NOTE, slowScriptNote);
-            }
-            return slowResult.toJson();
+            return buildExternalObjectsSlowResponse(finalEffectiveProjectName, configName,
+                finalVersion, scriptVariantStr);
         }
         if (jobResult.errorJson != null)
         {
@@ -1062,31 +1121,8 @@ public class CreateProjectTool implements IMcpTool
         {
             requestedSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
                 ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
-            try
-            {
-                IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-                IProject newIProject = createdHolder[0] != null ? createdHolder[0]
-                    : ProjectContext.of(finalEffectiveProjectName).project();
-                if (v8ProjectManager != null && newIProject != null && newIProject.exists())
-                {
-                    IV8Project v8project = v8ProjectManager.getProject(newIProject);
-                    if (v8project instanceof IExternalObjectProject)
-                    {
-                        extObjMgr.setScriptVariant((IExternalObjectProject) v8project, requestedSv,
-                            new NullProgressMonitor());
-                    }
-                    else
-                    {
-                        scriptVariantNote = "setScriptVariant skipped: project is not yet " //$NON-NLS-1$
-                            + "an IExternalObjectProject (state=" + projectState + ")."; //$NON-NLS-1$ //$NON-NLS-2$
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                Activator.logError("create_project (externalObjects): setScriptVariant failed", e); //$NON-NLS-1$
-                scriptVariantNote = "setScriptVariant failed (non-fatal): " + e.getMessage(); //$NON-NLS-1$
-            }
+            scriptVariantNote = applyExternalObjectsScriptVariant(extObjMgr, finalEffectiveProjectName,
+                createdHolder[0], requestedSv, projectState);
         }
 
         // Apply v8codestyle preferences
@@ -1116,6 +1152,84 @@ public class CreateProjectTool implements IMcpTool
             result.put(KEY_SCRIPT_VARIANT_NOTE, scriptVariantNote);
         }
         return result.toJson();
+    }
+
+    /**
+     * Builds the externalObjects slow-path response (creation completed past the wait window).
+     * When a {@code scriptVariantStr} was supplied, emits the canonical ScriptVariant literal
+     * and a note that setScriptVariant was skipped.
+     *
+     * @return the response JSON string
+     */
+    private static String buildExternalObjectsSlowResponse(String effectiveProjectName, String configName,
+        Version version, String scriptVariantStr)
+    {
+        ToolResult slowResult = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put(McpKeys.PROJECT, effectiveProjectName)
+            .put(KEY_PROJECT_KIND, KIND_EXTERNAL_OBJECTS)
+            .put("name", configName) //$NON-NLS-1$
+            .put(KEY_VERSION, version.toString())
+            .put(KEY_STATE, VAL_CREATED)
+            .put(KEY_CODESTYLE, slowPathCodestyleMap())
+            .put(McpKeys.MESSAGE, "External objects project '" + effectiveProjectName //$NON-NLS-1$
+                + "' created (creation completed past the " //$NON-NLS-1$
+                + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
+        if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
+        {
+            // Emit canonical literal (normalized from user input casing)
+            ScriptVariant slowSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
+                ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
+            slowResult.put(KEY_SCRIPT_VARIANT, slowSv.getLiteral());
+            String slowScriptNote =
+                "setScriptVariant skipped: creation exceeded the wait window; set the project preferences manually if needed."; //$NON-NLS-1$
+            slowResult.put(KEY_SCRIPT_VARIANT_NOTE, slowScriptNote);
+        }
+        return slowResult.toJson();
+    }
+
+    /**
+     * Applies the requested script variant to a freshly created externalObjects project
+     * (non-fatal: failures are logged and reported via the returned note, never propagated).
+     * Mirrors the original inline post-create block exactly.
+     *
+     * @param extObjMgr the external-object project manager
+     * @param effectiveProjectName the workspace project name
+     * @param createdProject the {@link IProject} returned by create (may be {@code null})
+     * @param requestedSv the canonical script variant to apply
+     * @param projectState the resolved lifecycle state (for the skip note)
+     * @return a note describing why the variant could not be applied, or {@code null} on success
+     */
+    private static String applyExternalObjectsScriptVariant(IExternalObjectProjectManager extObjMgr,
+        String effectiveProjectName, IProject createdProject, ScriptVariant requestedSv, String projectState)
+    {
+        String scriptVariantNote = null;
+        try
+        {
+            IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+            IProject newIProject = createdProject != null ? createdProject
+                : ProjectContext.of(effectiveProjectName).project();
+            if (v8ProjectManager != null && newIProject != null && newIProject.exists())
+            {
+                IV8Project v8project = v8ProjectManager.getProject(newIProject);
+                if (v8project instanceof IExternalObjectProject)
+                {
+                    extObjMgr.setScriptVariant((IExternalObjectProject) v8project, requestedSv,
+                        new NullProgressMonitor());
+                }
+                else
+                {
+                    scriptVariantNote = "setScriptVariant skipped: project is not yet " //$NON-NLS-1$
+                        + "an IExternalObjectProject (state=" + projectState + ")."; //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logError("create_project (externalObjects): setScriptVariant failed", e); //$NON-NLS-1$
+            scriptVariantNote = "setScriptVariant failed (non-fatal): " + e.getMessage(); //$NON-NLS-1$
+        }
+        return scriptVariantNote;
     }
 
     // ─────────────────────── Shared helpers ──────────────────────────────────

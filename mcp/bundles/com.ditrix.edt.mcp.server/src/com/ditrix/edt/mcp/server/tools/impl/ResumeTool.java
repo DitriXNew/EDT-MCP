@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
 
+import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IThread;
 
@@ -101,32 +102,7 @@ public class ResumeTool implements IMcpTool
         {
             if (threadId > 0)
             {
-                IThread thread = registry.getThread(threadId);
-                if (thread == null)
-                {
-                    return ToolResult.error("stale threadId — call wait_for_break again").toJson(); //$NON-NLS-1$
-                }
-                if (!thread.canResume())
-                {
-                    return ToolResult.error("thread cannot resume (state: " //$NON-NLS-1$
-                            + (thread.isSuspended() ? "suspended" : "running") + ")").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                }
-                // Canonical snapshot key for this thread's session: the registry's
-                // thread→appId mapping (set when the snapshot was created), falling
-                // back to the launch-attribute id. Computed BEFORE resuming — the
-                // async RESUME event may purge the mapping.
-                String threadAppId = registry.getThreadApplicationId(threadId);
-                if (threadAppId == null)
-                {
-                    threadAppId = DebugSessionRegistry.findApplicationIdFor(thread);
-                }
-                thread.resume();
-                // Drop the now-stale pre-resume snapshot (this branch
-                // previously resumed WITHOUT any clearSnapshot, so the snapshot
-                // outlived its suspend and the next wait_for_break returned it as a
-                // fresh hit). clearSnapshot(null) is a safe no-op.
-                registry.clearSnapshot(threadAppId);
-                return ToolResult.success().put(KEY_RESUMED, true).put(KEY_SCOPE, "thread").toJson(); //$NON-NLS-1$
+                return resumeThread(registry, threadId);
             }
 
             // Unified resolution: accept ANY id form for the same session —
@@ -144,42 +120,9 @@ public class ResumeTool implements IMcpTool
                     + "session available for auto-resolution. Use debug_status to list active sessions.").toJson(); //$NON-NLS-1$
             }
 
-            IDebugTarget target = res.target;
-            String effectiveAppId = res.canonicalId;
+            ResumeOutcome outcome = performResume(res.target);
 
-            // Prefer resuming at the TARGET level when it accepts it (thin-client and
-            // launch targets do). A 1C debug-server target, however, reports
-            // canResume()==false at the target level even while a thread is genuinely
-            // suspended on the breakpoint — so fall back to resuming each suspended
-            // thread (IRuntimeDebugTargetThread implements ISuspendResume), which is the
-            // SAME thread wait_for_break suspends on.
-            boolean resumed = false;
-            String scope = null;
-            if (!target.isTerminated() && target.canResume())
-            {
-                target.resume();
-                resumed = true;
-                scope = "target"; //$NON-NLS-1$
-            }
-            else
-            {
-                int count = 0;
-                for (IThread t : target.getThreads())
-                {
-                    if (t != null && t.isSuspended() && t.canResume())
-                    {
-                        t.resume();
-                        count++;
-                    }
-                }
-                if (count > 0)
-                {
-                    resumed = true;
-                    scope = "thread"; //$NON-NLS-1$
-                }
-            }
-
-            if (!resumed)
+            if (!outcome.resumed)
             {
                 return ToolResult.error(res.isServerTarget()
                     ? "server debug target cannot resume (no suspended thread to resume). " //$NON-NLS-1$
@@ -189,25 +132,128 @@ public class ResumeTool implements IMcpTool
 
             // Drop the cached snapshot so a subsequent wait_for_break does not return
             // the now-stale pre-resume frame.
-            registry.clearSnapshot(effectiveAppId);
-            ToolResult out = ToolResult.success()
-                .put(KEY_RESUMED, true)
-                .put(KEY_SCOPE, scope)
-                .put(McpKeys.APPLICATION_ID, effectiveAppId);
-            if (res.isServerTarget())
-            {
-                out.put("serverTarget", true); //$NON-NLS-1$
-            }
-            if (res.autoResolved)
-            {
-                out.put("autoResolved", true); //$NON-NLS-1$
-            }
-            return out.toJson();
+            registry.clearSnapshot(res.canonicalId);
+            return buildResumeResult(res, outcome.scope).toJson();
         }
         catch (Exception e)
         {
             Activator.logError("Error in resume", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Resume the thread registered under the given snapshot thread id.
+     *
+     * @param registry the debug session registry
+     * @param threadId the snapshot thread id (already validated to be positive)
+     * @return the JSON result for the resume request (success or a specific error)
+     * @throws DebugException if the underlying {@link IThread#resume()} fails
+     */
+    private static String resumeThread(DebugSessionRegistry registry, long threadId) throws DebugException
+    {
+        IThread thread = registry.getThread(threadId);
+        if (thread == null)
+        {
+            return ToolResult.error("stale threadId — call wait_for_break again").toJson(); //$NON-NLS-1$
+        }
+        if (!thread.canResume())
+        {
+            return ToolResult.error("thread cannot resume (state: " //$NON-NLS-1$
+                    + (thread.isSuspended() ? "suspended" : "running") + ")").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        // Canonical snapshot key for this thread's session: the registry's
+        // thread→appId mapping (set when the snapshot was created), falling
+        // back to the launch-attribute id. Computed BEFORE resuming — the
+        // async RESUME event may purge the mapping.
+        String threadAppId = registry.getThreadApplicationId(threadId);
+        if (threadAppId == null)
+        {
+            threadAppId = DebugSessionRegistry.findApplicationIdFor(thread);
+        }
+        thread.resume();
+        // Drop the now-stale pre-resume snapshot (this branch
+        // previously resumed WITHOUT any clearSnapshot, so the snapshot
+        // outlived its suspend and the next wait_for_break returned it as a
+        // fresh hit). clearSnapshot(null) is a safe no-op.
+        registry.clearSnapshot(threadAppId);
+        return ToolResult.success().put(KEY_RESUMED, true).put(KEY_SCOPE, "thread").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Resume a debug target, preferring a target-level resume and falling back to resuming
+     * each suspended thread.
+     *
+     * <p>A 1C debug-server target reports {@code canResume()==false} at the target level even
+     * while a thread is genuinely suspended on the breakpoint — so the fallback resumes each
+     * suspended thread (the SAME thread wait_for_break suspends on).
+     *
+     * @param target the debug target to resume
+     * @return the outcome describing whether anything was resumed and at which scope
+     * @throws DebugException if an underlying resume fails
+     */
+    private static ResumeOutcome performResume(IDebugTarget target) throws DebugException
+    {
+        // Prefer resuming at the TARGET level when it accepts it (thin-client and
+        // launch targets do).
+        if (!target.isTerminated() && target.canResume())
+        {
+            target.resume();
+            return new ResumeOutcome(true, "target"); //$NON-NLS-1$
+        }
+
+        int count = 0;
+        for (IThread t : target.getThreads())
+        {
+            if (t != null && t.isSuspended() && t.canResume())
+            {
+                t.resume();
+                count++;
+            }
+        }
+        if (count > 0)
+        {
+            return new ResumeOutcome(true, "thread"); //$NON-NLS-1$
+        }
+        return new ResumeOutcome(false, null);
+    }
+
+    /**
+     * Build the success result for a target resume, adding the resolution-derived flags.
+     *
+     * @param res the resolved debug target
+     * @param scope the resume scope ('target' or 'thread')
+     * @return the populated tool result
+     */
+    private static ToolResult buildResumeResult(DebugTargetResolver.Resolution res, String scope)
+    {
+        ToolResult out = ToolResult.success()
+            .put(KEY_RESUMED, true)
+            .put(KEY_SCOPE, scope)
+            .put(McpKeys.APPLICATION_ID, res.canonicalId);
+        if (res.isServerTarget())
+        {
+            out.put("serverTarget", true); //$NON-NLS-1$
+        }
+        if (res.autoResolved)
+        {
+            out.put("autoResolved", true); //$NON-NLS-1$
+        }
+        return out;
+    }
+
+    /**
+     * Outcome of a target resume attempt: whether anything was resumed and at which scope.
+     */
+    private static final class ResumeOutcome
+    {
+        private final boolean resumed;
+        private final String scope;
+
+        ResumeOutcome(boolean resumed, String scope)
+        {
+            this.resumed = resumed;
+            this.scope = scope;
         }
     }
 

@@ -250,77 +250,104 @@ public class TagSearchFilter extends ViewerFilter {
         
         // Check if element matches
         if (element instanceof EObject eObject) {
-            // Get the project this EObject belongs to for project-specific matching
-            IProject project = TagUtils.extractProject(eObject);
-            if (project != null) {
-                currentFilterProject = project;
-            }
-            
-            // Special handling for Configuration - always visible if there are matching FQNs for this project
-            String typeName = eObject.eClass().getName();
-            if ("Configuration".equals(typeName)) {
-                Set<String> projectFqns = getMatchingFqnsForProject(currentFilterProject);
-                return !projectFqns.isEmpty();
-            }
-            
-            String fqn = TagUtils.extractFqn(eObject);
-
-            if (fqn != null) {
-                // Check if this FQN or any parent matches IN THIS PROJECT
-                boolean result = matchesFqnOrParentInProject(fqn, currentFilterProject);
-                
-                // Special handling for Subsystems: parent subsystem should be visible if ANY child matches
-                // Using hardcoded "Subsystem" as the EClass name
-                if (!result && "Subsystem".equals(typeName)) {
-                    result = hasMatchingChildSubsystemInProject(eObject, currentFilterProject);
-                }
-                
-                return result;
-            } else {
-                // If we can't extract FQN, assume visible (might be a special element)
-                return true;
-            }
+            return selectEObject(eObject);
         } else {
-            // Check if this is a Navigator folder (e.g., DocumentNavigatorAdapter$Folder)
-            String className = element.getClass().getName();
-            
-            // Handle CommonNavigatorAdapter - it's the "Common" folder containing subsystems, common modules, etc.
-            if (className.endsWith("CommonNavigatorAdapter")) {
-                // Check if any matching FQN belongs to a "common" metadata type
-                return hasMatchingFqnsForAnyType(COMMON_METADATA_TYPES);
-            }
-            
-            // Handle navigator folder containers - fix operator precedence
-            if (className.contains("NavigatorAdapter$Folder") || 
-                    (className.contains("NavigatorAdapter") && !className.endsWith("CommonNavigatorAdapter"))) {
-                
-                // First, try to handle as a nested object folder (Attributes, TabularSections, etc.)
-                // These folders have a parent EObject and a model object name
-                Boolean nestedResult = checkNestedObjectFolder(element);
-                if (nestedResult != null) {
-                    return nestedResult;
-                }
-                
-                // Fall back to type-based check for top-level folders
-                String metadataType = extractMetadataTypeFromFolderClass(className);
-                if (metadataType != null) {
-                    return hasMatchingFqnsForType(metadataType);
-                }
-            }
-            
-            // Try to unwrap CommonNavigatorAdapter or similar
-            EObject unwrapped = TagUtils.unwrapToEObject(element);
-            if (unwrapped != null) {
-                String fqn = TagUtils.extractFqn(unwrapped);
-                if (fqn != null) {
-                    return matchesFqnOrParent(fqn);
-                }
-            }
-            
-            // IMPORTANT: Unknown elements should NOT be visible by default during tag search!
-            // Only show elements we explicitly matched
-            return false;
+            return selectByElementClass(element);
         }
+    }
+
+    /**
+     * Decides visibility for an {@link EObject} element: Configuration is shown when its project has
+     * any matching FQNs; otherwise the element's FQN (or a child subsystem for a Subsystem) is checked
+     * against the matching FQNs. Elements without an FQN are assumed visible. Extracted verbatim from
+     * {@link #selectByMatchingFqns(Object, Object)}; updates {@link #currentFilterProject} exactly as
+     * the inlined block did.
+     *
+     * @param eObject the element to test
+     * @return true if the element should be visible
+     */
+    private boolean selectEObject(EObject eObject) {
+        // Get the project this EObject belongs to for project-specific matching
+        IProject project = TagUtils.extractProject(eObject);
+        if (project != null) {
+            currentFilterProject = project;
+        }
+
+        // Special handling for Configuration - always visible if there are matching FQNs for this project
+        String typeName = eObject.eClass().getName();
+        if ("Configuration".equals(typeName)) {
+            Set<String> projectFqns = getMatchingFqnsForProject(currentFilterProject);
+            return !projectFqns.isEmpty();
+        }
+
+        String fqn = TagUtils.extractFqn(eObject);
+
+        if (fqn != null) {
+            // Check if this FQN or any parent matches IN THIS PROJECT
+            boolean result = matchesFqnOrParentInProject(fqn, currentFilterProject);
+
+            // Special handling for Subsystems: parent subsystem should be visible if ANY child matches
+            // Using hardcoded "Subsystem" as the EClass name
+            if (!result && "Subsystem".equals(typeName)) {
+                result = hasMatchingChildSubsystemInProject(eObject, currentFilterProject);
+            }
+
+            return result;
+        } else {
+            // If we can't extract FQN, assume visible (might be a special element)
+            return true;
+        }
+    }
+
+    /**
+     * Decides visibility for a non-{@link EObject} navigator element by inspecting its class name:
+     * the "Common" folder, navigator folder containers (nested-object or top-level type folders), and
+     * a final attempt to unwrap an underlying EObject. Unknown elements are hidden. Extracted verbatim
+     * from {@link #selectByMatchingFqns(Object, Object)}.
+     *
+     * @param element the navigator element to test
+     * @return true if the element should be visible
+     */
+    private boolean selectByElementClass(Object element) {
+        // Check if this is a Navigator folder (e.g., DocumentNavigatorAdapter$Folder)
+        String className = element.getClass().getName();
+
+        // Handle CommonNavigatorAdapter - it's the "Common" folder containing subsystems, common modules, etc.
+        if (className.endsWith("CommonNavigatorAdapter")) {
+            // Check if any matching FQN belongs to a "common" metadata type
+            return hasMatchingFqnsForAnyType(COMMON_METADATA_TYPES);
+        }
+
+        // Handle navigator folder containers - fix operator precedence
+        if (className.contains("NavigatorAdapter$Folder") ||
+                (className.contains("NavigatorAdapter") && !className.endsWith("CommonNavigatorAdapter"))) {
+
+            // First, try to handle as a nested object folder (Attributes, TabularSections, etc.)
+            // These folders have a parent EObject and a model object name
+            Boolean nestedResult = checkNestedObjectFolder(element);
+            if (nestedResult != null) {
+                return nestedResult;
+            }
+
+            // Fall back to type-based check for top-level folders
+            String metadataType = extractMetadataTypeFromFolderClass(className);
+            if (metadataType != null) {
+                return hasMatchingFqnsForType(metadataType);
+            }
+        }
+
+        // Try to unwrap CommonNavigatorAdapter or similar
+        EObject unwrapped = TagUtils.unwrapToEObject(element);
+        if (unwrapped != null) {
+            String fqn = TagUtils.extractFqn(unwrapped);
+            if (fqn != null) {
+                return matchesFqnOrParent(fqn);
+            }
+        }
+
+        // IMPORTANT: Unknown elements should NOT be visible by default during tag search!
+        // Only show elements we explicitly matched
+        return false;
     }
     
     /**

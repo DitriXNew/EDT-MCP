@@ -120,69 +120,14 @@ public class GetFormScreenshotTool implements IMcpTool
     {
         try
         {
-            Object editorPage;
             boolean formRequested = formPath != null && !formPath.isEmpty();
 
-            if (formRequested)
+            EditorPageResult pageResult = resolveEditorPage(projectName, formPath, formRequested);
+            if (pageResult.error != null)
             {
-                EditorScreenshotHelper.ensureBufferedNativeRenderMode();
-
-                // Open the requested form and keep a direct handle on the editor that was opened
-                // for it. The image MUST come from this editor's own WYSIWYG representation, not
-                // from the globally active form editor: previously this tool resolved the page via
-                // FormEditor.getActiveFormEditorPage(), which returns whatever form editor currently
-                // has workbench focus, so a previously rendered/active form (e.g. DataProcessor.X)
-                // was captured instead of the requested one.
-                EditorScreenshotHelper.OpenFormResult openResult =
-                    EditorScreenshotHelper.openForm(projectName, formPath);
-                if (!openResult.isSuccess())
-                {
-                    return CaptureResult.error(openResult.getError());
-                }
-
-                IEditorPart editorPart = openResult.getEditorPart();
-
-                // Let UI settle after activation
-                Display display = Display.getCurrent();
-                for (int i = 0; i < 5; i++)
-                {
-                    EditorScreenshotHelper.processEvents(display);
-                    Thread.sleep(100);
-                }
-
-                // Resolve the WYSIWYG page from THIS editor part (findPage), not the global active
-                // page, so the page is guaranteed to belong to the requested form.
-                editorPage = EditorScreenshotHelper.waitForFormEditorPageOf(editorPart);
-                if (editorPage == null)
-                {
-                    return CaptureResult.error(ToolResult.error(
-                        "Form editor opened but WYSIWYG page is not available. " + //$NON-NLS-1$
-                        "The form may still be loading.").toJson()); //$NON-NLS-1$
-                }
-
-                // Identity guard (a): confirm the opened editor actually corresponds to the requested
-                // form before reading its image. If it does not match, fail explicitly rather than
-                // return another form's PNG (the silent wrong-form defect).
-                String actualFqn = EditorScreenshotHelper.getFormEditorFqn(editorPart);
-                if (actualFqn != null && !EditorScreenshotHelper.fqnMatchesFormPath(actualFqn, formPath))
-                {
-                    return CaptureResult.error(ToolResult.error(
-                        "Captured form editor does not match the requested form. Requested '" //$NON-NLS-1$
-                        + formPath + "' but the active editor is '" + actualFqn //$NON-NLS-1$
-                        + "'. No screenshot was taken to avoid returning the wrong form's image; " //$NON-NLS-1$
-                        + "try again once the requested form's editor is fully open.").toJson()); //$NON-NLS-1$
-                }
+                return pageResult.error;
             }
-            else
-            {
-                editorPage = EditorScreenshotHelper.getActiveFormEditorPage();
-                if (editorPage == null)
-                {
-                    return CaptureResult.error(ToolResult.error(
-                        "No active form editor page found. " + //$NON-NLS-1$
-                        "Specify formPath parameter to open a form automatically.").toJson()); //$NON-NLS-1$
-                }
-            }
+            Object editorPage = pageResult.editorPage;
 
             Object wysiwygViewer = ReflectionUtils.getFieldValue(editorPage, WYSIWYG_VIEWER_FIELD);
             if (wysiwygViewer == null)
@@ -238,57 +183,19 @@ public class GetFormScreenshotTool implements IMcpTool
             // render ran during this call; otherwise we fail explicitly below — consistent with the
             // identity-guard philosophy: never a stale/wrong image silently.
             boolean rendered = EditorScreenshotHelper.ensureRenderedFormImage(representation, refresh);
-            if (refresh && !rendered)
+            CaptureResult renderGate = checkRenderGate(rendered, refresh, formRequested, formPath);
+            if (renderGate != null)
             {
-                return CaptureResult.error(ToolResult.error(
-                    "refresh=true was requested but the form could not be re-rendered in time, so no " //$NON-NLS-1$
-                    + "screenshot was taken: returning the previously rendered image would silently " //$NON-NLS-1$
-                    + "show stale (pre-edit) content. Ensure EDT runs with buffered native render " //$NON-NLS-1$
-                    + "(VM option -DnativeFormBufferedLayoutRender=true) and try again, or call with " //$NON-NLS-1$
-                    + "refresh=false to accept the last rendered image.").toJson()); //$NON-NLS-1$
-            }
-            if (formRequested && !rendered)
-            {
-                // Keep the documented render-unavailable sentinel "Form image data is not available"
-                // CONTIGUOUS — callers (and the upstream e2e suite) match it as a substring; the
-                // wait-budget context is carried around it, not inside it.
-                return CaptureResult.error(ToolResult.error(
-                    "Could not render the requested form '" + formPath //$NON-NLS-1$
-                    + "' in time, so no screenshot was taken. Form image data is not available: its " //$NON-NLS-1$
-                    + "WYSIWYG representation produced no image within the wait budget. " //$NON-NLS-1$
-                    + "Ensure EDT runs with buffered native render " //$NON-NLS-1$
-                    + "(VM option -DnativeFormBufferedLayoutRender=true) and try again.").toJson()); //$NON-NLS-1$
+                return renderGate;
             }
 
-            // Read the (identity-verified) rendered image from this representation. For a requested form
-            // this is the requested form's image: representationFormMatches proved the representation's
-            // own form IS the requested form, and ensureRenderedFormImage confirmed formImageData is
-            // non-empty.
-            ImageData imageData = EditorScreenshotHelper.readFormImageData(representation);
-
-            // Fallback: capture control via print (only used for the active-editor case with no
-            // explicit formPath; for a requested form the image above is already the correct one).
-            if (imageData == null && !formRequested)
+            ImageDataResult imageResult = readValidImageData(representation, wysiwygViewer, rendered, formRequested);
+            if (imageResult.error != null)
             {
-                imageData = EditorScreenshotHelper.captureControlImageData(wysiwygViewer);
+                return imageResult.error;
             }
 
-            if (imageData == null || imageData.width <= 0 || imageData.height <= 0)
-            {
-                if (!rendered)
-                {
-                    // Same contiguous-sentinel rule as above: lead with the documented
-                    // "Form image data is not available" phrase, then the wait-budget context.
-                    return CaptureResult.error(ToolResult.error(
-                        "Form image data is not available: the form did not finish rendering " + //$NON-NLS-1$
-                        "in time, so no image could be captured. " + //$NON-NLS-1$
-                        "Ensure EDT runs with buffered native render " + //$NON-NLS-1$
-                        "(VM option -DnativeFormBufferedLayoutRender=true) and try again.").toJson()); //$NON-NLS-1$
-                }
-                return CaptureResult.error(ToolResult.error("Form image data is not available").toJson()); //$NON-NLS-1$
-            }
-
-            String base64 = EditorScreenshotHelper.encodePng(imageData);
+            String base64 = EditorScreenshotHelper.encodePng(imageResult.imageData);
             return CaptureResult.success(base64);
         }
         catch (Exception e)
@@ -300,6 +207,207 @@ public class GetFormScreenshotTool implements IMcpTool
             Activator.logError("Failed to capture form screenshot", e); //$NON-NLS-1$
             return CaptureResult.error(
                 ToolResult.error("Failed to capture form screenshot: " + e.getMessage()).toJson()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Resolves the WYSIWYG editor page to capture. When a form is requested it opens that form,
+     * lets the UI settle, resolves the page from the opened editor part and applies identity
+     * guard (a); otherwise it falls back to the globally active form editor page. On any failure
+     * the returned holder carries the same {@link CaptureResult} error as the inline code did.
+     * Runs on the UI thread.
+     *
+     * @throws InterruptedException if the UI-settle sleep is interrupted (propagated unchanged)
+     */
+    private EditorPageResult resolveEditorPage(String projectName, String formPath, boolean formRequested)
+        throws Exception
+    {
+        if (formRequested)
+        {
+            EditorScreenshotHelper.ensureBufferedNativeRenderMode();
+
+            // Open the requested form and keep a direct handle on the editor that was opened
+            // for it. The image MUST come from this editor's own WYSIWYG representation, not
+            // from the globally active form editor: previously this tool resolved the page via
+            // FormEditor.getActiveFormEditorPage(), which returns whatever form editor currently
+            // has workbench focus, so a previously rendered/active form (e.g. DataProcessor.X)
+            // was captured instead of the requested one.
+            EditorScreenshotHelper.OpenFormResult openResult =
+                EditorScreenshotHelper.openForm(projectName, formPath);
+            if (!openResult.isSuccess())
+            {
+                return EditorPageResult.error(CaptureResult.error(openResult.getError()));
+            }
+
+            IEditorPart editorPart = openResult.getEditorPart();
+
+            // Let UI settle after activation
+            Display display = Display.getCurrent();
+            for (int i = 0; i < 5; i++)
+            {
+                EditorScreenshotHelper.processEvents(display);
+                Thread.sleep(100);
+            }
+
+            // Resolve the WYSIWYG page from THIS editor part (findPage), not the global active
+            // page, so the page is guaranteed to belong to the requested form.
+            Object editorPage = EditorScreenshotHelper.waitForFormEditorPageOf(editorPart);
+            if (editorPage == null)
+            {
+                return EditorPageResult.error(CaptureResult.error(ToolResult.error(
+                    "Form editor opened but WYSIWYG page is not available. " + //$NON-NLS-1$
+                    "The form may still be loading.").toJson())); //$NON-NLS-1$
+            }
+
+            // Identity guard (a): confirm the opened editor actually corresponds to the requested
+            // form before reading its image. If it does not match, fail explicitly rather than
+            // return another form's PNG (the silent wrong-form defect).
+            String actualFqn = EditorScreenshotHelper.getFormEditorFqn(editorPart);
+            if (actualFqn != null && !EditorScreenshotHelper.fqnMatchesFormPath(actualFqn, formPath))
+            {
+                return EditorPageResult.error(CaptureResult.error(ToolResult.error(
+                    "Captured form editor does not match the requested form. Requested '" //$NON-NLS-1$
+                    + formPath + "' but the active editor is '" + actualFqn //$NON-NLS-1$
+                    + "'. No screenshot was taken to avoid returning the wrong form's image; " //$NON-NLS-1$
+                    + "try again once the requested form's editor is fully open.").toJson())); //$NON-NLS-1$
+            }
+
+            return EditorPageResult.page(editorPage);
+        }
+
+        Object editorPage = EditorScreenshotHelper.getActiveFormEditorPage();
+        if (editorPage == null)
+        {
+            return EditorPageResult.error(CaptureResult.error(ToolResult.error(
+                "No active form editor page found. " + //$NON-NLS-1$
+                "Specify formPath parameter to open a form automatically.").toJson())); //$NON-NLS-1$
+        }
+        return EditorPageResult.page(editorPage);
+    }
+
+    /**
+     * Applies the render gate after {@code ensureRenderedFormImage}: when the render could not be
+     * completed it returns the same explicit error the inline code did (refresh first, then the
+     * requested-form case), or {@code null} when capture may proceed. Behaviour is unchanged.
+     */
+    private static CaptureResult checkRenderGate(boolean rendered, boolean refresh, boolean formRequested,
+        String formPath)
+    {
+        if (refresh && !rendered)
+        {
+            return CaptureResult.error(ToolResult.error(
+                "refresh=true was requested but the form could not be re-rendered in time, so no " //$NON-NLS-1$
+                + "screenshot was taken: returning the previously rendered image would silently " //$NON-NLS-1$
+                + "show stale (pre-edit) content. Ensure EDT runs with buffered native render " //$NON-NLS-1$
+                + "(VM option -DnativeFormBufferedLayoutRender=true) and try again, or call with " //$NON-NLS-1$
+                + "refresh=false to accept the last rendered image.").toJson()); //$NON-NLS-1$
+        }
+        if (formRequested && !rendered)
+        {
+            // Keep the documented render-unavailable sentinel "Form image data is not available"
+            // CONTIGUOUS — callers (and the upstream e2e suite) match it as a substring; the
+            // wait-budget context is carried around it, not inside it.
+            return CaptureResult.error(ToolResult.error(
+                "Could not render the requested form '" + formPath //$NON-NLS-1$
+                + "' in time, so no screenshot was taken. Form image data is not available: its " //$NON-NLS-1$
+                + "WYSIWYG representation produced no image within the wait budget. " //$NON-NLS-1$
+                + "Ensure EDT runs with buffered native render " //$NON-NLS-1$
+                + "(VM option -DnativeFormBufferedLayoutRender=true) and try again.").toJson()); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Reads the rendered image from the representation, applies the active-editor print fallback,
+     * and validates the image dimensions. Returns a holder carrying either a valid {@link ImageData}
+     * or the same {@link CaptureResult} error the inline code produced (the contiguous
+     * "Form image data is not available" sentinel rules are preserved).
+     */
+    private static ImageDataResult readValidImageData(Object representation, Object wysiwygViewer,
+        boolean rendered, boolean formRequested)
+        throws Exception
+    {
+        // Read the (identity-verified) rendered image from this representation. For a requested form
+        // this is the requested form's image: representationFormMatches proved the representation's
+        // own form IS the requested form, and ensureRenderedFormImage confirmed formImageData is
+        // non-empty.
+        ImageData imageData = EditorScreenshotHelper.readFormImageData(representation);
+
+        // Fallback: capture control via print (only used for the active-editor case with no
+        // explicit formPath; for a requested form the image above is already the correct one).
+        if (imageData == null && !formRequested)
+        {
+            imageData = EditorScreenshotHelper.captureControlImageData(wysiwygViewer);
+        }
+
+        if (imageData == null || imageData.width <= 0 || imageData.height <= 0)
+        {
+            if (!rendered)
+            {
+                // Same contiguous-sentinel rule as above: lead with the documented
+                // "Form image data is not available" phrase, then the wait-budget context.
+                return ImageDataResult.error(CaptureResult.error(ToolResult.error(
+                    "Form image data is not available: the form did not finish rendering " + //$NON-NLS-1$
+                    "in time, so no image could be captured. " + //$NON-NLS-1$
+                    "Ensure EDT runs with buffered native render " + //$NON-NLS-1$
+                    "(VM option -DnativeFormBufferedLayoutRender=true) and try again.").toJson())); //$NON-NLS-1$
+            }
+            return ImageDataResult.error(
+                CaptureResult.error(ToolResult.error("Form image data is not available").toJson())); //$NON-NLS-1$
+        }
+
+        return ImageDataResult.image(imageData);
+    }
+
+    /**
+     * Holder threading the resolved editor page or an early-return error out of
+     * {@link #resolveEditorPage}. Exactly one of {@code editorPage} / {@code error} is set.
+     */
+    private static final class EditorPageResult
+    {
+        final Object editorPage;
+        final CaptureResult error;
+
+        private EditorPageResult(Object editorPage, CaptureResult error)
+        {
+            this.editorPage = editorPage;
+            this.error = error;
+        }
+
+        static EditorPageResult page(Object editorPage)
+        {
+            return new EditorPageResult(editorPage, null);
+        }
+
+        static EditorPageResult error(CaptureResult error)
+        {
+            return new EditorPageResult(null, error);
+        }
+    }
+
+    /**
+     * Holder threading the validated image data or an early-return error out of
+     * {@link #readValidImageData}. Exactly one of {@code imageData} / {@code error} is set.
+     */
+    private static final class ImageDataResult
+    {
+        final ImageData imageData;
+        final CaptureResult error;
+
+        private ImageDataResult(ImageData imageData, CaptureResult error)
+        {
+            this.imageData = imageData;
+            this.error = error;
+        }
+
+        static ImageDataResult image(ImageData imageData)
+        {
+            return new ImageDataResult(imageData, null);
+        }
+
+        static ImageDataResult error(CaptureResult error)
+        {
+            return new ImageDataResult(null, error);
         }
     }
 }

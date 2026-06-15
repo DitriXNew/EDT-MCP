@@ -309,33 +309,34 @@ public class McpProtocolHandler
         boolean plainTextMode = Activator.getDefault() != null
             && Activator.getDefault().getPreferenceStore()
                 .getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
-        
+
         // Return response based on tool's declared response type
+        return buildToolCallResponse(tool, result, signal, plainTextMode, requestId, params);
+    }
+
+    /**
+     * Builds the tools/call response from the raw tool {@code result}, dispatching on
+     * the tool's declared {@link IMcpTool.ResponseType}. Holds the per-type delivery
+     * logic extracted verbatim from {@link #handleToolCall}: signal augmentation, the
+     * plain-text fallback, the structuredContent capability gate (JSON), and the
+     * error-diversion to a structured JSON error (non-JSON types). Returns the same
+     * response in the same case as the original inline switch.
+     *
+     * @param tool the resolved tool
+     * @param result the raw tool result payload (may be augmented per type)
+     * @param signal a user signal raised during execution, or {@code null}
+     * @param plainTextMode whether Cursor-compatible plain-text mode is enabled
+     * @param requestId the JSON-RPC request id to echo
+     * @param params the tool params (used only for the result file name)
+     * @return the serialized JSON-RPC response
+     */
+    private String buildToolCallResponse(IMcpTool tool, String result, UserSignal signal,
+        boolean plainTextMode, Object requestId, Map<String, String> params)
+    {
         switch (tool.getResponseType())
         {
             case JSON:
-                // For JSON, add signal as a separate field if present
-                if (signal != null)
-                {
-                    // Parse JSON and add userSignal field
-                    result = addUserSignalToJson(result, signal);
-                }
-                // In plain text mode, return markdown as plain text instead of structured content
-                if (plainTextMode)
-                {
-                    return buildToolCallTextResponse(result, requestId);
-                }
-                // Capability gate for structuredContent. By DEFAULT (no capabilities,
-                // or a client that does not explicitly opt out) this is true, so the
-                // structuredContent response below is emitted exactly as before — the
-                // no-regression guarantee. Only a client that EXPLICITLY declared it
-                // cannot accept structuredContent suppresses it; the JSON payload is
-                // then delivered as text so the data is still returned.
-                if (!clientCapabilities.get().allowsStructuredContent())
-                {
-                    return buildToolCallTextResponse(result, requestId);
-                }
-                return buildToolCallJsonResponse(result, requestId, tool.getName());
+                return buildJsonToolResponse(tool, result, signal, plainTextMode, requestId);
             case MARKDOWN:
                 // A ToolResult.error JSON payload is delivered as a structured JSON
                 // error (isError:true) instead of a markdown resource, so failures
@@ -398,6 +399,48 @@ public class McpProtocolHandler
                 }
                 return buildToolCallTextResponse(result, requestId);
         }
+    }
+
+    /**
+     * Builds the {@code ResponseType.JSON} tools/call response, holding the JSON-case
+     * logic extracted verbatim from {@link #handleToolCall}: a user signal is merged in
+     * as a {@code userSignal} field; plain-text mode delivers the payload as text; the
+     * structuredContent capability gate suppresses structured content only when the
+     * client explicitly opted out (default keeps it). Returns the same response in the
+     * same case as the original inline {@code JSON} branch.
+     *
+     * @param tool the resolved tool (its name is used for the JSON response)
+     * @param result the raw JSON tool result payload
+     * @param signal a user signal raised during execution, or {@code null}
+     * @param plainTextMode whether Cursor-compatible plain-text mode is enabled
+     * @param requestId the JSON-RPC request id to echo
+     * @return the serialized JSON-RPC response
+     */
+    private String buildJsonToolResponse(IMcpTool tool, String result, UserSignal signal,
+        boolean plainTextMode, Object requestId)
+    {
+        // For JSON, add signal as a separate field if present
+        if (signal != null)
+        {
+            // Parse JSON and add userSignal field
+            result = addUserSignalToJson(result, signal);
+        }
+        // In plain text mode, return markdown as plain text instead of structured content
+        if (plainTextMode)
+        {
+            return buildToolCallTextResponse(result, requestId);
+        }
+        // Capability gate for structuredContent. By DEFAULT (no capabilities,
+        // or a client that does not explicitly opt out) this is true, so the
+        // structuredContent response below is emitted exactly as before — the
+        // no-regression guarantee. Only a client that EXPLICITLY declared it
+        // cannot accept structuredContent suppresses it; the JSON payload is
+        // then delivered as text so the data is still returned.
+        if (!clientCapabilities.get().allowsStructuredContent())
+        {
+            return buildToolCallTextResponse(result, requestId);
+        }
+        return buildToolCallJsonResponse(result, requestId, tool.getName());
     }
     
     /**

@@ -553,91 +553,23 @@ public class SymbolInfoService
 
         if (element instanceof Method)
         {
-            Method method = (Method) element;
-            boolean isFunction = element instanceof Function;
-
-            sb.append(codeCell(SYMBOL, method.getName()));
-            sb.append("| **Kind** | ").append(isFunction ? "Function" : "Procedure").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append(codeCell("Signature", BslModuleUtils.buildSignature(method))); //$NON-NLS-1$
-            sb.append("| **Export** | ").append(method.isExport() ? "Yes" : "No").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-            int startLine = BslModuleUtils.getStartLine(method);
-            int endLine = BslModuleUtils.getEndLine(method);
-            if (startLine > 0)
-            {
-                sb.append("| **Lines** | ").append(startLine); //$NON-NLS-1$
-                if (endLine > startLine)
-                {
-                    sb.append(" - ").append(endLine); //$NON-NLS-1$
-                }
-                sb.append(" |\n"); //$NON-NLS-1$
-            }
-
-            // Parameters
-            String params = BslModuleUtils.buildParamsString(method);
-            if (params != null && !params.isEmpty())
-            {
-                sb.append(cell("Parameters", params)); //$NON-NLS-1$
-            }
+            appendMethodInfo(sb, (Method) element);
         }
         else if (element instanceof FormalParam)
         {
-            FormalParam param = (FormalParam) element;
-            sb.append(codeCell(SYMBOL, param.getName()));
-            sb.append("| **Kind** | Parameter |\n"); //$NON-NLS-1$
-            sb.append("| **ByValue** | ").append(param.isByValue() ? "Yes" : "No").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-            // Show containing method
-            EObject container = param.eContainer();
-            if (container instanceof Method)
-            {
-                sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
-            }
+            appendFormalParamInfo(sb, (FormalParam) element);
         }
         else if (element instanceof StaticFeatureAccess)
         {
-            StaticFeatureAccess sfa = (StaticFeatureAccess) element;
-            sb.append(codeCell(SYMBOL, sfa.getName()));
-            sb.append("| **Kind** | StaticFeatureAccess |\n"); //$NON-NLS-1$
-            sb.append(cell(EMF_TYPE, sfa.eClass().getName()));
-
-            // Show containing method
-            EObject container = findContainingMethod(sfa);
-            if (container instanceof Method)
-            {
-                sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
-            }
+            appendStaticFeatureAccessInfo(sb, (StaticFeatureAccess) element);
         }
         else if (element instanceof DynamicFeatureAccess)
         {
-            DynamicFeatureAccess dfa = (DynamicFeatureAccess) element;
-            sb.append(codeCell(SYMBOL, dfa.getName()));
-            sb.append("| **Kind** | DynamicFeatureAccess |\n"); //$NON-NLS-1$
-            sb.append(cell(EMF_TYPE, dfa.eClass().getName()));
-
-            // Show containing method
-            EObject container = findContainingMethod(dfa);
-            if (container instanceof Method)
-            {
-                sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
-            }
+            appendDynamicFeatureAccessInfo(sb, (DynamicFeatureAccess) element);
         }
         else if (element instanceof Invocation)
         {
-            Invocation invocation = (Invocation) element;
-            sb.append("| **Kind** | Invocation |\n"); //$NON-NLS-1$
-            sb.append(cell(EMF_TYPE, invocation.eClass().getName()));
-
-            // Try to get the method name from the feature access
-            EObject methodAccess = invocation.getMethodAccess();
-            if (methodAccess instanceof StaticFeatureAccess)
-            {
-                sb.append(codeCell(SYMBOL, ((StaticFeatureAccess) methodAccess).getName()));
-            }
-            else if (methodAccess instanceof DynamicFeatureAccess)
-            {
-                sb.append(codeCell(SYMBOL, ((DynamicFeatureAccess) methodAccess).getName()));
-            }
+            appendInvocationInfo(sb, (Invocation) element);
         }
         else if (element instanceof Module)
         {
@@ -646,38 +578,161 @@ public class SymbolInfoService
         }
         else
         {
-            // Generic EObject info
-            sb.append(cell("Kind", element.eClass().getName())); //$NON-NLS-1$
-
-            // Try to get name via reflection
-            try
-            {
-                Object name = ReflectionUtils.invokeMethod(element, "getName"); //$NON-NLS-1$
-                if (name instanceof String && !((String) name).isEmpty())
-                {
-                    sb.append(codeCell(SYMBOL, (String) name));
-                }
-            }
-            catch (Exception e)
-            {
-                // No getName method — that's OK
-            }
-
-            // Show containing method
-            EObject container = findContainingMethod(element);
-            if (container instanceof Method)
-            {
-                sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
-            }
-
-            int startLine = BslModuleUtils.getStartLine(element);
-            if (startLine > 0)
-            {
-                sb.append("| **Line** | ").append(startLine).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            appendGenericInfo(sb, element);
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Appends the {@link Method}-specific rows (symbol, kind, signature, export,
+     * lines, parameters) to {@code sb}. Extracted verbatim from the
+     * {@code instanceof Method} branch of {@link #buildEObjectInfo}.
+     */
+    private void appendMethodInfo(StringBuilder sb, Method method)
+    {
+        boolean isFunction = method instanceof Function;
+
+        sb.append(codeCell(SYMBOL, method.getName()));
+        sb.append("| **Kind** | ").append(isFunction ? "Function" : "Procedure").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append(codeCell("Signature", BslModuleUtils.buildSignature(method))); //$NON-NLS-1$
+        sb.append("| **Export** | ").append(method.isExport() ? "Yes" : "No").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        int startLine = BslModuleUtils.getStartLine(method);
+        int endLine = BslModuleUtils.getEndLine(method);
+        if (startLine > 0)
+        {
+            sb.append("| **Lines** | ").append(startLine); //$NON-NLS-1$
+            if (endLine > startLine)
+            {
+                sb.append(" - ").append(endLine); //$NON-NLS-1$
+            }
+            sb.append(" |\n"); //$NON-NLS-1$
+        }
+
+        // Parameters
+        String params = BslModuleUtils.buildParamsString(method);
+        if (params != null && !params.isEmpty())
+        {
+            sb.append(cell("Parameters", params)); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Appends the {@link FormalParam}-specific rows (symbol, kind, by-value, containing
+     * method) to {@code sb}. Extracted verbatim from the {@code instanceof FormalParam}
+     * branch of {@link #buildEObjectInfo}.
+     */
+    private void appendFormalParamInfo(StringBuilder sb, FormalParam param)
+    {
+        sb.append(codeCell(SYMBOL, param.getName()));
+        sb.append("| **Kind** | Parameter |\n"); //$NON-NLS-1$
+        sb.append("| **ByValue** | ").append(param.isByValue() ? "Yes" : "No").append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        // Show containing method
+        EObject container = param.eContainer();
+        if (container instanceof Method)
+        {
+            sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
+        }
+    }
+
+    /**
+     * Appends the {@link StaticFeatureAccess}-specific rows (symbol, kind, EMF type,
+     * containing method) to {@code sb}. Extracted verbatim from the
+     * {@code instanceof StaticFeatureAccess} branch of {@link #buildEObjectInfo}.
+     */
+    private void appendStaticFeatureAccessInfo(StringBuilder sb, StaticFeatureAccess sfa)
+    {
+        sb.append(codeCell(SYMBOL, sfa.getName()));
+        sb.append("| **Kind** | StaticFeatureAccess |\n"); //$NON-NLS-1$
+        sb.append(cell(EMF_TYPE, sfa.eClass().getName()));
+
+        // Show containing method
+        EObject container = findContainingMethod(sfa);
+        if (container instanceof Method)
+        {
+            sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
+        }
+    }
+
+    /**
+     * Appends the {@link DynamicFeatureAccess}-specific rows (symbol, kind, EMF type,
+     * containing method) to {@code sb}. Extracted verbatim from the
+     * {@code instanceof DynamicFeatureAccess} branch of {@link #buildEObjectInfo}.
+     */
+    private void appendDynamicFeatureAccessInfo(StringBuilder sb, DynamicFeatureAccess dfa)
+    {
+        sb.append(codeCell(SYMBOL, dfa.getName()));
+        sb.append("| **Kind** | DynamicFeatureAccess |\n"); //$NON-NLS-1$
+        sb.append(cell(EMF_TYPE, dfa.eClass().getName()));
+
+        // Show containing method
+        EObject container = findContainingMethod(dfa);
+        if (container instanceof Method)
+        {
+            sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
+        }
+    }
+
+    /**
+     * Appends the {@link Invocation}-specific rows (kind, EMF type, and the invoked
+     * symbol name resolved from the method access) to {@code sb}. Extracted verbatim
+     * from the {@code instanceof Invocation} branch of {@link #buildEObjectInfo}.
+     */
+    private void appendInvocationInfo(StringBuilder sb, Invocation invocation)
+    {
+        sb.append("| **Kind** | Invocation |\n"); //$NON-NLS-1$
+        sb.append(cell(EMF_TYPE, invocation.eClass().getName()));
+
+        // Try to get the method name from the feature access
+        EObject methodAccess = invocation.getMethodAccess();
+        if (methodAccess instanceof StaticFeatureAccess)
+        {
+            sb.append(codeCell(SYMBOL, ((StaticFeatureAccess) methodAccess).getName()));
+        }
+        else if (methodAccess instanceof DynamicFeatureAccess)
+        {
+            sb.append(codeCell(SYMBOL, ((DynamicFeatureAccess) methodAccess).getName()));
+        }
+    }
+
+    /**
+     * Appends the generic-EObject rows (kind, reflective name, containing method,
+     * line) to {@code sb} for any element not matched by a specific branch. Extracted
+     * verbatim from the {@code else} branch of {@link #buildEObjectInfo}.
+     */
+    private void appendGenericInfo(StringBuilder sb, EObject element)
+    {
+        // Generic EObject info
+        sb.append(cell("Kind", element.eClass().getName())); //$NON-NLS-1$
+
+        // Try to get name via reflection
+        try
+        {
+            Object name = ReflectionUtils.invokeMethod(element, "getName"); //$NON-NLS-1$
+            if (name instanceof String && !((String) name).isEmpty())
+            {
+                sb.append(codeCell(SYMBOL, (String) name));
+            }
+        }
+        catch (Exception e)
+        {
+            // No getName method — that's OK
+        }
+
+        // Show containing method
+        EObject container = findContainingMethod(element);
+        if (container instanceof Method)
+        {
+            sb.append(codeCell(IN_METHOD, ((Method) container).getName()));
+        }
+
+        int startLine = BslModuleUtils.getStartLine(element);
+        if (startLine > 0)
+        {
+            sb.append("| **Line** | ").append(startLine).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 
     /**
