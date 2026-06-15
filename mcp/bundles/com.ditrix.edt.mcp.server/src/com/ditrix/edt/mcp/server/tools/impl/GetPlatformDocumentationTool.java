@@ -28,6 +28,9 @@ public class GetPlatformDocumentationTool implements IMcpTool
     private static final String CATEGORY_TYPE = "type"; //$NON-NLS-1$
     private static final String CATEGORY_BUILTIN = "builtin"; //$NON-NLS-1$
 
+    /** Input param: the platform type/builtin name to document. */
+    private static final String KEY_TYPE_NAME = "typeName"; //$NON-NLS-1$
+
     /** Member type constant */
     private static final String MEMBER_ALL = "all"; //$NON-NLS-1$
 
@@ -59,11 +62,11 @@ public class GetPlatformDocumentationTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("typeName", //$NON-NLS-1$
+            .stringProperty(KEY_TYPE_NAME,
                 "Type or symbol name, English or Russian (e.g. 'ValueTable').", true) //$NON-NLS-1$
             .enumProperty("category", //$NON-NLS-1$
                 "'type' (platform types) or 'builtin' (global functions). Default: 'type'.", //$NON-NLS-1$
-                "type", "builtin") //$NON-NLS-1$ //$NON-NLS-2$
+                CATEGORY_TYPE, CATEGORY_BUILTIN)
             .stringProperty("memberName", //$NON-NLS-1$
                 "Filter members by name, partial match (e.g. 'Add').") //$NON-NLS-1$
             .enumProperty("memberType", //$NON-NLS-1$
@@ -79,7 +82,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
             .enumProperty("responseFormat", //$NON-NLS-1$
                 "'concise' (default) = leaner: headers + member names only; " //$NON-NLS-1$
                 + "'detailed' = full member signatures, parameters, types and flags.", //$NON-NLS-1$
-                "concise", "detailed") //$NON-NLS-1$ //$NON-NLS-2$
+                FORMAT_CONCISE, FORMAT_DETAILED)
             .build();
     }
 
@@ -92,7 +95,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String typeName = JsonUtils.extractStringArgument(params, "typeName"); //$NON-NLS-1$
+        String typeName = JsonUtils.extractStringArgument(params, KEY_TYPE_NAME);
         if (typeName != null && !typeName.isEmpty())
         {
             return "doc-" + typeName.toLowerCase() + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -103,7 +106,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String typeName = JsonUtils.extractStringArgument(params, "typeName"); //$NON-NLS-1$
+        String typeName = JsonUtils.extractStringArgument(params, KEY_TYPE_NAME);
         String category = JsonUtils.extractStringArgument(params, "category"); //$NON-NLS-1$
         String memberName = JsonUtils.extractStringArgument(params, "memberName"); //$NON-NLS-1$
         String memberType = JsonUtils.extractStringArgument(params, "memberType"); //$NON-NLS-1$
@@ -116,7 +119,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
         boolean detailed = FORMAT_DETAILED.equalsIgnoreCase(responseFormat);
 
         // Validate required parameter
-        String err = JsonUtils.requireArgument(params, "typeName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, KEY_TYPE_NAME);
         if (err != null)
         {
             return err;
