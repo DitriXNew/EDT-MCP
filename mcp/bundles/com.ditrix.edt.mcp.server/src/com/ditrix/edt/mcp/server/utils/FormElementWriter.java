@@ -101,6 +101,7 @@ public final class FormElementWriter
     private static final String ECLASS_FORM_GROUP = "FormGroup"; //$NON-NLS-1$
     private static final String ECLASS_DECORATION = "Decoration"; //$NON-NLS-1$
     private static final String ECLASS_FORM_ITEM = "FormItem"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
     private static final String ECLASS_USUAL_GROUP_EXT_INFO = "UsualGroupExtInfo"; //$NON-NLS-1$
     private static final String ECLASS_LABEL_DECORATION_EXT_INFO = "LabelDecorationExtInfo"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
@@ -155,6 +156,10 @@ public final class FormElementWriter
     private static final String ELEM_BUTTON = "Button"; //$NON-NLS-1$
     /** The leading fragment of the "invalid event" error message. */
     private static final String ERR_EVENT_PREFIX = "Event '"; //$NON-NLS-1$
+    /** The leading fragment of the "item already exists" error message. */
+    private static final String ERR_ITEM_EXISTS = "Form item already exists: "; //$NON-NLS-1$
+    /** The legacy managed-form platform type name (swapped with {@code ClientApplicationForm}). */
+    private static final String TYPE_MANAGED_FORM = "ManagedForm"; //$NON-NLS-1$
 
     /** A supported form-element kind, resolved from a (bilingual) FQN kind token. */
     public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON }
@@ -390,7 +395,7 @@ public final class FormElementWriter
             return false;
         }
         String t = token.trim().toLowerCase();
-        return "handler".equals(t) || RU_HANDLER.equals(t); //$NON-NLS-1$
+        return FEATURE_HANDLER.equals(t) || RU_HANDLER.equals(t);
     }
 
     public static Kind kindForToken(String token)
@@ -400,7 +405,7 @@ public final class FormElementWriter
             return null;
         }
         String t = token.trim().toLowerCase();
-        if ("attribute".equals(t) || "attributes".equals(t) || RU_ATTRIBUTE.equals(t)) //$NON-NLS-1$ //$NON-NLS-2$
+        if ("attribute".equals(t) || FEATURE_ATTRIBUTES.equals(t) || RU_ATTRIBUTE.equals(t)) //$NON-NLS-1$
         {
             return Kind.ATTRIBUTE;
         }
@@ -408,7 +413,7 @@ public final class FormElementWriter
         {
             return Kind.COMMAND;
         }
-        if ("group".equals(t) || RU_GROUP.equals(t)) //$NON-NLS-1$
+        if (FEATURE_GROUP.equals(t) || RU_GROUP.equals(t))
         {
             return Kind.GROUP;
         }
@@ -850,10 +855,18 @@ public final class FormElementWriter
         }
         // Guard: the factory may not run in this environment (its injector may be absent), or a future
         // change may stop seeding the command bar. Ensure the render-critical element is present.
-        if (singleReference(content, FEATURE_AUTO_COMMAND_BAR) == null)
+        EObject autoCommandBar = singleReference(content, FEATURE_AUTO_COMMAND_BAR);
+        if (autoCommandBar == null)
         {
-            setSingleReference(content, FEATURE_AUTO_COMMAND_BAR,
-                createDefaultAutoCommandBar(content, russianAutoNames));
+            autoCommandBar = createDefaultAutoCommandBar(content, russianAutoNames);
+            setSingleReference(content, FEATURE_AUTO_COMMAND_BAR, autoCommandBar);
+        }
+        // The FormObjectFactory-built bar does NOT carry the id=-1 sentinel a form's own predefined
+        // command bar requires, so EDT validation flags it (form-invalid-item-id). Enforce id=-1 on
+        // the bar regardless of who created it (the fallback bar already set it; this is idempotent).
+        if (autoCommandBar != null)
+        {
+            setIntFeature(autoCommandBar, FEATURE_ID, -1);
         }
         applyFormDefaults(content, version);
         return content;
@@ -1099,7 +1112,7 @@ public final class FormElementWriter
     {
         if (findItem(formModel, name) != null)
         {
-            return "Form item already exists: " + name; //$NON-NLS-1$
+            return ERR_ITEM_EXISTS + name;
         }
         EObject container = containerFor(formModel, parentName);
         if (container == null)
@@ -1538,14 +1551,14 @@ public final class FormElementWriter
         }
         if (findItem(formModel, name) != null)
         {
-            return "Form item already exists: " + name; //$NON-NLS-1$
+            return ERR_ITEM_EXISTS + name;
         }
         EObject container = containerFor(formModel, parentName);
         if (container == null)
         {
             return parentNotFound(parentName);
         }
-        EObject item = createFromClassifier(formModel, "FormField"); //$NON-NLS-1$
+        EObject item = createFromClassifier(formModel, ECLASS_FORM_FIELD);
         if (item == null)
         {
             return "Cannot create a form field for this form model."; //$NON-NLS-1$
@@ -1614,7 +1627,7 @@ public final class FormElementWriter
         }
         if (findItem(formModel, name) != null)
         {
-            return "Form item already exists: " + name; //$NON-NLS-1$
+            return ERR_ITEM_EXISTS + name;
         }
         EObject container = containerFor(formModel, parentName);
         if (container == null)
@@ -2258,13 +2271,13 @@ public final class FormElementWriter
             return null;
         }
         EObject type = resolveType(provider, context, typeName);
-        if (type == null && "ManagedForm".equals(typeName)) //$NON-NLS-1$
+        if (type == null && TYPE_MANAGED_FORM.equals(typeName))
         {
             type = resolveType(provider, context, "ClientApplicationForm"); //$NON-NLS-1$
         }
         else if (type == null && "ClientApplicationForm".equals(typeName)) //$NON-NLS-1$
         {
-            type = resolveType(provider, context, "ManagedForm"); //$NON-NLS-1$
+            type = resolveType(provider, context, TYPE_MANAGED_FORM);
         }
         return type;
     }
@@ -2301,12 +2314,12 @@ public final class FormElementWriter
     {
         Map<String, String> m = new HashMap<>();
         // Element base types.
-        m.put("Form", "ManagedForm"); // modern: ClientApplicationForm (resolveTypeName swaps) //$NON-NLS-1$ //$NON-NLS-2$
-        m.put("Table", "FormTable"); //$NON-NLS-1$ //$NON-NLS-2$
-        m.put("Decoration", "FormDecoration"); //$NON-NLS-1$ //$NON-NLS-2$
-        m.put("FormField", "FormField"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Form", TYPE_MANAGED_FORM); // modern: ClientApplicationForm (resolveTypeName swaps) //$NON-NLS-1$
+        m.put(ECLASS_TABLE, "FormTable"); //$NON-NLS-1$
+        m.put(ECLASS_DECORATION, "FormDecoration"); //$NON-NLS-1$
+        m.put(ECLASS_FORM_FIELD, ECLASS_FORM_FIELD);
         m.put(ELEM_BUTTON, "FormButton"); //$NON-NLS-1$
-        m.put("FormGroup", "FormGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put(ECLASS_FORM_GROUP, ECLASS_FORM_GROUP);
         m.put("Addition", "FormItemAddition"); //$NON-NLS-1$ //$NON-NLS-2$
         // Form ext-infos.
         m.put("CatalogFormExtInfo", "ManagedFormExtensionForCatalogs"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2328,7 +2341,7 @@ public final class FormElementWriter
         m.put("CubeRecordSetFormExtInfo", "ManagedFormExtensionForExternalDataSourceCubeRecordSet"); //$NON-NLS-1$ //$NON-NLS-2$
         // Table / decoration ext-infos.
         m.put("DynamicListTableExtInfo", "FormTableExtensionForDynamicList"); //$NON-NLS-1$ //$NON-NLS-2$
-        m.put("LabelDecorationExtInfo", "FormDecorationExtensionForALabel"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put(ECLASS_LABEL_DECORATION_EXT_INFO, "FormDecorationExtensionForALabel"); //$NON-NLS-1$
         m.put("PictureDecorationExtInfo", "FormDecorationExtensionForAPicture"); //$NON-NLS-1$ //$NON-NLS-2$
         // Field ext-infos.
         m.put("LabelFieldExtInfo", "FormFieldExtensionForALabelField"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2357,7 +2370,7 @@ public final class FormElementWriter
         m.put("PageGroupExtInfo", "FormGroupExtensionForAPage"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("PopupGroupExtInfo", "FormGroupExtensionForAPopup"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("CommandBarExtInfo", "FormGroupExtensionForACommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
-        m.put("UsualGroupExtInfo", "FormGroupExtensionForAUsualGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put(ECLASS_USUAL_GROUP_EXT_INFO, "FormGroupExtensionForAUsualGroup"); //$NON-NLS-1$
         // Addition ext-infos.
         m.put("SearchStringAdditionExtInfo", "FormItemAdditionExtensionForSearchString"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("ViewStatusAdditionExtInfo", "FormItemAdditionExtensionForViewStatus"); //$NON-NLS-1$ //$NON-NLS-2$

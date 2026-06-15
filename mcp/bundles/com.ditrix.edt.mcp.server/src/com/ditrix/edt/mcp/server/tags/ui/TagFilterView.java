@@ -72,6 +72,9 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     /** Size of color icons for tags */
     private static final int COLOR_ICON_SIZE = 16;
+
+    /** Placeholder/tooltip text for the search field */
+    private static final String SEARCH_REGEX_HINT = "Search (regex)...";
     
     private TagService tagService;
     private IV8ProjectManager v8ProjectManager;
@@ -470,7 +473,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Search field
         searchText = new Text(group, SWT.BORDER | SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL);
-        searchText.setMessage("Search (regex)...");
+        searchText.setMessage(SEARCH_REGEX_HINT);
         GridData searchData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         searchText.setLayoutData(searchData);
         searchText.addModifyListener(e -> {
@@ -692,11 +695,11 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         String text = searchText.getText().trim();
         if (text.isEmpty()) {
             searchPattern = null;
-            searchText.setToolTipText("Search (regex)...");
+            searchText.setToolTipText(SEARCH_REGEX_HINT);
         } else {
             try {
                 searchPattern = Pattern.compile(text, Pattern.CASE_INSENSITIVE);
-                searchText.setToolTipText("Search (regex)...");
+                searchText.setToolTipText(SEARCH_REGEX_HINT);
             } catch (PatternSyntaxException e) {
                 // Invalid regex - show error in tooltip
                 searchText.setToolTipText("Invalid regex: " + e.getDescription());
@@ -973,9 +976,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     @Override
     public void onTagsChanged(IProject project) {
-        Display.getDefault().asyncExec(() -> {
-            refreshTagsTree();
-        });
+        Display.getDefault().asyncExec(() -> refreshTagsTree());
     }
     
     @Override

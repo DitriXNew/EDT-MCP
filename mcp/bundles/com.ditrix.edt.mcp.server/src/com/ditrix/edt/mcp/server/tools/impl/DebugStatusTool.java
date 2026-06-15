@@ -39,6 +39,8 @@ public class DebugStatusTool implements IMcpTool
 {
     public static final String NAME = "debug_status"; //$NON-NLS-1$
 
+    private static final String APPLICATION_ID = "applicationId"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -60,7 +62,7 @@ public class DebugStatusTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("applicationId", "Optional application id filter") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(APPLICATION_ID, "Optional application id filter") //$NON-NLS-1$
             .build();
     }
 
@@ -87,7 +89,7 @@ public class DebugStatusTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String filterAppId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
+        String filterAppId = JsonUtils.extractStringArgument(params, APPLICATION_ID);
 
         DebugSessionRegistry.get().ensureListenerRegistered();
 
@@ -119,7 +121,7 @@ public class DebugStatusTool implements IMcpTool
                 }
 
                 Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("applicationId", appId); //$NON-NLS-1$
+                entry.put(APPLICATION_ID, appId);
                 entry.put("mode", launch.getLaunchMode()); //$NON-NLS-1$
                 entry.put("debug", ILaunchManager.DEBUG_MODE.equals(launch.getLaunchMode())); //$NON-NLS-1$
 

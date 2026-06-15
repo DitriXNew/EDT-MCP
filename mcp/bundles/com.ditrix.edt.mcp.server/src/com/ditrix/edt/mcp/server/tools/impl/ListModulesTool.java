@@ -58,6 +58,10 @@ public class ListModulesTool implements IMcpTool
 
     private static final int MAX_RECURSION_DEPTH = 20;
 
+    private static final String MODULE_BSL = "Module.bsl"; //$NON-NLS-1$
+    private static final String MODULE = "Module"; //$NON-NLS-1$
+    private static final String CONFIGURATION = "Configuration"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -189,7 +193,7 @@ public class ListModulesTool implements IMcpTool
             case "commonmodules": //$NON-NLS-1$
                 collectSingleModuleType(project, modules, objectName, nameFilter,
                     config.getCommonModules(), CommonModule::getName,
-                    "CommonModules", "Module.bsl", "Module", "CommonModule"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    "CommonModules", MODULE_BSL, MODULE, "CommonModule"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "documents": //$NON-NLS-1$
                 collectMultiModuleType(project, modules, objectName, nameFilter,
@@ -244,17 +248,17 @@ public class ListModulesTool implements IMcpTool
             case "commonforms": //$NON-NLS-1$
                 collectSingleModuleType(project, modules, objectName, nameFilter,
                     config.getCommonForms(), CommonForm::getName,
-                    "CommonForms", "Module.bsl", "FormModule", "CommonForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    "CommonForms", MODULE_BSL, "FormModule", "CommonForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 break;
             case "webservices": //$NON-NLS-1$
                 collectSingleModuleType(project, modules, objectName, nameFilter,
                     config.getWebServices(), WebService::getName,
-                    "WebServices", "Module.bsl", "Module", "WebService"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    "WebServices", MODULE_BSL, MODULE, "WebService"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "httpservices": //$NON-NLS-1$
                 collectSingleModuleType(project, modules, objectName, nameFilter,
                     config.getHttpServices(), HTTPService::getName,
-                    "HTTPServices", "Module.bsl", "Module", "HTTPService"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    "HTTPServices", MODULE_BSL, MODULE, "HTTPService"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             default:
                 return ToolResult.error("Unknown metadata type: " + metadataType + //$NON-NLS-1$
@@ -386,10 +390,10 @@ public class ListModulesTool implements IMcpTool
                     String parentName;
                     String parentType;
 
-                    if ("Configuration".equals(collectionName)) //$NON-NLS-1$
+                    if (CONFIGURATION.equals(collectionName))
                     {
-                        parentName = "Configuration"; //$NON-NLS-1$
-                        parentType = "Configuration"; //$NON-NLS-1$
+                        parentName = CONFIGURATION;
+                        parentType = CONFIGURATION;
                     }
                     else
                     {
@@ -409,7 +413,7 @@ public class ListModulesTool implements IMcpTool
                         continue;
                     }
 
-                    String basePath = "Configuration".equals(collectionName) //$NON-NLS-1$
+                    String basePath = CONFIGURATION.equals(collectionName)
                         ? collectionName : collectionName + "/" + parentName; //$NON-NLS-1$
                     String moduleType = determineModuleType(modulePath, basePath);
 
@@ -529,13 +533,13 @@ public class ListModulesTool implements IMcpTool
             : fileName;
 
         // "Module.bsl" in Forms subfolder → FormModule
-        if ("Module".equals(baseName)) //$NON-NLS-1$
+        if (MODULE.equals(baseName))
         {
             if (relativePath.startsWith("Forms/")) //$NON-NLS-1$
             {
                 return "FormModule"; //$NON-NLS-1$
             }
-            return "Module"; //$NON-NLS-1$
+            return MODULE;
         }
 
         return baseName;

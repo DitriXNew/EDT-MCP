@@ -46,6 +46,8 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class InterceptionUtils
 {
+    private static final String VIA_SEPARATOR = "` via `"; //$NON-NLS-1$
+
     private InterceptionUtils()
     {
         // Utility class
@@ -138,7 +140,7 @@ public final class InterceptionUtils
                         Method baseMethod = entry.getValue();
                         String baseName = baseMethod != null ? baseMethod.getName() : pragmaTarget(entry.getKey());
                         lines.add("`" + safeName(method) + "` -> intercepts core method `" + baseName //$NON-NLS-1$ //$NON-NLS-2$
-                            + "` via `" + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
+                            + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$
                     }
                 }
             }
@@ -164,7 +166,7 @@ public final class InterceptionUtils
                                 Method baseMethod = entry.getValue();
                                 String baseName = baseMethod != null ? baseMethod.getName() : pragmaTarget(entry.getKey());
                                 lines.add("`" + baseName + "` <- intercepted by extension `" + extProject //$NON-NLS-1$ //$NON-NLS-2$
-                                    + "`: `" + safeName(extMethod) + "` via `" + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                                    + "`: `" + safeName(extMethod) + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
                             }
                         }
                     }
@@ -205,7 +207,7 @@ public final class InterceptionUtils
             Method baseMethod = entry.getValue();
             String baseName = baseMethod != null ? baseMethod.getName() : pragmaTarget(entry.getKey());
             lines.add("**Extension interception** — `" + safeName(extensionMethod) //$NON-NLS-1$
-                + "` intercepts core method `" + baseName + "` via `" + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "` intercepts core method `" + baseName + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -232,7 +234,7 @@ public final class InterceptionUtils
             for (Map.Entry<Pragma, Method> entry : hits.entrySet())
             {
                 lines.add("**Intercepted by extension** `" + extProject + "`: `" + safeName(entry.getValue()) //$NON-NLS-1$ //$NON-NLS-2$
-                    + "` via `" + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
+                    + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$
             }
         }
     }

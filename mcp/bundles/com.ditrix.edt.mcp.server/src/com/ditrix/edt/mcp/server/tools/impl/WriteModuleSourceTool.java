@@ -44,6 +44,15 @@ public class WriteModuleSourceTool implements IMcpTool
     private static final String MODE_APPEND = "append"; //$NON-NLS-1$
     private static final String MODE_SEARCH_REPLACE = "searchReplace"; //$NON-NLS-1$
 
+    private static final String PROJECT_NAME = "projectName"; //$NON-NLS-1$
+    private static final String MODULE_PATH = "modulePath"; //$NON-NLS-1$
+
+    private static final String MODULE_TYPE_MODULE = "Module"; //$NON-NLS-1$
+    private static final String MODULE_TYPE_OBJECT_MODULE = "ObjectModule"; //$NON-NLS-1$
+    private static final String MODULE_TYPE_COMMAND_MODULE = "CommandModule"; //$NON-NLS-1$
+
+    private static final String MODULE_FILE_SUFFIX = "/Module.bsl"; //$NON-NLS-1$
+
     /** Maximum source length to prevent accidental huge writes */
     private static final int MAX_SOURCE_LENGTH = 500_000;
 
@@ -71,9 +80,9 @@ public class WriteModuleSourceTool implements IMcpTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .stringProperty("projectName", //$NON-NLS-1$
+            .stringProperty(PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
-            .stringProperty("modulePath", //$NON-NLS-1$
+            .stringProperty(MODULE_PATH,
                 "src/-relative module path, e.g. 'CommonModules/MyModule/Module.bsl'. " + //$NON-NLS-1$
                 "Alternative to objectName (pass exactly one).") //$NON-NLS-1$
             .stringProperty("objectName", //$NON-NLS-1$
@@ -81,7 +90,7 @@ public class WriteModuleSourceTool implements IMcpTool
                 "Resolved with moduleType. Alternative to modulePath.") //$NON-NLS-1$
             .enumProperty("moduleType", //$NON-NLS-1$
                 "Module type for objectName resolution (default ObjectModule).", //$NON-NLS-1$
-                "ObjectModule", "ManagerModule", "FormModule", "CommandModule", "RecordSetModule", "Module") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                MODULE_TYPE_OBJECT_MODULE, "ManagerModule", "FormModule", MODULE_TYPE_COMMAND_MODULE, "RecordSetModule", MODULE_TYPE_MODULE) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .stringProperty("source", //$NON-NLS-1$
                 "BSL source to write (required): full file for replace, new fragment for " + //$NON-NLS-1$
                 "searchReplace, text to add for append.", true) //$NON-NLS-1$
@@ -89,7 +98,7 @@ public class WriteModuleSourceTool implements IMcpTool
                 "Fragment to find and replace; required for searchReplace, must match exactly once.") //$NON-NLS-1$
             .enumProperty("mode", //$NON-NLS-1$
                 "Write mode (default searchReplace).", //$NON-NLS-1$
-                "searchReplace", "replace", "append") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                MODE_SEARCH_REPLACE, MODE_REPLACE, MODE_APPEND)
             .stringProperty("formName", //$NON-NLS-1$
                 "Form name; required when moduleType=FormModule (e.g. 'ItemForm').") //$NON-NLS-1$
             .stringProperty("commandName", //$NON-NLS-1$
@@ -114,7 +123,7 @@ public class WriteModuleSourceTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String modulePath = JsonUtils.extractStringArgument(params, MODULE_PATH);
         if (modulePath != null && !modulePath.isEmpty())
         {
             String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -127,8 +136,8 @@ public class WriteModuleSourceTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         // 1. Extract parameters
-        String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
-        String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
+        String projectName = JsonUtils.extractStringArgument(params, PROJECT_NAME);
+        String modulePath = JsonUtils.extractStringArgument(params, MODULE_PATH);
         String objectName = JsonUtils.extractStringArgument(params, "objectName"); //$NON-NLS-1$
         String moduleType = JsonUtils.extractStringArgument(params, "moduleType"); //$NON-NLS-1$
         String source = JsonUtils.extractStringArgument(params, "source"); //$NON-NLS-1$
@@ -142,7 +151,7 @@ public class WriteModuleSourceTool implements IMcpTool
         String expectedHash = JsonUtils.extractStringArgument(params, "expectedHash"); //$NON-NLS-1$
 
         // 2. Validate required parameters
-        String err = JsonUtils.requireArgument(params, "projectName"); //$NON-NLS-1$
+        String err = JsonUtils.requireArgument(params, PROJECT_NAME);
         if (err != null)
         {
             return err;
@@ -374,8 +383,8 @@ public class WriteModuleSourceTool implements IMcpTool
             // 10. Build frontmatter
             FrontMatter fm = FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
-                .put("projectName", projectName) //$NON-NLS-1$
-                .put("modulePath", modulePath) //$NON-NLS-1$
+                .put(PROJECT_NAME, projectName)
+                .put(MODULE_PATH, modulePath)
                 .put("mode", mode) //$NON-NLS-1$
                 .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("linesAfter", newLines.size()) //$NON-NLS-1$
@@ -616,25 +625,25 @@ public class WriteModuleSourceTool implements IMcpTool
                 || "WebService".equals(englishType) //$NON-NLS-1$
                 || "HTTPService".equals(englishType)) //$NON-NLS-1$
             {
-                moduleType = "Module"; //$NON-NLS-1$
+                moduleType = MODULE_TYPE_MODULE;
             }
             else if ("CommonCommand".equals(englishType)) //$NON-NLS-1$
             {
-                moduleType = "CommandModule"; //$NON-NLS-1$
+                moduleType = MODULE_TYPE_COMMAND_MODULE;
             }
             else
             {
-                moduleType = "ObjectModule"; //$NON-NLS-1$
+                moduleType = MODULE_TYPE_OBJECT_MODULE;
             }
         }
 
         // Build path based on moduleType
         switch (moduleType)
         {
-            case "Module": //$NON-NLS-1$
-                return dirName + "/" + namePart + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
+            case MODULE_TYPE_MODULE:
+                return dirName + "/" + namePart + MODULE_FILE_SUFFIX; //$NON-NLS-1$
 
-            case "ObjectModule": //$NON-NLS-1$
+            case MODULE_TYPE_OBJECT_MODULE:
                 return dirName + "/" + namePart + "/ObjectModule.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
 
             case "ManagerModule": //$NON-NLS-1$
@@ -647,15 +656,15 @@ public class WriteModuleSourceTool implements IMcpTool
                 // CommonForms don't need formName — path is always Module.bsl
                 if ("CommonForm".equals(englishType)) //$NON-NLS-1$
                 {
-                    return dirName + "/" + namePart + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
+                    return dirName + "/" + namePart + MODULE_FILE_SUFFIX; //$NON-NLS-1$
                 }
                 if (formName == null || formName.isEmpty())
                 {
                     return ToolResult.error("formName is required when moduleType=FormModule").toJson(); //$NON-NLS-1$
                 }
-                return dirName + "/" + namePart + "/Forms/" + formName + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                return dirName + "/" + namePart + "/Forms/" + formName + MODULE_FILE_SUFFIX; //$NON-NLS-1$ //$NON-NLS-2$
 
-            case "CommandModule": //$NON-NLS-1$
+            case MODULE_TYPE_COMMAND_MODULE:
                 // CommonCommands don't need commandName — path is always CommandModule.bsl
                 if ("CommonCommand".equals(englishType)) //$NON-NLS-1$
                 {

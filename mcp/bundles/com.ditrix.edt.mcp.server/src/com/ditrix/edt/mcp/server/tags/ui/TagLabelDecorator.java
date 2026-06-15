@@ -120,9 +120,7 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
         
         if (!refreshPending) {
             refreshPending = true;
-            org.eclipse.swt.widgets.Display.getDefault().timerExec((int) REFRESH_DEBOUNCE_MS, () -> {
-                executeRefresh();
-            });
+            org.eclipse.swt.widgets.Display.getDefault().timerExec((int) REFRESH_DEBOUNCE_MS, () -> executeRefresh());
         }
     }
     
@@ -136,9 +134,7 @@ public class TagLabelDecorator implements ILightweightLabelDecorator, ITagChange
         
         if (elapsed < REFRESH_DEBOUNCE_MS) {
             // More requests came in, reschedule
-            org.eclipse.swt.widgets.Display.getDefault().timerExec((int) (REFRESH_DEBOUNCE_MS - elapsed), () -> {
-                executeRefresh();
-            });
+            org.eclipse.swt.widgets.Display.getDefault().timerExec((int) (REFRESH_DEBOUNCE_MS - elapsed), () -> executeRefresh());
         } else {
             // Debounce period passed, execute refresh
             refreshPending = false;

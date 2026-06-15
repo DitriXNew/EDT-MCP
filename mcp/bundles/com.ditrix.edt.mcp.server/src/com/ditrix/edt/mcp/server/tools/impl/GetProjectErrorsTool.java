@@ -514,11 +514,7 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return true;
         }
-        if (symbolicCheckId != null && symbolicCheckId.toLowerCase().contains(needle))
-        {
-            return true;
-        }
-        return false;
+        return symbolicCheckId != null && symbolicCheckId.toLowerCase().contains(needle);
     }
     
     /**
