@@ -250,7 +250,36 @@ public class PlatformDocumentationService
     {
         StringBuilder sb = new StringBuilder();
 
-        // Type header
+        appendTypeHeader(sb, type, useRussian);
+        appendTypeInfo(sb, type);
+        appendCollectionElementTypes(sb, type, useRussian);
+
+        int count = 0;
+        count = appendConstructorsSection(sb, type, memberType, limit, count, useRussian);
+
+        // Get context def for methods and properties
+        ContextDef contextDef = type.getContextDef();
+        if (contextDef != null)
+        {
+            count = appendMethodsSection(sb, contextDef, memberName, memberType, limit, count, useRussian);
+            count = appendPropertiesSection(sb, contextDef, memberName, memberType, limit, count, useRussian);
+        }
+
+        count = appendEventsSection(sb, type, memberName, memberType, limit, count, useRussian);
+
+        if (count >= limit)
+        {
+            sb.append("\n*Results limited to ").append(limit).append(" items.*\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Appends the type header line (localized name plus optional alternate name).
+     */
+    private void appendTypeHeader(StringBuilder sb, Type type, boolean useRussian)
+    {
         String displayName = useRussian ? type.getNameRu() : type.getName();
         String altName = useRussian ? type.getName() : type.getNameRu();
 
@@ -260,137 +289,187 @@ public class PlatformDocumentationService
             sb.append(" / ").append(altName); //$NON-NLS-1$
         }
         sb.append("\n\n"); //$NON-NLS-1$
+    }
 
-        // Type properties
+    /**
+     * Appends the "Type Info" block (iterable / index accessible / created by New flags).
+     */
+    private void appendTypeInfo(StringBuilder sb, Type type)
+    {
         sb.append("**Type Info:**\n"); //$NON-NLS-1$
         sb.append("- Iterable: ").append(type.isIterable() ? "Yes" : "No").append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         sb.append("- Index accessible: ").append(type.isIndexAccessible() ? "Yes" : "No").append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         sb.append("- Created by New: ").append(type.isCreatedByNewOperator() ? "Yes" : "No").append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
 
-        // Collection element types
+    /**
+     * Appends the "Collection element types" line, when the type exposes any.
+     */
+    private void appendCollectionElementTypes(StringBuilder sb, Type type, boolean useRussian)
+    {
         TypeContainer elementTypes = type.getCollectionElementTypes();
-        if (elementTypes != null)
+        if (elementTypes == null)
         {
-            EList<TypeItem> elemTypesList = elementTypes.allTypes();
-            if (elemTypesList != null && !elemTypesList.isEmpty())
+            return;
+        }
+        EList<TypeItem> elemTypesList = elementTypes.allTypes();
+        if (elemTypesList == null || elemTypesList.isEmpty())
+        {
+            return;
+        }
+        sb.append("**Collection element types:** "); //$NON-NLS-1$
+        List<String> typeNames = new ArrayList<>();
+        for (TypeItem elemType : elemTypesList)
+        {
+            String name = useRussian ? elemType.getNameRu() : elemType.getName();
+            if (name != null)
             {
-                sb.append("**Collection element types:** "); //$NON-NLS-1$
-                List<String> typeNames = new ArrayList<>();
-                for (TypeItem elemType : elemTypesList)
-                {
-                    String name = useRussian ? elemType.getNameRu() : elemType.getName();
-                    if (name != null)
-                    {
-                        typeNames.add(name);
-                    }
-                }
-                sb.append(String.join(", ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                typeNames.add(name);
             }
         }
+        sb.append(String.join(", ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 
-        int count = 0;
-
-        // Constructors
-        if (shouldIncludeMemberType(memberType, MEMBER_CONSTRUCTOR))
+    /**
+     * Appends the "Constructors" section, honoring the member-type filter and the
+     * running item limit. Returns the updated running item count.
+     */
+    private int appendConstructorsSection(StringBuilder sb, Type type, String memberType,
+                                          int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_CONSTRUCTOR))
         {
-            EList<Ctor> ctors = type.getCtors();
-            if (ctors != null && !ctors.isEmpty())
+            return count;
+        }
+        EList<Ctor> ctors = type.getCtors();
+        if (ctors == null || ctors.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Constructors\n\n"); //$NON-NLS-1$
+        for (int i = 0; i < ctors.size(); i++)
+        {
+            Ctor ctor = ctors.get(i);
+            if (count >= limit)
+                break;
+            appendCtorDocumentation(sb, ctor, i + 1, useRussian);
+            count++;
+        }
+        sb.append("\n"); //$NON-NLS-1$
+        return count;
+    }
+
+    /**
+     * Appends the "Methods" section, honoring the member-name/type filters and the
+     * running item limit. Returns the updated running item count.
+     */
+    private int appendMethodsSection(StringBuilder sb, ContextDef contextDef, String memberName,
+                                     String memberType, int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_METHOD))
+        {
+            return count;
+        }
+        EList<Method> methods = contextDef.allMethods();
+        if (methods == null || methods.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Methods\n\n"); //$NON-NLS-1$
+        for (Method method : methods)
+        {
+            if (count >= limit)
+                break;
+            String methodName = useRussian ? method.getNameRu() : method.getName();
+            if (memberNameMatches(methodName, method.getName(), method.getNameRu(), memberName))
             {
-                sb.append("## Constructors\n\n"); //$NON-NLS-1$
-                for (int i = 0; i < ctors.size(); i++)
-                {
-                    Ctor ctor = ctors.get(i);
-                    if (count >= limit)
-                        break;
-                    appendCtorDocumentation(sb, ctor, i + 1, useRussian);
-                    count++;
-                }
-                sb.append("\n"); //$NON-NLS-1$
+                appendMethodDocumentation(sb, method, useRussian);
+                count++;
             }
         }
+        sb.append("\n"); //$NON-NLS-1$
+        return count;
+    }
 
-        // Get context def for methods and properties
-        ContextDef contextDef = type.getContextDef();
-        if (contextDef != null)
+    /**
+     * Appends the "Properties" section, honoring the member-name/type filters and the
+     * running item limit. Returns the updated running item count.
+     */
+    private int appendPropertiesSection(StringBuilder sb, ContextDef contextDef, String memberName,
+                                        String memberType, int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_PROPERTY))
         {
-            // Methods
-            if (shouldIncludeMemberType(memberType, MEMBER_METHOD))
+            return count;
+        }
+        EList<Property> properties = contextDef.allProperties();
+        if (properties == null || properties.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Properties\n\n"); //$NON-NLS-1$
+        for (Property prop : properties)
+        {
+            if (count >= limit)
+                break;
+            String propName = useRussian ? prop.getNameRu() : prop.getName();
+            if (memberNameMatches(propName, prop.getName(), prop.getNameRu(), memberName))
             {
-                EList<Method> methods = contextDef.allMethods();
-                if (methods != null && !methods.isEmpty())
-                {
-                    sb.append("## Methods\n\n"); //$NON-NLS-1$
-                    for (Method method : methods)
-                    {
-                        if (count >= limit)
-                            break;
-                        String methodName = useRussian ? method.getNameRu() : method.getName();
-                        if (memberName == null || matchesMemberName(methodName, memberName) ||
-                            matchesMemberName(method.getName(), memberName) ||
-                            matchesMemberName(method.getNameRu(), memberName))
-                        {
-                            appendMethodDocumentation(sb, method, useRussian);
-                            count++;
-                        }
-                    }
-                    sb.append("\n"); //$NON-NLS-1$
-                }
-            }
-
-            // Properties
-            if (shouldIncludeMemberType(memberType, MEMBER_PROPERTY))
-            {
-                EList<Property> properties = contextDef.allProperties();
-                if (properties != null && !properties.isEmpty())
-                {
-                    sb.append("## Properties\n\n"); //$NON-NLS-1$
-                    for (Property prop : properties)
-                    {
-                        if (count >= limit)
-                            break;
-                        String propName = useRussian ? prop.getNameRu() : prop.getName();
-                        if (memberName == null || matchesMemberName(propName, memberName) ||
-                            matchesMemberName(prop.getName(), memberName) ||
-                            matchesMemberName(prop.getNameRu(), memberName))
-                        {
-                            appendPropertyDocumentation(sb, prop, useRussian);
-                            count++;
-                        }
-                    }
-                    sb.append("\n"); //$NON-NLS-1$
-                }
+                appendPropertyDocumentation(sb, prop, useRussian);
+                count++;
             }
         }
+        sb.append("\n"); //$NON-NLS-1$
+        return count;
+    }
 
-        // Events
-        if (shouldIncludeMemberType(memberType, MEMBER_EVENT))
+    /**
+     * Appends the "Events" section, honoring the member-name/type filters and the
+     * running item limit. Returns the updated running item count.
+     */
+    private int appendEventsSection(StringBuilder sb, Type type, String memberName,
+                                    String memberType, int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_EVENT))
         {
-            EList<Event> events = type.getEvents();
-            if (events != null && !events.isEmpty())
+            return count;
+        }
+        EList<Event> events = type.getEvents();
+        if (events == null || events.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Events\n\n"); //$NON-NLS-1$
+        for (Event event : events)
+        {
+            if (count >= limit)
+                break;
+            String eventName = useRussian ? event.getNameRu() : event.getName();
+            if (memberNameMatches(eventName, event.getName(), event.getNameRu(), memberName))
             {
-                sb.append("## Events\n\n"); //$NON-NLS-1$
-                for (Event event : events)
-                {
-                    if (count >= limit)
-                        break;
-                    String eventName = useRussian ? event.getNameRu() : event.getName();
-                    if (memberName == null || matchesMemberName(eventName, memberName) ||
-                        matchesMemberName(event.getName(), memberName) ||
-                        matchesMemberName(event.getNameRu(), memberName))
-                    {
-                        appendEventDocumentation(sb, event, useRussian);
-                        count++;
-                    }
-                }
+                appendEventDocumentation(sb, event, useRussian);
+                count++;
             }
         }
+        return count;
+    }
 
-        if (count >= limit)
-        {
-            sb.append("\n*Results limited to ").append(limit).append(" items.*\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        return sb.toString();
+    /**
+     * Tells whether a member should be emitted given the optional member-name filter.
+     * A {@code null} filter always matches; otherwise the filter is matched (case-insensitive,
+     * partial) against the localized name and the explicit English/Russian names, in that order.
+     *
+     * @param localizedName the name already resolved for the requested language
+     * @param enName the English name of the member
+     * @param ruName the Russian name of the member
+     * @param filter the optional member-name filter ({@code null} to accept all)
+     * @return {@code true} when the member passes the filter
+     */
+    private boolean memberNameMatches(String localizedName, String enName, String ruName, String filter)
+    {
+        return filter == null || matchesMemberName(localizedName, filter) ||
+            matchesMemberName(enName, filter) ||
+            matchesMemberName(ruName, filter);
     }
 
     /**
