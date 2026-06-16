@@ -418,52 +418,83 @@ public class TerminateLaunchTool implements IMcpTool
         }
         for (ILaunch launch : launches)
         {
-            // Live launches are the primary selection's job; the identity skip
-            // covers a launch that terminated between the two scans.
-            if (launch == null || !launch.isTerminated()
-                || containsIdentity(alreadySelected, launch))
+            if (matchesStaleSelection(launch, alreadySelected, configName, projectName,
+                applicationId, all, hasName, hasProject, hasAppId))
             {
-                continue;
-            }
-            ILaunchConfiguration config = launch.getLaunchConfiguration();
-            if (config == null || !LaunchConfigUtils.isEdtConfig(config))
-            {
-                continue;
-            }
-            if (hasName)
-            {
-                if (configName.equals(config.getName()))
-                {
-                    stale.add(launch);
-                }
-                continue;
-            }
-            if (hasProject && hasAppId)
-            {
-                String project = LaunchConfigUtils.readAttribute(config,
-                    LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-                if (projectName.equals(project)
-                    && applicationId.equals(LaunchConfigUtils.getApplicationIdFor(launch)))
-                {
-                    stale.add(launch);
-                }
-                continue;
-            }
-            if (all)
-            {
-                if (hasProject)
-                {
-                    String project = LaunchConfigUtils.readAttribute(config,
-                        LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-                    if (!projectName.equals(project))
-                    {
-                        continue;
-                    }
-                }
                 stale.add(launch);
             }
         }
         return stale;
+    }
+
+    /**
+     * Decides whether a single launch belongs to the stale-terminated selection,
+     * applying exactly the same skip/match logic as the in-loop body it was
+     * extracted from (terminated + EDT-config gate, then config name / project +
+     * applicationId / all scope). Pure predicate: reads the launch and the
+     * selection criteria, never mutates anything.
+     *
+     * @param launch          candidate launch (may be {@code null})
+     * @param alreadySelected launches the live selection already picked
+     * @return {@code true} if the launch should be added to the stale list
+     */
+    private static boolean matchesStaleSelection(ILaunch launch, List<ILaunch> alreadySelected,
+            String configName, String projectName, String applicationId, boolean all,
+            boolean hasName, boolean hasProject, boolean hasAppId)
+    {
+        // Live launches are the primary selection's job; the identity skip
+        // covers a launch that terminated between the two scans.
+        if (launch == null || !launch.isTerminated()
+            || containsIdentity(alreadySelected, launch))
+        {
+            return false;
+        }
+        ILaunchConfiguration config = launch.getLaunchConfiguration();
+        if (config == null || !LaunchConfigUtils.isEdtConfig(config))
+        {
+            return false;
+        }
+        if (hasName)
+        {
+            return configName.equals(config.getName());
+        }
+        if (hasProject && hasAppId)
+        {
+            String project = LaunchConfigUtils.readAttribute(config,
+                LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            return projectName.equals(project)
+                && applicationId.equals(LaunchConfigUtils.getApplicationIdFor(launch));
+        }
+        if (all)
+        {
+            return matchesAllScope(config, projectName, hasProject);
+        }
+        return false;
+    }
+
+    /**
+     * The {@code all}-scope branch of {@link #matchesStaleSelection}: with no name
+     * and no project+applicationId narrowing, every EDT launch matches, optionally
+     * restricted to a single project when {@code hasProject} is set.
+     *
+     * @param config      the launch configuration (non-{@code null})
+     * @param projectName project to restrict to when {@code hasProject}
+     * @param hasProject  whether the project narrowing applies
+     * @return {@code true} if the launch matches the all-scope
+     */
+    private static boolean matchesAllScope(ILaunchConfiguration config, String projectName,
+            boolean hasProject)
+    {
+        if (hasProject)
+        {
+            String project = LaunchConfigUtils.readAttribute(config,
+                LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            if (!projectName.equals(project))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Identity-based contains — {@link ILaunch} has no value equality. */

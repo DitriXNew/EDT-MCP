@@ -151,68 +151,7 @@ public class MetadataRenameService
         // Phase 1: collect all changes and problems
         List<ChangePoint> allChanges = new ArrayList<>();
         List<String> allProblems = new ArrayList<>();
-        int[] indexCounter = {0};
-
-        for (IRefactoring refactoring : refactorings)
-        {
-            String title = refactoring.getTitle();
-
-            Collection<IRefactoringItem> items = refactoring.getItems();
-            if (items != null)
-            {
-                for (IRefactoringItem item : items)
-                {
-                    if (item instanceof INativeChangeRefactoringItem nativeItem)
-                    {
-                        Change nativeChange = nativeItem.getNativeChange();
-                        if (nativeChange != null)
-                        {
-                            collectFlatChanges(nativeChange, null, null, exactMatches, allChanges, indexCounter, title,
-                                item.isOptional(), oldName);
-                        }
-                    }
-                    else
-                    {
-                        allChanges.add(new ChangePoint(
-                            indexCounter[0]++, "rename", null, null, //$NON-NLS-1$
-                            item.getName(), item.isOptional(), item.isChecked(), title));
-                    }
-                }
-            }
-
-            RefactoringStatus status = refactoring.getStatus();
-            if (status != null)
-            {
-                Collection<IRefactoringProblem> problems = status.getProblems();
-                if (problems != null)
-                {
-                    for (IRefactoringProblem problem : problems)
-                    {
-                        StringBuilder pb = new StringBuilder();
-                        if (problem instanceof CleanReferenceProblem crp)
-                        {
-                            org.eclipse.emf.ecore.EObject refObj = crp.getReferencingObject();
-                            if (refObj instanceof IBmObject bmObj)
-                            {
-                                pb.append(bmObj.bmGetFqn());
-                            }
-                            org.eclipse.emf.ecore.EStructuralFeature feat = crp.getReference();
-                            if (feat != null)
-                            {
-                                pb.append(" \u2192 ").append(feat.getName()); //$NON-NLS-1$
-                            }
-                        }
-                        org.eclipse.emf.ecore.EObject obj = problem.getObject();
-                        if (obj instanceof IBmObject bmObj)
-                        {
-                            if (pb.length() > 0) pb.append(" | "); //$NON-NLS-1$
-                            pb.append(bmObj.bmGetFqn());
-                        }
-                        allProblems.add(pb.toString());
-                    }
-                }
-            }
-        }
+        collectChangesAndProblems(refactorings, exactMatches, oldName, allChanges, allProblems);
 
         applyEdtBslPreviewData(allChanges, edtBslPreviewChanges);
 
@@ -221,6 +160,117 @@ public class MetadataRenameService
 
         // Phase 2: build markdown with YAML frontmatter
         StringBuilder sb = new StringBuilder();
+        appendFrontmatter(sb, objectFqn, newName, allChanges, allProblems, exactMatches, enabledCount, shown);
+        appendChangePointsTable(sb, allChanges, shown);
+        appendCodeContext(sb, allChanges, shown);
+        appendProblemsSection(sb, allProblems);
+        appendFooter(sb);
+
+        return sb.toString();
+    }
+
+    /**
+     * Phase 1 of the preview: walks every refactoring, flattening its items into change points and
+     * accumulating its status problems, preserving the original collection (and index) ordering.
+     */
+    private void collectChangesAndProblems(Collection<IRefactoring> refactorings,
+        Map<String, ExactMatchInfo> exactMatches, String oldName, List<ChangePoint> allChanges,
+        List<String> allProblems)
+    {
+        int[] indexCounter = {0};
+        for (IRefactoring refactoring : refactorings)
+        {
+            String title = refactoring.getTitle();
+            collectRefactoringItems(refactoring, title, exactMatches, oldName, allChanges, indexCounter);
+            collectRefactoringProblems(refactoring, allProblems);
+        }
+    }
+
+    /**
+     * Flattens one refactoring's items into change points: native items recurse through the LTK change
+     * tree, while plain rename items each consume one global index. Preserves the original ordering.
+     */
+    private void collectRefactoringItems(IRefactoring refactoring, String title,
+        Map<String, ExactMatchInfo> exactMatches, String oldName, List<ChangePoint> allChanges, int[] indexCounter)
+    {
+        Collection<IRefactoringItem> items = refactoring.getItems();
+        if (items == null)
+        {
+            return;
+        }
+        for (IRefactoringItem item : items)
+        {
+            if (item instanceof INativeChangeRefactoringItem nativeItem)
+            {
+                Change nativeChange = nativeItem.getNativeChange();
+                if (nativeChange != null)
+                {
+                    collectFlatChanges(nativeChange, null, null, exactMatches, allChanges, indexCounter, title,
+                        item.isOptional(), oldName);
+                }
+            }
+            else
+            {
+                allChanges.add(new ChangePoint(
+                    indexCounter[0]++, "rename", null, null, //$NON-NLS-1$
+                    item.getName(), item.isOptional(), item.isChecked(), title));
+            }
+        }
+    }
+
+    /** Appends one formatted problem line per problem in the refactoring's status (if any). */
+    private void collectRefactoringProblems(IRefactoring refactoring, List<String> allProblems)
+    {
+        RefactoringStatus status = refactoring.getStatus();
+        if (status == null)
+        {
+            return;
+        }
+        Collection<IRefactoringProblem> problems = status.getProblems();
+        if (problems == null)
+        {
+            return;
+        }
+        for (IRefactoringProblem problem : problems)
+        {
+            allProblems.add(formatProblem(problem));
+        }
+    }
+
+    /**
+     * Formats a single refactoring problem as a one-line string: clean-reference source/feature
+     * (when applicable) joined with the problem object's FQN, matching the original rendering.
+     */
+    private static String formatProblem(IRefactoringProblem problem)
+    {
+        StringBuilder pb = new StringBuilder();
+        if (problem instanceof CleanReferenceProblem crp)
+        {
+            org.eclipse.emf.ecore.EObject refObj = crp.getReferencingObject();
+            if (refObj instanceof IBmObject bmObj)
+            {
+                pb.append(bmObj.bmGetFqn());
+            }
+            org.eclipse.emf.ecore.EStructuralFeature feat = crp.getReference();
+            if (feat != null)
+            {
+                pb.append(" \u2192 ").append(feat.getName()); //$NON-NLS-1$
+            }
+        }
+        org.eclipse.emf.ecore.EObject obj = problem.getObject();
+        if (obj instanceof IBmObject bmObj)
+        {
+            if (pb.length() > 0) pb.append(" | "); //$NON-NLS-1$
+            pb.append(bmObj.bmGetFqn());
+        }
+        return pb.toString();
+    }
+
+    /** Appends the YAML frontmatter, title, totals and (when truncated) the "showing N of M" note. */
+    private void appendFrontmatter(StringBuilder sb, String objectFqn, String newName,
+        List<ChangePoint> allChanges, List<String> allProblems, Map<String, ExactMatchInfo> exactMatches,
+        long enabledCount, int shown)
+    {
         sb.append("---\n"); //$NON-NLS-1$
         sb.append("action: preview\n"); //$NON-NLS-1$
         sb.append("objectFqn: ").append(objectFqn).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -243,31 +293,17 @@ public class MetadataRenameService
               .append(" changes. Pass `maxResults=").append(allChanges.size()) //$NON-NLS-1$
               .append("` to see all._\n\n"); //$NON-NLS-1$
         }
+    }
 
-        // Change points table
+    /** Appends the change-points markdown table (header, the first {@code shown} rows, and the overflow row). */
+    private void appendChangePointsTable(StringBuilder sb, List<ChangePoint> allChanges, int shown)
+    {
         sb.append("## Change Points\n\n"); //$NON-NLS-1$
                 sb.append("| # | Type | Description | Line | Col | Default | Skippable | Project | FQN |\n"); //$NON-NLS-1$
                 sb.append("|---|------|-------------|------|-----|---------|-----------|---------|-----|\n"); //$NON-NLS-1$
         for (int i = 0; i < shown; i++)
         {
-            ChangePoint cp = allChanges.get(i);
-            String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$
-            String optionalMark = cp.optional ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
-            String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : DASH;
-            String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : DASH;
-            String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : DASH;
-                        String column = cp.columnNumber > 0 ? String.valueOf(cp.columnNumber) : DASH;
-            String description = cp.description != null ? escapeMarkdownCell(cp.description) : DASH;
-            sb.append("| ").append(cp.index) //$NON-NLS-1$
-              .append(" | ").append(cp.type) //$NON-NLS-1$
-              .append(" | ").append(description) //$NON-NLS-1$
-              .append(" | ").append(line) //$NON-NLS-1$
-                            .append(" | ").append(column) //$NON-NLS-1$
-              .append(" | ").append(enabledMark) //$NON-NLS-1$
-              .append(" | ").append(optionalMark) //$NON-NLS-1$
-              .append(" | ").append(projectCell) //$NON-NLS-1$
-              .append(" | ").append(fqnCell) //$NON-NLS-1$
-              .append(" |\n"); //$NON-NLS-1$
+            appendChangePointRow(sb, allChanges.get(i));
         }
         if (allChanges.size() > shown)
         {
@@ -275,8 +311,36 @@ public class MetadataRenameService
               .append(" more_ |\n"); //$NON-NLS-1$
         }
         sb.append("\n"); //$NON-NLS-1$
+    }
 
-        // Code context section
+    /** Appends one markdown table row for a single change point, rendering empty cells as an em dash. */
+    private void appendChangePointRow(StringBuilder sb, ChangePoint cp)
+    {
+        String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$
+        String optionalMark = cp.optional ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
+        String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : DASH;
+        String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : DASH;
+        String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : DASH;
+                    String column = cp.columnNumber > 0 ? String.valueOf(cp.columnNumber) : DASH;
+        String description = cp.description != null ? escapeMarkdownCell(cp.description) : DASH;
+        sb.append("| ").append(cp.index) //$NON-NLS-1$
+          .append(" | ").append(cp.type) //$NON-NLS-1$
+          .append(" | ").append(description) //$NON-NLS-1$
+          .append(" | ").append(line) //$NON-NLS-1$
+                        .append(" | ").append(column) //$NON-NLS-1$
+          .append(" | ").append(enabledMark) //$NON-NLS-1$
+          .append(" | ").append(optionalMark) //$NON-NLS-1$
+          .append(" | ").append(projectCell) //$NON-NLS-1$
+          .append(" | ").append(fqnCell) //$NON-NLS-1$
+          .append(" |\n"); //$NON-NLS-1$
+    }
+
+    /**
+     * Appends the code-context section (one block per shown change point that carries a snippet),
+     * but only when at least one of the shown change points actually has a code context.
+     */
+    private void appendCodeContext(StringBuilder sb, List<ChangePoint> allChanges, int shown)
+    {
         boolean hasContext = false;
         for (int i = 0; i < shown; i++)
         {
@@ -286,40 +350,47 @@ public class MetadataRenameService
                 break;
             }
         }
-        if (hasContext)
+        if (!hasContext)
         {
-            sb.append("## Code Context\n\n"); //$NON-NLS-1$
-            for (int i = 0; i < shown; i++)
-            {
-                ChangePoint cp = allChanges.get(i);
-                if (cp.codeContext == null)
-                    continue;
-                sb.append("### #").append(cp.index); //$NON-NLS-1$
-                if (cp.methodName != null)
-                    sb.append(" \u2014 `").append(escapeMarkdownCell(cp.methodName)).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
-                if (cp.fqn != null && cp.lineNumber > 0)
-                    sb.append(" \u00b7 ").append(escapeMarkdownCell(cp.fqn)) //$NON-NLS-1$
-                      .append(":").append(cp.lineNumber); //$NON-NLS-1$
-                sb.append("\n```bsl\n").append(cp.codeContext).append("```\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            return;
         }
-
-        // Problems section
-        if (!allProblems.isEmpty())
+        sb.append("## Code Context\n\n"); //$NON-NLS-1$
+        for (int i = 0; i < shown; i++)
         {
-            sb.append("## Problems\n\n"); //$NON-NLS-1$
-            for (String p : allProblems)
-            {
-                sb.append("- ").append(p).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            sb.append("\n"); //$NON-NLS-1$
+            ChangePoint cp = allChanges.get(i);
+            if (cp.codeContext == null)
+                continue;
+            sb.append("### #").append(cp.index); //$NON-NLS-1$
+            if (cp.methodName != null)
+                sb.append(" \u2014 `").append(escapeMarkdownCell(cp.methodName)).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (cp.fqn != null && cp.lineNumber > 0)
+                sb.append(" \u00b7 ").append(escapeMarkdownCell(cp.fqn)) //$NON-NLS-1$
+                  .append(":").append(cp.lineNumber); //$NON-NLS-1$
+            sb.append("\n```bsl\n").append(cp.codeContext).append("```\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
+    }
 
+    /** Appends the problems section (one bullet per problem) when any problems were collected. */
+    private void appendProblemsSection(StringBuilder sb, List<String> allProblems)
+    {
+        if (allProblems.isEmpty())
+        {
+            return;
+        }
+        sb.append("## Problems\n\n"); //$NON-NLS-1$
+        for (String p : allProblems)
+        {
+            sb.append("- ").append(p).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        sb.append("\n"); //$NON-NLS-1$
+    }
+
+    /** Appends the trailing usage hint (confirm/disableIndices) shared by every preview. */
+    private void appendFooter(StringBuilder sb)
+    {
         sb.append("> To execute, call with `confirm=true`.\n"); //$NON-NLS-1$
         sb.append("> Use `disableIndices='1,2,3'` to skip change points by their `#` index " //$NON-NLS-1$
             + "(optional only; one index may span several context rows - skipping it skips them all).\n"); //$NON-NLS-1$
-
-        return sb.toString();
     }
 
     /** Simple data holder for a single change point in preview. */
@@ -393,6 +464,24 @@ public class MetadataRenameService
     }
 
     /**
+     * Mutable accumulator threaded through the per-leaf scan helpers so they can
+     * report back the resolved {@code fqn}/{@code project} (refined from the change
+     * itself) and whether they already added one or more change points for the leaf.
+     */
+    private static final class LeafScan
+    {
+        String fqn;
+        String project;
+        boolean addedFallbackChange;
+
+        LeafScan(String fqn, String project)
+        {
+            this.fqn = fqn;
+            this.project = project;
+        }
+    }
+
+    /**
      * Recursively collects leaf changes from LTK change tree into a flat list with global indices.
      * Extracts line number and code context (±3 lines + containing method) for TextChange leaves.
      */
@@ -411,161 +500,210 @@ public class MetadataRenameService
         }
         if (change instanceof CompositeChange composite)
         {
-            Change[] children = composite.getChildren();
-            if (children != null && children.length > 0)
-            {
-                for (Change child : children)
-                {
-                    collectFlatChanges(child, currentFqn, currentProject, exactMatches, result, indexCounter,
-                        refactoringTitle, optional, oldName);
-                }
-            }
+            recurseComposite(composite, currentFqn, currentProject, exactMatches, result, indexCounter,
+                refactoringTitle, optional, oldName);
         }
         else
         {
-            // One index per leaf change - this MUST match the leaf numbering in
-            // walkLeafChanges()/applyDisableToChange() so a preview index stays a
-            // stable cross-call handle for disableIndices. A leaf may render as
-            // several display rows (multiple exact matches / text edits) or none
-            // (suppressed), but it always consumes exactly one index. (card A2)
-            int leafIndex = indexCounter[0]++;
-            boolean hasExactMatches = exactMatches != null && !exactMatches.isEmpty();
-            boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
-            boolean isFullTextSearchChange = isFullTextSearchSourceFileChange(change);
-            boolean addedFallbackChange = false;
-            int lineNumber = -1;
-            int columnNumber = -1;
-            String codeContext = null;
-            String methodName = null;
-            String fqn = currentFqn;
-            String project = currentProject;
-            List<ExactMatchInfo> exactMatchInfos = findExactMatchInfos(change, exactMatches);
-            logPreviewMapping(change, fqn, project, exactMatchInfos.size());
-            if (!exactMatchInfos.isEmpty())
-            {
-                for (ExactMatchInfo exactMatch : exactMatchInfos)
-                {
-                    String exactFqn = exactMatch.fqn != null ? exactMatch.fqn : fqn;
-                    String exactProject = exactMatch.project != null ? exactMatch.project : project;
-                    result.add(new ChangePoint(
-                        leafIndex, BSL_REF, exactFqn, exactProject,
-                        change.getName(), optional, change.isEnabled(), refactoringTitle,
-                        exactMatch.lineNumber, exactMatch.columnNumber, exactMatch.codeContext, exactMatch.methodName));
-                }
-                return;
-            }
-            else if (change instanceof BmObjectTextContentChange<?> bmChange)
-            {
-                try
-                {
-                    project = bmChange.getProjectName();
-                    Object modifiedElement = bmChange.getModifiedElement();
-                    EObject bmObj = modifiedElement instanceof EObject ? (EObject) modifiedElement : null;
-                    if (modifiedElement instanceof IBmObject ibm)
-                    {
-                        fqn = ibm.bmGetFqn();
-                    }
-                    String content = bmChange.getCurrentContent(new NullProgressMonitor());
-                    TextEdit edit = bmChange.getEdit();
-                    if (content != null && !content.isEmpty() && edit != null)
-                    {
-                        List<TextEdit> leafEdits = getLeafEdits(edit);
-                        if (!leafEdits.isEmpty())
-                        {
-                            for (TextEdit leafEdit : leafEdits)
-                            {
-                                int matchedLineNumber = computeLineNumber(content, leafEdit.getOffset());
-                                int matchedColumnNumber = computeColumnNumber(content, leafEdit.getOffset());
-                                String matchedCodeContext = extractContext(content, matchedLineNumber);
-                                String matchedMethodName = null;
-                                if (bmObj instanceof Module module)
-                                {
-                                    matchedMethodName = findContainingMethodAst(module, matchedLineNumber);
-                                }
-                                if (matchedMethodName == null)
-                                {
-                                    matchedMethodName = findContainingMethodText(content, matchedLineNumber);
-                                }
-                                result.add(new ChangePoint(
-                                    leafIndex, BSL_REF, fqn, project,
-                                    change.getName(), optional, change.isEnabled(), refactoringTitle,
-                                    matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
-                            }
-                            addedFallbackChange = true;
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    Activator.logError("Error extracting BSL change location", e); //$NON-NLS-1$
-                }
-            }
-            else
-            {
-                try
-                {
-                    IFile file = getIFile(change);
-                    if (file != null)
-                    {
-                        project = file.getProject().getName();
-                        String resolvedFqn = getBslFqn(file);
-                        if (resolvedFqn != null && !resolvedFqn.isEmpty())
-                        {
-                            fqn = resolvedFqn;
-                        }
-                        String content = BslModuleUtils.readFileText(file);
-                        TextEdit edit = getChangeEdit(change);
-                        if (content != null && !content.isEmpty() && edit != null)
-                        {
-                            List<TextEdit> leafEdits = getLeafEdits(edit);
-                            if (!leafEdits.isEmpty())
-                            {
-                                Module module = BslModuleUtils.loadModule(file.getProject(), BslModuleUtils.extractModulePath(file.getFullPath().toString()));
-                                for (TextEdit leafEdit : leafEdits)
-                                {
-                                    int matchedLineNumber = computeLineNumber(content, leafEdit.getOffset());
-                                    int matchedColumnNumber = computeColumnNumber(content, leafEdit.getOffset());
-                                    String matchedCodeContext = extractContext(content, matchedLineNumber);
-                                    String matchedMethodName = null;
-                                    if (module != null)
-                                    {
-                                        matchedMethodName = findContainingMethodAst(module, matchedLineNumber);
-                                    }
-                                    if (matchedMethodName == null)
-                                    {
-                                        matchedMethodName = findContainingMethodText(content, matchedLineNumber);
-                                    }
-                                    result.add(new ChangePoint(
-                                        leafIndex, BSL_REF, fqn, project,
-                                        change.getName(), optional, change.isEnabled(), refactoringTitle,
-                                        matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
-                                }
-                                addedFallbackChange = true;
-                            }
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    Activator.logError("Error extracting source file change location", e); //$NON-NLS-1$
-                }
-            }
-
-            if (addedFallbackChange)
-            {
-                return;
-            }
-
-            if (hasExactMatches && isBslReferenceChange && isFullTextSearchChange)
-            {
-                return;
-            }
-
-            result.add(new ChangePoint(
-                indexCounter[0]++, BSL_REF, fqn, project,
-                change.getName(), optional, change.isEnabled(), refactoringTitle,
-                lineNumber, columnNumber, codeContext, methodName));
+            collectLeafChange(change, currentFqn, currentProject, exactMatches, result, indexCounter,
+                refactoringTitle, optional);
         }
+    }
+
+    /** Recurses into the children of a composite change, preserving the inherited fqn/project context. */
+    private void recurseComposite(CompositeChange composite, String currentFqn, String currentProject,
+        Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
+        String refactoringTitle, boolean optional, String oldName)
+    {
+        Change[] children = composite.getChildren();
+        if (children != null && children.length > 0)
+        {
+            for (Change child : children)
+            {
+                collectFlatChanges(child, currentFqn, currentProject, exactMatches, result, indexCounter,
+                    refactoringTitle, optional, oldName);
+            }
+        }
+    }
+
+    /**
+     * Handles a single leaf (non-composite) change: consumes exactly one global index, then renders
+     * either the exact-match rows, the BSL/source extracted rows, or the bare fallback row. Mirrors
+     * the leaf numbering of {@link #walkLeafChanges} so a preview {@code #index} stays a stable handle.
+     */
+    private void collectLeafChange(Change change, String currentFqn, String currentProject,
+        Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
+        String refactoringTitle, boolean optional)
+    {
+        // One index per leaf change - this MUST match the leaf numbering in
+        // walkLeafChanges()/applyDisableToChange() so a preview index stays a
+        // stable cross-call handle for disableIndices. A leaf may render as
+        // several display rows (multiple exact matches / text edits) or none
+        // (suppressed), but it always consumes exactly one index. (card A2)
+        int leafIndex = indexCounter[0]++;
+        boolean hasExactMatches = exactMatches != null && !exactMatches.isEmpty();
+        boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
+        boolean isFullTextSearchChange = isFullTextSearchSourceFileChange(change);
+        LeafScan scan = new LeafScan(currentFqn, currentProject);
+        List<ExactMatchInfo> exactMatchInfos = findExactMatchInfos(change, exactMatches);
+        logPreviewMapping(change, scan.fqn, scan.project, exactMatchInfos.size());
+        if (!exactMatchInfos.isEmpty())
+        {
+            addExactMatchChangePoints(change, leafIndex, scan, exactMatchInfos, result, refactoringTitle, optional);
+            return;
+        }
+        else if (change instanceof BmObjectTextContentChange<?> bmChange)
+        {
+            scanBmTextContentChange(change, bmChange, leafIndex, scan, result, refactoringTitle, optional);
+        }
+        else
+        {
+            scanSourceFileChange(change, leafIndex, scan, result, refactoringTitle, optional);
+        }
+
+        if (scan.addedFallbackChange)
+        {
+            return;
+        }
+
+        if (hasExactMatches && isBslReferenceChange && isFullTextSearchChange)
+        {
+            return;
+        }
+
+        result.add(new ChangePoint(
+            indexCounter[0]++, BSL_REF, scan.fqn, scan.project,
+            change.getName(), optional, change.isEnabled(), refactoringTitle,
+            -1, -1, null, null));
+    }
+
+    /** Emits one change point per resolved exact-match, defaulting fqn/project to the leaf context. */
+    private void addExactMatchChangePoints(Change change, int leafIndex, LeafScan scan,
+        List<ExactMatchInfo> exactMatchInfos, List<ChangePoint> result, String refactoringTitle, boolean optional)
+    {
+        for (ExactMatchInfo exactMatch : exactMatchInfos)
+        {
+            String exactFqn = exactMatch.fqn != null ? exactMatch.fqn : scan.fqn;
+            String exactProject = exactMatch.project != null ? exactMatch.project : scan.project;
+            result.add(new ChangePoint(
+                leafIndex, BSL_REF, exactFqn, exactProject,
+                change.getName(), optional, change.isEnabled(), refactoringTitle,
+                exactMatch.lineNumber, exactMatch.columnNumber, exactMatch.codeContext, exactMatch.methodName));
+        }
+    }
+
+    /**
+     * Extracts line/column/context for a BM model text-content change, refining scan.fqn/project and
+     * adding one change point per leaf edit. Swallows extraction errors exactly as before (logs only).
+     */
+    private void scanBmTextContentChange(Change change, BmObjectTextContentChange<?> bmChange, int leafIndex,
+        LeafScan scan, List<ChangePoint> result, String refactoringTitle, boolean optional)
+    {
+        try
+        {
+            scan.project = bmChange.getProjectName();
+            Object modifiedElement = bmChange.getModifiedElement();
+            EObject bmObj = modifiedElement instanceof EObject ? (EObject) modifiedElement : null;
+            if (modifiedElement instanceof IBmObject ibm)
+            {
+                scan.fqn = ibm.bmGetFqn();
+            }
+            String content = bmChange.getCurrentContent(new NullProgressMonitor());
+            TextEdit edit = bmChange.getEdit();
+            if (content != null && !content.isEmpty() && edit != null)
+            {
+                List<TextEdit> leafEdits = getLeafEdits(edit);
+                if (!leafEdits.isEmpty())
+                {
+                    Module module = bmObj instanceof Module bslModule ? bslModule : null;
+                    addLeafEditChangePoints(change, leafIndex, scan, leafEdits, content, module, result,
+                        refactoringTitle, optional);
+                    scan.addedFallbackChange = true;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error extracting BSL change location", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Extracts line/column/context for a source-file change, refining scan.fqn/project and adding one
+     * change point per leaf edit. Swallows extraction errors exactly as before (logs only).
+     */
+    private void scanSourceFileChange(Change change, int leafIndex, LeafScan scan, List<ChangePoint> result,
+        String refactoringTitle, boolean optional)
+    {
+        try
+        {
+            IFile file = getIFile(change);
+            if (file != null)
+            {
+                scan.project = file.getProject().getName();
+                String resolvedFqn = getBslFqn(file);
+                if (resolvedFqn != null && !resolvedFqn.isEmpty())
+                {
+                    scan.fqn = resolvedFqn;
+                }
+                String content = BslModuleUtils.readFileText(file);
+                TextEdit edit = getChangeEdit(change);
+                if (content != null && !content.isEmpty() && edit != null)
+                {
+                    List<TextEdit> leafEdits = getLeafEdits(edit);
+                    if (!leafEdits.isEmpty())
+                    {
+                        Module module = BslModuleUtils.loadModule(file.getProject(),
+                            BslModuleUtils.extractModulePath(file.getFullPath().toString()));
+                        addLeafEditChangePoints(change, leafIndex, scan, leafEdits, content, module, result,
+                            refactoringTitle, optional);
+                        scan.addedFallbackChange = true;
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error extracting source file change location", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Shared leaf-edit loop: for each edit computes line/column/context and the containing method, then
+     * appends a change point carrying the leaf's shared global index and the refined fqn/project.
+     */
+    private void addLeafEditChangePoints(Change change, int leafIndex, LeafScan scan, List<TextEdit> leafEdits,
+        String content, Module module, List<ChangePoint> result, String refactoringTitle, boolean optional)
+    {
+        for (TextEdit leafEdit : leafEdits)
+        {
+            int matchedLineNumber = computeLineNumber(content, leafEdit.getOffset());
+            int matchedColumnNumber = computeColumnNumber(content, leafEdit.getOffset());
+            String matchedCodeContext = extractContext(content, matchedLineNumber);
+            String matchedMethodName = resolveContainingMethod(module, content, matchedLineNumber);
+            result.add(new ChangePoint(
+                leafIndex, BSL_REF, scan.fqn, scan.project,
+                change.getName(), optional, change.isEnabled(), refactoringTitle,
+                matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
+        }
+    }
+
+    /**
+     * Resolves the containing method name for a line, preferring the BSL AST (when a module is
+     * available) and falling back to the regex-based text search, matching the original order.
+     */
+    private static String resolveContainingMethod(Module module, String content, int lineNumber)
+    {
+        String methodName = null;
+        if (module != null)
+        {
+            methodName = findContainingMethodAst(module, lineNumber);
+        }
+        if (methodName == null)
+        {
+            methodName = findContainingMethodText(content, lineNumber);
+        }
+        return methodName;
     }
 
     private Map<String, ExactMatchInfo> buildExactMatchInfo(IProject project, MdObject targetObject, String newName)
@@ -879,64 +1017,106 @@ public class MetadataRenameService
             Object modifiedElement = bmChange.getModifiedElement();
             if (modifiedElement instanceof IBmObject bmObject)
             {
-                EStructuralFeature feature = getBmChangeFeature(bmChange);
-                if (feature != null)
-                {
-                    for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
-                    {
-                        ExactMatchInfo info = exactMatches.get(getModelMatchKey(bmObject.bmGetId(), feature,
-                            leafEdit.getOffset(), leafEdit.getLength()));
-                        if (info != null)
-                        {
-                            matches.put(getExactMatchIdentity(info), info);
-                        }
-                    }
-                }
-
-                String projectName = bmChange.getProjectName();
-                String objectFqn = bmObject.bmGetFqn();
-                for (ExactMatchInfo info : exactMatches.values())
-                {
-                    if (info == null || info.filePath == null)
-                    {
-                        continue;
-                    }
-                    if (!Objects.equals(info.project, projectName) || !Objects.equals(info.fqn, objectFqn))
-                    {
-                        continue;
-                    }
-                    for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
-                    {
-                        if (containsOffset(leafEdit, info.matchOffset))
-                        {
-                            matches.put(getExactMatchIdentity(info), info);
-                            break;
-                        }
-                    }
-                }
+                collectBmChangeMatches(bmChange, bmObject, exactMatches, matches);
             }
         }
         IFile file = getIFile(change);
         TextEdit edit = getChangeEdit(change);
         if (file != null && edit != null)
         {
-            for (ExactMatchInfo info : exactMatches.values())
+            collectFileChangeMatches(file, edit, exactMatches, matches);
+        }
+        return new ArrayList<>(matches.values());
+    }
+
+    /**
+     * Collects the exact matches that belong to a {@link BmObjectTextContentChange}: model matches
+     * keyed by (object, feature, offset, length) and file-backed matches whose project / FQN equal the
+     * change's and whose offset falls inside one of the change's leaf edits. Pure lookup - adds the
+     * hits into {@code matches} keyed by their identity (no model mutation).
+     */
+    private void collectBmChangeMatches(BmObjectTextContentChange<?> bmChange, IBmObject bmObject,
+        Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
+    {
+        EStructuralFeature feature = getBmChangeFeature(bmChange);
+        if (feature != null)
+        {
+            collectBmModelKeyMatches(bmChange, bmObject, feature, exactMatches, matches);
+        }
+        collectBmFileOffsetMatches(bmChange, bmObject, exactMatches, matches);
+    }
+
+    /**
+     * Adds the file-backed exact matches whose (object, feature, offset, length) key equals a leaf edit
+     * of the BM change. Pure lookup - no model mutation.
+     */
+    private void collectBmModelKeyMatches(BmObjectTextContentChange<?> bmChange, IBmObject bmObject,
+        EStructuralFeature feature, Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
+    {
+        for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
+        {
+            ExactMatchInfo info = exactMatches.get(getModelMatchKey(bmObject.bmGetId(), feature,
+                leafEdit.getOffset(), leafEdit.getLength()));
+            if (info != null)
             {
-                if (info == null || info.filePath == null || !info.filePath.equals(file.getFullPath().toString()))
+                matches.put(getExactMatchIdentity(info), info);
+            }
+        }
+    }
+
+    /**
+     * Adds the file-backed exact matches whose project / FQN equal the BM change's and whose offset
+     * falls inside one of the change's leaf edits. Pure lookup - no model mutation.
+     */
+    private void collectBmFileOffsetMatches(BmObjectTextContentChange<?> bmChange, IBmObject bmObject,
+        Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
+    {
+        String projectName = bmChange.getProjectName();
+        String objectFqn = bmObject.bmGetFqn();
+        for (ExactMatchInfo info : exactMatches.values())
+        {
+            if (info == null || info.filePath == null)
+            {
+                continue;
+            }
+            if (!Objects.equals(info.project, projectName) || !Objects.equals(info.fqn, objectFqn))
+            {
+                continue;
+            }
+            for (TextEdit leafEdit : getLeafEdits(bmChange.getEdit()))
+            {
+                if (containsOffset(leafEdit, info.matchOffset))
                 {
-                    continue;
-                }
-                for (TextEdit leafEdit : getLeafEdits(edit))
-                {
-                    if (containsOffset(leafEdit, info.matchOffset))
-                    {
-                        matches.put(getExactMatchIdentity(info), info);
-                        break;
-                    }
+                    matches.put(getExactMatchIdentity(info), info);
+                    break;
                 }
             }
         }
-        return new ArrayList<>(matches.values());
+    }
+
+    /**
+     * Collects the exact matches that belong to a plain source-file change: file-backed matches whose
+     * path equals {@code file} and whose offset falls inside one of the change's leaf edits. Pure
+     * lookup - adds the hits into {@code matches} keyed by their identity (no model mutation).
+     */
+    private void collectFileChangeMatches(IFile file, TextEdit edit,
+        Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
+    {
+        for (ExactMatchInfo info : exactMatches.values())
+        {
+            if (info == null || info.filePath == null || !info.filePath.equals(file.getFullPath().toString()))
+            {
+                continue;
+            }
+            for (TextEdit leafEdit : getLeafEdits(edit))
+            {
+                if (containsOffset(leafEdit, info.matchOffset))
+                {
+                    matches.put(getExactMatchIdentity(info), info);
+                    break;
+                }
+            }
+        }
     }
 
     private void logPreviewMapping(Change change, String fqn, String project, int exactMatchesCount)

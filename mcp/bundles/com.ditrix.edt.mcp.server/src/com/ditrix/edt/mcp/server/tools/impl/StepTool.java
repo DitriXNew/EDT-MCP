@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
 
+import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IStep;
 import org.eclipse.debug.core.model.IThread;
@@ -135,22 +136,7 @@ public class StepTool implements IMcpTool
         // even when the session is keyed by its owning launch id, so clearSnapshot
         // cleared the wrong key and the caller's next wait_for_break returned the
         // surviving PRE-step snapshot.
-        String appId = registry.getThreadApplicationId(threadId);
-        if (appId == null)
-        {
-            // Fallback: the same canonical policy the resolver applies to every
-            // applicationId-based call (owning-launch id first, minted id else).
-            IDebugTarget owner = null;
-            try
-            {
-                owner = thread.getDebugTarget();
-            }
-            catch (Exception ex)
-            {
-                // best-effort
-            }
-            appId = DebugTargetResolver.canonicalIdFor(owner, serverTarget);
-        }
+        String appId = resolveApplicationId(registry, threadId, thread, serverTarget);
         if (appId == null)
         {
             return ToolResult.error("could not determine applicationId for thread").toJson(); //$NON-NLS-1$
@@ -162,32 +148,10 @@ public class StepTool implements IMcpTool
             // SUSPEND event after the step, not the stale pre-step snapshot.
             registry.clearSnapshot(appId);
 
-            switch (kind.toLowerCase())
+            String stepError = performStep(stepper, kind);
+            if (stepError != null)
             {
-                case "over": //$NON-NLS-1$
-                    if (!stepper.canStepOver())
-                    {
-                        return ToolResult.error("cannot step over").toJson(); //$NON-NLS-1$
-                    }
-                    stepper.stepOver();
-                    break;
-                case "into": //$NON-NLS-1$
-                    if (!stepper.canStepInto())
-                    {
-                        return ToolResult.error("cannot step into").toJson(); //$NON-NLS-1$
-                    }
-                    stepper.stepInto();
-                    break;
-                case "out": //$NON-NLS-1$
-                case "return": //$NON-NLS-1$
-                    if (!stepper.canStepReturn())
-                    {
-                        return ToolResult.error("cannot step out").toJson(); //$NON-NLS-1$
-                    }
-                    stepper.stepReturn();
-                    break;
-                default:
-                    return ToolResult.error("unknown kind: " + kind).toJson(); //$NON-NLS-1$
+                return stepError;
             }
 
             DebugSessionRegistry.SuspendSnapshot snapshot;
@@ -240,6 +204,71 @@ public class StepTool implements IMcpTool
             Activator.logError("Error in step", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Resolves the canonical applicationId for the stepped thread. The registry's
+     * thread&rarr;appId mapping is authoritative (it carries the key recorded when this
+     * threadId was registered); only when it is absent does this fall back to the same
+     * canonical policy the resolver applies to every applicationId-based call
+     * (owning-launch id first, minted id else). Returns {@code null} when undeterminable.
+     */
+    private static String resolveApplicationId(DebugSessionRegistry registry, long threadId,
+            IThread thread, DebugServerTargetSupport.ServerTarget serverTarget)
+    {
+        String appId = registry.getThreadApplicationId(threadId);
+        if (appId == null)
+        {
+            IDebugTarget owner = null;
+            try
+            {
+                owner = thread.getDebugTarget();
+            }
+            catch (Exception ex)
+            {
+                // best-effort
+            }
+            appId = DebugTargetResolver.canonicalIdFor(owner, serverTarget);
+        }
+        return appId;
+    }
+
+    /**
+     * Issues the requested step (over / into / out) on the suspended thread. Returns an
+     * error-response JSON string when the step cannot be performed (capability missing or
+     * unknown kind), or {@code null} when the step was issued successfully and the caller
+     * should proceed to wait for the next suspend.
+     */
+    private static String performStep(IStep stepper, String kind) throws DebugException
+    {
+        switch (kind.toLowerCase())
+        {
+            case "over": //$NON-NLS-1$
+                if (!stepper.canStepOver())
+                {
+                    return ToolResult.error("cannot step over").toJson(); //$NON-NLS-1$
+                }
+                stepper.stepOver();
+                break;
+            case "into": //$NON-NLS-1$
+                if (!stepper.canStepInto())
+                {
+                    return ToolResult.error("cannot step into").toJson(); //$NON-NLS-1$
+                }
+                stepper.stepInto();
+                break;
+            case "out": //$NON-NLS-1$
+            case "return": //$NON-NLS-1$
+                if (!stepper.canStepReturn())
+                {
+                    return ToolResult.error("cannot step out").toJson(); //$NON-NLS-1$
+                }
+                stepper.stepReturn();
+                break;
+            default:
+                return ToolResult.error("unknown kind: " + kind).toJson(); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**

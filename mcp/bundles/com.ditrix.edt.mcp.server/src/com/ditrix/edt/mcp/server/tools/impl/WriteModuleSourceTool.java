@@ -151,91 +151,24 @@ public class WriteModuleSourceTool implements IMcpTool
         String expectedHash = JsonUtils.extractStringArgument(params, "expectedHash"); //$NON-NLS-1$
 
         // 2. Validate required parameters
-        String err = JsonUtils.requireArgument(params, PROJECT_NAME);
-        if (err != null)
-        {
-            return err;
-        }
-        if (source == null)
-        {
-            return ToolResult.error("source is required").toJson(); //$NON-NLS-1$
-        }
-        if (source.length() > MAX_SOURCE_LENGTH)
-        {
-            return ToolResult.error("source exceeds maximum allowed length (" + MAX_SOURCE_LENGTH + " characters)").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        // Default mode
         if (mode == null || mode.isEmpty())
         {
             mode = MODE_SEARCH_REPLACE;
         }
-
-        // Validate mode
-        if (!MODE_REPLACE.equals(mode) && !MODE_APPEND.equals(mode)
-            && !MODE_SEARCH_REPLACE.equals(mode))
+        String argError = validateWriteArguments(params, source, mode, oldSource);
+        if (argError != null)
         {
-            return ToolResult.error("invalid mode '" + mode + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
-                "Allowed: searchReplace, replace, append").toJson(); //$NON-NLS-1$
+            return argError;
         }
 
-        // Validate oldSource for searchReplace mode
-        if (MODE_SEARCH_REPLACE.equals(mode))
+        // 3. Resolve the module target.
+        ModuleTargetResult target = resolveModuleTarget(modulePath, objectName, moduleType,
+            formName, commandName);
+        if (target.error != null)
         {
-            if (oldSource == null || oldSource.isEmpty())
-            {
-                return ToolResult.error("oldSource is required for searchReplace mode").toJson(); //$NON-NLS-1$
-            }
+            return target.error;
         }
-
-        // 3. Resolve the module target. modulePath and objectName form an exclusive
-        // OR (a flat Map schema cannot express XOR, so it is enforced here): exactly
-        // one must be given. moduleType is a decorator on the objectName path only —
-        // it is meaningless with an explicit modulePath, so flag it instead of
-        // silently ignoring it. formName/commandName are validated deeper in
-        // resolveModulePath (they depend on the resolved moduleType).
-        boolean hasModulePath = modulePath != null && !modulePath.isEmpty();
-        boolean hasObjectName = objectName != null && !objectName.isEmpty();
-        boolean hasModuleType = moduleType != null && !moduleType.isEmpty();
-
-        if (hasModulePath && hasObjectName)
-        {
-            return ToolResult.error("modulePath and objectName are mutually exclusive; " + //$NON-NLS-1$
-                "pass only one (modulePath for a direct path, or objectName to resolve it)").toJson(); //$NON-NLS-1$
-        }
-        if (!hasModulePath && !hasObjectName)
-        {
-            return ToolResult.error("either modulePath or objectName is required").toJson(); //$NON-NLS-1$
-        }
-        if (hasModulePath && hasModuleType)
-        {
-            return ToolResult.error("moduleType applies only with objectName; " + //$NON-NLS-1$
-                "it is meaningless with an explicit modulePath, so drop one of them").toJson(); //$NON-NLS-1$
-        }
-
-        if (!hasModulePath)
-        {
-            String resolved = resolveModulePath(objectName, moduleType, formName, commandName);
-            if (isErrorJson(resolved))
-            {
-                // resolveModulePath signals failure by returning a ready
-                // ToolResult.error(...).toJson() payload; surface it as-is.
-                return resolved;
-            }
-            modulePath = resolved;
-        }
-
-        // Validate modulePath: prevent path traversal
-        if (modulePath.contains("..")) //$NON-NLS-1$
-        {
-            return ToolResult.error("modulePath must not contain '..'").toJson(); //$NON-NLS-1$
-        }
-
-        // Validate modulePath: only .bsl files allowed
-        if (!modulePath.endsWith(".bsl")) //$NON-NLS-1$
-        {
-            return ToolResult.error("only .bsl module files can be written").toJson(); //$NON-NLS-1$
-        }
+        modulePath = target.modulePath;
 
         // 4. Validate project
         ProjectContext ctx = ProjectContext.of(projectName);
@@ -291,121 +224,316 @@ public class WriteModuleSourceTool implements IMcpTool
             }
 
             // 7. Compute new content based on mode
-            List<String> newLines;
             int totalOriginal = originalLines.size();
-
-            switch (mode)
+            NewLinesResult computed = computeNewLines(mode, file, fileExists, originalLines,
+                source, oldSource, expectedHash, expectedSource, overwrite);
+            if (computed.error != null)
             {
-                case MODE_REPLACE:
-                {
-                    // Lost-update guard: overwriting an EXISTING module blindly
-                    // clobbers any edit made since the agent last read it. Creating a
-                    // NEW module is unconditional (nothing to lose).
-                    // A matching expectedHash is itself a valid lost-update precondition
-                    // (the whole-file token proves the agent saw the current state) and
-                    // was ALREADY validated at step 6b — so when one was supplied, the
-                    // expectedSource/overwrite precondition is satisfied and skipped.
-                    boolean hashGuardSatisfied = expectedHash != null && !expectedHash.isEmpty();
-                    if (fileExists && !hashGuardSatisfied)
-                    {
-                        String preconditionError =
-                            checkReplacePrecondition(file, expectedSource, overwrite);
-                        if (preconditionError != null)
-                        {
-                            return preconditionError;
-                        }
-                    }
-                    newLines = splitSourceLines(source);
-                    break;
-                }
-
-                case MODE_APPEND:
-                    newLines = new ArrayList<>(originalLines);
-                    newLines.addAll(splitSourceLines(source));
-                    break;
-
-                case MODE_SEARCH_REPLACE:
-                {
-                    // Normalize oldSource
-                    oldSource = oldSource.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
-                    // Read the raw file content (preserves the trailing newline that
-                    // writeFile always adds). Reconstructing it from originalLines via
-                    // String.join dropped that final newline, so an oldSource fragment
-                    // that ended at EOF (including the final newline) was reported
-                    // "not found".
-                    String currentContent = BslModuleUtils.readFileText(file).replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
-                    SearchReplaceResult sr = applySearchReplace(currentContent, oldSource, source);
-                    if (sr.occurrences == 0)
-                    {
-                        return ToolResult.error("oldSource not found in current file content. " + //$NON-NLS-1$
-                            "The file may have changed since last read, or the oldSource text " + //$NON-NLS-1$
-                            "does not match exactly. Please read the file again with read_module_source.").toJson(); //$NON-NLS-1$
-                    }
-                    if (sr.occurrences > 1)
-                    {
-                        return ToolResult.error("oldSource found multiple times in the file (" + //$NON-NLS-1$
-                            sr.occurrences +
-                            " occurrences). Provide a larger, more specific oldSource fragment " + //$NON-NLS-1$
-                            "that matches exactly one location.").toJson(); //$NON-NLS-1$
-                    }
-
-                    newLines = splitSourceLines(sr.newContent);
-                    break;
-                }
-
-                default:
-                    return ToolResult.error("unsupported mode: " + mode).toJson(); //$NON-NLS-1$
+                return computed.error;
             }
+            List<String> newLines = computed.newLines;
 
             // 8. BSL syntax check
             if (!skipSyntaxCheck)
             {
-                BslSyntaxChecker.CheckResult checkResult = BslSyntaxChecker.check(newLines);
-                if (!checkResult.isValid())
+                String syntaxError = runSyntaxCheck(newLines);
+                if (syntaxError != null)
                 {
-                    StringBuilder sb = new StringBuilder();
-                    sb.append("BSL syntax check failed. Write blocked.\n\n"); //$NON-NLS-1$
-                    sb.append("Errors:\n"); //$NON-NLS-1$
-                    for (String error : checkResult.getErrors())
-                    {
-                        sb.append("- ").append(error).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                    }
-                    sb.append("\nPass skipSyntaxCheck=true to force write."); //$NON-NLS-1$
-                    return ToolResult.error(sb.toString()).toJson();
+                    return syntaxError;
                 }
             }
 
             // 9. Write file
             writeFile(file, newLines, hasBom, fileExists);
 
-            // 10. Build frontmatter
-            FrontMatter fm = FrontMatter.create()
-                .put("tool", NAME) //$NON-NLS-1$
-                .put(PROJECT_NAME, projectName)
-                .put(MODULE_PATH, modulePath)
-                .put("mode", mode) //$NON-NLS-1$
-                .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
-                .put("linesAfter", newLines.size()) //$NON-NLS-1$
-                .put("syntaxCheck", skipSyntaxCheck ? "skipped" : "passed"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-            if (fileExists)
-            {
-                fm.put("linesBefore", totalOriginal); //$NON-NLS-1$
-            }
-            else
-            {
-                fm.put("newFile", true); //$NON-NLS-1$
-            }
-
-            // 11. Return success
-            return fm.wrapContent("File written successfully"); //$NON-NLS-1$
+            // 10. Return success
+            return buildSuccessResponse(projectName, modulePath, mode, skipSyntaxCheck,
+                newLines, fileExists, totalOriginal);
         }
         catch (Exception e)
         {
             return ToolResult.error("Failed to write file: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Validates the required and scalar write arguments in the SAME order the inline
+     * flow did: projectName presence, source presence + length, mode validity, and the
+     * oldSource requirement for searchReplace. {@code mode} is expected to have already
+     * been defaulted by the caller.
+     *
+     * @return a ready {@link ToolResult#error} JSON payload (or the {@code requireArgument}
+     *         error) to return verbatim, or {@code null} when all arguments are valid
+     */
+    private static String validateWriteArguments(Map<String, String> params, String source,
+        String mode, String oldSource)
+    {
+        String err = JsonUtils.requireArgument(params, PROJECT_NAME);
+        if (err != null)
+        {
+            return err;
+        }
+        if (source == null)
+        {
+            return ToolResult.error("source is required").toJson(); //$NON-NLS-1$
+        }
+        if (source.length() > MAX_SOURCE_LENGTH)
+        {
+            return ToolResult.error("source exceeds maximum allowed length (" + MAX_SOURCE_LENGTH + " characters)").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        // Validate mode
+        if (!MODE_REPLACE.equals(mode) && !MODE_APPEND.equals(mode)
+            && !MODE_SEARCH_REPLACE.equals(mode))
+        {
+            return ToolResult.error("invalid mode '" + mode + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
+                "Allowed: searchReplace, replace, append").toJson(); //$NON-NLS-1$
+        }
+
+        // Validate oldSource for searchReplace mode
+        if (MODE_SEARCH_REPLACE.equals(mode) && (oldSource == null || oldSource.isEmpty()))
+        {
+            return ToolResult.error("oldSource is required for searchReplace mode").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Resolved module target produced by {@link #resolveModuleTarget}: either a ready
+     * {@link ToolResult#error} JSON payload in {@link #error} (the caller returns it
+     * verbatim) or the validated {@code src/}-relative {@link #modulePath}.
+     */
+    private static final class ModuleTargetResult
+    {
+        final String error;
+        final String modulePath;
+
+        private ModuleTargetResult(String error, String modulePath)
+        {
+            this.error = error;
+            this.modulePath = modulePath;
+        }
+    }
+
+    /**
+     * Resolves the module target (read-only — no file is written). modulePath and
+     * objectName form an exclusive OR (a flat Map schema cannot express XOR, so it is
+     * enforced here): exactly one must be given. moduleType is a decorator on the
+     * objectName path only — it is meaningless with an explicit modulePath, so it is
+     * flagged instead of being silently ignored. formName/commandName are validated
+     * deeper in {@link #resolveModulePath} (they depend on the resolved moduleType).
+     * The resolved path is then validated against path traversal and a {@code .bsl}
+     * extension, mirroring the inline checks exactly.
+     *
+     * @return a {@link ModuleTargetResult} whose {@link ModuleTargetResult#error} is
+     *         non-{@code null} when the caller must return that JSON payload, otherwise
+     *         the validated module path
+     */
+    private ModuleTargetResult resolveModuleTarget(String modulePath, String objectName,
+        String moduleType, String formName, String commandName)
+    {
+        boolean hasModulePath = modulePath != null && !modulePath.isEmpty();
+        boolean hasObjectName = objectName != null && !objectName.isEmpty();
+        boolean hasModuleType = moduleType != null && !moduleType.isEmpty();
+
+        if (hasModulePath && hasObjectName)
+        {
+            return new ModuleTargetResult(ToolResult.error("modulePath and objectName are mutually exclusive; " + //$NON-NLS-1$
+                "pass only one (modulePath for a direct path, or objectName to resolve it)").toJson(), null); //$NON-NLS-1$
+        }
+        if (!hasModulePath && !hasObjectName)
+        {
+            return new ModuleTargetResult(
+                ToolResult.error("either modulePath or objectName is required").toJson(), null); //$NON-NLS-1$
+        }
+        if (hasModulePath && hasModuleType)
+        {
+            return new ModuleTargetResult(ToolResult.error("moduleType applies only with objectName; " + //$NON-NLS-1$
+                "it is meaningless with an explicit modulePath, so drop one of them").toJson(), null); //$NON-NLS-1$
+        }
+
+        if (!hasModulePath)
+        {
+            String resolved = resolveModulePath(objectName, moduleType, formName, commandName);
+            if (isErrorJson(resolved))
+            {
+                // resolveModulePath signals failure by returning a ready
+                // ToolResult.error(...).toJson() payload; surface it as-is.
+                return new ModuleTargetResult(resolved, null);
+            }
+            modulePath = resolved;
+        }
+
+        // Validate modulePath: prevent path traversal
+        if (modulePath.contains("..")) //$NON-NLS-1$
+        {
+            return new ModuleTargetResult(ToolResult.error("modulePath must not contain '..'").toJson(), null); //$NON-NLS-1$
+        }
+
+        // Validate modulePath: only .bsl files allowed
+        if (!modulePath.endsWith(".bsl")) //$NON-NLS-1$
+        {
+            return new ModuleTargetResult(
+                ToolResult.error("only .bsl module files can be written").toJson(), null); //$NON-NLS-1$
+        }
+
+        return new ModuleTargetResult(null, modulePath);
+    }
+
+    /**
+     * Computed new module content produced by {@link #computeNewLines}: either a ready
+     * {@link ToolResult#error} JSON payload in {@link #error} (the caller returns it
+     * verbatim) or the {@link #newLines} to write.
+     */
+    private static final class NewLinesResult
+    {
+        final String error;
+        final List<String> newLines;
+
+        private NewLinesResult(String error, List<String> newLines)
+        {
+            this.error = error;
+            this.newLines = newLines;
+        }
+    }
+
+    /**
+     * Computes the new module content for the given mode (read-only — no file is
+     * written; only the already-read {@code file}/{@code originalLines} content is
+     * consulted). Mirrors the inline {@code switch} exactly, including the replace
+     * lost-update precondition and the searchReplace not-found / multiple-match errors.
+     * <p>
+     * Declares {@code throws Exception} because {@link #checkReplacePrecondition} does,
+     * so the same exceptions reach the SAME {@code catch (Exception)} in {@link #execute}
+     * as before.
+     *
+     * @return a {@link NewLinesResult} whose {@link NewLinesResult#error} is non-{@code null}
+     *         when the caller must return that JSON payload, otherwise the lines to write
+     */
+    private NewLinesResult computeNewLines(String mode, IFile file, boolean fileExists,
+        List<String> originalLines, String source, String oldSource, String expectedHash,
+        String expectedSource, boolean overwrite) throws Exception
+    {
+        switch (mode)
+        {
+            case MODE_REPLACE:
+            {
+                // Lost-update guard: overwriting an EXISTING module blindly
+                // clobbers any edit made since the agent last read it. Creating a
+                // NEW module is unconditional (nothing to lose).
+                // A matching expectedHash is itself a valid lost-update precondition
+                // (the whole-file token proves the agent saw the current state) and
+                // was ALREADY validated at step 6b — so when one was supplied, the
+                // expectedSource/overwrite precondition is satisfied and skipped.
+                boolean hashGuardSatisfied = expectedHash != null && !expectedHash.isEmpty();
+                if (fileExists && !hashGuardSatisfied)
+                {
+                    String preconditionError =
+                        checkReplacePrecondition(file, expectedSource, overwrite);
+                    if (preconditionError != null)
+                    {
+                        return new NewLinesResult(preconditionError, null);
+                    }
+                }
+                return new NewLinesResult(null, splitSourceLines(source));
+            }
+
+            case MODE_APPEND:
+            {
+                List<String> appended = new ArrayList<>(originalLines);
+                appended.addAll(splitSourceLines(source));
+                return new NewLinesResult(null, appended);
+            }
+
+            case MODE_SEARCH_REPLACE:
+            {
+                // Normalize oldSource
+                oldSource = oldSource.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+                // Read the raw file content (preserves the trailing newline that
+                // writeFile always adds). Reconstructing it from originalLines via
+                // String.join dropped that final newline, so an oldSource fragment
+                // that ended at EOF (including the final newline) was reported
+                // "not found".
+                String currentContent = BslModuleUtils.readFileText(file).replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+                SearchReplaceResult sr = applySearchReplace(currentContent, oldSource, source);
+                if (sr.occurrences == 0)
+                {
+                    return new NewLinesResult(ToolResult.error("oldSource not found in current file content. " + //$NON-NLS-1$
+                        "The file may have changed since last read, or the oldSource text " + //$NON-NLS-1$
+                        "does not match exactly. Please read the file again with read_module_source.").toJson(), null); //$NON-NLS-1$
+                }
+                if (sr.occurrences > 1)
+                {
+                    return new NewLinesResult(ToolResult.error("oldSource found multiple times in the file (" + //$NON-NLS-1$
+                        sr.occurrences +
+                        " occurrences). Provide a larger, more specific oldSource fragment " + //$NON-NLS-1$
+                        "that matches exactly one location.").toJson(), null); //$NON-NLS-1$
+                }
+
+                return new NewLinesResult(null, splitSourceLines(sr.newContent));
+            }
+
+            default:
+                return new NewLinesResult(ToolResult.error("unsupported mode: " + mode).toJson(), null); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Runs the BSL syntax check (read-only) over the computed {@code newLines} and,
+     * on failure, formats the blocking error message exactly as the inline check did.
+     *
+     * @return a ready {@link ToolResult#error} JSON payload to return verbatim, or
+     *         {@code null} when the syntax check passes
+     */
+    private static String runSyntaxCheck(List<String> newLines)
+    {
+        BslSyntaxChecker.CheckResult checkResult = BslSyntaxChecker.check(newLines);
+        if (checkResult.isValid())
+        {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("BSL syntax check failed. Write blocked.\n\n"); //$NON-NLS-1$
+        sb.append("Errors:\n"); //$NON-NLS-1$
+        for (String error : checkResult.getErrors())
+        {
+            sb.append("- ").append(error).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        sb.append("\nPass skipSyntaxCheck=true to force write."); //$NON-NLS-1$
+        return ToolResult.error(sb.toString()).toJson();
+    }
+
+    /**
+     * Builds the success frontmatter + content returned after the module is written
+     * (pure string building — no side effects), preserving the exact keys and the
+     * {@code linesBefore}/{@code newFile} branch the inline flow used.
+     *
+     * @return the wrapped success response
+     */
+    private static String buildSuccessResponse(String projectName, String modulePath, String mode,
+        boolean skipSyntaxCheck, List<String> newLines, boolean fileExists, int totalOriginal)
+    {
+        FrontMatter fm = FrontMatter.create()
+            .put("tool", NAME) //$NON-NLS-1$
+            .put(PROJECT_NAME, projectName)
+            .put(MODULE_PATH, modulePath)
+            .put("mode", mode) //$NON-NLS-1$
+            .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("linesAfter", newLines.size()) //$NON-NLS-1$
+            .put("syntaxCheck", skipSyntaxCheck ? "skipped" : "passed"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        if (fileExists)
+        {
+            fm.put("linesBefore", totalOriginal); //$NON-NLS-1$
+        }
+        else
+        {
+            fm.put("newFile", true); //$NON-NLS-1$
+        }
+
+        return fm.wrapContent("File written successfully"); //$NON-NLS-1$
     }
 
     /**

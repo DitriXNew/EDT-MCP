@@ -114,64 +114,21 @@ public class CleanProjectTool implements IMcpTool
         {
             IProgressMonitor monitor = new NullProgressMonitor();
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-            
-            List<String> projectNamesList = new ArrayList<>();
-            List<ProjectCleanInfo> projectsToClean = new ArrayList<>();
-            
-            if (projectName != null && !projectName.isEmpty())
+
+            // Resolve the set of projects to clean (read-only: validates state and
+            // builds the work lists; performs no clean build itself).
+            CleanCollection collection = collectProjectsToClean(projectName, dtProjectManager);
+            if (collection.error != null)
             {
-                // Clean specific project
-                ProjectContext ctx = ProjectContext.of(projectName);
-                if (!ctx.exists())
-                {
-                    return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
-                }
-
-                if (!ctx.isOpen())
-                {
-                    return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
-                }
-
-                IProject project = ctx.project();
-
-                IDtProject dtProject = dtProjectManager != null ? 
-                    dtProjectManager.getDtProject(project) : null;
-                
-                projectsToClean.add(new ProjectCleanInfo(project, dtProject));
-                projectNamesList.add(projectName);
+                return collection.error;
             }
-            else
-            {
-                // Clean all EDT projects
-                if (dtProjectManager != null)
-                {
-                    for (IDtProject dtProject : dtProjectManager.getDtProjects())
-                    {
-                        IProject project = dtProject.getWorkspaceProject();
-                        if (project != null && project.isOpen())
-                        {
-                            projectsToClean.add(new ProjectCleanInfo(project, dtProject));
-                            projectNamesList.add(project.getName());
-                        }
-                    }
-                }
-            }
-            
+            List<ProjectCleanInfo> projectsToClean = collection.projectsToClean;
+            List<String> projectNamesList = collection.projectNamesList;
+
             // Phase 1: Register lifecycle listeners BEFORE triggering clean builds
             // This avoids race condition where STOPPED event could be missed
-            List<ProjectRestartWaiter> waiters = new ArrayList<>();
-            for (ProjectCleanInfo info : projectsToClean)
-            {
-                if (info.dtProject != null)
-                {
-                    ProjectRestartWaiter waiter = LifecycleWaiter.prepareForRestart(info.dtProject);
-                    if (waiter != null)
-                    {
-                        waiters.add(waiter);
-                    }
-                }
-            }
-            
+            List<ProjectRestartWaiter> waiters = registerRestartWaiters(projectsToClean);
+
             // Phase 2: Trigger clean build for all projects
             for (ProjectCleanInfo info : projectsToClean)
             {
@@ -204,6 +161,92 @@ public class CleanProjectTool implements IMcpTool
     }
     
     /**
+     * Resolves the projects to clean (read-only): for a named project it validates
+     * existence/open state, otherwise it collects every open EDT project. Builds the
+     * parallel work lists used by the clean phases. Performs no clean build.
+     *
+     * @param projectName name of the project to clean (null/empty for all projects)
+     * @param dtProjectManager the DT project manager (may be null)
+     * @return a {@link CleanCollection} holding the work lists, or one whose
+     *     {@code error} is a {@link ToolResult#error} JSON payload when the named
+     *     project does not exist or is closed
+     */
+    private static CleanCollection collectProjectsToClean(String projectName,
+        IDtProjectManager dtProjectManager)
+    {
+        CleanCollection collection = new CleanCollection();
+
+        if (projectName != null && !projectName.isEmpty())
+        {
+            // Clean specific project
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (!ctx.exists())
+            {
+                collection.error = ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+                return collection;
+            }
+
+            if (!ctx.isOpen())
+            {
+                collection.error = ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
+                return collection;
+            }
+
+            IProject project = ctx.project();
+
+            IDtProject dtProject = dtProjectManager != null ?
+                dtProjectManager.getDtProject(project) : null;
+
+            collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject));
+            collection.projectNamesList.add(projectName);
+        }
+        else
+        {
+            // Clean all EDT projects
+            if (dtProjectManager != null)
+            {
+                for (IDtProject dtProject : dtProjectManager.getDtProjects())
+                {
+                    IProject project = dtProject.getWorkspaceProject();
+                    if (project != null && project.isOpen())
+                    {
+                        collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject));
+                        collection.projectNamesList.add(project.getName());
+                    }
+                }
+            }
+        }
+
+        return collection;
+    }
+
+    /**
+     * Phase 1 helper: registers a lifecycle restart listener for every project that has
+     * a DT project, BEFORE any clean build is triggered, so the STOPPED event cannot be
+     * missed. Returns the waiters to {@code await} after the clean builds are scheduled.
+     *
+     * @param projectsToClean the projects being cleaned
+     * @return the registered restart waiters (one per DT project that produced a waiter)
+     */
+    private static List<ProjectRestartWaiter> registerRestartWaiters(
+        List<ProjectCleanInfo> projectsToClean)
+    {
+        List<ProjectRestartWaiter> waiters = new ArrayList<>();
+        for (ProjectCleanInfo info : projectsToClean)
+        {
+            if (info.dtProject != null)
+            {
+                ProjectRestartWaiter waiter = LifecycleWaiter.prepareForRestart(info.dtProject);
+                if (waiter != null)
+                {
+                    waiters.add(waiter);
+                }
+            }
+        }
+        return waiters;
+    }
+
+    /**
      * Cleans a single project using Eclipse CLEAN_BUILD.
      * This triggers EDT's full project rebuild including:
      * - CLEAN phase (stops project context)
@@ -228,6 +271,17 @@ public class CleanProjectTool implements IMcpTool
         Activator.logInfo("Clean build scheduled for: " + project.getName()); //$NON-NLS-1$
     }
     
+    /**
+     * Holder for the result of {@link #collectProjectsToClean}: the parallel work lists,
+     * or an {@code error} JSON payload that the caller should return as-is.
+     */
+    private static class CleanCollection
+    {
+        final List<ProjectCleanInfo> projectsToClean = new ArrayList<>();
+        final List<String> projectNamesList = new ArrayList<>();
+        String error;
+    }
+
     /**
      * Helper class to store project info for cleaning.
      */

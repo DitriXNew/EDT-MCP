@@ -132,6 +132,34 @@ public class PlatformDocumentationService
         // Note: For platform types like Array, ValueTable, the types are
         // directly available from IEObjectDescription without needing project ResourceSet.
 
+        IEObjectProvider typeProvider = selectTypeProvider(version);
+        if (typeProvider == null)
+        {
+            return ToolResult.error("Could not get type provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
+        }
+
+        // Find type by iterating through all type descriptions
+        List<String> availableTypes = new ArrayList<>();
+        Type foundType = findType(typeProvider, typeName, availableTypes);
+
+        // If not found, show available types
+        if (foundType == null)
+        {
+            return buildNotFoundBanner("Type not found: ", typeName, "types", availableTypes); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        // Build documentation from resolved Type
+        return buildTypeDocumentation(foundType, memberName, memberType, limit, useRussian);
+    }
+
+    /**
+     * Selects the type provider for the given version: prefers TYPE (platform types like Array,
+     * ValueTable) and falls back to TYPE_ITEM when the TYPE provider is empty (some EDT versions).
+     *
+     * @return the selected provider, or {@code null} when neither is available
+     */
+    private IEObjectProvider selectTypeProvider(Version version)
+    {
         // Get type provider using TYPE (not TYPE_ITEM - TYPE gives us platform types like ValueTable)
         IEObjectProvider.Registry registry = IEObjectProvider.Registry.INSTANCE;
 
@@ -155,91 +183,118 @@ public class PlatformDocumentationService
         {
             typeProvider = typeItemProvider; // Fall back to TYPE_ITEM
         }
+        return typeProvider;
+    }
 
-        if (typeProvider == null)
-        {
-            return ToolResult.error("Could not get type provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
-        }
-
-        // Find type by iterating through all type descriptions
-        Type foundType = null;
-        List<String> availableTypes = new ArrayList<>();
-
+    /**
+     * Iterates the provider's descriptions looking for {@code typeName} (case-insensitive, matching
+     * either the full qualified name or its last segment), collecting up to the first 30 names into
+     * {@code availableTypes} for the not-found banner.
+     *
+     * @param availableTypes out-param populated with up to 30 candidate names, in iteration order
+     * @return the resolved (non-proxy) {@link Type}, or {@code null} when not found
+     */
+    private Type findType(IEObjectProvider typeProvider, String typeName, List<String> availableTypes)
+    {
         Iterable<IEObjectDescription> descriptions = typeProvider.getEObjectDescriptions(null);
-        if (descriptions != null)
+        if (descriptions == null)
         {
-            for (IEObjectDescription desc : descriptions)
+            return null;
+        }
+        for (IEObjectDescription desc : descriptions)
+        {
+            // Get last segment of qualified name (e.g., "DocumentRef" from "some.package.DocumentRef")
+            String fullName = desc.getName().toString();
+            String lastSegment = desc.getName().getLastSegment();
+
+            // Collect first 30 types for debugging (show full name)
+            if (availableTypes.size() < 30)
             {
-                // Get last segment of qualified name (e.g., "DocumentRef" from "some.package.DocumentRef")
-                String fullName = desc.getName().toString();
-                String lastSegment = desc.getName().getLastSegment();
+                availableTypes.add(lastSegment != null ? lastSegment : fullName);
+            }
 
-                // Collect first 30 types for debugging (show full name)
-                if (availableTypes.size() < 30)
+            // Check if this is the type we're looking for (case-insensitive, check both full and last segment)
+            if (fullName.equalsIgnoreCase(typeName) ||
+                (lastSegment != null && lastSegment.equalsIgnoreCase(typeName)))
+            {
+                Type resolvedType = resolveDescriptionAsType(desc);
+                if (resolvedType != null)
                 {
-                    availableTypes.add(lastSegment != null ? lastSegment : fullName);
-                }
-
-                // Check if this is the type we're looking for (case-insensitive, check both full and last segment)
-                if (fullName.equalsIgnoreCase(typeName) ||
-                    (lastSegment != null && lastSegment.equalsIgnoreCase(typeName)))
-                {
-                    // Get the object - for platform types from TYPE provider,
-                    // these should be fully resolved objects, not proxies
-                    EObject resolved = desc.getEObjectOrProxy();
-
-                    if (resolved instanceof Type)
-                    {
-                        // If still a proxy, we can use the EcoreUtil registry to resolve
-                        if (resolved.eIsProxy())
-                        {
-                            org.eclipse.emf.common.util.URI uri = desc.getEObjectURI();
-                            try
-                            {
-                                // Try to resolve via platform resource
-                                org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet =
-                                    new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
-                                resolved = EcoreUtil.resolve(resolved, tempResourceSet);
-                            }
-                            catch (Exception e)
-                            {
-                                Activator.logError("Error resolving type proxy: " + uri, e); //$NON-NLS-1$
-                            }
-                        }
-
-                        if (!resolved.eIsProxy())
-                        {
-                            foundType = (Type) resolved;
-                            break;
-                        }
-                    }
+                    return resolvedType;
                 }
             }
         }
+        return null;
+    }
 
-        // If not found, show available types
-        if (foundType == null)
+    /**
+     * Resolves a matched description to a non-proxy {@link Type}, attempting EcoreUtil proxy
+     * resolution via a temporary resource set when needed (errors are logged, not thrown).
+     *
+     * @return the resolved {@link Type}, or {@code null} when the object is not a Type or stays a proxy
+     */
+    private Type resolveDescriptionAsType(IEObjectDescription desc)
+    {
+        // Get the object - for platform types from TYPE provider,
+        // these should be fully resolved objects, not proxies
+        EObject resolved = desc.getEObjectOrProxy();
+
+        if (resolved instanceof Type)
         {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Error: Type not found: ").append(typeName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("Available types (first ").append(availableTypes.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            for (String availType : availableTypes)
+            // If still a proxy, we can use the EcoreUtil registry to resolve
+            if (resolved.eIsProxy())
             {
-                sb.append("- ").append(availType).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                org.eclipse.emf.common.util.URI uri = desc.getEObjectURI();
+                try
+                {
+                    // Try to resolve via platform resource
+                    org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet =
+                        new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
+                    resolved = EcoreUtil.resolve(resolved, tempResourceSet);
+                }
+                catch (Exception e)
+                {
+                    Activator.logError("Error resolving type proxy: " + uri, e); //$NON-NLS-1$
+                }
             }
-            if (availableTypes.isEmpty())
-            {
-                sb.append("(no types found - provider may be empty)\n"); //$NON-NLS-1$
-            }
-            else if (availableTypes.size() >= 30)
-            {
-                sb.append("... (more available)\n"); //$NON-NLS-1$
-            }
-            return sb.toString();
-        }
 
-        // Build documentation from resolved Type
-        return buildTypeDocumentation(foundType, memberName, memberType, limit, useRussian);
+            if (!resolved.eIsProxy())
+            {
+                return (Type) resolved;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Builds the soft "not found" banner: an {@code "Error: <subject><name>"} line followed by the
+     * collected available items (or an empty-provider note / "more available" hint). The exact text
+     * matches the previous inline builders so {@link #isNotFoundBanner} still recognises it.
+     *
+     * @param subject the not-found phrase incl. trailing separator (e.g. {@code "Type not found: "})
+     * @param name the looked-up name appended after {@code subject}
+     * @param itemsLabel the plural noun used in the "Available &lt;itemsLabel&gt; (first N)" heading
+     * @param available the collected candidate names
+     * @return the rendered banner string
+     */
+    private String buildNotFoundBanner(String subject, String name, String itemsLabel, List<String> available)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Error: ").append(subject).append(name).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("Available ").append(itemsLabel).append(" (first ").append(available.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String item : available)
+        {
+            sb.append("- ").append(item).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (available.isEmpty())
+        {
+            sb.append("(no ").append(itemsLabel).append(" found - provider may be empty)\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else if (available.size() >= 30)
+        {
+            sb.append("... (more available)\n"); //$NON-NLS-1$
+        }
+        return sb.toString();
     }
 
     /**
@@ -250,140 +305,22 @@ public class PlatformDocumentationService
     {
         StringBuilder sb = new StringBuilder();
 
-        // Type header
-        String displayName = useRussian ? type.getNameRu() : type.getName();
-        String altName = useRussian ? type.getName() : type.getNameRu();
-
-        sb.append("# ").append(displayName != null ? displayName : UNKNOWN_LABEL); //$NON-NLS-1$
-        if (altName != null && !altName.equals(displayName))
-        {
-            sb.append(" / ").append(altName); //$NON-NLS-1$
-        }
-        sb.append("\n\n"); //$NON-NLS-1$
-
-        // Type properties
-        sb.append("**Type Info:**\n"); //$NON-NLS-1$
-        sb.append("- Iterable: ").append(type.isIterable() ? "Yes" : "No").append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        sb.append("- Index accessible: ").append(type.isIndexAccessible() ? "Yes" : "No").append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        sb.append("- Created by New: ").append(type.isCreatedByNewOperator() ? "Yes" : "No").append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-
-        // Collection element types
-        TypeContainer elementTypes = type.getCollectionElementTypes();
-        if (elementTypes != null)
-        {
-            EList<TypeItem> elemTypesList = elementTypes.allTypes();
-            if (elemTypesList != null && !elemTypesList.isEmpty())
-            {
-                sb.append("**Collection element types:** "); //$NON-NLS-1$
-                List<String> typeNames = new ArrayList<>();
-                for (TypeItem elemType : elemTypesList)
-                {
-                    String name = useRussian ? elemType.getNameRu() : elemType.getName();
-                    if (name != null)
-                    {
-                        typeNames.add(name);
-                    }
-                }
-                sb.append(String.join(", ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-        }
+        appendTypeHeader(sb, type, useRussian);
+        appendTypeInfo(sb, type);
+        appendCollectionElementTypes(sb, type, useRussian);
 
         int count = 0;
-
-        // Constructors
-        if (shouldIncludeMemberType(memberType, MEMBER_CONSTRUCTOR))
-        {
-            EList<Ctor> ctors = type.getCtors();
-            if (ctors != null && !ctors.isEmpty())
-            {
-                sb.append("## Constructors\n\n"); //$NON-NLS-1$
-                for (int i = 0; i < ctors.size(); i++)
-                {
-                    Ctor ctor = ctors.get(i);
-                    if (count >= limit)
-                        break;
-                    appendCtorDocumentation(sb, ctor, i + 1, useRussian);
-                    count++;
-                }
-                sb.append("\n"); //$NON-NLS-1$
-            }
-        }
+        count = appendConstructorsSection(sb, type, memberType, limit, count, useRussian);
 
         // Get context def for methods and properties
         ContextDef contextDef = type.getContextDef();
         if (contextDef != null)
         {
-            // Methods
-            if (shouldIncludeMemberType(memberType, MEMBER_METHOD))
-            {
-                EList<Method> methods = contextDef.allMethods();
-                if (methods != null && !methods.isEmpty())
-                {
-                    sb.append("## Methods\n\n"); //$NON-NLS-1$
-                    for (Method method : methods)
-                    {
-                        if (count >= limit)
-                            break;
-                        String methodName = useRussian ? method.getNameRu() : method.getName();
-                        if (memberName == null || matchesMemberName(methodName, memberName) ||
-                            matchesMemberName(method.getName(), memberName) ||
-                            matchesMemberName(method.getNameRu(), memberName))
-                        {
-                            appendMethodDocumentation(sb, method, useRussian);
-                            count++;
-                        }
-                    }
-                    sb.append("\n"); //$NON-NLS-1$
-                }
-            }
-
-            // Properties
-            if (shouldIncludeMemberType(memberType, MEMBER_PROPERTY))
-            {
-                EList<Property> properties = contextDef.allProperties();
-                if (properties != null && !properties.isEmpty())
-                {
-                    sb.append("## Properties\n\n"); //$NON-NLS-1$
-                    for (Property prop : properties)
-                    {
-                        if (count >= limit)
-                            break;
-                        String propName = useRussian ? prop.getNameRu() : prop.getName();
-                        if (memberName == null || matchesMemberName(propName, memberName) ||
-                            matchesMemberName(prop.getName(), memberName) ||
-                            matchesMemberName(prop.getNameRu(), memberName))
-                        {
-                            appendPropertyDocumentation(sb, prop, useRussian);
-                            count++;
-                        }
-                    }
-                    sb.append("\n"); //$NON-NLS-1$
-                }
-            }
+            count = appendMethodsSection(sb, contextDef, memberName, memberType, limit, count, useRussian);
+            count = appendPropertiesSection(sb, contextDef, memberName, memberType, limit, count, useRussian);
         }
 
-        // Events
-        if (shouldIncludeMemberType(memberType, MEMBER_EVENT))
-        {
-            EList<Event> events = type.getEvents();
-            if (events != null && !events.isEmpty())
-            {
-                sb.append("## Events\n\n"); //$NON-NLS-1$
-                for (Event event : events)
-                {
-                    if (count >= limit)
-                        break;
-                    String eventName = useRussian ? event.getNameRu() : event.getName();
-                    if (memberName == null || matchesMemberName(eventName, memberName) ||
-                        matchesMemberName(event.getName(), memberName) ||
-                        matchesMemberName(event.getNameRu(), memberName))
-                    {
-                        appendEventDocumentation(sb, event, useRussian);
-                        count++;
-                    }
-                }
-            }
-        }
+        count = appendEventsSection(sb, type, memberName, memberType, limit, count, useRussian);
 
         if (count >= limit)
         {
@@ -394,53 +331,269 @@ public class PlatformDocumentationService
     }
 
     /**
+     * Appends the type header line (localized name plus optional alternate name).
+     */
+    private void appendTypeHeader(StringBuilder sb, Type type, boolean useRussian)
+    {
+        String displayName = useRussian ? type.getNameRu() : type.getName();
+        String altName = useRussian ? type.getName() : type.getNameRu();
+
+        sb.append("# ").append(displayName != null ? displayName : UNKNOWN_LABEL); //$NON-NLS-1$
+        if (altName != null && !altName.equals(displayName))
+        {
+            sb.append(" / ").append(altName); //$NON-NLS-1$
+        }
+        sb.append("\n\n"); //$NON-NLS-1$
+    }
+
+    /**
+     * Appends the "Type Info" block (iterable / index accessible / created by New flags).
+     */
+    private void appendTypeInfo(StringBuilder sb, Type type)
+    {
+        sb.append("**Type Info:**\n"); //$NON-NLS-1$
+        sb.append("- Iterable: ").append(type.isIterable() ? "Yes" : "No").append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        sb.append("- Index accessible: ").append(type.isIndexAccessible() ? "Yes" : "No").append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        sb.append("- Created by New: ").append(type.isCreatedByNewOperator() ? "Yes" : "No").append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    /**
+     * Appends the "Collection element types" line, when the type exposes any.
+     */
+    private void appendCollectionElementTypes(StringBuilder sb, Type type, boolean useRussian)
+    {
+        TypeContainer elementTypes = type.getCollectionElementTypes();
+        if (elementTypes == null)
+        {
+            return;
+        }
+        EList<TypeItem> elemTypesList = elementTypes.allTypes();
+        if (elemTypesList == null || elemTypesList.isEmpty())
+        {
+            return;
+        }
+        sb.append("**Collection element types:** "); //$NON-NLS-1$
+        List<String> typeNames = new ArrayList<>();
+        for (TypeItem elemType : elemTypesList)
+        {
+            String name = useRussian ? elemType.getNameRu() : elemType.getName();
+            if (name != null)
+            {
+                typeNames.add(name);
+            }
+        }
+        sb.append(String.join(", ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Appends the "Constructors" section, honoring the member-type filter and the
+     * running item limit. Returns the updated running item count.
+     */
+    private int appendConstructorsSection(StringBuilder sb, Type type, String memberType,
+                                          int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_CONSTRUCTOR))
+        {
+            return count;
+        }
+        EList<Ctor> ctors = type.getCtors();
+        if (ctors == null || ctors.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Constructors\n\n"); //$NON-NLS-1$
+        for (int i = 0; i < ctors.size(); i++)
+        {
+            Ctor ctor = ctors.get(i);
+            if (count >= limit)
+                break;
+            appendCtorDocumentation(sb, ctor, i + 1, useRussian);
+            count++;
+        }
+        sb.append("\n"); //$NON-NLS-1$
+        return count;
+    }
+
+    /**
+     * Appends the "Methods" section, honoring the member-name/type filters and the
+     * running item limit. Returns the updated running item count.
+     */
+    private int appendMethodsSection(StringBuilder sb, ContextDef contextDef, String memberName,
+                                     String memberType, int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_METHOD))
+        {
+            return count;
+        }
+        EList<Method> methods = contextDef.allMethods();
+        if (methods == null || methods.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Methods\n\n"); //$NON-NLS-1$
+        for (Method method : methods)
+        {
+            if (count >= limit)
+                break;
+            String methodName = useRussian ? method.getNameRu() : method.getName();
+            if (memberNameMatches(methodName, method.getName(), method.getNameRu(), memberName))
+            {
+                appendMethodDocumentation(sb, method, useRussian);
+                count++;
+            }
+        }
+        sb.append("\n"); //$NON-NLS-1$
+        return count;
+    }
+
+    /**
+     * Appends the "Properties" section, honoring the member-name/type filters and the
+     * running item limit. Returns the updated running item count.
+     */
+    private int appendPropertiesSection(StringBuilder sb, ContextDef contextDef, String memberName,
+                                        String memberType, int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_PROPERTY))
+        {
+            return count;
+        }
+        EList<Property> properties = contextDef.allProperties();
+        if (properties == null || properties.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Properties\n\n"); //$NON-NLS-1$
+        for (Property prop : properties)
+        {
+            if (count >= limit)
+                break;
+            String propName = useRussian ? prop.getNameRu() : prop.getName();
+            if (memberNameMatches(propName, prop.getName(), prop.getNameRu(), memberName))
+            {
+                appendPropertyDocumentation(sb, prop, useRussian);
+                count++;
+            }
+        }
+        sb.append("\n"); //$NON-NLS-1$
+        return count;
+    }
+
+    /**
+     * Appends the "Events" section, honoring the member-name/type filters and the
+     * running item limit. Returns the updated running item count.
+     */
+    private int appendEventsSection(StringBuilder sb, Type type, String memberName,
+                                    String memberType, int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_EVENT))
+        {
+            return count;
+        }
+        EList<Event> events = type.getEvents();
+        if (events == null || events.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Events\n\n"); //$NON-NLS-1$
+        for (Event event : events)
+        {
+            if (count >= limit)
+                break;
+            String eventName = useRussian ? event.getNameRu() : event.getName();
+            if (memberNameMatches(eventName, event.getName(), event.getNameRu(), memberName))
+            {
+                appendEventDocumentation(sb, event, useRussian);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Tells whether a member should be emitted given the optional member-name filter.
+     * A {@code null} filter always matches; otherwise the filter is matched (case-insensitive,
+     * partial) against the localized name and the explicit English/Russian names, in that order.
+     *
+     * @param localizedName the name already resolved for the requested language
+     * @param enName the English name of the member
+     * @param ruName the Russian name of the member
+     * @param filter the optional member-name filter ({@code null} to accept all)
+     * @return {@code true} when the member passes the filter
+     */
+    private boolean memberNameMatches(String localizedName, String enName, String ruName, String filter)
+    {
+        return filter == null || matchesMemberName(localizedName, filter) ||
+            matchesMemberName(enName, filter) ||
+            matchesMemberName(ruName, filter);
+    }
+
+    /**
      * Gets platform version for a project.
      */
     private Version getProjectVersion(String projectName)
     {
         if (projectName == null || projectName.isEmpty())
         {
-            // Try to get from first available project
-            IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
-            if (v8pm != null)
-            {
-                java.util.Iterator<IV8Project> it = v8pm.getProjects().iterator();
-                if (it.hasNext())
-                {
-                    return it.next().getVersion();
-                }
-            }
-            return null;
+            return firstProjectVersion();
         }
 
         try
         {
             ProjectContext ctx = ProjectContext.of(projectName);
-            IProject project = ctx.project();
             if (ctx.exists())
             {
-                IDtProjectManager dtpm = Activator.getDefault().getDtProjectManager();
-                if (dtpm != null)
-                {
-                    IDtProject dtProject = dtpm.getDtProject(project);
-                    if (dtProject != null)
-                    {
-                        IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
-                        if (v8pm != null)
-                        {
-                            IV8Project v8Project = v8pm.getProject(dtProject);
-                            if (v8Project != null)
-                            {
-                                return v8Project.getVersion();
-                            }
-                        }
-                    }
-                }
+                return versionForContext(ctx);
             }
         }
         catch (Exception e)
         {
             Activator.logError("Error getting project version", e); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Returns the platform version of the first available project, or {@code null} when
+     * there is none. Used as the fallback when no project name is supplied.
+     */
+    private Version firstProjectVersion()
+    {
+        IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
+        if (v8pm != null)
+        {
+            java.util.Iterator<IV8Project> it = v8pm.getProjects().iterator();
+            if (it.hasNext())
+            {
+                return it.next().getVersion();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves the platform version for an existing project context by walking
+     * {@code IProject -> IDtProject -> IV8Project}, returning {@code null} when any link in
+     * the chain is unavailable.
+     */
+    private Version versionForContext(ProjectContext ctx)
+    {
+        IProject project = ctx.project();
+        IDtProjectManager dtpm = Activator.getDefault().getDtProjectManager();
+        if (dtpm != null)
+        {
+            IDtProject dtProject = dtpm.getDtProject(project);
+            if (dtProject != null)
+            {
+                IV8ProjectManager v8pm = Activator.getDefault().getV8ProjectManager();
+                if (v8pm != null)
+                {
+                    IV8Project v8Project = v8pm.getProject(dtProject);
+                    if (v8Project != null)
+                    {
+                        return v8Project.getVersion();
+                    }
+                }
+            }
         }
         return null;
     }
@@ -518,6 +671,24 @@ public class PlatformDocumentationService
 
         // Parameter sets (overloads) - use getParamSet() not getParamSets()
         EList<ParamSet> paramSets = method.getParamSet();
+        appendMethodParamSets(sb, paramSets, useRussian);
+
+        // Return type - on method level, not ParamSet
+        EList<TypeItem> retValTypes = method.getRetValType();
+        if (retValTypes != null && !retValTypes.isEmpty())
+        {
+            sb.append("**Returns:** ").append(joinTypeNames(retValTypes, useRussian)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        sb.append("\n"); //$NON-NLS-1$
+    }
+
+    /**
+     * Appends the parameter sets (overloads) of a method, prefixing each with an
+     * "Overload N" heading when more than one set is present.
+     */
+    private void appendMethodParamSets(StringBuilder sb, EList<ParamSet> paramSets, boolean useRussian)
+    {
         if (paramSets != null && !paramSets.isEmpty())
         {
             for (int i = 0; i < paramSets.size(); i++)
@@ -530,25 +701,24 @@ public class PlatformDocumentationService
                 appendParamSetDocumentation(sb, ps, useRussian);
             }
         }
+    }
 
-        // Return type - on method level, not ParamSet
-        EList<TypeItem> retValTypes = method.getRetValType();
-        if (retValTypes != null && !retValTypes.isEmpty())
+    /**
+     * Joins the localized names of the given type items with " | ", skipping items whose
+     * name is {@code null}.
+     */
+    private String joinTypeNames(EList<TypeItem> typeItems, boolean useRussian)
+    {
+        List<String> typeNames = new ArrayList<>();
+        for (TypeItem typeItem : typeItems)
         {
-            sb.append("**Returns:** "); //$NON-NLS-1$
-            List<String> typeNames = new ArrayList<>();
-            for (TypeItem typeItem : retValTypes)
+            String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
+            if (typeName != null)
             {
-                String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
-                if (typeName != null)
-                {
-                    typeNames.add(typeName);
-                }
+                typeNames.add(typeName);
             }
-            sb.append(String.join(" | ", typeNames)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
-
-        sb.append("\n"); //$NON-NLS-1$
+        return String.join(" | ", typeNames); //$NON-NLS-1$
     }
 
     /**
@@ -739,6 +909,28 @@ public class PlatformDocumentationService
             return ToolResult.error("Could not get method provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
         }
 
+        ResourceSet resourceSet = findAnyProjectResourceSet();
+
+        // Search for the function
+        List<String> availableMethods = new ArrayList<>();
+        Method foundMethod = findBuiltinMethod(methodProvider, functionName, resourceSet, availableMethods);
+
+        // If not found, show available methods
+        if (foundMethod == null)
+        {
+            return buildBuiltinNotFoundBanner(functionName, availableMethods);
+        }
+
+        // Build documentation for the found method
+        return buildBuiltinMethodDocumentation(foundMethod, useRussian);
+    }
+
+    /**
+     * Finds the first non-{@code null} project {@link ResourceSet} (used to resolve proxies),
+     * iterating the open V8 projects. Returns {@code null} when no provider / project yields one.
+     */
+    private ResourceSet findAnyProjectResourceSet()
+    {
         // Get ResourceSet for resolving proxies
         ResourceSet resourceSet = null;
         BmAwareResourceSetProvider resourceSetProvider = Activator.getDefault().getResourceSetProvider();
@@ -754,80 +946,114 @@ public class PlatformDocumentationService
                 }
             }
         }
+        return resourceSet;
+    }
 
-        // Search for the function
-        Method foundMethod = null;
-        List<String> availableMethods = new ArrayList<>();
-
+    /**
+     * Iterates the provider's descriptions looking for a global method named {@code functionName}
+     * (case-insensitive, by last segment), collecting up to the first 30 names into
+     * {@code availableMethods} for the not-found banner.
+     *
+     * @param resourceSet resource set used to resolve a matched proxy (may be {@code null})
+     * @param availableMethods out-param populated with up to 30 candidate names, in iteration order
+     * @return the resolved (non-proxy) {@link Method}, or {@code null} when not found
+     */
+    private Method findBuiltinMethod(IEObjectProvider methodProvider, String functionName,
+                                     ResourceSet resourceSet, List<String> availableMethods)
+    {
         Iterable<IEObjectDescription> descriptions = methodProvider.getEObjectDescriptions(null);
-        if (descriptions != null)
+        if (descriptions == null)
         {
-            for (IEObjectDescription desc : descriptions)
+            return null;
+        }
+        for (IEObjectDescription desc : descriptions)
+        {
+            String methodName = desc.getName().getLastSegment();
+            if (methodName == null)
             {
-                String methodName = desc.getName().getLastSegment();
-                if (methodName == null)
-                {
-                    methodName = desc.getName().toString();
-                }
+                methodName = desc.getName().toString();
+            }
 
-                // Collect some methods for suggestions
-                if (availableMethods.size() < 30)
-                {
-                    availableMethods.add(methodName);
-                }
+            // Collect some methods for suggestions
+            if (availableMethods.size() < 30)
+            {
+                availableMethods.add(methodName);
+            }
 
-                // Check if this is the function we're looking for (case-insensitive)
-                if (methodName.equalsIgnoreCase(functionName))
+            // Check if this is the function we're looking for (case-insensitive)
+            if (methodName.equalsIgnoreCase(functionName))
+            {
+                Method resolvedMethod = resolveDescriptionAsMethod(desc, resourceSet);
+                if (resolvedMethod != null)
                 {
-                    EObject resolved = desc.getEObjectOrProxy();
-                    if (resolved != null)
-                    {
-                        // Try to resolve proxy
-                        if (resolved.eIsProxy() && resourceSet != null)
-                        {
-                            resolved = EcoreUtil.resolve(resolved, resourceSet);
-                        }
-                        else if (resolved.eIsProxy())
-                        {
-                            // Try with temp resource set
-                            org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet =
-                                new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
-                            resolved = EcoreUtil.resolve(resolved, tempResourceSet);
-                        }
-
-                        if (resolved instanceof Method && !resolved.eIsProxy())
-                        {
-                            foundMethod = (Method) resolved;
-                            break;
-                        }
-                    }
+                    return resolvedMethod;
                 }
             }
         }
+        return null;
+    }
 
-        // If not found, show available methods
-        if (foundMethod == null)
+    /**
+     * Resolves a matched description to a non-proxy {@link Method}, preferring the given
+     * {@code resourceSet} and otherwise a temporary one for proxy resolution.
+     *
+     * @return the resolved {@link Method}, or {@code null} when the object is absent, not a Method,
+     *         or stays a proxy
+     */
+    private Method resolveDescriptionAsMethod(IEObjectDescription desc, ResourceSet resourceSet)
+    {
+        EObject resolved = desc.getEObjectOrProxy();
+        if (resolved == null)
         {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Error: Built-in function not found: ").append(functionName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append("Available global methods (first ").append(availableMethods.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            for (String availMethod : availableMethods)
-            {
-                sb.append("- ").append(availMethod).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            if (availableMethods.isEmpty())
-            {
-                sb.append("(no methods found - provider may be empty)\n"); //$NON-NLS-1$
-            }
-            else if (availableMethods.size() >= 30)
-            {
-                sb.append("... (more available)\n"); //$NON-NLS-1$
-            }
-            return sb.toString();
+            return null;
+        }
+        // Try to resolve proxy
+        if (resolved.eIsProxy() && resourceSet != null)
+        {
+            resolved = EcoreUtil.resolve(resolved, resourceSet);
+        }
+        else if (resolved.eIsProxy())
+        {
+            // Try with temp resource set
+            org.eclipse.emf.ecore.resource.impl.ResourceSetImpl tempResourceSet =
+                new org.eclipse.emf.ecore.resource.impl.ResourceSetImpl();
+            resolved = EcoreUtil.resolve(resolved, tempResourceSet);
         }
 
-        // Build documentation for the found method
-        return buildBuiltinMethodDocumentation(foundMethod, useRussian);
+        if (resolved instanceof Method && !resolved.eIsProxy())
+        {
+            return (Method) resolved;
+        }
+        return null;
+    }
+
+    /**
+     * Builds the built-in-function not-found banner. Mirrors the previous inline text exactly: the
+     * heading reads "Available global methods" while the empty-provider note reads "(no methods
+     * found ...)", so it cannot reuse {@link #buildNotFoundBanner} (single label).
+     *
+     * @param functionName the looked-up function name
+     * @param available the collected candidate global-method names
+     * @return the rendered banner string
+     */
+    private String buildBuiltinNotFoundBanner(String functionName, List<String> available)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Error: Built-in function not found: ").append(functionName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("Available global methods (first ").append(available.size()).append("):\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String availMethod : available)
+        {
+            sb.append("- ").append(availMethod).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (available.isEmpty())
+        {
+            sb.append("(no methods found - provider may be empty)\n"); //$NON-NLS-1$
+        }
+        else if (available.size() >= 30)
+        {
+            sb.append("... (more available)\n"); //$NON-NLS-1$
+        }
+        return sb.toString();
     }
 
     /**
@@ -837,6 +1063,28 @@ public class PlatformDocumentationService
     {
         StringBuilder sb = new StringBuilder();
 
+        appendBuiltinMethodHeader(sb, method, useRussian);
+
+        // Parameter sets (overloads)
+        EList<ParamSet> paramSets = method.getParamSet();
+        appendBuiltinParamSets(sb, paramSets, useRussian);
+
+        // Return type
+        EList<TypeItem> retValTypes = method.getRetValType();
+        if (retValTypes != null && !retValTypes.isEmpty())
+        {
+            sb.append("## Return Type\n\n"); //$NON-NLS-1$
+            sb.append("**Returns:** ").append(joinTypeNames(retValTypes, useRussian)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Appends the title, category and return/procedure flag header of a built-in method.
+     */
+    private void appendBuiltinMethodHeader(StringBuilder sb, Method method, boolean useRussian)
+    {
         // Method header
         String displayName = useRussian ? method.getNameRu() : method.getName();
         String altName = useRussian ? method.getName() : method.getNameRu();
@@ -859,9 +1107,15 @@ public class PlatformDocumentationService
         {
             sb.append("*Procedure (no return value)*\n\n"); //$NON-NLS-1$
         }
+    }
 
-        // Parameter sets (overloads)
-        EList<ParamSet> paramSets = method.getParamSet();
+    /**
+     * Appends the "Parameters" section of a built-in method, rendering one block per
+     * overload (with an "Overload N" heading when there are several) or a "No parameters"
+     * note when the method has none.
+     */
+    private void appendBuiltinParamSets(StringBuilder sb, EList<ParamSet> paramSets, boolean useRussian)
+    {
         if (paramSets != null && !paramSets.isEmpty())
         {
             sb.append("## Parameters\n\n"); //$NON-NLS-1$
@@ -880,24 +1134,5 @@ public class PlatformDocumentationService
         {
             sb.append("## Parameters\n\n*No parameters*\n\n"); //$NON-NLS-1$
         }
-
-        // Return type
-        EList<TypeItem> retValTypes = method.getRetValType();
-        if (retValTypes != null && !retValTypes.isEmpty())
-        {
-            sb.append("## Return Type\n\n"); //$NON-NLS-1$
-            List<String> typeNames = new ArrayList<>();
-            for (TypeItem typeItem : retValTypes)
-            {
-                String typeName = useRussian ? typeItem.getNameRu() : typeItem.getName();
-                if (typeName != null)
-                {
-                    typeNames.add(typeName);
-                }
-            }
-            sb.append("**Returns:** ").append(String.join(" | ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        }
-
-        return sb.toString();
     }
 }
