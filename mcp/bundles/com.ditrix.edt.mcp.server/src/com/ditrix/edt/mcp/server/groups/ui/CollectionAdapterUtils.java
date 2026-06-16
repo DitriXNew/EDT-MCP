@@ -92,43 +92,107 @@ public final class CollectionAdapterUtils {
         if (adapter == null) {
             return null;
         }
-        
-        Class<?> clazz = adapter.getClass();
-        
+
+        // A successful MethodHandle invocation is authoritative even when it
+        // returns null - only a missing handle or a failed invocation falls
+        // through to the IWorkbenchAdapter fallback.
+        HandleResult handleResult = invokeGetModelObjectName(adapter, adapter.getClass());
+        if (handleResult.invoked) {
+            return handleResult.value;
+        }
+
+        return getModelObjectNameFallback(adapter);
+    }
+
+    /**
+     * Outcome of attempting the getModelObjectName MethodHandle invocation.
+     * {@link #invoked} is true only when a handle existed and ran without throwing,
+     * in which case {@link #value} (possibly null) is authoritative; otherwise the
+     * caller must apply the fallback.
+     */
+    private static final class HandleResult {
+        final boolean invoked;
+        final String value;
+
+        private HandleResult(boolean invoked, String value) {
+            this.invoked = invoked;
+            this.value = value;
+        }
+
+        static HandleResult fallThrough() {
+            return new HandleResult(false, null);
+        }
+
+        static HandleResult of(String value) {
+            return new HandleResult(true, value);
+        }
+    }
+
+    /**
+     * Resolves the model object name via the cached/looked-up getModelObjectName
+     * MethodHandle. Returns a {@link HandleResult} whose {@code invoked} flag is
+     * false when there is no such method or the invocation throws, so the caller
+     * can apply the IWorkbenchAdapter fallback; otherwise the (possibly null)
+     * invocation result is authoritative.
+     *
+     * @param adapter the adapter to invoke the method on
+     * @param clazz the adapter's runtime class (cache key)
+     * @return the invocation outcome
+     */
+    private static HandleResult invokeGetModelObjectName(Object adapter, Class<?> clazz) {
+        MethodHandle mh = resolveModelObjectNameHandle(clazz);
+        if (mh == null) {
+            return HandleResult.fallThrough();
+        }
+        try {
+            return HandleResult.of((String) mh.invoke(adapter));
+        } catch (Throwable e) {
+            // Fall through to fallback
+            return HandleResult.fallThrough();
+        }
+    }
+
+    /**
+     * Returns the getModelObjectName MethodHandle for the given class, using the
+     * cache. Negative results (no such method) are cached as null keys; positive
+     * results are stored. ConcurrentHashMap forbids null values, so classes without
+     * the method are simply re-looked-up rather than negatively cached.
+     *
+     * @param clazz the adapter class
+     * @return the MethodHandle, or null if the class has no such method
+     */
+    private static MethodHandle resolveModelObjectNameHandle(Class<?> clazz) {
         // Check if we've already cached this class (including negative results)
         if (MODEL_OBJECT_NAME_CACHE.containsKey(clazz)) {
-            MethodHandle cached = MODEL_OBJECT_NAME_CACHE.get(clazz);
-            if (cached != null) {
-                try {
-                    return (String) cached.invoke(adapter);
-                } catch (Throwable e) {
-                    // Fall through to fallback
-                }
-            }
-            // cached is null - means we tried before and there's no method
-        } else {
-            // Cache miss - try to find and cache the method
-            MethodHandle mh = findGetModelObjectNameMethod(clazz);
-            if (mh != null) {
-                MODEL_OBJECT_NAME_CACHE.put(clazz, mh);
-                try {
-                    return (String) mh.invoke(adapter);
-                } catch (Throwable e) {
-                    // Fall through to fallback
-                }
-            }
-            // Don't cache null - ConcurrentHashMap doesn't allow null values
-            // We'll just repeat the lookup for classes without the method
+            // A non-null value is a usable handle; null means we tried before and
+            // there's no method.
+            return MODEL_OBJECT_NAME_CACHE.get(clazz);
         }
-        
-        // Fallback: try IWorkbenchAdapter label
+        // Cache miss - try to find and cache the method
+        MethodHandle mh = findGetModelObjectNameMethod(clazz);
+        if (mh != null) {
+            MODEL_OBJECT_NAME_CACHE.put(clazz, mh);
+        }
+        // Don't cache null - ConcurrentHashMap doesn't allow null values
+        // We'll just repeat the lookup for classes without the method
+        return mh;
+    }
+
+    /**
+     * Fallback model-object-name resolution via the IWorkbenchAdapter label
+     * (spaces stripped), used when the getModelObjectName MethodHandle is
+     * unavailable or fails.
+     *
+     * @param adapter the adapter
+     * @return the label-derived name, or null
+     */
+    private static String getModelObjectNameFallback(Object adapter) {
         if (adapter instanceof IWorkbenchAdapter workbenchAdapter) {
             String label = workbenchAdapter.getLabel(adapter);
             if (label != null) {
                 return label.replace(" ", "");
             }
         }
-        
         return null;
     }
     

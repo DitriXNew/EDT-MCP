@@ -214,45 +214,83 @@ public class DebugStatusTool implements IMcpTool
      */
     private static void appendSuspendState(Map<String, Object> entry, IDebugTarget[] targets)
     {
-        int threadCount = 0;
-        boolean anySuspended = false;
-        String suspendedAt = null;
+        SuspendState state = new SuspendState();
         for (IDebugTarget t : targets)
         {
             if (t == null || t.isTerminated())
             {
                 continue;
             }
-            try
-            {
-                for (IThread th : t.getThreads())
-                {
-                    threadCount++;
-                    if (th.isSuspended())
-                    {
-                        anySuspended = true;
-                        if (suspendedAt == null)
-                        {
-                            IStackFrame top = th.getTopStackFrame();
-                            if (top != null)
-                            {
-                                suspendedAt = top.getName() + " @ " + top.getLineNumber(); //$NON-NLS-1$
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                // best-effort
-            }
+            scanTargetThreads(t, state);
         }
-        entry.put("threadCount", threadCount); //$NON-NLS-1$
-        entry.put("suspended", anySuspended); //$NON-NLS-1$
-        if (suspendedAt != null)
+        entry.put("threadCount", state.threadCount); //$NON-NLS-1$
+        entry.put("suspended", state.anySuspended); //$NON-NLS-1$
+        if (state.suspendedAt != null)
         {
-            entry.put("suspendedAt", suspendedAt); //$NON-NLS-1$
+            entry.put("suspendedAt", state.suspendedAt); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Walks one debug target's threads (best-effort, swallowing per-target exceptions
+     * exactly as the original inline loop) and folds the result into {@code state}:
+     * increments the thread count, flags any suspended thread, and records the
+     * {@code name @ line} of the first suspended thread's top frame. Read-only with
+     * respect to the target; only the accumulator is mutated.
+     *
+     * @param target the (non-null, non-terminated) debug target to scan
+     * @param state the accumulator to fold thread results into
+     */
+    private static void scanTargetThreads(IDebugTarget target, SuspendState state)
+    {
+        try
+        {
+            for (IThread th : target.getThreads())
+            {
+                foldThread(th, state);
+            }
+        }
+        catch (Exception ex)
+        {
+            // best-effort
+        }
+    }
+
+    /**
+     * Folds a single thread into the accumulator, mirroring the innermost block of the
+     * original suspend scan: counts the thread, flags suspension, and — only while no
+     * suspend location has been recorded yet — captures the {@code name @ line} of its
+     * top stack frame.
+     *
+     * @param th the thread to inspect (may throw on access; caller swallows)
+     * @param state the accumulator to update
+     * @throws org.eclipse.debug.core.DebugException if the thread or frame cannot be read
+     */
+    private static void foldThread(IThread th, SuspendState state) throws org.eclipse.debug.core.DebugException
+    {
+        state.threadCount++;
+        if (!th.isSuspended())
+        {
+            return;
+        }
+        state.anySuspended = true;
+        if (state.suspendedAt != null)
+        {
+            return;
+        }
+        IStackFrame top = th.getTopStackFrame();
+        if (top != null)
+        {
+            state.suspendedAt = top.getName() + " @ " + top.getLineNumber(); //$NON-NLS-1$
+        }
+    }
+
+    /** Mutable accumulator for the aggregated suspend state across a launch's targets. */
+    private static final class SuspendState
+    {
+        int threadCount;
+        boolean anySuspended;
+        String suspendedAt;
     }
 
     /**

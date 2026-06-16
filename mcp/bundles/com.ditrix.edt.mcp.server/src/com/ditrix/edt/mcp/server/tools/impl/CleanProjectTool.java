@@ -178,46 +178,74 @@ public class CleanProjectTool implements IMcpTool
 
         if (projectName != null && !projectName.isEmpty())
         {
-            // Clean specific project
-            ProjectContext ctx = ProjectContext.of(projectName);
-            if (!ctx.exists())
-            {
-                collection.error = ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
-                return collection;
-            }
-
-            if (!ctx.isOpen())
-            {
-                collection.error = ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
-                return collection;
-            }
-
-            IProject project = ctx.project();
-
-            IDtProject dtProject = dtProjectManager != null ?
-                dtProjectManager.getDtProject(project) : null;
-
-            collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject));
-            collection.projectNamesList.add(projectName);
+            collectNamedProject(projectName, dtProjectManager, collection);
         }
         else
         {
-            // Clean all EDT projects
-            if (dtProjectManager != null)
-            {
-                for (IDtProject dtProject : dtProjectManager.getDtProjects())
-                {
-                    IProject project = dtProject.getWorkspaceProject();
-                    if (project != null && project.isOpen())
-                    {
-                        collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject));
-                        collection.projectNamesList.add(project.getName());
-                    }
-                }
-            }
+            collectAllEdtProjects(dtProjectManager, collection);
         }
 
         return collection;
+    }
+
+    /**
+     * Resolves a single named project into {@code collection}: validates that it exists and is open,
+     * then records it with its DT project (or {@code null} when the manager is unavailable). On a
+     * missing/closed project it sets {@code collection.error} to the same JSON payload as the original
+     * inline block and leaves the work lists empty.
+     *
+     * @param projectName       the requested project name (non-empty)
+     * @param dtProjectManager  the DT project manager (may be {@code null})
+     * @param collection        the accumulator to populate (mutated)
+     */
+    private static void collectNamedProject(String projectName, IDtProjectManager dtProjectManager,
+        CleanCollection collection)
+    {
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            collection.error = ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return;
+        }
+
+        if (!ctx.isOpen())
+        {
+            collection.error = ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
+            return;
+        }
+
+        IProject project = ctx.project();
+
+        IDtProject dtProject = dtProjectManager != null ?
+            dtProjectManager.getDtProject(project) : null;
+
+        collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject));
+        collection.projectNamesList.add(projectName);
+    }
+
+    /**
+     * Collects every open EDT project into {@code collection} (the "clean all" path). No-op when the
+     * DT project manager is unavailable; otherwise each DT project whose workspace project exists and
+     * is open is recorded. Behaviour-identical to the original inline {@code else} block.
+     *
+     * @param dtProjectManager  the DT project manager (may be {@code null})
+     * @param collection        the accumulator to populate (mutated)
+     */
+    private static void collectAllEdtProjects(IDtProjectManager dtProjectManager, CleanCollection collection)
+    {
+        if (dtProjectManager == null)
+        {
+            return;
+        }
+        for (IDtProject dtProject : dtProjectManager.getDtProjects())
+        {
+            IProject project = dtProject.getWorkspaceProject();
+            if (project != null && project.isOpen())
+            {
+                collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject));
+                collection.projectNamesList.add(project.getName());
+            }
+        }
     }
 
     /**

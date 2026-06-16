@@ -328,23 +328,50 @@ public class GetModuleStructureTool implements IMcpTool
         int idx = 1;
         for (MethodInfo m : methods)
         {
-            sb.append("| ").append(idx++); //$NON-NLS-1$
-            sb.append(" | ").append(m.isFunction ? "Function" : "Procedure"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append(" | ").append(MarkdownUtils.escapeForTable(m.name)); //$NON-NLS-1$
-            sb.append(" | ").append(m.isExport ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            sb.append(" | ").append(m.executionContext != null ? MarkdownUtils.escapeForTable(m.executionContext) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append(" | ").append(m.startLine).append("-").append(m.endLine); //$NON-NLS-1$ //$NON-NLS-2$
-            if (detailed)
-            {
-                sb.append(" | ").append(MarkdownUtils.escapeForTable(m.paramsString)); //$NON-NLS-1$
-            }
-            sb.append(" | ").append(m.region != null ? MarkdownUtils.escapeForTable(m.region) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (showComments)
-            {
-                sb.append(" | ").append(m.docComment != null ? MarkdownUtils.escapeForTable(m.docComment) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            sb.append(" |\n"); //$NON-NLS-1$
+            appendMethodRow(sb, m, idx++, detailed, showComments);
         }
+    }
+
+    /**
+     * Appends one markdown table row for a single method. The Parameters cell is emitted only in
+     * {@code detailed} mode and the Description cell only when {@code showComments}, matching the
+     * column set advertised by {@link #appendMethodsTableHeader}. Behaviour-identical to the former
+     * inline loop body.
+     *
+     * @param sb           output buffer
+     * @param m            the method to render
+     * @param idx          the 1-based row number shown in the first column
+     * @param detailed     whether the Parameters column is present
+     * @param showComments whether the Description column is present
+     */
+    private void appendMethodRow(StringBuilder sb, MethodInfo m, int idx,
+        boolean detailed, boolean showComments)
+    {
+        sb.append("| ").append(idx); //$NON-NLS-1$
+        sb.append(" | ").append(m.isFunction ? "Function" : "Procedure"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append(" | ").append(MarkdownUtils.escapeForTable(m.name)); //$NON-NLS-1$
+        sb.append(" | ").append(m.isExport ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append(" | ").append(m.executionContext != null ? MarkdownUtils.escapeForTable(m.executionContext) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(" | ").append(m.startLine).append("-").append(m.endLine); //$NON-NLS-1$ //$NON-NLS-2$
+        if (detailed)
+        {
+            sb.append(" | ").append(MarkdownUtils.escapeForTable(m.paramsString)); //$NON-NLS-1$
+        }
+        sb.append(" | ").append(escapeOrDash(m.region)); //$NON-NLS-1$
+        if (showComments)
+        {
+            sb.append(" | ").append(escapeOrDash(m.docComment)); //$NON-NLS-1$
+        }
+        sb.append(" |\n"); //$NON-NLS-1$
+    }
+
+    /**
+     * Escapes a nullable cell value for a markdown table, returning {@code "-"} for {@code null}.
+     * Mirrors the original inline {@code x != null ? escapeForTable(x) : "-"} guard.
+     */
+    private static String escapeOrDash(String value)
+    {
+        return value != null ? MarkdownUtils.escapeForTable(value) : "-"; //$NON-NLS-1$
     }
 
     /**

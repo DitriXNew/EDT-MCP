@@ -218,9 +218,11 @@ public class GetProjectErrorsTool implements IMcpTool
             final int[] unresolvedShown = {0};
             final int[] unresolvedFilteredOut = {0};
 
+            final CollectContext collectContext = new CollectContext(finalSeverityFilter,
+                finalCheckId, finalObjects, checkRepository, limit, unresolvedShown,
+                unresolvedFilteredOut);
             final List<ErrorInfo> errors = collectErrors(markersByProject, bmModelManager,
-                finalSeverityFilter, finalCheckId, finalObjects, checkRepository, limit,
-                unresolvedShown, unresolvedFilteredOut);
+                collectContext);
 
             // Build Markdown response for better readability and context efficiency
             StringBuilder md = new StringBuilder();
@@ -330,30 +332,23 @@ public class GetProjectErrorsTool implements IMcpTool
      *
      * @param markersByProject the markers grouped by project, in processing order
      * @param bmModelManager the BM model manager, may be {@code null}
-     * @param severityFilter the severity filter, or {@code null} for all severities
-     * @param checkId the checkId substring filter, may be {@code null}/empty
-     * @param objects the normalized object FQN variants (empty for no object filter)
-     * @param checkRepository the check repository for symbolic id resolution, may be {@code null}
-     * @param limit the maximum number of collected errors
-     * @param unresolvedShown out-counter for markers reported with a placeholder location
-     * @param unresolvedFilteredOut out-counter for markers excluded by an active object filter
-     * @return the collected errors, capped at {@code limit}
+     * @param context the immutable collection context (filters, repository, limit and the
+     *     two unresolved-marker out-counters)
+     * @return the collected errors, capped at {@code context.limit}
      */
     private static List<ErrorInfo> collectErrors(Map<IProject, List<Marker>> markersByProject,
-        IBmModelManager bmModelManager, MarkerSeverity severityFilter, String checkId,
-        Set<String> objects, ICheckRepository checkRepository, int limit,
-        int[] unresolvedShown, int[] unresolvedFilteredOut)
+        IBmModelManager bmModelManager, CollectContext context)
     {
         final List<ErrorInfo> errors = new ArrayList<>();
         for (Map.Entry<IProject, List<Marker>> entry : markersByProject.entrySet())
         {
-            if (errors.size() >= limit)
+            if (errors.size() >= context.limit)
             {
                 break;
             }
 
             final List<Marker> projectMarkers = entry.getValue();
-            final int remaining = limit - errors.size();
+            final int remaining = context.limit - errors.size();
 
             // Resolve the project's BM model so getObjectPresentation() can lazily
             // resolve the marker target inside a read transaction. The getModel(IProject)
@@ -362,8 +357,9 @@ public class GetProjectErrorsTool implements IMcpTool
             IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
 
             Runnable collector = () -> projectMarkers.stream()
-                .map(marker -> buildIfMatches(marker, severityFilter, checkId,
-                    objects, checkRepository, unresolvedShown, unresolvedFilteredOut))
+                .map(marker -> buildIfMatches(marker, context.severityFilter, context.checkId,
+                    context.objects, context.checkRepository, context.unresolvedShown,
+                    context.unresolvedFilteredOut))
                 .filter(error -> error != null)
                 .limit(remaining)
                 .forEach(errors::add);
@@ -383,6 +379,36 @@ public class GetProjectErrorsTool implements IMcpTool
             }
         }
         return errors;
+    }
+
+    /**
+     * Immutable holder for the per-call collection context threaded through {@link #collectErrors}:
+     * the severity / checkId / objects filters, the check repository, the result {@code limit} and
+     * the two unresolved-marker out-counters. The {@code int[]} counters are shared references whose
+     * contents are advanced exactly as before. Bundles the parameters without changing any value.
+     */
+    private static final class CollectContext
+    {
+        final MarkerSeverity severityFilter;
+        final String checkId;
+        final Set<String> objects;
+        final ICheckRepository checkRepository;
+        final int limit;
+        final int[] unresolvedShown;
+        final int[] unresolvedFilteredOut;
+
+        CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
+            ICheckRepository checkRepository, int limit, int[] unresolvedShown,
+            int[] unresolvedFilteredOut)
+        {
+            this.severityFilter = severityFilter;
+            this.checkId = checkId;
+            this.objects = objects;
+            this.checkRepository = checkRepository;
+            this.limit = limit;
+            this.unresolvedShown = unresolvedShown;
+            this.unresolvedFilteredOut = unresolvedFilteredOut;
+        }
     }
 
     /**

@@ -182,8 +182,9 @@ public class GetMarkersTool implements IMcpTool
                 projects = ProjectContext.allProjects();
             }
 
-            collectMarkerRows(projects, includeBookmarks, includeTasks, filePath, priorityFilter,
-                limit, rows, seenTasks);
+            MarkerScan scan = new MarkerScan(includeBookmarks, includeTasks, filePath,
+                priorityFilter, limit);
+            collectMarkerRows(projects, scan, rows, seenTasks);
 
             appendMarkersTable(md, rows, limit);
         }
@@ -202,16 +203,11 @@ public class GetMarkersTool implements IMcpTool
      * {@code seenTasks}). Stops once {@code limit} rows have been gathered.
      *
      * @param projects the projects to scan (already resolved/filtered)
-     * @param includeBookmarks whether to scan bookmark markers
-     * @param includeTasks whether to scan task markers
-     * @param filePath case-insensitive path-substring filter (null/empty = no filter)
-     * @param priorityFilter task priority filter (null = no filter); ignored for bookmarks
-     * @param limit maximum number of rows to collect (already clamped)
+     * @param scan the immutable scan criteria (marker families, filters and limit)
      * @param rows accumulator the collected rows are appended to
      * @param seenTasks dedup set shared across the two task marker types
      */
-    private static void collectMarkerRows(IProject[] projects, boolean includeBookmarks,
-        boolean includeTasks, String filePath, Integer priorityFilter, int limit,
+    private static void collectMarkerRows(IProject[] projects, MarkerScan scan,
         List<MarkerRow> rows, Set<String> seenTasks)
     {
         for (IProject project : projects)
@@ -221,23 +217,48 @@ public class GetMarkersTool implements IMcpTool
                 continue;
             }
 
-            if (includeBookmarks && rows.size() < limit)
+            if (scan.includeBookmarks && rows.size() < scan.limit)
             {
-                collectBookmarks(project, rows, filePath, limit);
+                collectBookmarks(project, rows, scan.filePath, scan.limit);
             }
-            if (includeTasks && rows.size() < limit)
+            if (scan.includeTasks && rows.size() < scan.limit)
             {
-                collectTasks(project, TASK_MARKER_TYPE, rows, seenTasks, filePath, priorityFilter, limit);
-                if (rows.size() < limit)
+                collectTasks(project, TASK_MARKER_TYPE, rows, seenTasks, scan.filePath, scan.priorityFilter, scan.limit);
+                if (rows.size() < scan.limit)
                 {
-                    collectTasks(project, XTEXT_TASK_MARKER_TYPE, rows, seenTasks, filePath, priorityFilter, limit);
+                    collectTasks(project, XTEXT_TASK_MARKER_TYPE, rows, seenTasks, scan.filePath, scan.priorityFilter, scan.limit);
                 }
             }
 
-            if (rows.size() >= limit)
+            if (rows.size() >= scan.limit)
             {
                 break;
             }
+        }
+    }
+
+    /**
+     * Immutable holder for the marker-scan criteria threaded through
+     * {@link #collectMarkerRows}: which marker families to scan, the path/priority
+     * filters and the (already clamped) row limit. Bundles the parameters without
+     * changing any value or scan behaviour.
+     */
+    private static final class MarkerScan
+    {
+        final boolean includeBookmarks;
+        final boolean includeTasks;
+        final String filePath;
+        final Integer priorityFilter;
+        final int limit;
+
+        MarkerScan(boolean includeBookmarks, boolean includeTasks, String filePath,
+            Integer priorityFilter, int limit)
+        {
+            this.includeBookmarks = includeBookmarks;
+            this.includeTasks = includeTasks;
+            this.filePath = filePath;
+            this.priorityFilter = priorityFilter;
+            this.limit = limit;
         }
     }
 

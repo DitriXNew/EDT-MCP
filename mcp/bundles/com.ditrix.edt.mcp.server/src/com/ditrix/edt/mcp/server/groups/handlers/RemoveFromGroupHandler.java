@@ -125,21 +125,37 @@ public class RemoveFromGroupHandler extends AbstractHandler {
             IGroupService service, List<ObjectInGroup> objectsToRemove) {
         IProject project = null;
         for (Object element : structuredSelection.toList()) {
-            if (element instanceof EObject eObject) {
-                IProject objProject = TagUtils.extractProject(eObject);
-                String fqn = TagUtils.extractFqn(eObject);
-                if (objProject != null && fqn != null) {
-                    Group group = service.findGroupForObject(objProject, fqn);
-                    if (group != null) {
-                        objectsToRemove.add(new ObjectInGroup(objProject, fqn));
-                        if (project == null) {
-                            project = objProject;
-                        }
-                    }
-                }
+            ObjectInGroup inGroup = resolveObjectInGroup(element, service);
+            if (inGroup == null) {
+                continue;
+            }
+            objectsToRemove.add(inGroup);
+            if (project == null) {
+                project = inGroup.project();
             }
         }
         return project;
+    }
+
+    /**
+     * Resolves a single selection element to an {@link ObjectInGroup} when it is an {@link EObject}
+     * that has both a project and FQN and is currently a member of some group; otherwise returns
+     * {@code null}. Read-only group lookup — does not modify any group.
+     */
+    private static ObjectInGroup resolveObjectInGroup(Object element, IGroupService service) {
+        if (!(element instanceof EObject eObject)) {
+            return null;
+        }
+        IProject objProject = TagUtils.extractProject(eObject);
+        String fqn = TagUtils.extractFqn(eObject);
+        if (objProject == null || fqn == null) {
+            return null;
+        }
+        Group group = service.findGroupForObject(objProject, fqn);
+        if (group == null) {
+            return null;
+        }
+        return new ObjectInGroup(objProject, fqn);
     }
 
     /**

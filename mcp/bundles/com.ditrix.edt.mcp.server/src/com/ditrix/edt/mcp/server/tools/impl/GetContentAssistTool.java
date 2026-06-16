@@ -206,26 +206,50 @@ public class GetContentAssistTool implements IMcpTool
         int offset = Math.max(0, JsonUtils.extractIntArgument(params, "offset", 0)); //$NON-NLS-1$
         
         boolean extendedDocumentation = "true".equalsIgnoreCase(extendedDocStr); //$NON-NLS-1$
-        
-        return getContentAssist(projectName, filePath, line, column, limit, offset, containsFilter, extendedDocumentation);
+
+        ContentAssistRequest request =
+            new ContentAssistRequest(line, column, limit, offset, containsFilter, extendedDocumentation);
+        return getContentAssist(projectName, filePath, request);
     }
-    
+
+    /**
+     * Immutable bundle of the per-call content-assist request parameters (caret
+     * position plus pagination/filter/format options), threaded unchanged from
+     * {@link #getContentAssist} into {@link #executeOnUiThread}. Field values and
+     * read order match the previous flat parameter lists exactly.
+     */
+    private static final class ContentAssistRequest
+    {
+        final int line;
+        final int column;
+        final int maxProposals;
+        final int proposalOffset;
+        final String containsFilter;
+        final boolean extendedDocumentation;
+
+        ContentAssistRequest(int line, int column, int maxProposals, int proposalOffset,
+                String containsFilter, boolean extendedDocumentation)
+        {
+            this.line = line;
+            this.column = column;
+            this.maxProposals = maxProposals;
+            this.proposalOffset = proposalOffset;
+            this.containsFilter = containsFilter;
+            this.extendedDocumentation = extendedDocumentation;
+        }
+    }
+
     /**
      * Gets content assist proposals at the specified position.
      * Must run on UI thread to access editors.
-     * 
+     *
      * @param projectName EDT project name
      * @param filePath relative path from project's src folder (e.g. 'CommonModules/MyModule/Module.bsl')
-     * @param line line number (1-based)
-     * @param column column number (1-based)
-     * @param limit maximum proposals to return
-     * @param offset number of proposals to skip (for pagination)
-     * @param containsFilter comma-separated substrings to filter proposals
-     * @param extendedDocumentation whether to include full documentation
+     * @param request the caret position and pagination/filter/format options
      * @return JSON result
      */
-    private String getContentAssist(String projectName, String filePath, int line, int column, 
-                                    int limit, int offset, String containsFilter, boolean extendedDocumentation)
+    private String getContentAssist(String projectName, String filePath,
+                                    ContentAssistRequest request)
     {
         // Find the project
         ProjectContext ctx = ProjectContext.of(projectName);
@@ -241,7 +265,7 @@ public class GetContentAssistTool implements IMcpTool
         }
 
         IProject project = ctx.project();
-        
+
         // Build the full path: project/src/filePath
         IFile file = BslModuleUtils.resolveModuleFile(project, filePath);
 
@@ -249,24 +273,17 @@ public class GetContentAssistTool implements IMcpTool
         {
             return ToolResult.error("File not found: " + file.getProjectRelativePath().toString() + " in project " + projectName).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        
+
         final IFile targetFile = file;
-        final int targetLine = line;
-        final int targetColumn = column;
-        final int maxProposals = limit;
-        final int proposalOffset = offset;
-        final String filter = containsFilter;
-        final boolean extendedDoc = extendedDocumentation;
-        
+
         AtomicReference<String> resultRef = new AtomicReference<>();
-        
+
         // Execute on UI thread
         Display display = PlatformUI.getWorkbench().getDisplay();
         display.syncExec(() -> {
             try
             {
-                String result = executeOnUiThread(targetFile, targetLine, targetColumn, maxProposals, 
-                                                   proposalOffset, filter, extendedDoc);
+                String result = executeOnUiThread(targetFile, request);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -275,15 +292,14 @@ public class GetContentAssistTool implements IMcpTool
                 resultRef.set(ToolResult.error(e.getMessage()).toJson()); //$NON-NLS-1$
             }
         });
-        
+
         return resultRef.get();
     }
-    
+
     /**
      * Executes content assist on UI thread.
      */
-    private String executeOnUiThread(IFile file, int line, int column, int maxProposals, 
-                                     int proposalOffset, String containsFilter, boolean extendedDocumentation) throws Exception
+    private String executeOnUiThread(IFile file, ContentAssistRequest request) throws Exception
     {
         IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
         if (window == null)
@@ -327,9 +343,9 @@ public class GetContentAssistTool implements IMcpTool
         int offset;
         try
         {
-            int lineOffset = document.getLineOffset(line - 1);
-            offset = lineOffset + column - 1;
-            
+            int lineOffset = document.getLineOffset(request.line - 1);
+            offset = lineOffset + request.column - 1;
+
             // Validate offset is within document
             if (offset < 0 || offset > document.getLength())
             {
@@ -338,7 +354,7 @@ public class GetContentAssistTool implements IMcpTool
         }
         catch (BadLocationException e)
         {
-            return ToolResult.error("Invalid line number: " + line).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Invalid line number: " + request.line).toJson(); //$NON-NLS-1$
         }
         
         // Set cursor position
@@ -393,8 +409,9 @@ public class GetContentAssistTool implements IMcpTool
         ICompletionProposal[] proposals = computeStableProposals(processor, sourceViewer, offset);
 
         // Format results
-        return formatProposals(proposals, maxProposals, proposalOffset, containsFilter, extendedDocumentation,
-                               line, column, file.getFullPath().toString());
+        return formatProposals(proposals, request.maxProposals, request.proposalOffset,
+                               request.containsFilter, request.extendedDocumentation,
+                               request.line, request.column, file.getFullPath().toString());
     }
 
     /**

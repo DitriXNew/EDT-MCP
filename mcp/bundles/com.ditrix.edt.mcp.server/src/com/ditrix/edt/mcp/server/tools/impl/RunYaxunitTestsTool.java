@@ -261,8 +261,45 @@ public class RunYaxunitTestsTool implements IMcpTool
         ensureLaunchListenerRegistered();
         purgeTerminatedLaunches();
 
-        return runTests(configName, projectName, applicationId, extensions, modules, tests,
-            timeout, updateBeforeLaunch, updateScope, debug);
+        return runTests(new RunRequest(configName, projectName, applicationId, extensions, modules,
+            tests, timeout, updateBeforeLaunch, updateScope, debug));
+    }
+
+    /**
+     * Immutable carrier for the parsed {@code execute} arguments threaded through
+     * {@link #runTests} and {@link #spawnOrReuseLaunch}. Pure value object — bundling
+     * these keeps both methods below the 7-parameter limit without changing any value
+     * (the resolved {@code projectName}/{@code applicationId} derived from the launch
+     * config are kept as method locals in {@link #runTests}, never written back here).
+     */
+    private static final class RunRequest
+    {
+        final String configName;
+        final String projectName;
+        final String applicationId;
+        final String extensions;
+        final String modules;
+        final String tests;
+        final int timeout;
+        final boolean updateBeforeLaunch;
+        final String updateScope;
+        final boolean debug;
+
+        RunRequest(String configName, String projectName, String applicationId, String extensions,
+                String modules, String tests, int timeout, boolean updateBeforeLaunch,
+                String updateScope, boolean debug)
+        {
+            this.configName = configName;
+            this.projectName = projectName;
+            this.applicationId = applicationId;
+            this.extensions = extensions;
+            this.modules = modules;
+            this.tests = tests;
+            this.timeout = timeout;
+            this.updateBeforeLaunch = updateBeforeLaunch;
+            this.updateScope = updateScope;
+            this.debug = debug;
+        }
     }
 
     /**
@@ -288,9 +325,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * The temp directory is NEVER deleted in finally — a Pending re-call can fetch the result. Old
      * runs are cleaned up automatically before starting a new launch.
      */
-    private String runTests(String configName, String projectName, String applicationId,
-            String extensions, String modules, String tests, int timeout, boolean updateBeforeLaunch,
-            String updateScope, boolean debug)
+    private String runTests(RunRequest req)
     {
         try
         {
@@ -300,44 +335,46 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return ToolResult.error("Launch manager is not available").toJson(); //$NON-NLS-1$
             }
 
-            String earlyScopeError = validateUpdateScopeEarly(projectName, updateScope, updateBeforeLaunch);
+            String earlyScopeError = validateUpdateScopeEarly(req.projectName, req.updateScope,
+                req.updateBeforeLaunch);
             if (earlyScopeError != null)
             {
                 return earlyScopeError;
             }
 
-            LaunchContext context = resolveLaunchContext(launchManager, configName, projectName, applicationId);
+            LaunchContext context = resolveLaunchContext(launchManager, req.configName,
+                req.projectName, req.applicationId);
             if (context.error != null)
             {
                 return context.error;
             }
             ILaunchConfiguration matchingConfig = context.config;
-            projectName = context.projectName;
-            applicationId = context.applicationId;
+            String projectName = context.projectName;
+            String applicationId = context.applicationId;
             IProject project = context.project;
             IApplicationManager appManager = context.appManager;
 
             // DEBUG mode shares the whole setup above (resolve/validate/effective
             // project+app), then spawns a DEBUG launch and returns at once for
             // wait_for_break — no polling, no run-key reuse cache.
-            if (debug)
+            if (req.debug)
             {
                 return launchDebugMode(matchingConfig, project, projectName, applicationId,
-                    appManager, launchManager, extensions, modules, tests, updateBeforeLaunch,
-                    updateScope);
+                    appManager, launchManager, req.extensions, req.modules, req.tests,
+                    req.updateBeforeLaunch, req.updateScope);
             }
 
             // Use the launch config name as the run-key root — stable across
             // (project, applicationId) vs. launchConfigurationName call styles.
             String runKey = matchingConfig.getName() + ":" //$NON-NLS-1$
-                    + sha1(safe(extensions) + "|" + safe(modules) + "|" + safe(tests)); //$NON-NLS-1$ //$NON-NLS-2$
+                    + sha1(safe(req.extensions) + "|" + safe(req.modules) + "|" + safe(req.tests)); //$NON-NLS-1$ //$NON-NLS-2$
             Path reportDir = stableReportDir(runKey);
 
             // If a launch is already running for this key, just poll it.
             ILaunch existing = ACTIVE_LAUNCHES.get(runKey);
             if (existing != null)
             {
-                return handleExistingLaunch(existing, reportDir, timeout, runKey,
+                return handleExistingLaunch(existing, reportDir, req.timeout, runKey,
                         projectName, applicationId);
             }
 
@@ -371,20 +408,15 @@ public class RunYaxunitTestsTool implements IMcpTool
             PreLaunchResult preLaunch = null;
             if (launch == null)
             {
-                if (updateBeforeLaunch)
+                if (req.updateBeforeLaunch)
                 {
                     String prepKey = LaunchLifecycleUtils.prepKeyFor(projectName, applicationId);
-                    final ILaunchManager finalLaunchManager = launchManager;
-                    final IProject finalProject = project;
-                    final String finalApplicationId = applicationId;
-                    final IApplicationManager finalAppManager = appManager;
-                    final String finalUpdateScope = updateScope;
                     final PreLaunchResult[] resultHolder = new PreLaunchResult[1];
+                    PrepRequest prepReq = new PrepRequest(projectName, launchManager, project,
+                        applicationId, appManager, req.updateScope,
+                        "YAXUnit pre-launch preparation for " + projectName); //$NON-NLS-1$
 
-                    String pendingOrError = awaitPreparedOrPending(prepKey, projectName,
-                        finalLaunchManager, finalProject, finalApplicationId, finalAppManager,
-                        finalUpdateScope, "YAXUnit pre-launch preparation for " + projectName, //$NON-NLS-1$
-                        resultHolder);
+                    String pendingOrError = awaitPreparedOrPending(prepKey, prepReq, resultHolder);
                     if (pendingOrError != null)
                     {
                         return pendingOrError;
@@ -392,77 +424,21 @@ public class RunYaxunitTestsTool implements IMcpTool
                     preLaunch = resultHolder[0];
                 }
 
+                // Phase 3 (spawn-or-reuse) runs under the per-key lock — the spawn
+                // body itself (re-check racer / cleanup+write-params+launch+register)
+                // is extracted but stays INLINE under the SAME two locks here so the
+                // lock scopes are byte-for-byte the inline behaviour.
                 synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
                 {
-                    // Phase 3: re-check ACTIVE_LAUNCHES under JVM-wide sync (another
-                    // thread may have spawned for the same runKey while we waited
-                    // on the per-key lock), then either reuse or spawn.
                     synchronized (ACTIVE_LAUNCHES)
                     {
-                        ILaunch racer = ACTIVE_LAUNCHES.get(runKey);
-                        if (racer != null && !racer.isTerminated())
-                        {
-                            Activator.logInfo("Reusing YAXUnit launch spawned during auto-chain: runKey=" //$NON-NLS-1$
-                                + runKey);
-                            launch = racer;
-                        }
-                        else
-                        {
-                            cleanupTempDir(reportDir);
-                            Files.createDirectories(reportDir);
-                            Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
-                            String paramsJson = buildParamsJson(reportDir.resolve(VAL_JUNIT_XML).toString(),
-                                    extensions, modules, tests);
-                            Files.write(paramsFile, paramsJson.getBytes(StandardCharsets.UTF_8));
-                            Activator.logInfo("YAXUnit params written to: " + paramsFile); //$NON-NLS-1$
-
-                            ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
-                            String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
-                            workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
-                            // Stamp the resolved applicationId onto the launch so the spawned
-                            // client carries it (an app-less config would otherwise launch with
-                            // an empty id), keeping it matchable by the terminate-before-launch
-                            // sweep keyed on applicationId.
-                            if (applicationId != null && !applicationId.isEmpty())
-                            {
-                                workingCopy.setAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, applicationId);
-                            }
-
-                            Activator.logInfo("Launching YAXUnit tests: config=" + matchingConfig.getName() //$NON-NLS-1$
-                                    + ", startup=" + startupOption); //$NON-NLS-1$
-
-                            // Auto-confirm EDT's blocking "Application update" modal
-                            // for the duration of this launch only (the dependent
-                            // test extension keeps the app in INCREMENTAL_UPDATE_REQUIRED,
-                            // which no pre-update durably clears) — but ONLY when the
-                            // caller did not opt out via updateBeforeLaunch=false:
-                            // auto-pressing "Update then run" would silently perform
-                            // the very DB update the caller disabled, so with the
-                            // opt-out the platform's dialogs are left for a human.
-                            // Manual EDT launches outside this window still prompt
-                            // normally.
-                            boolean[] armFlags = runPathArmFlags(updateBeforeLaunch);
-                            LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1]);
-                            try
-                            {
-                                launch = workingCopy.launch(ILaunchManager.RUN_MODE,
-                                    new NullProgressMonitor());
-                            }
-                            finally
-                            {
-                                LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1]);
-                            }
-                            // Register BEFORE leaving the per-key lock so a concurrent
-                            // auto-chain on the same IB sees this launch as owned and
-                            // refuses to terminate it.
-                            LaunchLifecycleUtils.registerOwnedLaunch(launch);
-                            ACTIVE_LAUNCHES.put(runKey, launch);
-                        }
+                        launch = spawnOrReuseLaunch(req, matchingConfig, applicationId,
+                            runKey, reportDir);
                     }
                 }
             }
 
-            String pollResult = pollLaunch(launch, reportDir, timeout, runKey,
+            String pollResult = pollLaunch(launch, reportDir, req.timeout, runKey,
                     projectName, applicationId);
             if (pollResult != null)
             {
@@ -491,6 +467,83 @@ public class RunYaxunitTestsTool implements IMcpTool
             Activator.logError("Unexpected error running YAXUnit tests", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
         }
+    }
+
+    /**
+     * Phase 3 reuse-or-spawn body for the RUN path — extracted verbatim from the
+     * inner {@code synchronized (ACTIVE_LAUNCHES)} block of {@link #runTests}. The
+     * CALLER still holds BOTH locks ({@code lockFor(project, applicationId)} then
+     * {@code ACTIVE_LAUNCHES}); this method runs entirely inside that scope, so the
+     * mutating {@code workingCopy.launch} + {@code registerOwnedLaunch} +
+     * {@code ACTIVE_LAUNCHES.put} sequence keeps the exact same serialisation it had
+     * inline. Re-checks {@link #ACTIVE_LAUNCHES} for a launch a racing identical call
+     * spawned during the auto-chain and reuses it; otherwise cleans the report dir,
+     * writes the params file and spawns a fresh RUN-mode launch.
+     *
+     * @return the reused or freshly spawned launch (never {@code null})
+     */
+    private ILaunch spawnOrReuseLaunch(RunRequest req, ILaunchConfiguration matchingConfig,
+            String applicationId, String runKey, Path reportDir) throws CoreException, IOException
+    {
+        ILaunch racer = ACTIVE_LAUNCHES.get(runKey);
+        if (racer != null && !racer.isTerminated())
+        {
+            Activator.logInfo("Reusing YAXUnit launch spawned during auto-chain: runKey=" //$NON-NLS-1$
+                + runKey);
+            return racer;
+        }
+
+        cleanupTempDir(reportDir);
+        Files.createDirectories(reportDir);
+        Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
+        String paramsJson = buildParamsJson(reportDir.resolve(VAL_JUNIT_XML).toString(),
+                req.extensions, req.modules, req.tests);
+        Files.write(paramsFile, paramsJson.getBytes(StandardCharsets.UTF_8));
+        Activator.logInfo("YAXUnit params written to: " + paramsFile); //$NON-NLS-1$
+
+        ILaunchConfigurationWorkingCopy workingCopy = matchingConfig.getWorkingCopy();
+        String startupOption = "RunUnitTests=" + paramsFile.toString(); //$NON-NLS-1$
+        workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
+        // Stamp the resolved applicationId onto the launch so the spawned
+        // client carries it (an app-less config would otherwise launch with
+        // an empty id), keeping it matchable by the terminate-before-launch
+        // sweep keyed on applicationId.
+        if (applicationId != null && !applicationId.isEmpty())
+        {
+            workingCopy.setAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, applicationId);
+        }
+
+        Activator.logInfo("Launching YAXUnit tests: config=" + matchingConfig.getName() //$NON-NLS-1$
+                + ", startup=" + startupOption); //$NON-NLS-1$
+
+        // Auto-confirm EDT's blocking "Application update" modal
+        // for the duration of this launch only (the dependent
+        // test extension keeps the app in INCREMENTAL_UPDATE_REQUIRED,
+        // which no pre-update durably clears) — but ONLY when the
+        // caller did not opt out via updateBeforeLaunch=false:
+        // auto-pressing "Update then run" would silently perform
+        // the very DB update the caller disabled, so with the
+        // opt-out the platform's dialogs are left for a human.
+        // Manual EDT launches outside this window still prompt
+        // normally.
+        boolean[] armFlags = runPathArmFlags(req.updateBeforeLaunch);
+        LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1]);
+        ILaunch launch;
+        try
+        {
+            launch = workingCopy.launch(ILaunchManager.RUN_MODE,
+                new NullProgressMonitor());
+        }
+        finally
+        {
+            LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1]);
+        }
+        // Register BEFORE leaving the per-key lock so a concurrent
+        // auto-chain on the same IB sees this launch as owned and
+        // refuses to terminate it.
+        LaunchLifecycleUtils.registerOwnedLaunch(launch);
+        ACTIVE_LAUNCHES.put(runKey, launch);
+        return launch;
     }
 
     /**
@@ -599,6 +652,22 @@ public class RunYaxunitTestsTool implements IMcpTool
                 + "' is not a runtime-client config — YAXUnit tests require one.").toJson()); //$NON-NLS-1$
         }
 
+        return deriveLaunchContext(matchingConfig, projectName, applicationId);
+    }
+
+    /**
+     * Second half of {@link #resolveLaunchContext} (extracted, behaviour-identical):
+     * derives the effective project/application from the already-validated runtime-client
+     * config, then runs the project-state / existence / open / application-manager /
+     * application-exists gates in the SAME order, returning the first failure or a
+     * populated success. Pure (read-only) — no launch is spawned.
+     *
+     * @return a {@link LaunchContext} whose {@link LaunchContext#error} is non-{@code null}
+     *         when the caller must return that JSON payload, otherwise a populated success
+     */
+    private LaunchContext deriveLaunchContext(ILaunchConfiguration matchingConfig,
+            String projectName, String applicationId)
+    {
         // Derive effective project/application from the resolved config.
         String effectiveProject = LaunchConfigUtils.readAttribute(matchingConfig,
             LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
@@ -618,23 +687,12 @@ public class RunYaxunitTestsTool implements IMcpTool
                 + "' has no project attribute set").toJson()); //$NON-NLS-1$
         }
 
-        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
-        if (notReadyError != null)
+        LaunchContext projectError = checkProjectGate(projectName);
+        if (projectError != null)
         {
-            return LaunchContext.failure(ToolResult.error(notReadyError).toJson());
+            return projectError;
         }
-
-        ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.exists())
-        {
-            return LaunchContext.failure(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
-        }
-
-        if (!ctx.isOpen())
-        {
-            return LaunchContext.failure(ToolResult.error("Project is closed: " + projectName).toJson()); //$NON-NLS-1$
-        }
-        IProject project = ctx.project();
+        IProject project = ProjectContext.of(projectName).project();
 
         IApplicationManager appManager = Activator.getDefault().getApplicationManager();
         if (appManager == null)
@@ -659,6 +717,34 @@ public class RunYaxunitTestsTool implements IMcpTool
         }
 
         return LaunchContext.success(matchingConfig, projectName, applicationId, project, appManager);
+    }
+
+    /**
+     * Runs the project-readiness / existence / open gates for {@code projectName}
+     * in the exact order {@link #deriveLaunchContext} previously ran them inline.
+     *
+     * @return a failure {@link LaunchContext} for the first gate that fails, or
+     *         {@code null} when the project is ready, present and open
+     */
+    private static LaunchContext checkProjectGate(String projectName)
+    {
+        String notReadyError = ProjectStateChecker.checkReadyOrError(projectName);
+        if (notReadyError != null)
+        {
+            return LaunchContext.failure(ToolResult.error(notReadyError).toJson());
+        }
+
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return LaunchContext.failure(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
+        }
+
+        if (!ctx.isOpen())
+        {
+            return LaunchContext.failure(ToolResult.error("Project is closed: " + projectName).toJson()); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**
@@ -810,11 +896,11 @@ public class RunYaxunitTestsTool implements IMcpTool
         {
             String prepKey = LaunchLifecycleUtils.prepKeyFor(projectName, applicationId);
             final PreLaunchResult[] resultHolder = new PreLaunchResult[1];
+            PrepRequest prepReq = new PrepRequest(projectName, launchManager, project,
+                applicationId, appManager, updateScope,
+                "YAXUnit debug pre-launch preparation for " + projectName); //$NON-NLS-1$
 
-            String pendingOrError = awaitPreparedOrPending(prepKey, projectName,
-                launchManager, project, applicationId, appManager,
-                updateScope, "YAXUnit debug pre-launch preparation for " + projectName, //$NON-NLS-1$
-                resultHolder);
+            String pendingOrError = awaitPreparedOrPending(prepKey, prepReq, resultHolder);
             if (pendingOrError != null)
             {
                 return pendingOrError;
@@ -925,18 +1011,11 @@ public class RunYaxunitTestsTool implements IMcpTool
      * </ol>
      *
      * @param prepKey          the in-flight map key (project\u0000applicationId)
-     * @param projectName      project name (for log messages)
-     * @param launchManager    Eclipse launch manager passed through to
-     *                         {@link LaunchLifecycleUtils#prepareForFreshLaunch}
-     * @param project          project handle passed through to
-     *                         {@link LaunchLifecycleUtils#prepareForFreshLaunch}
-     * @param applicationId    application id passed through to
-     *                         {@link LaunchLifecycleUtils#prepareForFreshLaunch}
-     * @param appManager       application manager passed through to
-     *                         {@link LaunchLifecycleUtils#prepareForFreshLaunch}
-     * @param updateScope      updateScope value passed through to
-     *                         {@link LaunchLifecycleUtils#prepareForFreshLaunch}
-     * @param jobName          display name for the background Job
+     * @param req              the pre-launch preparation pass-throughs (project name,
+     *                         launch manager, project, application id, application
+     *                         manager and updateScope forwarded to
+     *                         {@link LaunchLifecycleUtils#prepareForFreshLaunch}, plus
+     *                         the background Job display name)
      * @param resultHolder     single-element array; on success the
      *                         {@link PreLaunchResult} is stored in {@code [0]}
      * @return a non-{@code null} string (a Pending or error message) when the
@@ -944,42 +1023,16 @@ public class RunYaxunitTestsTool implements IMcpTool
      *         {@code null} when preparation completed successfully and the caller
      *         may proceed
      */
-    private static String awaitPreparedOrPending(String prepKey, String projectName,
-            ILaunchManager launchManager, IProject project, String applicationId,
-            IApplicationManager appManager, String updateScope, String jobName,
+    private static String awaitPreparedOrPending(String prepKey, PrepRequest req,
             PreLaunchResult[] resultHolder)
     {
         // Stale-entry eviction loop: if an expired or done-with-error entry is in
         // the map, remove it atomically so the computeIfAbsent below creates a fresh
         // one. At most two iterations: one to detect + remove, one to proceed.
-        while (true)
+        String staleError = evictStalePrepEntry(prepKey);
+        if (staleError != null)
         {
-            PrepInFlight existing = LaunchLifecycleUtils.PREP_INFLIGHT.get(prepKey);
-            if (existing == null)
-            {
-                break; // nothing stale — fall through to computeIfAbsent
-            }
-            if (existing.done && existing.error != null)
-            {
-                // Surface the error ONCE; clear the entry so the next call retries.
-                if (LaunchLifecycleUtils.PREP_INFLIGHT.remove(prepKey, existing))
-                {
-                    return ToolResult.error("Pre-launch preparation failed: " + existing.error //$NON-NLS-1$
-                        + "\n\nIf the previous launch is stuck, call `terminate_launch` " //$NON-NLS-1$
-                        + "with `force=true` and retry. As a last resort, pass " //$NON-NLS-1$
-                        + "`updateBeforeLaunch=false` — but the EDT launch delegate may " //$NON-NLS-1$
-                        + "then pop a modal dialog that blocks the MCP call.").toJson(); //$NON-NLS-1$
-                }
-                continue; // another thread already replaced it — re-check
-            }
-            if (existing.isExpired())
-            {
-                // Atomically replace the expired entry; on failure another thread
-                // already replaced it, so re-check.
-                LaunchLifecycleUtils.PREP_INFLIGHT.remove(prepKey, existing);
-                continue;
-            }
-            break; // active (not done, not expired) — fall through to computeIfAbsent
+            return staleError;
         }
 
         // Atomically get-or-create.  Only the thread that wins
@@ -990,46 +1043,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         if (entry.started.compareAndSet(false, true))
         {
             // This thread won: create and schedule the background Job.
-            final PrepInFlight jobEntry = entry;
-            Job prepJob = new Job(jobName)
-            {
-                @Override
-                protected IStatus run(IProgressMonitor monitor)
-                {
-                    try
-                    {
-                        jobEntry.phase = "recompute"; //$NON-NLS-1$
-                        int terminateTimeout =
-                            LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
-                        PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
-                            launchManager, project, applicationId,
-                            appManager, terminateTimeout, updateScope);
-                        jobEntry.phase = "db-update"; //$NON-NLS-1$
-                        resultHolder[0] = result;
-                        if (!result.isOk())
-                        {
-                            jobEntry.error = result.getError();
-                        }
-                    }
-                    catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
-                    {
-                        // Throwable, not Exception: an Error escaping the prep must still
-                        // surface as a prep failure — otherwise the retry call would see
-                        // done-without-error and proceed as if preparation succeeded.
-                        jobEntry.error = e.getMessage() != null ? e.getMessage()
-                            : e.getClass().getSimpleName();
-                        Activator.logError("Pre-launch preparation job failed: " + projectName, e); //$NON-NLS-1$
-                    }
-                    finally
-                    {
-                        jobEntry.done = true;
-                        jobEntry.latch.countDown();
-                    }
-                    return Status.OK_STATUS;
-                }
-            };
-            prepJob.setPriority(Job.INTERACTIVE);
-            prepJob.schedule();
+            schedulePrepJob(entry, req, resultHolder);
         }
         // else: another thread is already running the Job — just await the latch.
 
@@ -1053,15 +1067,144 @@ public class RunYaxunitTestsTool implements IMcpTool
         LaunchLifecycleUtils.PREP_INFLIGHT.remove(prepKey, entry);
         if (entry.error != null)
         {
-            return ToolResult.error("Pre-launch preparation failed: " + entry.error //$NON-NLS-1$
-                + "\n\nIf the previous launch is stuck, call `terminate_launch` " //$NON-NLS-1$
-                + "with `force=true` and retry. As a last resort, pass " //$NON-NLS-1$
-                + "`updateBeforeLaunch=false` — but the EDT launch delegate may " //$NON-NLS-1$
-                + "then pop a modal dialog that blocks the MCP call.").toJson(); //$NON-NLS-1$
+            return prepFailedError(entry.error);
         }
         // resultHolder[0] already set by the Job; null for the concurrent-waiter path
         // (the original job-starter holds the result, but launch can proceed either way).
         return null; // success — caller may proceed to launch
+    }
+
+    /**
+     * Immutable carrier for the pre-launch preparation pass-throughs (everything
+     * the background {@link #schedulePrepJob} hands to
+     * {@link LaunchLifecycleUtils#prepareForFreshLaunch}, plus the project name for
+     * logging and the Job display name). Bundling these keeps
+     * {@link #awaitPreparedOrPending} and {@link #schedulePrepJob} below the
+     * 7-parameter limit without changing any value or order.
+     */
+    private static final class PrepRequest
+    {
+        final String projectName;
+        final ILaunchManager launchManager;
+        final IProject project;
+        final String applicationId;
+        final IApplicationManager appManager;
+        final String updateScope;
+        final String jobName;
+
+        PrepRequest(String projectName, ILaunchManager launchManager, IProject project,
+                String applicationId, IApplicationManager appManager, String updateScope,
+                String jobName)
+        {
+            this.projectName = projectName;
+            this.launchManager = launchManager;
+            this.project = project;
+            this.applicationId = applicationId;
+            this.appManager = appManager;
+            this.updateScope = updateScope;
+            this.jobName = jobName;
+        }
+    }
+
+    /**
+     * Stale-entry eviction loop for {@link #awaitPreparedOrPending}: if an expired
+     * or done-with-error {@link PrepInFlight} entry is in {@link LaunchLifecycleUtils#PREP_INFLIGHT},
+     * removes it atomically so the caller's {@code computeIfAbsent} creates a fresh
+     * one. At most two iterations: one to detect + remove, one to proceed.
+     *
+     * @return a ready {@link ToolResult#error} JSON payload when a done-with-error
+     *         entry was surfaced (caller returns it verbatim), otherwise {@code null}
+     *         once no stale entry blocks the path
+     */
+    private static String evictStalePrepEntry(String prepKey)
+    {
+        while (true)
+        {
+            PrepInFlight existing = LaunchLifecycleUtils.PREP_INFLIGHT.get(prepKey);
+            if (existing == null)
+            {
+                return null; // nothing stale — caller falls through to computeIfAbsent
+            }
+            if (existing.done && existing.error != null)
+            {
+                // Surface the error ONCE; clear the entry so the next call retries.
+                if (LaunchLifecycleUtils.PREP_INFLIGHT.remove(prepKey, existing))
+                {
+                    return prepFailedError(existing.error);
+                }
+                continue; // another thread already replaced it — re-check
+            }
+            if (existing.isExpired())
+            {
+                // Atomically replace the expired entry; on failure another thread
+                // already replaced it, so re-check.
+                LaunchLifecycleUtils.PREP_INFLIGHT.remove(prepKey, existing);
+                continue;
+            }
+            return null; // active (not done, not expired) — caller falls through
+        }
+    }
+
+    /**
+     * Creates and schedules the single background preparation Job for the entry the
+     * calling thread won (the {@link PrepInFlight#started} CAS). The Job runs
+     * {@link LaunchLifecycleUtils#prepareForFreshLaunch}, stores the
+     * {@link PreLaunchResult} in {@code resultHolder[0]} and always counts down the
+     * entry's latch — identical to the inline body it replaces.
+     */
+    private static void schedulePrepJob(PrepInFlight entry, PrepRequest req,
+            PreLaunchResult[] resultHolder)
+    {
+        final PrepInFlight jobEntry = entry;
+        Job prepJob = new Job(req.jobName)
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                try
+                {
+                    jobEntry.phase = "recompute"; //$NON-NLS-1$
+                    int terminateTimeout =
+                        LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
+                    PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
+                        req.launchManager, req.project, req.applicationId,
+                        req.appManager, terminateTimeout, req.updateScope);
+                    jobEntry.phase = "db-update"; //$NON-NLS-1$
+                    resultHolder[0] = result;
+                    if (!result.isOk())
+                    {
+                        jobEntry.error = result.getError();
+                    }
+                }
+                catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+                {
+                    // Throwable, not Exception: an Error escaping the prep must still
+                    // surface as a prep failure — otherwise the retry call would see
+                    // done-without-error and proceed as if preparation succeeded.
+                    jobEntry.error = e.getMessage() != null ? e.getMessage()
+                        : e.getClass().getSimpleName();
+                    Activator.logError("Pre-launch preparation job failed: " + req.projectName, e); //$NON-NLS-1$
+                }
+                finally
+                {
+                    jobEntry.done = true;
+                    jobEntry.latch.countDown();
+                }
+                return Status.OK_STATUS;
+            }
+        };
+        prepJob.setPriority(Job.INTERACTIVE);
+        prepJob.schedule();
+    }
+
+    /** Shared "Pre-launch preparation failed" error payload (identical wording in both surfacing sites). */
+    private static String prepFailedError(String error)
+    {
+        return ToolResult.error("Pre-launch preparation failed: " + error //$NON-NLS-1$
+            + "\n\nIf the previous launch is stuck, call `terminate_launch` " //$NON-NLS-1$
+            + "with `force=true` and retry. As a last resort, pass " //$NON-NLS-1$
+            + "`updateBeforeLaunch=false` — but the EDT launch delegate may " //$NON-NLS-1$
+            + "then pop a modal dialog that blocks the MCP call.").toJson(); //$NON-NLS-1$
     }
 
     /** Markdown launch handle returned by DEBUG mode — readable, with the wait_for_break next step. */

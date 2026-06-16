@@ -89,76 +89,156 @@ public class GetVariablesTool implements IMcpTool
 
         try
         {
-            IStackFrame frame = null;
-            if (frameRef > 0)
+            FrameResolution fr = resolveFrame(registry, frameRef, threadId, frameIndex);
+            if (fr.error != null)
             {
-                frame = registry.getFrame(frameRef);
-                if (frame == null)
-                {
-                    return ToolResult.error("stale frameRef — call wait_for_break again").toJson(); //$NON-NLS-1$
-                }
+                return fr.error;
             }
-            else if (threadId > 0)
-            {
-                IThread thread = registry.getThread(threadId);
-                if (thread == null)
-                {
-                    return ToolResult.error("stale threadId — call wait_for_break again").toJson(); //$NON-NLS-1$
-                }
-                IStackFrame[] frames = thread.getStackFrames();
-                if (frameIndex < 0 || frameIndex >= frames.length)
-                {
-                    return ToolResult.error("frameIndex out of range (0.." //$NON-NLS-1$
-                            + (frames.length - 1) + ")").toJson(); //$NON-NLS-1$
-                }
-                frame = frames[frameIndex];
-            }
-            else
-            {
-                // Fallback: auto-resolve the single active debug session through the
-                // SAME blank-id policy every applicationId-based tool uses
-                // (DebugTargetResolver: the lone Eclipse launch, else the lone
-                // server target) and read its snapshot under the canonical key —
-                // replaces a hand-rolled condensed copy of that policy.
-                DebugTargetResolver.Resolution res = DebugTargetResolver.resolve(null);
-                DebugSessionRegistry.SuspendSnapshot snap =
-                    res != null ? registry.getSnapshot(res.canonicalId) : null;
-                if (snap == null)
-                {
-                    return ToolResult.error("Provide frameRef or threadId — no single suspended debug " //$NON-NLS-1$
-                        + "session available for auto-resolution. Call wait_for_break first.").toJson(); //$NON-NLS-1$
-                }
-                IStackFrame[] frames = snap.thread.getStackFrames();
-                if (frames.length == 0)
-                {
-                    return ToolResult.error("suspended thread has no stack frames").toJson(); //$NON-NLS-1$
-                }
-                frame = frames[Math.min(Math.max(frameIndex, 0), frames.length - 1)];
-            }
-
-            List<Map<String, Object>> vars;
-            if (expandPath != null && !expandPath.isEmpty())
-            {
-                IVariable resolved = VariableSerializer.resolvePath(frame, expandPath);
-                if (resolved == null)
-                {
-                    return ToolResult.error("expandPath not found: " + expandPath).toJson(); //$NON-NLS-1$
-                }
-                vars = VariableSerializer.serializeChildren(resolved, registry);
-            }
-            else
-            {
-                vars = VariableSerializer.serializeFrame(frame, registry);
-            }
-            return ToolResult.success()
-                .put("variables", vars) //$NON-NLS-1$
-                .put("count", vars.size()) //$NON-NLS-1$
-                .toJson();
+            return serializeVariables(registry, fr.frame, expandPath);
         }
         catch (Exception e)
         {
             Activator.logError("Error in get_variables", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Resolves the target stack frame from (in priority order) {@code frameRef},
+     * {@code threadId + frameIndex}, or the auto-resolved single active debug
+     * session. Returns a holder carrying either the resolved frame or the exact
+     * error JSON the original inline branch produced — the caller re-checks
+     * {@code error} and returns it unchanged.
+     *
+     * @return a {@link FrameResolution} with a non-null {@code frame} on success,
+     *         or a non-null {@code error} (same value/case as before) otherwise
+     */
+    private static FrameResolution resolveFrame(DebugSessionRegistry registry, long frameRef, long threadId,
+        int frameIndex)
+        throws org.eclipse.debug.core.DebugException
+    {
+        if (frameRef > 0)
+        {
+            return resolveByFrameRef(registry, frameRef);
+        }
+        if (threadId > 0)
+        {
+            return resolveByThreadId(registry, threadId, frameIndex);
+        }
+        return resolveByAutoSession(registry, frameIndex);
+    }
+
+    /** Resolves the frame stored under a stable {@code frameRef} from wait_for_break. */
+    private static FrameResolution resolveByFrameRef(DebugSessionRegistry registry, long frameRef)
+    {
+        IStackFrame frame = registry.getFrame(frameRef);
+        if (frame == null)
+        {
+            return FrameResolution.error(
+                ToolResult.error("stale frameRef — call wait_for_break again").toJson()); //$NON-NLS-1$
+        }
+        return FrameResolution.frame(frame);
+    }
+
+    /** Resolves the {@code frameIndex}-th frame of the live thread {@code threadId}. */
+    private static FrameResolution resolveByThreadId(DebugSessionRegistry registry, long threadId, int frameIndex)
+        throws org.eclipse.debug.core.DebugException
+    {
+        IThread thread = registry.getThread(threadId);
+        if (thread == null)
+        {
+            return FrameResolution.error(
+                ToolResult.error("stale threadId — call wait_for_break again").toJson()); //$NON-NLS-1$
+        }
+        IStackFrame[] frames = thread.getStackFrames();
+        if (frameIndex < 0 || frameIndex >= frames.length)
+        {
+            return FrameResolution.error(ToolResult.error("frameIndex out of range (0.." //$NON-NLS-1$
+                + (frames.length - 1) + ")").toJson()); //$NON-NLS-1$
+        }
+        return FrameResolution.frame(frames[frameIndex]);
+    }
+
+    /**
+     * Fallback: auto-resolve the single active debug session through the SAME
+     * blank-id policy every applicationId-based tool uses (DebugTargetResolver:
+     * the lone Eclipse launch, else the lone server target) and read its snapshot
+     * under the canonical key — replaces a hand-rolled condensed copy of that
+     * policy. The frame index is clamped into range.
+     */
+    private static FrameResolution resolveByAutoSession(DebugSessionRegistry registry, int frameIndex)
+        throws org.eclipse.debug.core.DebugException
+    {
+        DebugTargetResolver.Resolution res = DebugTargetResolver.resolve(null);
+        DebugSessionRegistry.SuspendSnapshot snap =
+            res != null ? registry.getSnapshot(res.canonicalId) : null;
+        if (snap == null)
+        {
+            return FrameResolution.error(
+                ToolResult.error("Provide frameRef or threadId — no single suspended debug " //$NON-NLS-1$
+                    + "session available for auto-resolution. Call wait_for_break first.").toJson()); //$NON-NLS-1$
+        }
+        IStackFrame[] frames = snap.thread.getStackFrames();
+        if (frames.length == 0)
+        {
+            return FrameResolution.error(
+                ToolResult.error("suspended thread has no stack frames").toJson()); //$NON-NLS-1$
+        }
+        return FrameResolution.frame(frames[Math.min(Math.max(frameIndex, 0), frames.length - 1)]);
+    }
+
+    /**
+     * Serializes either the children of the variable at {@code expandPath} (when
+     * non-empty) or the whole frame, returning the success JSON — or the exact
+     * "expandPath not found" error the inline branch produced.
+     */
+    private static String serializeVariables(DebugSessionRegistry registry, IStackFrame frame, String expandPath)
+        throws Exception
+    {
+        List<Map<String, Object>> vars;
+        if (expandPath != null && !expandPath.isEmpty())
+        {
+            IVariable resolved = VariableSerializer.resolvePath(frame, expandPath);
+            if (resolved == null)
+            {
+                return ToolResult.error("expandPath not found: " + expandPath).toJson(); //$NON-NLS-1$
+            }
+            vars = VariableSerializer.serializeChildren(resolved, registry);
+        }
+        else
+        {
+            vars = VariableSerializer.serializeFrame(frame, registry);
+        }
+        return ToolResult.success()
+            .put("variables", vars) //$NON-NLS-1$
+            .put("count", vars.size()) //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * Holder threading a frame-resolution early-return out of {@link #resolveFrame}:
+     * exactly one of {@code frame} / {@code error} is non-null. {@code error} carries
+     * the same error JSON (same case) the inline branches returned.
+     */
+    private static final class FrameResolution
+    {
+        final IStackFrame frame;
+        final String error;
+
+        private FrameResolution(IStackFrame frame, String error)
+        {
+            this.frame = frame;
+            this.error = error;
+        }
+
+        static FrameResolution frame(IStackFrame frame)
+        {
+            return new FrameResolution(frame, null);
+        }
+
+        static FrameResolution error(String error)
+        {
+            return new FrameResolution(null, error);
         }
     }
 

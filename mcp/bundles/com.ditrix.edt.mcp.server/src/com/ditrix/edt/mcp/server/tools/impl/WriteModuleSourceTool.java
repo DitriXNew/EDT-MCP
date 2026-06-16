@@ -135,125 +135,189 @@ public class WriteModuleSourceTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        // 1. Extract parameters
-        String projectName = JsonUtils.extractStringArgument(params, PROJECT_NAME);
-        String modulePath = JsonUtils.extractStringArgument(params, MODULE_PATH);
-        String objectName = JsonUtils.extractStringArgument(params, "objectName"); //$NON-NLS-1$
-        String moduleType = JsonUtils.extractStringArgument(params, "moduleType"); //$NON-NLS-1$
-        String source = JsonUtils.extractStringArgument(params, "source"); //$NON-NLS-1$
-        String oldSource = JsonUtils.extractStringArgument(params, "oldSource"); //$NON-NLS-1$
-        String mode = JsonUtils.extractStringArgument(params, "mode"); //$NON-NLS-1$
-        String formName = JsonUtils.extractStringArgument(params, "formName"); //$NON-NLS-1$
-        String commandName = JsonUtils.extractStringArgument(params, "commandName"); //$NON-NLS-1$
-        boolean skipSyntaxCheck = JsonUtils.extractBooleanArgument(params, "skipSyntaxCheck", false); //$NON-NLS-1$
-        String expectedSource = JsonUtils.extractStringArgument(params, "expectedSource"); //$NON-NLS-1$
-        boolean overwrite = JsonUtils.extractBooleanArgument(params, "overwrite", false); //$NON-NLS-1$
-        String expectedHash = JsonUtils.extractStringArgument(params, "expectedHash"); //$NON-NLS-1$
+        // 1. Extract and default the request parameters.
+        WriteRequest req = WriteRequest.from(params);
 
         // 2. Validate required parameters
-        if (mode == null || mode.isEmpty())
-        {
-            mode = MODE_SEARCH_REPLACE;
-        }
-        String argError = validateWriteArguments(params, source, mode, oldSource);
+        String argError = validateWriteArguments(params, req.source, req.mode, req.oldSource);
         if (argError != null)
         {
             return argError;
         }
 
         // 3. Resolve the module target.
-        ModuleTargetResult target = resolveModuleTarget(modulePath, objectName, moduleType,
-            formName, commandName);
+        ModuleTargetResult target = resolveModuleTarget(req.modulePath, req.objectName,
+            req.moduleType, req.formName, req.commandName);
         if (target.error != null)
         {
             return target.error;
         }
-        modulePath = target.modulePath;
+        req.modulePath = target.modulePath;
 
         // 4. Validate project
-        ProjectContext ctx = ProjectContext.of(projectName);
+        ProjectContext ctx = ProjectContext.of(req.projectName);
         if (!ctx.exists())
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return ToolResult.error(ProjectContext.notFoundMessage(req.projectName)).toJson();
         }
         IProject project = ctx.project();
 
         // 5. Get file
-        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
+        IFile file = BslModuleUtils.resolveModuleFile(project, req.modulePath);
         boolean fileExists = file.exists();
 
         // For non-replace modes, file must exist
-        if (!fileExists && !MODE_REPLACE.equals(mode))
+        if (!fileExists && !MODE_REPLACE.equals(req.mode))
         {
-            return ToolResult.error("File not found: src/" + modulePath + //$NON-NLS-1$
+            return ToolResult.error("File not found: src/" + req.modulePath + //$NON-NLS-1$
                 ". Only 'replace' mode can create new files.").toJson(); //$NON-NLS-1$
         }
 
         try
         {
-            // Normalize source: \r\n -> \n
-            source = source.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
-            // 6. Read current content (if file exists)
-            List<String> originalLines;
-            boolean hasBom;
-            if (fileExists)
-            {
-                originalLines = BslModuleUtils.readFileLines(file);
-                hasBom = detectBom(file);
-            }
-            else
-            {
-                originalLines = new ArrayList<>();
-                hasBom = true; // New BSL files should have BOM
-            }
-
-            // 6b. Optimistic-lock guard (any mode): when the caller carried an
-            // expectedHash from its last read, reject if the module changed since —
-            // a cheap lost-update check that complements searchReplace's oldSource
-            // match and replace's expectedSource. Read the canonical text the same way
-            // those guards do (readFileText, \n-normalized) so the hashes always agree; // NOSONAR explanatory comment, not commented-out code
-            // skipped entirely when no expectedHash is given.
-            String currentTextForHash = (expectedHash != null && !expectedHash.isEmpty() && fileExists)
-                ? BslModuleUtils.readFileText(file).replace("\r\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$
-                : null;
-            String hashError = evaluateExpectedHash(currentTextForHash, expectedHash, fileExists);
-            if (hashError != null)
-            {
-                return hashError;
-            }
-
-            // 7. Compute new content based on mode
-            int totalOriginal = originalLines.size();
-            NewLinesResult computed = computeNewLines(mode, file, fileExists, originalLines,
-                source, oldSource, expectedHash, expectedSource, overwrite);
-            if (computed.error != null)
-            {
-                return computed.error;
-            }
-            List<String> newLines = computed.newLines;
-
-            // 8. BSL syntax check
-            if (!skipSyntaxCheck)
-            {
-                String syntaxError = runSyntaxCheck(newLines);
-                if (syntaxError != null)
-                {
-                    return syntaxError;
-                }
-            }
-
-            // 9. Write file
-            writeFile(file, newLines, hasBom, fileExists);
-
-            // 10. Return success
-            return buildSuccessResponse(projectName, modulePath, mode, skipSyntaxCheck,
-                newLines, fileExists, totalOriginal);
+            return writeModule(req, file, fileExists);
         }
         catch (Exception e)
         {
             return ToolResult.error("Failed to write file: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Parsed and defaulted {@code write_module_source} request inputs, bundled into one
+     * holder so the write helpers take a single seam instead of a long parameter list
+     * (avoids the &gt;7-parameter smell on {@link #computeNewLines}). {@code mode} is
+     * defaulted to {@link #MODE_SEARCH_REPLACE} at construction exactly as the inline flow
+     * did; {@code modulePath} is mutable because {@link #resolveModuleTarget} may resolve it
+     * from {@code objectName}.
+     */
+    private static final class WriteRequest
+    {
+        final String projectName;
+        String modulePath;
+        final String objectName;
+        final String moduleType;
+        String source;
+        final String oldSource;
+        final String mode;
+        final String formName;
+        final String commandName;
+        final boolean skipSyntaxCheck;
+        final String expectedSource;
+        final boolean overwrite;
+        final String expectedHash;
+
+        private WriteRequest(Map<String, String> params)
+        {
+            this.projectName = JsonUtils.extractStringArgument(params, PROJECT_NAME);
+            this.modulePath = JsonUtils.extractStringArgument(params, MODULE_PATH);
+            this.objectName = JsonUtils.extractStringArgument(params, "objectName"); //$NON-NLS-1$
+            this.moduleType = JsonUtils.extractStringArgument(params, "moduleType"); //$NON-NLS-1$
+            // Kept RAW here (NOT \r\n-normalized) so validateWriteArguments measures the
+            // exact same length the inline flow did; the \r\n->\n normalization happens in
+            // writeModule, just like the original try block did, before any content compute.
+            this.source = JsonUtils.extractStringArgument(params, "source"); //$NON-NLS-1$
+            this.oldSource = JsonUtils.extractStringArgument(params, "oldSource"); //$NON-NLS-1$
+            String rawMode = JsonUtils.extractStringArgument(params, "mode"); //$NON-NLS-1$
+            this.mode = (rawMode == null || rawMode.isEmpty()) ? MODE_SEARCH_REPLACE : rawMode;
+            this.formName = JsonUtils.extractStringArgument(params, "formName"); //$NON-NLS-1$
+            this.commandName = JsonUtils.extractStringArgument(params, "commandName"); //$NON-NLS-1$
+            this.skipSyntaxCheck = JsonUtils.extractBooleanArgument(params, "skipSyntaxCheck", false); //$NON-NLS-1$
+            this.expectedSource = JsonUtils.extractStringArgument(params, "expectedSource"); //$NON-NLS-1$
+            this.overwrite = JsonUtils.extractBooleanArgument(params, "overwrite", false); //$NON-NLS-1$
+            this.expectedHash = JsonUtils.extractStringArgument(params, "expectedHash"); //$NON-NLS-1$
+        }
+
+        static WriteRequest from(Map<String, String> params)
+        {
+            return new WriteRequest(params);
+        }
+    }
+
+    /**
+     * The body of {@link #execute} that runs once the project/file is resolved: reads the
+     * current content, applies the optimistic-lock + syntax guards, then WRITES the module
+     * and builds the success response. Kept under {@link #execute}'s {@code try} so any
+     * {@link Exception} reaches the SAME {@code catch} as before; declares
+     * {@code throws Exception} because {@link #computeNewLines}/{@link #writeFile} do.
+     *
+     * @param req the parsed request (its {@code modulePath} is already resolved)
+     * @param file the resolved module file
+     * @param fileExists whether {@code file} already exists on disk
+     * @return the success response, or a ready {@link ToolResult#error} JSON payload from a
+     *         guard (returned verbatim) — the same value in the same case as the inline flow
+     */
+    private String writeModule(WriteRequest req, IFile file, boolean fileExists) throws Exception
+    {
+        // Normalize source: \r\n -> \n (same point and order as the inline try block,
+        // i.e. AFTER validateWriteArguments measured the raw length).
+        req.source = req.source.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Read current content (if file exists)
+        List<String> originalLines;
+        boolean hasBom;
+        if (fileExists)
+        {
+            originalLines = BslModuleUtils.readFileLines(file);
+            hasBom = detectBom(file);
+        }
+        else
+        {
+            originalLines = new ArrayList<>();
+            hasBom = true; // New BSL files should have BOM
+        }
+
+        String hashError = checkExpectedHashGuard(req, file, fileExists);
+        if (hashError != null)
+        {
+            return hashError;
+        }
+
+        // Compute new content based on mode
+        int totalOriginal = originalLines.size();
+        NewLinesResult computed = computeNewLines(req, file, fileExists, originalLines);
+        if (computed.error != null)
+        {
+            return computed.error;
+        }
+        List<String> newLines = computed.newLines;
+
+        // BSL syntax check
+        if (!req.skipSyntaxCheck)
+        {
+            String syntaxError = runSyntaxCheck(newLines);
+            if (syntaxError != null)
+            {
+                return syntaxError;
+            }
+        }
+
+        // Write file (the mutating step — kept inline under the passed guards)
+        writeFile(file, newLines, hasBom, fileExists);
+
+        // Return success
+        return buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
+            newLines, fileExists, totalOriginal);
+    }
+
+    /**
+     * Optimistic-lock guard (any mode): when the caller carried an {@code expectedHash} from
+     * its last read, reject if the module changed since — a cheap lost-update check that
+     * complements searchReplace's {@code oldSource} match and replace's {@code expectedSource}.
+     * Reads the canonical text the same way those guards do (readFileText, {@code \n}-normalized)
+     * so the hashes always agree; skipped entirely when no {@code expectedHash} is given.
+     *
+     * @return a ready {@link ToolResult#error} JSON payload to return verbatim, or {@code null}
+     *         when the guard passes (or is disabled)
+     */
+    private static String checkExpectedHashGuard(WriteRequest req, IFile file, boolean fileExists)
+        throws Exception
+    {
+        String currentTextForHash =
+            (req.expectedHash != null && !req.expectedHash.isEmpty() && fileExists)
+                ? BslModuleUtils.readFileText(file).replace("\r\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                : null;
+        return evaluateExpectedHash(currentTextForHash, req.expectedHash, fileExists);
     }
 
     /**
@@ -398,7 +462,7 @@ public class WriteModuleSourceTool implements IMcpTool
     }
 
     /**
-     * Computes the new module content for the given mode (read-only — no file is
+     * Computes the new module content for the request's mode (read-only — no file is
      * written; only the already-read {@code file}/{@code originalLines} content is
      * consulted). Mirrors the inline {@code switch} exactly, including the replace
      * lost-update precondition and the searchReplace not-found / multiple-match errors.
@@ -410,11 +474,11 @@ public class WriteModuleSourceTool implements IMcpTool
      * @return a {@link NewLinesResult} whose {@link NewLinesResult#error} is non-{@code null}
      *         when the caller must return that JSON payload, otherwise the lines to write
      */
-    private NewLinesResult computeNewLines(String mode, IFile file, boolean fileExists,
-        List<String> originalLines, String source, String oldSource, String expectedHash,
-        String expectedSource, boolean overwrite) throws Exception
+    private NewLinesResult computeNewLines(WriteRequest req, IFile file, boolean fileExists,
+        List<String> originalLines) throws Exception
     {
-        switch (mode)
+        String source = req.source;
+        switch (req.mode)
         {
             case MODE_REPLACE:
             {
@@ -425,11 +489,11 @@ public class WriteModuleSourceTool implements IMcpTool
                 // (the whole-file token proves the agent saw the current state) and
                 // was ALREADY validated at step 6b — so when one was supplied, the
                 // expectedSource/overwrite precondition is satisfied and skipped.
-                boolean hashGuardSatisfied = expectedHash != null && !expectedHash.isEmpty();
+                boolean hashGuardSatisfied = req.expectedHash != null && !req.expectedHash.isEmpty();
                 if (fileExists && !hashGuardSatisfied)
                 {
                     String preconditionError =
-                        checkReplacePrecondition(file, expectedSource, overwrite);
+                        checkReplacePrecondition(file, req.expectedSource, req.overwrite);
                     if (preconditionError != null)
                     {
                         return new NewLinesResult(preconditionError, null);
@@ -448,7 +512,7 @@ public class WriteModuleSourceTool implements IMcpTool
             case MODE_SEARCH_REPLACE:
             {
                 // Normalize oldSource
-                oldSource = oldSource.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                String oldSource = req.oldSource.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
                 // Read the raw file content (preserves the trailing newline that
                 // writeFile always adds). Reconstructing it from originalLines via
@@ -476,7 +540,7 @@ public class WriteModuleSourceTool implements IMcpTool
             }
 
             default:
-                return new NewLinesResult(ToolResult.error("unsupported mode: " + mode).toJson(), null); //$NON-NLS-1$
+                return new NewLinesResult(ToolResult.error("unsupported mode: " + req.mode).toJson(), null); //$NON-NLS-1$
         }
     }
 

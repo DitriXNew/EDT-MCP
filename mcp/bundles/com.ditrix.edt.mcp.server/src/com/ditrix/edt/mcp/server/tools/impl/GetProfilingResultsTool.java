@@ -182,9 +182,19 @@ public class GetProfilingResultsTool implements IMcpTool
             Method getDurability = timeHolderClass.getMethod("getDurability"); //$NON-NLS-1$
             Method getPureDurability = timeHolderClass.getMethod("getPureDurability"); //$NON-NLS-1$
 
-            ProfilingReflection refl = new ProfilingReflection(getResultName, getTotalDurability,
-                getProfilingResults, getFrequency, getModuleName, getLineNo, getPercentage,
-                getDurability, getPureDurability, getLine, getMethodSignature);
+            ProfilingReflection refl = ProfilingReflection.builder()
+                .resultName(getResultName)
+                .totalDurability(getTotalDurability)
+                .profilingResults(getProfilingResults)
+                .frequency(getFrequency)
+                .moduleName(getModuleName)
+                .lineNo(getLineNo)
+                .percentage(getPercentage)
+                .durability(getDurability)
+                .pureDurability(getPureDurability)
+                .line(getLine)
+                .methodSignature(getMethodSignature)
+                .build();
 
             List<Map<String, Object>> resultSummaries = new ArrayList<>();
 
@@ -331,7 +341,9 @@ public class GetProfilingResultsTool implements IMcpTool
 
     /**
      * Immutable holder for the reflective {@code Method} handles used while summarizing a profiling
-     * result. Groups them so the per-result / per-line helpers keep a small signature.
+     * result. Groups them so the per-result / per-line helpers keep a small signature. Built via
+     * {@link Builder} so the construction site has no long parameter list; the field values are
+     * exactly the {@code Method} handles assigned to the builder.
      */
     private static final class ProfilingReflection
     {
@@ -347,21 +359,61 @@ public class GetProfilingResultsTool implements IMcpTool
         final Method getLine;
         final Method getMethodSignature;
 
-        ProfilingReflection(Method getResultName, Method getTotalDurability, Method getProfilingResults,
-            Method getFrequency, Method getModuleName, Method getLineNo, Method getPercentage,
-            Method getDurability, Method getPureDurability, Method getLine, Method getMethodSignature)
+        private ProfilingReflection(Builder b)
         {
-            this.getResultName = getResultName;
-            this.getTotalDurability = getTotalDurability;
-            this.getProfilingResults = getProfilingResults;
-            this.getFrequency = getFrequency;
-            this.getModuleName = getModuleName;
-            this.getLineNo = getLineNo;
-            this.getPercentage = getPercentage;
-            this.getDurability = getDurability;
-            this.getPureDurability = getPureDurability;
-            this.getLine = getLine;
-            this.getMethodSignature = getMethodSignature;
+            this.getResultName = b.getResultName;
+            this.getTotalDurability = b.getTotalDurability;
+            this.getProfilingResults = b.getProfilingResults;
+            this.getFrequency = b.getFrequency;
+            this.getModuleName = b.getModuleName;
+            this.getLineNo = b.getLineNo;
+            this.getPercentage = b.getPercentage;
+            this.getDurability = b.getDurability;
+            this.getPureDurability = b.getPureDurability;
+            this.getLine = b.getLine;
+            this.getMethodSignature = b.getMethodSignature;
+        }
+
+        static Builder builder()
+        {
+            return new Builder();
+        }
+
+        /**
+         * Mutable builder that collects the reflective {@code Method} handles before they are
+         * frozen into an immutable {@link ProfilingReflection}. Exists solely to keep the
+         * construction site free of an 11-argument call; it carries no logic.
+         */
+        private static final class Builder
+        {
+            private Method getResultName;
+            private Method getTotalDurability;
+            private Method getProfilingResults;
+            private Method getFrequency;
+            private Method getModuleName;
+            private Method getLineNo;
+            private Method getPercentage;
+            private Method getDurability;
+            private Method getPureDurability;
+            private Method getLine;
+            private Method getMethodSignature;
+
+            Builder resultName(Method m) { this.getResultName = m; return this; }
+            Builder totalDurability(Method m) { this.getTotalDurability = m; return this; }
+            Builder profilingResults(Method m) { this.getProfilingResults = m; return this; }
+            Builder frequency(Method m) { this.getFrequency = m; return this; }
+            Builder moduleName(Method m) { this.getModuleName = m; return this; }
+            Builder lineNo(Method m) { this.getLineNo = m; return this; }
+            Builder percentage(Method m) { this.getPercentage = m; return this; }
+            Builder durability(Method m) { this.getDurability = m; return this; }
+            Builder pureDurability(Method m) { this.getPureDurability = m; return this; }
+            Builder line(Method m) { this.getLine = m; return this; }
+            Builder methodSignature(Method m) { this.getMethodSignature = m; return this; }
+
+            ProfilingReflection build()
+            {
+                return new ProfilingReflection(this);
+            }
         }
     }
 }

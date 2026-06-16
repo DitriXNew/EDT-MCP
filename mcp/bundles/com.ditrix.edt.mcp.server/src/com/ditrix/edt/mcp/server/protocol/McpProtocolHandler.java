@@ -262,8 +262,43 @@ public class McpProtocolHandler
             server.setCurrentToolName(tool.getName());
         }
         
-        // Execute tool, timing the call so each tools/call gets exactly one
-        // completion log line (success or failure) carrying name + duration + outcome.
+        // Execute the tool (timed + logged + status-bar cleared in one place).
+        String result = executeToolTimed(tool, params, server);
+
+        // Check if user sent a signal during execution
+        UserSignal signal = null;
+        if (server != null)
+        {
+            signal = server.consumeUserSignal();
+        }
+        
+        // Check if plain text mode is enabled (Cursor compatibility).
+        // Activator.getDefault() can be null during a shutdown race; in that
+        // case fall back to the safe default (structured content, not plain text).
+        boolean plainTextMode = Activator.getDefault() != null
+            && Activator.getDefault().getPreferenceStore()
+                .getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
+
+        // Return response based on tool's declared response type
+        return buildToolCallResponse(tool, result, signal, plainTextMode, requestId, params);
+    }
+
+    /**
+     * Executes {@code tool} while timing the call, clearing the status-bar tool name in a
+     * {@code finally}, and emitting exactly one completion log line (plus, on failure, the
+     * extracted error message at WARNING). Extracted verbatim from {@link #handleToolCall} so
+     * the tool-result hot path stays a thin orchestrator. A thrown exception escaping
+     * {@code execute} is propagated to the caller unchanged AFTER the {@code finally} has run
+     * — same behaviour as the original inline try/finally.
+     *
+     * @param tool the resolved tool to run
+     * @param params the extracted tool params
+     * @param server the MCP server (may be {@code null} during a shutdown race)
+     * @return the raw tool result payload (may be {@code null} only if {@code execute} returned
+     *         {@code null})
+     */
+    private String executeToolTimed(IMcpTool tool, Map<String, String> params, McpServer server)
+    {
         String result = null;
         long startNanos = System.nanoTime();
         boolean threw = true;
@@ -271,6 +306,7 @@ public class McpProtocolHandler
         {
             result = tool.execute(params);
             threw = false;
+            return result;
         }
         finally
         {
@@ -295,23 +331,6 @@ public class McpProtocolHandler
             }
             logToolCallCompletion(tool.getName(), elapsedMs, isError);
         }
-        
-        // Check if user sent a signal during execution
-        UserSignal signal = null;
-        if (server != null)
-        {
-            signal = server.consumeUserSignal();
-        }
-        
-        // Check if plain text mode is enabled (Cursor compatibility).
-        // Activator.getDefault() can be null during a shutdown race; in that
-        // case fall back to the safe default (structured content, not plain text).
-        boolean plainTextMode = Activator.getDefault() != null
-            && Activator.getDefault().getPreferenceStore()
-                .getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
-
-        // Return response based on tool's declared response type
-        return buildToolCallResponse(tool, result, signal, plainTextMode, requestId, params);
     }
 
     /**
@@ -338,67 +357,122 @@ public class McpProtocolHandler
             case JSON:
                 return buildJsonToolResponse(tool, result, signal, plainTextMode, requestId);
             case MARKDOWN:
-                // A ToolResult.error JSON payload is delivered as a structured JSON
-                // error (isError:true) instead of a markdown resource, so failures
-                // are machine-detectable regardless of the declared response type.
-                if (isJsonErrorPayload(result))
-                {
-                    return buildToolCallJsonResponse(result, requestId, tool.getName());
-                }
-                // Append user signal as markdown
-                if (signal != null)
-                {
-                    result = result + "\n\n---\n**USER SIGNAL:** " + signal.getMessage();
-                }
-                // In plain text mode, return markdown as plain text instead of embedded resource
-                if (plainTextMode)
-                {
-                    return buildToolCallTextResponse(result, requestId);
-                }
-                String fileName = tool.getResultFileName(params);
-                return buildToolCallResourceResponse(result, MIME_TEXT_MARKDOWN, fileName, requestId);
+                return buildMarkdownToolResponse(tool, result, signal, plainTextMode, requestId,
+                    params);
             case YAML:
-                // Same delivery as MARKDOWN (error diversion, signal append, plain
-                // text fallback) but the embedded resource advertises a YAML
-                // mimeType so it agrees with the .yaml resource URI and the body.
-                if (isJsonErrorPayload(result))
-                {
-                    return buildToolCallJsonResponse(result, requestId, tool.getName());
-                }
-                if (signal != null)
-                {
-                    result = result + "\n\n---\n# USER SIGNAL: " + signal.getMessage();
-                }
-                if (plainTextMode)
-                {
-                    return buildToolCallTextResponse(result, requestId);
-                }
-                String yamlFileName = tool.getResultFileName(params);
-                return buildToolCallResourceResponse(result, "text/yaml", yamlFileName, requestId); //$NON-NLS-1$
+                return buildYamlToolResponse(tool, result, signal, plainTextMode, requestId, params);
             case IMAGE:
-                // Images always returned as embedded resource (ignore plain text mode)
-                // For images, user signals are ignored
-                if (isJsonErrorPayload(result))
-                {
-                    return buildToolCallJsonResponse(result, requestId, tool.getName());
-                }
-                String imageFileName = tool.getResultFileName(params);
-                return buildToolCallResourceBlobResponse(result, "image/png", imageFileName, requestId); //$NON-NLS-1$
+                return buildImageToolResponse(tool, result, requestId, params);
             case TEXT:
             default:
-                // See MARKDOWN: a ToolResult.error JSON payload is delivered as a
-                // structured JSON error regardless of the declared response type.
-                if (isJsonErrorPayload(result))
-                {
-                    return buildToolCallJsonResponse(result, requestId, tool.getName());
-                }
-                // Append user signal as text
-                if (signal != null)
-                {
-                    result = result + "\n\n---\nUSER SIGNAL: " + signal.getMessage();
-                }
-                return buildToolCallTextResponse(result, requestId);
+                return buildTextToolResponse(tool, result, signal, requestId);
         }
+    }
+
+    /**
+     * Delivers a {@code ResponseType.MARKDOWN} tools/call result, holding the MARKDOWN-case
+     * logic extracted verbatim from {@link #buildToolCallResponse}: a {@code ToolResult.error}
+     * JSON payload is diverted to a structured JSON error (machine-detectable regardless of
+     * the declared response type); otherwise a user signal is appended as markdown, plain-text
+     * mode delivers the body as text, and the default is an embedded {@code text/markdown}
+     * resource. Returns the same response in the same case as the original inline branch.
+     */
+    private String buildMarkdownToolResponse(IMcpTool tool, String result, UserSignal signal,
+        boolean plainTextMode, Object requestId, Map<String, String> params)
+    {
+        // A ToolResult.error JSON payload is delivered as a structured JSON
+        // error (isError:true) instead of a markdown resource, so failures
+        // are machine-detectable regardless of the declared response type.
+        if (isJsonErrorPayload(result))
+        {
+            return buildToolCallJsonResponse(result, requestId, tool.getName());
+        }
+        // Append user signal as markdown
+        if (signal != null)
+        {
+            result = result + "\n\n---\n**USER SIGNAL:** " + signal.getMessage();
+        }
+        // In plain text mode, return markdown as plain text instead of embedded resource
+        if (plainTextMode)
+        {
+            return buildToolCallTextResponse(result, requestId);
+        }
+        String fileName = tool.getResultFileName(params);
+        return buildToolCallResourceResponse(result, MIME_TEXT_MARKDOWN, fileName, requestId);
+    }
+
+    /**
+     * Delivers a {@code ResponseType.YAML} tools/call result, holding the YAML-case logic
+     * extracted verbatim from {@link #buildToolCallResponse}: same delivery as
+     * {@link #buildMarkdownToolResponse} (error diversion, signal append, plain-text
+     * fallback) but the signal banner uses the YAML comment form and the embedded resource
+     * advertises a {@code text/yaml} mimeType so it agrees with the {@code .yaml} resource
+     * URI and body. Returns the same response in the same case as the original inline branch.
+     */
+    private String buildYamlToolResponse(IMcpTool tool, String result, UserSignal signal,
+        boolean plainTextMode, Object requestId, Map<String, String> params)
+    {
+        // Same delivery as MARKDOWN (error diversion, signal append, plain
+        // text fallback) but the embedded resource advertises a YAML
+        // mimeType so it agrees with the .yaml resource URI and the body.
+        if (isJsonErrorPayload(result))
+        {
+            return buildToolCallJsonResponse(result, requestId, tool.getName());
+        }
+        if (signal != null)
+        {
+            result = result + "\n\n---\n# USER SIGNAL: " + signal.getMessage();
+        }
+        if (plainTextMode)
+        {
+            return buildToolCallTextResponse(result, requestId);
+        }
+        String yamlFileName = tool.getResultFileName(params);
+        return buildToolCallResourceResponse(result, "text/yaml", yamlFileName, requestId); //$NON-NLS-1$
+    }
+
+    /**
+     * Delivers a {@code ResponseType.IMAGE} tools/call result, holding the IMAGE-case logic
+     * extracted verbatim from {@link #buildToolCallResponse}: an error payload is diverted to
+     * a structured JSON error; otherwise the (base64) image is returned as an embedded
+     * {@code image/png} resource blob — plain-text mode and user signals are ignored for
+     * images. Returns the same response in the same case as the original inline branch.
+     */
+    private String buildImageToolResponse(IMcpTool tool, String result, Object requestId,
+        Map<String, String> params)
+    {
+        // Images always returned as embedded resource (ignore plain text mode)
+        // For images, user signals are ignored
+        if (isJsonErrorPayload(result))
+        {
+            return buildToolCallJsonResponse(result, requestId, tool.getName());
+        }
+        String imageFileName = tool.getResultFileName(params);
+        return buildToolCallResourceBlobResponse(result, "image/png", imageFileName, requestId); //$NON-NLS-1$
+    }
+
+    /**
+     * Delivers a {@code ResponseType.TEXT} (and default) tools/call result, holding the
+     * TEXT-case logic extracted verbatim from {@link #buildToolCallResponse}: an error payload
+     * is diverted to a structured JSON error; otherwise a user signal is appended as plain
+     * text and the body is delivered as a text result. Returns the same response in the same
+     * case as the original inline branch.
+     */
+    private String buildTextToolResponse(IMcpTool tool, String result, UserSignal signal,
+        Object requestId)
+    {
+        // See MARKDOWN: a ToolResult.error JSON payload is delivered as a
+        // structured JSON error regardless of the declared response type.
+        if (isJsonErrorPayload(result))
+        {
+            return buildToolCallJsonResponse(result, requestId, tool.getName());
+        }
+        // Append user signal as text
+        if (signal != null)
+        {
+            result = result + "\n\n---\nUSER SIGNAL: " + signal.getMessage();
+        }
+        return buildToolCallTextResponse(result, requestId);
     }
 
     /**

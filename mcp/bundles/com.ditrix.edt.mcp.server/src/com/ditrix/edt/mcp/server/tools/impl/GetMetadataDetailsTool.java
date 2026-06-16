@@ -196,11 +196,14 @@ public class GetMetadataDetailsTool implements IMcpTool
         // for whole-call failures such as a missing project or configuration).
         List<String[]> failures = new ArrayList<>();
 
+        // Per-request render context, constant across every FQN in the loop.
+        RenderContext ctx = new RenderContext(config, bmModel, effectiveLanguage, full, assignable,
+            isExtensionProject);
+
         // Process each FQN
         for (String fqn : objectFqns)
         {
-            processFqn(fqn, sb, failures, config, bmModel, effectiveLanguage, full, assignable,
-                isExtensionProject);
+            processFqn(fqn, sb, failures, ctx);
         }
 
         if (!failures.isEmpty())
@@ -217,14 +220,13 @@ public class GetMetadataDetailsTool implements IMcpTool
      * {@link #getMetadataDetailsInternal} loop body; a per-object failure is not a whole-call
      * failure, so this method never throws on a resolution miss.
      */
-    private void processFqn(String fqn, StringBuilder sb, List<String[]> failures, Configuration config,
-        IBmModel bmModel, String effectiveLanguage, boolean full, boolean assignable, boolean isExtensionProject)
+    private void processFqn(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx)
     {
         // Assignable-schema mode: resolve the node (top object OR member) via the shared
         // resolver and render its assignable-property table - what modify_metadata can set.
-        if (assignable)
+        if (ctx.assignable)
         {
-            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, fqn);
+            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(ctx.config, fqn);
             if (node == null || node.object == null)
             {
                 failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
@@ -242,7 +244,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         String formPath = FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(fqn));
         if (formPath != null)
         {
-            String formStructure = renderFormStructure(config, bmModel, formPath, effectiveLanguage);
+            String formStructure = renderFormStructure(ctx.config, ctx.bmModel, formPath, ctx.effectiveLanguage);
             if (formStructure == null)
             {
                 failures.add(new String[] { fqn, "the form has no editable content model (it may " //$NON-NLS-1$
@@ -254,20 +256,48 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
-        MdObject mdObject = resolveObject(config, fqn);
+        MdObject mdObject = resolveObject(ctx.config, fqn);
         if (mdObject == null)
         {
             failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
             return;
         }
-        sb.append(MetadataFormatterRegistry.format(mdObject, full, effectiveLanguage));
+        sb.append(MetadataFormatterRegistry.format(mdObject, ctx.full, ctx.effectiveLanguage));
         // ORIGIN footer: core / core (adopted) / extension. For a base
         // configuration this is always "core"; for an extension it distinguishes
         // an adopted base object from one the extension itself owns.
         sb.append("\n**Origin:** ") //$NON-NLS-1$
-            .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), isExtensionProject))
+            .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), ctx.isExtensionProject))
             .append("\n"); //$NON-NLS-1$
         sb.append(SECTION_SEPARATOR);
+    }
+
+    /**
+     * Immutable per-request render context threaded through {@link #processFqn}: the resolved
+     * configuration, the (best-effort) BM model used only for a form's cross-model hop, the
+     * effective synonym language code and the three rendering flags. Computed once in
+     * {@link #getMetadataDetailsInternal} and constant across every FQN. Bundles the parameters
+     * without changing any value or rendering behaviour.
+     */
+    private static final class RenderContext
+    {
+        final Configuration config;
+        final IBmModel bmModel;
+        final String effectiveLanguage;
+        final boolean full;
+        final boolean assignable;
+        final boolean isExtensionProject;
+
+        RenderContext(Configuration config, IBmModel bmModel, String effectiveLanguage,
+            boolean full, boolean assignable, boolean isExtensionProject)
+        {
+            this.config = config;
+            this.bmModel = bmModel;
+            this.effectiveLanguage = effectiveLanguage;
+            this.full = full;
+            this.assignable = assignable;
+            this.isExtensionProject = isExtensionProject;
+        }
     }
 
     /**

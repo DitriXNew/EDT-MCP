@@ -189,29 +189,46 @@ public class GroupSelectionHelper implements ISelectionChangedListener {
 
         for (Iterator<?> it = lastNonEmptySelection.iterator(); it.hasNext();) {
             Object element = it.next();
-
-            if (element instanceof EObject eObject) {
-                IProject project = TagUtils.extractProject(eObject);
-                String fqn = TagUtils.extractFqn(eObject);
-
-                if (project != null && fqn != null) {
-                    Group group = groupService.findGroupForObject(project, fqn);
-
-                    if (group != null) {
-                        // Find the GroupNavigatorAdapter for this group
-                        GroupNavigatorAdapter groupAdapter = findOrCreateGroupAdapter(project, group);
-
-                        if (groupAdapter != null) {
-                            // Create TreePath: groupAdapter -> element
-                            TreePath path = new TreePath(new Object[] { groupAdapter, element });
-                            treePaths.add(path);
-                        }
-                    }
-                }
+            TreePath path = groupedTreePathFor(element, groupService);
+            if (path != null) {
+                treePaths.add(path);
             }
         }
 
         return treePaths;
+    }
+
+    /**
+     * Builds the {@link TreePath} {@code groupAdapter -> element} for a single selection
+     * element when it is an {@link EObject} that resolves to a project + fqn, is in a group,
+     * and whose {@link GroupNavigatorAdapter} can be located; otherwise returns {@code null}.
+     * Mirrors the per-element body of {@link #collectGroupedTreePaths} (including the
+     * tree-expansion side effects of {@link #findOrCreateGroupAdapter}).
+     *
+     * @param element the selection element to route
+     * @param groupService the (non-{@code null}) group service used to resolve groups
+     * @return the routed tree path, or {@code null} when the element cannot be routed
+     */
+    private TreePath groupedTreePathFor(Object element, IGroupService groupService) {
+        if (!(element instanceof EObject eObject)) {
+            return null;
+        }
+        IProject project = TagUtils.extractProject(eObject);
+        String fqn = TagUtils.extractFqn(eObject);
+        if (project == null || fqn == null) {
+            return null;
+        }
+        Group group = groupService.findGroupForObject(project, fqn);
+        if (group == null) {
+            return null;
+        }
+        // Find the GroupNavigatorAdapter for this group
+        GroupNavigatorAdapter groupAdapter = findOrCreateGroupAdapter(project, group);
+        if (groupAdapter == null) {
+            return null;
+        }
+        // Create TreePath: groupAdapter -> element
+        return new TreePath(new Object[] { groupAdapter, element });
     }
 
     /**

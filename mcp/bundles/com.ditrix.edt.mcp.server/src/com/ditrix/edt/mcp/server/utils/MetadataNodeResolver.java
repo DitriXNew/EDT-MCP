@@ -209,14 +209,35 @@ public final class MetadataNodeResolver
         /** Concrete element type to instantiate; {@code null} for a top-level create. */
         public final EClass elementType;
 
-        private CreateTarget(boolean topLevel, String childName, String topLevelType,
-            String configFeatureName, EObject owner, MdObject topObject, EReference feature,
-            EClass elementType)
+        /**
+         * Top-level create target: {@link #topLevel} is {@code true} and only the top-level
+         * fields are set; the child-navigation fields stay {@code null}. Matches the field
+         * values the former 8-arg constructor produced for {@link #forTopLevel}.
+         */
+        private CreateTarget(String topLevelType, String configFeatureName, String childName)
         {
-            this.topLevel = topLevel;
+            this.topLevel = true;
             this.childName = childName;
             this.topLevelType = topLevelType;
             this.configFeatureName = configFeatureName;
+            this.owner = null;
+            this.topObject = null;
+            this.feature = null;
+            this.elementType = null;
+        }
+
+        /**
+         * Child create target: {@link #topLevel} is {@code false} and only the child-navigation
+         * fields are set; the top-level fields stay {@code null}. Matches the field values the
+         * former 8-arg constructor produced for {@link #forChild}.
+         */
+        private CreateTarget(EObject owner, MdObject topObject, EReference feature,
+            EClass elementType, String childName)
+        {
+            this.topLevel = false;
+            this.childName = childName;
+            this.topLevelType = null;
+            this.configFeatureName = null;
             this.owner = owner;
             this.topObject = topObject;
             this.feature = feature;
@@ -225,13 +246,13 @@ public final class MetadataNodeResolver
 
         static CreateTarget forTopLevel(String topLevelType, String configFeatureName, String childName)
         {
-            return new CreateTarget(true, childName, topLevelType, configFeatureName, null, null, null, null);
+            return new CreateTarget(topLevelType, configFeatureName, childName);
         }
 
         static CreateTarget forChild(EObject owner, MdObject topObject, EReference feature,
             EClass elementType, String childName)
         {
-            return new CreateTarget(false, childName, null, null, owner, topObject, feature, elementType);
+            return new CreateTarget(owner, topObject, feature, elementType, childName);
         }
     }
 

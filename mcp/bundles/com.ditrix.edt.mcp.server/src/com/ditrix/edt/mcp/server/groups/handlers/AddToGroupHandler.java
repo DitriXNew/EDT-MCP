@@ -136,25 +136,40 @@ public class AddToGroupHandler extends AbstractHandler {
         String objectType = null; // e.g., "Catalog", "CommonModule"
 
         for (Object element : structuredSelection.toList()) {
-            if (element instanceof EObject eObject) {
-                String fqn = TagUtils.extractFqn(eObject);
-                if (fqn != null) {
-                    String[] parts = fqn.split("\\.");
-                    if (parts.length == 2) {
-                        // Top-level object
-                        selectedObjects.add(eObject);
-                        if (project == null) {
-                            project = TagUtils.extractProject(eObject);
-                        }
-                        if (objectType == null) {
-                            objectType = parts[0]; // e.g., "Catalog"
-                        }
-                    }
-                }
+            String type = topLevelTypeOf(element);
+            if (type == null) {
+                continue;
+            }
+            // Top-level object
+            EObject eObject = (EObject) element;
+            selectedObjects.add(eObject);
+            if (project == null) {
+                project = TagUtils.extractProject(eObject);
+            }
+            if (objectType == null) {
+                objectType = type; // e.g., "Catalog"
             }
         }
 
         return new Selected(selectedObjects, project, objectType);
+    }
+
+    /**
+     * Returns the top-level metadata type token (the {@code Type} part of a {@code Type.Name}
+     * FQN, e.g. {@code "Catalog"}) for a selection element, or {@code null} when the element is
+     * not an {@link EObject}, carries no FQN, or its FQN is not a two-part top-level name. Pure,
+     * no side effects.
+     */
+    private static String topLevelTypeOf(Object element) {
+        if (!(element instanceof EObject eObject)) {
+            return null;
+        }
+        String fqn = TagUtils.extractFqn(eObject);
+        if (fqn == null) {
+            return null;
+        }
+        String[] parts = fqn.split("\\.");
+        return parts.length == 2 ? parts[0] : null;
     }
 
     /** Read-only query: the groups whose path matches the given object type. */

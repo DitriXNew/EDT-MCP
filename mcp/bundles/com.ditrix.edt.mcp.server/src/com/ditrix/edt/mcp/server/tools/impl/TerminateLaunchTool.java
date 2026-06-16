@@ -226,8 +226,9 @@ public class TerminateLaunchTool implements IMcpTool
                 return ToolResult.error("Launch manager is not available.").toJson(); //$NON-NLS-1$
             }
 
-            List<ILaunch> targets = selectTargets(launchManager, configName, projectName,
+            SelectionCriteria criteria = new SelectionCriteria(configName, projectName,
                 applicationId, all, hasName, hasProject, hasAppId);
+            List<ILaunch> targets = selectTargets(launchManager, criteria);
 
             // Second pass: the live-selection helpers skip
             // terminated launches by design, so an ALREADY-terminated launch
@@ -342,29 +343,30 @@ public class TerminateLaunchTool implements IMcpTool
         return null;
     }
 
-    private static List<ILaunch> selectTargets(ILaunchManager launchManager, String configName,
-            String projectName, String applicationId, boolean all, boolean hasName,
-            boolean hasProject, boolean hasAppId)
+    private static List<ILaunch> selectTargets(ILaunchManager launchManager,
+            SelectionCriteria criteria)
     {
         List<ILaunch> targets = new ArrayList<>();
-        if (hasName)
+        if (criteria.hasName)
         {
-            ILaunch launch = LaunchConfigUtils.findLiveLaunchByName(launchManager, configName);
+            ILaunch launch =
+                LaunchConfigUtils.findLiveLaunchByName(launchManager, criteria.configName);
             if (launch != null)
             {
                 targets.add(launch);
             }
             return targets;
         }
-        if (hasProject && hasAppId)
+        if (criteria.hasProject && criteria.hasAppId)
         {
             // Scope search to the project first, then match applicationId. Avoids a false
             // not_found if some other project happens to carry the same applicationId
             // (ATTR_APPLICATION_ID is an arbitrary EDT-assigned string with per-project
             // uniqueness only).
-            for (ILaunch launch : LaunchConfigUtils.getAllLiveLaunches(launchManager, projectName))
+            for (ILaunch launch : LaunchConfigUtils.getAllLiveLaunches(launchManager,
+                criteria.projectName))
             {
-                if (applicationId.equals(LaunchConfigUtils.getApplicationIdFor(launch)))
+                if (criteria.applicationId.equals(LaunchConfigUtils.getApplicationIdFor(launch)))
                 {
                     targets.add(launch);
                     break;
@@ -372,12 +374,44 @@ public class TerminateLaunchTool implements IMcpTool
             }
             return targets;
         }
-        if (all)
+        if (criteria.all)
         {
-            String projectFilter = hasProject ? projectName : null;
+            String projectFilter = criteria.hasProject ? criteria.projectName : null;
             targets.addAll(LaunchConfigUtils.getAllLiveLaunches(launchManager, projectFilter));
         }
         return targets;
+    }
+
+    /**
+     * Immutable bundle of the seven selection-criteria fields shared by the live
+     * ({@link #selectTargets}) and stale ({@link #matchesStaleSelection}) target
+     * selectors. Carries the three raw inputs ({@code configName} /
+     * {@code projectName} / {@code applicationId}, the {@code all} flag) together
+     * with their pre-computed presence flags ({@code hasName} / {@code hasProject}
+     * / {@code hasAppId}), so the selectors read the very same values in the very
+     * same order as the previous flat parameter lists.
+     */
+    private static final class SelectionCriteria
+    {
+        final String configName;
+        final String projectName;
+        final String applicationId;
+        final boolean all;
+        final boolean hasName;
+        final boolean hasProject;
+        final boolean hasAppId;
+
+        SelectionCriteria(String configName, String projectName, String applicationId,
+                boolean all, boolean hasName, boolean hasProject, boolean hasAppId)
+        {
+            this.configName = configName;
+            this.projectName = projectName;
+            this.applicationId = applicationId;
+            this.all = all;
+            this.hasName = hasName;
+            this.hasProject = hasProject;
+            this.hasAppId = hasAppId;
+        }
     }
 
     /**
@@ -416,10 +450,11 @@ public class TerminateLaunchTool implements IMcpTool
         {
             return stale;
         }
+        SelectionCriteria criteria = new SelectionCriteria(configName, projectName, applicationId,
+            all, hasName, hasProject, hasAppId);
         for (ILaunch launch : launches)
         {
-            if (matchesStaleSelection(launch, alreadySelected, configName, projectName,
-                applicationId, all, hasName, hasProject, hasAppId))
+            if (matchesStaleSelection(launch, alreadySelected, criteria))
             {
                 stale.add(launch);
             }
@@ -436,11 +471,11 @@ public class TerminateLaunchTool implements IMcpTool
      *
      * @param launch          candidate launch (may be {@code null})
      * @param alreadySelected launches the live selection already picked
+     * @param criteria        the shared selection criteria
      * @return {@code true} if the launch should be added to the stale list
      */
     private static boolean matchesStaleSelection(ILaunch launch, List<ILaunch> alreadySelected,
-            String configName, String projectName, String applicationId, boolean all,
-            boolean hasName, boolean hasProject, boolean hasAppId)
+            SelectionCriteria criteria)
     {
         // Live launches are the primary selection's job; the identity skip
         // covers a launch that terminated between the two scans.
@@ -454,20 +489,20 @@ public class TerminateLaunchTool implements IMcpTool
         {
             return false;
         }
-        if (hasName)
+        if (criteria.hasName)
         {
-            return configName.equals(config.getName());
+            return criteria.configName.equals(config.getName());
         }
-        if (hasProject && hasAppId)
+        if (criteria.hasProject && criteria.hasAppId)
         {
             String project = LaunchConfigUtils.readAttribute(config,
                 LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            return projectName.equals(project)
-                && applicationId.equals(LaunchConfigUtils.getApplicationIdFor(launch));
+            return criteria.projectName.equals(project)
+                && criteria.applicationId.equals(LaunchConfigUtils.getApplicationIdFor(launch));
         }
-        if (all)
+        if (criteria.all)
         {
-            return matchesAllScope(config, projectName, hasProject);
+            return matchesAllScope(config, criteria.projectName, criteria.hasProject);
         }
         return false;
     }

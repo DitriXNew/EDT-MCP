@@ -229,14 +229,47 @@ public class DeleteInfobaseTool implements IMcpTool
                 deleteRegistration, deleteDatabaseFiles, confirm);
         }
 
+        // Resolve the file-infobase target (cast-check, on-disk directory, shared-files guard) -
+        // read-only. On a non-file/non-server application it carries the SAME refusal JSON.
+        FileDeletionPlan ibPlan = resolveFileDeletionPlan(targetApp, project, appManager,
+            projectName, deleteRegistration, deleteDatabaseFiles);
+        if (ibPlan.error != null)
+        {
+            return ibPlan.error;
+        }
+
+        // --- Confirm-preview gate ---
+        if (!confirm)
+        {
+            return buildPreviewResult(
+                new IbIdentity(projectName, ibPlan.resolvedId, ibPlan.resolvedName),
+                deleteRegistration, deleteDatabaseFiles, ibPlan.dbDir, ibPlan.dbSharedWithOthers);
+        }
+
+        return performFileInfobaseDeletion(projectName, project, assocManager, ibManager,
+            deleteDatabaseFiles, ibPlan);
+    }
+
+    /**
+     * Resolves the file-infobase deletion target (read-only): verifies the application is a file
+     * infobase (not some other unmanaged type), reads its {@link InfobaseReference}, the on-disk
+     * database directory and the shared-files guard. Returns a {@link FileDeletionPlan} whose
+     * {@code error} carries the SAME refusal JSON the inline cast-check produced when the application
+     * is neither a file infobase nor a standalone server; otherwise {@code error} is {@code null} and
+     * the plan fields are populated. Extracted verbatim from {@link #deleteInfobase}.
+     */
+    private static FileDeletionPlan resolveFileDeletionPlan(IApplication targetApp, IProject project,
+            IApplicationManager appManager, String projectName, boolean deleteRegistration,
+            boolean deleteDatabaseFiles)
+    {
         // Verify it is a file infobase application (not some other type we do not manage here).
         if (!(targetApp instanceof IInfobaseApplication))
         {
-            return ToolResult.error("Application '" + targetApp.getName() //$NON-NLS-1$
+            return FileDeletionPlan.error(ToolResult.error("Application '" + targetApp.getName() //$NON-NLS-1$
                 + "' (id=" + targetApp.getId() //$NON-NLS-1$
                 + ") is neither a file infobase (" + INFOBASE_APP_TYPE //$NON-NLS-1$
                 + ") nor a standalone server (" + StandaloneServerSupport.WST_SERVER_APP_TYPE //$NON-NLS-1$
-                + ") application; this tool cannot remove it.").toJson(); //$NON-NLS-1$
+                + ") application; this tool cannot remove it.").toJson()); //$NON-NLS-1$
         }
         IInfobaseApplication ibApp = (IInfobaseApplication) targetApp;
         InfobaseReference ibRef = ibApp.getInfobase();
@@ -249,16 +282,27 @@ public class DeleteInfobaseTool implements IMcpTool
         // uses this infobase — if so we keep the files.
         final boolean dbSharedWithOthers = deleteDatabaseFiles && dbDir != null
             && isSharedWithOtherProjects(appManager, project, dbDir);
+        return FileDeletionPlan.of(ibRef, resolvedName, resolvedId, dbDir, dbSharedWithOthers,
+            deleteRegistration);
+    }
 
-        // --- Confirm-preview gate ---
-        if (!confirm)
-        {
-            return buildPreviewResult(projectName, resolvedId, resolvedName, deleteRegistration,
-                deleteDatabaseFiles, dbDir, dbSharedWithOthers);
-        }
+    /**
+     * Performs the file-infobase deletion (confirm already granted): dissociate, optional
+     * deregister, optional on-disk file deletion — every destructive call stays INLINE at the same
+     * point under the same guards. Extracted verbatim from {@link #deleteInfobase}; the early-returns
+     * (dissociate failure, deregister partial-failure) return the SAME JSON in the SAME case.
+     */
+    private String performFileInfobaseDeletion(String projectName, IProject project,
+            IInfobaseAssociationManager assocManager, IInfobaseManager ibManager,
+            boolean deleteDatabaseFiles, FileDeletionPlan plan)
+    {
+        final InfobaseReference ibRef = plan.ibRef;
+        final IbIdentity id = new IbIdentity(projectName, plan.resolvedId, plan.resolvedName);
+        final Path dbDir = plan.dbDir;
+        final boolean dbSharedWithOthers = plan.dbSharedWithOthers;
 
         // --- Perform deletion ---
-        Activator.logInfo("delete_infobase: dissociating '" + resolvedName //$NON-NLS-1$
+        Activator.logInfo("delete_infobase: dissociating '" + id.resolvedName //$NON-NLS-1$
             + "' from project " + projectName); //$NON-NLS-1$
 
         // Step 1: dissociate from the project (removes the infobase Application).
@@ -270,11 +314,46 @@ public class DeleteInfobaseTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("delete_infobase: dissociate failed", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to dissociate infobase '" + resolvedName //$NON-NLS-1$
+            return ToolResult.error("Failed to dissociate infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' from project '" + projectName + "': " + e.getMessage()).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        // Step 2: optionally deregister from the global EDT infobases list.
+        // Step 2: optionally deregister from the global EDT infobases list. A non-null result is the
+        // partial-failure JSON returned as-is (the database files are then KEPT); null = continue.
+        String deregisterFailed = deregisterFileInfobase(ibManager, ibRef, id, deleteDatabaseFiles,
+            plan.deleteRegistration);
+        if (deregisterFailed != null)
+        {
+            return deregisterFailed;
+        }
+
+        // Step 3: optionally delete the infobase database files from disk (IRREVERSIBLE).
+        // Skip when the same on-disk database is still referenced by other workspace projects —
+        // deleting it would break those projects (a file infobase can be shared).
+        boolean dbFilesDeleted = false;
+        if (deleteDatabaseFiles && dbDir != null && !dbSharedWithOthers)
+        {
+            dbFilesDeleted = deleteDatabaseDirBestEffort(dbDir);
+        }
+
+        Activator.logInfo("delete_infobase: done, resolvedId=" + id.resolvedId //$NON-NLS-1$
+            + " (dbFilesDeleted=" + dbFilesDeleted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        return buildDeleteSuccessResult(id, plan.deleteRegistration,
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers));
+    }
+
+    /**
+     * Step 2 of the file-infobase deletion: optionally deregister the infobase from the global EDT
+     * infobases list. The {@code ibManager.delete} destructive call stays INLINE here under the same
+     * {@code deleteRegistration && ibRef != null} guard. A missing {@code IInfobaseManager} is logged
+     * and treated as non-fatal (the dissociation already succeeded). Returns the partial-failure JSON
+     * (which the caller returns as-is — the database files are then KEPT) when the delete throws, or
+     * {@code null} to continue. Extracted verbatim from {@link #deleteInfobase}.
+     */
+    private String deregisterFileInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
+            IbIdentity id, boolean deleteDatabaseFiles, boolean deleteRegistration)
+    {
         if (deleteRegistration && ibRef != null)
         {
             if (ibManager == null)
@@ -296,26 +375,11 @@ public class DeleteInfobaseTool implements IMcpTool
                     // Non-fatal: return success but note the partial deletion. We deliberately do NOT
                     // delete the database files here even if requested — deregistration failed, so the
                     // safe choice is to leave the data and say so explicitly (schema-consistent).
-                    return buildDeregisterFailedResult(projectName, resolvedId, resolvedName,
-                        deleteDatabaseFiles, e);
+                    return buildDeregisterFailedResult(id, deleteDatabaseFiles, e);
                 }
             }
         }
-
-        // Step 3: optionally delete the infobase database files from disk (IRREVERSIBLE).
-        // Skip when the same on-disk database is still referenced by other workspace projects —
-        // deleting it would break those projects (a file infobase can be shared).
-        boolean dbFilesDeleted = false;
-        if (deleteDatabaseFiles && dbDir != null && !dbSharedWithOthers)
-        {
-            dbFilesDeleted = deleteDatabaseDirBestEffort(dbDir);
-        }
-
-        Activator.logInfo("delete_infobase: done, resolvedId=" + resolvedId //$NON-NLS-1$
-            + " (dbFilesDeleted=" + dbFilesDeleted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
-
-        return buildDeleteSuccessResult(projectName, resolvedId, resolvedName, deleteRegistration,
-            deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers);
+        return null;
     }
 
     /**
@@ -419,21 +483,63 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
+     * Identity quartet shared by the result-builders: the project name plus the resolved application
+     * id / name (and, for the success builders, the deleteRegistration flag is passed alongside). A
+     * parameter-object that keeps the builders below the 7-parameter bar; carries no behaviour.
+     */
+    private static final class IbIdentity
+    {
+        final String projectName;
+        final String resolvedId;
+        final String resolvedName;
+
+        IbIdentity(String projectName, String resolvedId, String resolvedName)
+        {
+            this.projectName = projectName;
+            this.resolvedId = resolvedId;
+            this.resolvedName = resolvedName;
+        }
+    }
+
+    /**
+     * The on-disk database-files outcome cluster shared by the success result-builders and
+     * {@link #databaseResultNote}: whether deletion was requested, the resolved directory (may be
+     * {@code null}), whether it was actually deleted and whether it was kept because shared. A
+     * parameter-object that keeps the builders below the 7-parameter bar; carries no behaviour.
+     */
+    private static final class DbFileOutcome
+    {
+        final boolean deleteDatabaseFiles;
+        final Path dbDir;
+        final boolean dbFilesDeleted;
+        final boolean dbSharedWithOthers;
+
+        DbFileOutcome(boolean deleteDatabaseFiles, Path dbDir, boolean dbFilesDeleted,
+                boolean dbSharedWithOthers)
+        {
+            this.deleteDatabaseFiles = deleteDatabaseFiles;
+            this.dbDir = dbDir;
+            this.dbFilesDeleted = dbFilesDeleted;
+            this.dbSharedWithOthers = dbSharedWithOthers;
+        }
+    }
+
+    /**
      * Builds the confirm-preview tool-result JSON for a file infobase (no change is made). Byte-for-byte
      * identical to the inline preview the {@code !confirm} gate produced.
      */
-    private static String buildPreviewResult(String projectName, String resolvedId, String resolvedName,
-            boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir, boolean dbSharedWithOthers)
+    private static String buildPreviewResult(IbIdentity id, boolean deleteRegistration,
+            boolean deleteDatabaseFiles, Path dbDir, boolean dbSharedWithOthers)
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
             .put(KEY_CONFIRMATION_REQUIRED, true)
-            .put(McpKeys.PROJECT, projectName)
-            .put(McpKeys.APPLICATION_ID, resolvedId)
-            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(McpKeys.PROJECT, id.projectName)
+            .put(McpKeys.APPLICATION_ID, id.resolvedId)
+            .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-            .put(McpKeys.MESSAGE, "PREVIEW: this would dissociate infobase '" + resolvedName //$NON-NLS-1$
-                + "' from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "PREVIEW: this would dissociate infobase '" + id.resolvedName //$NON-NLS-1$
+                + "' from project '" + id.projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteRegistration
                     ? " AND deregister it from the EDT infobases list" //$NON-NLS-1$
                     : " (EDT infobases list entry kept)") //$NON-NLS-1$
@@ -448,18 +554,18 @@ public class DeleteInfobaseTool implements IMcpTool
      * deregister-failure catch produced; the database files are reported as KEPT (the safe choice when
      * deregistration failed). Read-only — the dissociation has already happened at the call site.
      */
-    private static String buildDeregisterFailedResult(String projectName, String resolvedId,
-            String resolvedName, boolean deleteDatabaseFiles, Exception e)
+    private static String buildDeregisterFailedResult(IbIdentity id, boolean deleteDatabaseFiles,
+            Exception e)
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
-            .put(McpKeys.PROJECT, projectName)
-            .put(McpKeys.APPLICATION_ID, resolvedId)
-            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(McpKeys.PROJECT, id.projectName)
+            .put(McpKeys.APPLICATION_ID, id.resolvedId)
+            .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, false)
             .put(KEY_DATABASE_FILES_DELETED, false)
-            .put(McpKeys.MESSAGE, "Infobase '" + resolvedName //$NON-NLS-1$
-                + "' was dissociated from project '" + projectName //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
+                + "' was dissociated from project '" + id.projectName //$NON-NLS-1$
                 + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
                 + e.getMessage()
                 + ". You can remove it manually from the Infobases view in EDT." //$NON-NLS-1$
@@ -475,22 +581,21 @@ public class DeleteInfobaseTool implements IMcpTool
      * identical to the inline result the success path produced. Read-only — all mutations
      * (dissociate / deregister / file deletion) have already happened at the call site.
      */
-    private static String buildDeleteSuccessResult(String projectName, String resolvedId,
-            String resolvedName, boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir,
-            boolean dbFilesDeleted, boolean dbSharedWithOthers)
+    private static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration,
+            DbFileOutcome db)
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
-            .put(McpKeys.PROJECT, projectName)
-            .put(McpKeys.APPLICATION_ID, resolvedId)
-            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(McpKeys.PROJECT, id.projectName)
+            .put(McpKeys.APPLICATION_ID, id.resolvedId)
+            .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-            .put(KEY_DATABASE_FILES_DELETED, dbFilesDeleted)
-            .put(McpKeys.MESSAGE, "Infobase '" + resolvedName //$NON-NLS-1$
-                + "' removed from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            .put(KEY_DATABASE_FILES_DELETED, db.dbFilesDeleted)
+            .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
+                + "' removed from project '" + id.projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteRegistration ? " and deregistered from the EDT infobases list." //$NON-NLS-1$
                     : " (EDT infobases list entry kept).") //$NON-NLS-1$
-                + databaseResultNote(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers))
+                + databaseResultNote(db))
             .toJson();
     }
 
@@ -558,6 +663,50 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
+     * Holder for the file-infobase deletion resolved by
+     * {@link #resolveFileDeletionPlan(IApplication, IProject, IApplicationManager, String, boolean,
+     * boolean)}: the {@link InfobaseReference}, the resolved name / id, the on-disk database directory,
+     * the shared-files guard and the deleteRegistration flag. When {@code error} is non-null it carries
+     * a ready tool-result JSON (the cast-check refusal) and the other fields are unset; otherwise
+     * {@code error} is {@code null} and the fields are populated ({@code ibRef} / {@code dbDir} may be
+     * {@code null} as in the original inline code).
+     */
+    private static final class FileDeletionPlan
+    {
+        final String error;
+        final InfobaseReference ibRef;
+        final String resolvedName;
+        final String resolvedId;
+        final Path dbDir;
+        final boolean dbSharedWithOthers;
+        final boolean deleteRegistration;
+
+        private FileDeletionPlan(String error, InfobaseReference ibRef, String resolvedName,
+                String resolvedId, Path dbDir, boolean dbSharedWithOthers, boolean deleteRegistration)
+        {
+            this.error = error;
+            this.ibRef = ibRef;
+            this.resolvedName = resolvedName;
+            this.resolvedId = resolvedId;
+            this.dbDir = dbDir;
+            this.dbSharedWithOthers = dbSharedWithOthers;
+            this.deleteRegistration = deleteRegistration;
+        }
+
+        static FileDeletionPlan error(String error)
+        {
+            return new FileDeletionPlan(error, null, null, null, null, false, false);
+        }
+
+        static FileDeletionPlan of(InfobaseReference ibRef, String resolvedName, String resolvedId,
+                Path dbDir, boolean dbSharedWithOthers, boolean deleteRegistration)
+        {
+            return new FileDeletionPlan(null, ibRef, resolvedName, resolvedId, dbDir,
+                dbSharedWithOthers, deleteRegistration);
+        }
+    }
+
+    /**
      * Deletes a standalone (WST) server application — the inverse of
      * {@code create_infobase applicationKind=standaloneServer}. Mirrors EDT's "Delete server" UI action
      * via {@code IStandaloneServerService.deleteServer(...)} (resolved reflectively): it stops the server,
@@ -574,6 +723,7 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         final String resolvedName = targetApp.getName();
         final String resolvedId = targetApp.getId();
+        final IbIdentity id = new IbIdentity(projectName, resolvedId, resolvedName);
 
         // Resolve the standalone-server service, backing WST server, infobaseId and served-DB
         // directory (read-only: acquires services and reads paths; deletes nothing). On a
@@ -591,7 +741,7 @@ public class DeleteInfobaseTool implements IMcpTool
         final boolean dbSharedWithOthers = deletionCtx.dbSharedWithOthers;
 
         // --- Confirm-preview gate ---
-        String preview = buildStandaloneServerPreview(confirm, projectName, resolvedId, resolvedName,
+        String preview = buildStandaloneServerPreview(confirm, id,
             deleteRegistration, deleteDatabaseFiles, dbDir, dbSharedWithOthers);
         if (preview != null)
         {
@@ -683,8 +833,9 @@ public class DeleteInfobaseTool implements IMcpTool
         // Read-back: confirm THIS deletion via a count decrease (tolerant of same-id twins).
         boolean removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
 
-        return buildDeletedResult(projectName, resolvedId, resolvedName, deleteRegistration,
-            deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers, cleanup, removed);
+        return buildDeletedResult(id, deleteRegistration,
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers),
+            cleanup, removed);
     }
 
     /**
@@ -760,8 +911,8 @@ public class DeleteInfobaseTool implements IMcpTool
      *
      * @return the preview JSON payload, or {@code null} when {@code confirm} is true
      */
-    private String buildStandaloneServerPreview(boolean confirm, String projectName, String resolvedId,
-        String resolvedName, boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir,
+    private String buildStandaloneServerPreview(boolean confirm, IbIdentity id,
+        boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir,
         boolean dbSharedWithOthers)
     {
         if (confirm)
@@ -772,16 +923,16 @@ public class DeleteInfobaseTool implements IMcpTool
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
             .put(KEY_CONFIRMATION_REQUIRED, true)
             .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
-            .put(McpKeys.PROJECT, projectName)
-            .put(McpKeys.APPLICATION_ID, resolvedId)
-            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(McpKeys.PROJECT, id.projectName)
+            .put(McpKeys.APPLICATION_ID, id.resolvedId)
+            .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-            .put(McpKeys.MESSAGE, "PREVIEW: this would delete standalone server '" + resolvedName //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, "PREVIEW: this would delete standalone server '" + id.resolvedName //$NON-NLS-1$
                 + "' (stop it, remove the WST server and its server config folder)" //$NON-NLS-1$
                 + (deleteRegistration ? " AND clean its infobases.yaml registry entry" //$NON-NLS-1$
                     : " (infobases.yaml entry kept)") //$NON-NLS-1$
                 + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
-                + " for project '" + projectName //$NON-NLS-1$
+                + " for project '" + id.projectName //$NON-NLS-1$
                 + "'. This is irreversible. Re-call with confirm=true to apply.") //$NON-NLS-1$
             .toJson();
     }
@@ -824,24 +975,23 @@ public class DeleteInfobaseTool implements IMcpTool
      *
      * @return the success JSON payload
      */
-    private String buildDeletedResult(String projectName, String resolvedId, String resolvedName,
-        boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir, boolean dbFilesDeleted,
-        boolean dbSharedWithOthers, StandaloneServerSupport.RegistryCleanup cleanup, boolean removed)
+    private String buildDeletedResult(IbIdentity id, boolean deleteRegistration, DbFileOutcome db,
+        StandaloneServerSupport.RegistryCleanup cleanup, boolean removed)
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
-            .put(McpKeys.PROJECT, projectName)
-            .put(McpKeys.APPLICATION_ID, resolvedId)
-            .put(KEY_INFOBASE_NAME, resolvedName)
+            .put(McpKeys.PROJECT, id.projectName)
+            .put(McpKeys.APPLICATION_ID, id.resolvedId)
+            .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-            .put(KEY_DATABASE_FILES_DELETED, dbFilesDeleted)
-            .put(McpKeys.MESSAGE, "Standalone server '" + resolvedName //$NON-NLS-1$
-                + "' deleted from project '" + projectName //$NON-NLS-1$
+            .put(KEY_DATABASE_FILES_DELETED, db.dbFilesDeleted)
+            .put(McpKeys.MESSAGE, "Standalone server '" + id.resolvedName //$NON-NLS-1$
+                + "' deleted from project '" + id.projectName //$NON-NLS-1$
                 + "' (server stopped, WST server and its server config folder removed)" //$NON-NLS-1$
                 + (deleteRegistration ? registryNote(cleanup)
                     : " (infobases.yaml registry entry kept).") //$NON-NLS-1$
-                + databaseResultNote(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers)
+                + databaseResultNote(db)
                 + (removed ? "" : " NOTE: it may still appear in get_applications briefly.")) //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
     }
@@ -1151,25 +1301,24 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /** Result-message fragment describing the actual outcome of the database-files deletion. */
-    private static String databaseResultNote(boolean deleteDatabaseFiles, Path dbDir, boolean deleted,
-            boolean sharedWithOthers)
+    private static String databaseResultNote(DbFileOutcome db)
     {
-        if (!deleteDatabaseFiles)
+        if (!db.deleteDatabaseFiles)
         {
             return " The database files on disk were kept (pass deleteDatabaseFiles=true to remove them)."; //$NON-NLS-1$
         }
-        if (dbDir == null)
+        if (db.dbDir == null)
         {
             return " No database directory could be resolved, so nothing was deleted from disk."; //$NON-NLS-1$
         }
-        if (sharedWithOthers)
+        if (db.dbSharedWithOthers)
         {
             return " The database files were KEPT: this infobase is still used by other project(s) in " //$NON-NLS-1$
                 + "the workspace; deleting them would break those projects."; //$NON-NLS-1$
         }
-        return deleted
-            ? " The database files at '" + dbDir + "' were deleted from disk." //$NON-NLS-1$ //$NON-NLS-2$
-            : " The database files at '" + dbDir //$NON-NLS-1$
+        return db.dbFilesDeleted
+            ? " The database files at '" + db.dbDir + "' were deleted from disk." //$NON-NLS-1$ //$NON-NLS-2$
+            : " The database files at '" + db.dbDir //$NON-NLS-1$
                 + "' were NOT deleted (locked, already absent, or not a recognised infobase directory " //$NON-NLS-1$
                 + "without a 1Cv8.1CD) — check/remove the directory manually."; //$NON-NLS-1$
     }

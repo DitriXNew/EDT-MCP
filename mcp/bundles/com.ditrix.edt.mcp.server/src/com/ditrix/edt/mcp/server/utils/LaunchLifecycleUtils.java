@@ -1436,13 +1436,56 @@ public final class LaunchLifecycleUtils
             return ApplicationUpdateState.UNKNOWN;
         }
 
-        // Latest state pushed by an UPDATE_STATE_CHANGED event (or read directly).
-        AtomicReference<ApplicationUpdateState> observed =
-            new AtomicReference<>(ApplicationUpdateState.UNKNOWN);
-        // Signals every time a relevant event arrives so the waiter re-evaluates.
-        AtomicReference<CountDownLatch> signal = new AtomicReference<>(new CountDownLatch(1));
+        AwaitState awaitState = new AwaitState();
+        IApplicationListener listener = buildUpdateStateListener(application, awaitState);
 
-        IApplicationListener listener = event -> {
+        appManager.addAppllicationListener(listener);
+        try
+        {
+            // An event may already have fired before registration — read once now.
+            ApplicationUpdateState current = readUpdateState(appManager, application);
+            awaitState.observed.set(current);
+            if (done.test(current))
+            {
+                return current;
+            }
+
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            return pollUpdateStateUntilDone(appManager, application, done, deadline, awaitState);
+        }
+        finally
+        {
+            appManager.removeAppllicationListener(listener);
+        }
+    }
+
+    /**
+     * Mutable holder shared between {@link #awaitUpdateState}'s listener and its
+     * wait loop: {@link #observed} is the latest state pushed by an
+     * {@link ApplicationEventType#UPDATE_STATE_CHANGED} event (or read directly), and
+     * {@link #signal} is re-set on every relevant event so the waiter re-evaluates.
+     * Bundled into one object so the loop helper takes a single seam rather than two
+     * loose references.
+     */
+    private static final class AwaitState
+    {
+        final AtomicReference<ApplicationUpdateState> observed =
+            new AtomicReference<>(ApplicationUpdateState.UNKNOWN);
+        final AtomicReference<CountDownLatch> signal =
+            new AtomicReference<>(new CountDownLatch(1));
+    }
+
+    /**
+     * Builds the {@link IApplicationListener} that {@link #awaitUpdateState} registers:
+     * an {@link ApplicationEventType#UPDATE_STATE_CHANGED} event for {@code application}
+     * records the pushed state into {@code awaitState.observed} and wakes the waiter by
+     * counting down {@code awaitState.signal}; every other event is ignored. Same filter
+     * and side effects as the original inline lambda.
+     */
+    private static IApplicationListener buildUpdateStateListener(IApplication application,
+            AwaitState awaitState)
+    {
+        return event -> {
             if (event == null || event.getEventType() != ApplicationEventType.UPDATE_STATE_CHANGED
                 || !isSameApplication(event.getApplication(), application))
             {
@@ -1451,71 +1494,84 @@ public final class LaunchLifecycleUtils
             ApplicationUpdateState pushed = event.getUpdateState();
             if (pushed != null)
             {
-                observed.set(pushed);
+                awaitState.observed.set(pushed);
             }
             // Wake the waiter; it re-reads `observed` and re-evaluates `done`.
-            signal.get().countDown();
+            awaitState.signal.get().countDown();
         };
+    }
 
-        appManager.addAppllicationListener(listener);
-        try
+    /**
+     * The wait loop of {@link #awaitUpdateState}: blocks on the event latch (re-waking
+     * every {@link #syncPollIntervalMs} as a missed-event safety net) until {@code done}
+     * is satisfied or {@code deadline} passes. Preserves the original control flow
+     * exactly — including returning the last observed state on timeout and on an
+     * interruption (after re-asserting the interrupt flag).
+     *
+     * @return the last observed {@link ApplicationUpdateState} once {@code done} holds,
+     *         or the last observed state when {@code deadline} elapses / the wait breaks
+     */
+    private static ApplicationUpdateState pollUpdateStateUntilDone(IApplicationManager appManager,
+            IApplication application, Predicate<ApplicationUpdateState> done, long deadline,
+            AwaitState awaitState)
+    {
+        while (true)
         {
-            // An event may already have fired before registration — read once now.
-            ApplicationUpdateState current = readUpdateState(appManager, application);
-            observed.set(current);
-            if (done.test(current))
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0)
             {
-                return current;
+                return awaitState.observed.get();
             }
-
-            long deadline = System.currentTimeMillis() + timeoutMs;
-            while (true)
+            CountDownLatch latch = awaitState.signal.get();
+            // Wake on the event OR every syncPollIntervalMs (safety net for a
+            // missed event), whichever comes first.
+            long waitMs = Math.min(remaining, Math.max(1L, syncPollIntervalMs));
+            boolean signalled;
+            try
             {
-                long remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0)
-                {
-                    return observed.get();
-                }
-                CountDownLatch latch = signal.get();
-                // Wake on the event OR every syncPollIntervalMs (safety net for a
-                // missed event), whichever comes first.
-                long waitMs = Math.min(remaining, Math.max(1L, syncPollIntervalMs));
-                boolean signalled;
-                try
-                {
-                    signalled = latch.await(waitMs, TimeUnit.MILLISECONDS);
-                }
-                catch (InterruptedException e)
-                {
-                    Thread.currentThread().interrupt();
-                    return observed.get();
-                }
-                if (signalled)
-                {
-                    // Reset the latch for the next event before re-evaluating, so an
-                    // event arriving during evaluation is not lost.
-                    signal.set(new CountDownLatch(1));
-                    if (done.test(observed.get()))
-                    {
-                        return observed.get();
-                    }
-                }
-                else
-                {
-                    // Timed wake — re-read the cached state as a fallback.
-                    ApplicationUpdateState polled = readUpdateState(appManager, application);
-                    observed.set(polled);
-                    if (done.test(polled))
-                    {
-                        return polled;
-                    }
-                }
+                signalled = latch.await(waitMs, TimeUnit.MILLISECONDS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return awaitState.observed.get();
+            }
+            ApplicationUpdateState reached =
+                evaluateAwaitWake(appManager, application, done, signalled, awaitState);
+            if (reached != null)
+            {
+                return reached;
             }
         }
-        finally
+    }
+
+    /**
+     * Evaluates one wake of {@link #pollUpdateStateUntilDone}. On a signalled wake the
+     * event latch is reset (so an event arriving during evaluation is not lost) and the
+     * pushed {@code observed} state is tested; on a timed wake the cached state is
+     * re-read into {@code observed} and tested. Returns the satisfying state when
+     * {@code done} now holds, otherwise {@code null} to keep waiting.
+     *
+     * @param signalled {@code true} when the latch fired (event), {@code false} on a
+     *            timed safety-net wake
+     * @return the state that satisfied {@code done}, or {@code null} to continue the loop
+     */
+    private static ApplicationUpdateState evaluateAwaitWake(IApplicationManager appManager,
+            IApplication application, Predicate<ApplicationUpdateState> done, boolean signalled,
+            AwaitState awaitState)
+    {
+        if (signalled)
         {
-            appManager.removeAppllicationListener(listener);
+            // Reset the latch for the next event before re-evaluating, so an
+            // event arriving during evaluation is not lost.
+            awaitState.signal.set(new CountDownLatch(1));
+            ApplicationUpdateState observed = awaitState.observed.get();
+            return done.test(observed) ? observed : null;
         }
+        // Timed wake — re-read the cached state as a fallback.
+        ApplicationUpdateState polled = readUpdateState(appManager, application);
+        awaitState.observed.set(polled);
+        return done.test(polled) ? polled : null;
     }
 
     /**
@@ -1647,159 +1703,221 @@ public final class LaunchLifecycleUtils
             // permanently block future auto-chains.
             OWNED_LAUNCHES.removeIf(ILaunch::isTerminated);
 
-            int terminated = 0;
-            for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager,
-                project.getName()))
+            TerminationOutcome outcome = new TerminationOutcome();
+            terminateMatchingLiveLaunches(launchManager, project, applicationId,
+                terminateTimeoutSeconds, outcome);
+            if (outcome.error != null)
             {
-                if (!applicationId.equals(LaunchConfigUtils.getApplicationIdFor(live)))
-                {
-                    continue;
-                }
-                String name = live.getLaunchConfiguration() != null
-                    ? live.getLaunchConfiguration().getName() : UNKNOWN_LABEL;
-                // Identity-equals lookup against the OWNED registry — relies on
-                // the invariant that callers pass the exact ILaunch instance
-                // returned by workingCopy.launch() to registerOwnedLaunch.
-                if (OWNED_LAUNCHES.contains(live))
-                {
-                    return new PreLaunchResult(false, terminated,
-                        "Another test run is already in progress for this IB " //$NON-NLS-1$
-                            + "(launch '" + name + "'). Wait for it to finish " //$NON-NLS-1$ //$NON-NLS-2$
-                            + "(call this tool again later with the same arguments), " //$NON-NLS-1$
-                            + "or call `terminate_launch` to stop it first."); //$NON-NLS-1$
-                }
-                boolean done = terminateAndWait(live, terminateTimeoutSeconds);
-                if (!done)
-                {
-                    return new PreLaunchResult(false, terminated,
-                        "Could not terminate previous launch '" + name //$NON-NLS-1$
-                            + "' within " + terminateTimeoutSeconds //$NON-NLS-1$
-                            + "s. Call `terminate_launch` with `force=true` to kill " //$NON-NLS-1$
-                            + "the stuck process, then retry."); //$NON-NLS-1$
-                }
-                terminated++;
+                return new PreLaunchResult(false, outcome.terminated, outcome.error);
             }
 
-            // Second pass: stale Attach launches on the same project. Attach
-            // configs don't carry a real ATTR_APPLICATION_ID — getApplicationIdFor
-            // synthesises "attach:<name>", which never equals a runtime client's
-            // UUID, so the per-applicationId loop above never sweeps them. A
-            // lingering Attach (e.g. left over from a previous debug session) can
-            // mask which 1C client really holds the IB and clutter diagnostics,
-            // so disconnect it before the new spawn. Killing an Attach launch is
-            // just a debugger disconnect — the 1C server keeps running, no
-            // unsaved state is at risk.
-            for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager,
-                project.getName()))
+            sweepStaleAttachLaunches(launchManager, project, terminateTimeoutSeconds, outcome);
+            if (outcome.error != null)
             {
-                if (!LaunchConfigUtils.isAttachConfig(live.getLaunchConfiguration()))
-                {
-                    continue;
-                }
-                String name = live.getLaunchConfiguration() != null
-                    ? live.getLaunchConfiguration().getName() : UNKNOWN_LABEL;
-                // Defensive: today both YAXUnit tools register only runtime
-                // launches, so an Attach in OWNED is purely hypothetical. If a
-                // future tool starts registering Attach launches as owned, we
-                // intentionally fast-fail here rather than skipping — at the
-                // attach-pass level we don't know which IB the foreign attach
-                // targets, and silent skip would risk a spawn that hangs on a
-                // locked IB until the MCP timeout. The error message points the
-                // caller at terminate_launch, which is the right escape hatch.
-                if (OWNED_LAUNCHES.contains(live))
-                {
-                    return new PreLaunchResult(false, terminated,
-                        "An Attach debug session for this project is owned by another " //$NON-NLS-1$
-                            + "MCP tool (launch '" + name + "'). Wait for it to finish, " //$NON-NLS-1$ //$NON-NLS-2$
-                            + "or call `terminate_launch` to disconnect it first."); //$NON-NLS-1$
-                }
-                boolean done = terminateAndWait(live, terminateTimeoutSeconds);
-                if (!done)
-                {
-                    // An Attach disconnect that doesn't complete is unusual but
-                    // not fatal to the test run: Attach launches don't hold the
-                    // IB lock (the foreign 1C client does), so a stuck disconnect
-                    // shouldn't block the new spawn. Log and continue.
-                    Activator.logError("Could not disconnect stale Attach launch '" //$NON-NLS-1$
-                        + name + "' within " + terminateTimeoutSeconds //$NON-NLS-1$
-                        + "s, continuing with the auto-chain", null); //$NON-NLS-1$
-                    continue;
-                }
-                // Surface attach disconnects in the log because the per-call
-                // PreLaunchResult counter slips them into the same total as
-                // runtime terminations — without this line, post-mortems can't
-                // tell which launches the second pass swept.
-                Activator.logInfo("Pre-launch auto-chain disconnected stale Attach launch '" //$NON-NLS-1$
-                    + name + "' on project " + project.getName()); //$NON-NLS-1$
-                terminated++;
+                return new PreLaunchResult(false, outcome.terminated, outcome.error);
             }
 
-            // Selectively force a derived-data recompute of projects that have
-            // had file changes since the last successful prepare (dirty projects).
-            // Clean projects get only a cheap derived-data drain. Without the
-            // forced recompute for dirty projects, an extension (.cfe) edited just
-            // before the launch is never regenerated (the derived-data wait no-ops
-            // when nothing is scheduled) and appManager.update() consumes the
-            // stale export artifact — so the first test run executes the old
-            // extension, missing freshly added tests. updateScope narrows the
-            // project scope FIRST; the dirty filter is applied within that scope.
-            //
-            // The snapshot is taken INSIDE recomputeAndSettleIfDirty, BEFORE the
-            // recompute begins. We receive it back so we can pass it to
-            // markPrepared on the success paths — a change arriving DURING the
-            // recompute bumps the generation counter; the conditional remove in
-            // markPrepared then fails and the project stays dirty (stale-.cfe fix).
-            List<IProject> scopeProjects = resolveUpdateScope(project, updateScope);
-            Map<String, Long> dirtySnapshot = recomputeAndSettleIfDirty(scopeProjects);
+            return finalizeFreshLaunchPrep(project, applicationId, appManager, updateScope,
+                outcome.terminated);
+        }
+    }
 
-            // A STANDALONE-SERVER application (literal
-            // "ServerApplication." id prefix) must NOT be DB-updated out-of-band
-            // here. IApplicationManager.update on a ServerApplication routes through
-            // ServerApplicationBehaviourDelegate.update →
-            // JobBasedServerModulePublisher.publish, which STARTS the standalone
-            // server in RUN mode and caches a live designer-agent connection in the
-            // global DesignerSessionPool; the launch delegate then needs the server
-            // in DEBUG mode, and the restart's teardown of that cached connection
-            // wedges the launch. Defer to the delegate's coordinated path instead —
-            // EDT's native ApplicationUiSupport.ensureUpdated prepares the server
-            // directly in the target mode FIRST and only then updates (no restart).
-            // Both YAXUnit tools arm LaunchUpdateDialogAutoConfirmer around
-            // workingCopy.launch, so the delegate's "Application update" dialog
-            // (shown only when the IB is stale) is auto-pressed; when the IB is in
-            // sync there is no dialog at all. The terminate-stale passes and the
-            // recompute/settle above still ran — they do not open IB connections.
-            if (DebugServerTargetSupport.isServerApplicationId(applicationId))
-            {
-                Activator.logInfo("Pre-launch auto-chain: server application: deferring DB update " //$NON-NLS-1$
-                    + "to the launch delegate's coordinated path (auto-confirmed): applicationId=" //$NON-NLS-1$
-                    + applicationId);
-                // Success path: mark all scope projects as prepared with the
-                // generation-keyed snapshot so the next call skips the recompute
-                // when nothing changed (and keeps dirty flag on a change-during-recompute).
-                PreLaunchChangeTracker.markPrepared(scopeProjects, dirtySnapshot);
-                return new PreLaunchResult(true, terminated, null);
-            }
+    /**
+     * Mutable accumulator threaded through the {@link #prepareForFreshLaunch} sweep
+     * helpers: {@link #terminated} is the running count of swept launches, and
+     * {@link #error} is set to the first blocking error message (a populated value tells
+     * the caller to abort with {@code new PreLaunchResult(false, terminated, error)},
+     * exactly the inline early-returns did).
+     */
+    private static final class TerminationOutcome
+    {
+        int terminated;
+        String error;
+    }
 
-            // settleAfterPossibleRecompute=true: we JUST forced a recompute, so a cached
-            // UPDATED may lag the freshly regenerated .cfe — wait out the settle window
-            // before trusting "no update needed". The settle is kept
-            // UNCONDITIONALLY: the lagging UPDATE_STATE_CHANGED push this window
-            // exists for arrives AFTER the recompute drain (it is emitted by the
-            // applications-layer infobase-sync checker, which the drained build /
-            // derived-data job families do NOT cover), so no during-drain probe can
-            // prove it will not come. The plain debug_launch path passes false
-            // (immediate return on UPDATED) to avoid that ~5s cost.
-            Optional<String> updateErr = updateApplicationIfNeeded(project, applicationId,
-                appManager, true);
-            if (updateErr.isPresent())
+    /**
+     * First pass of {@link #prepareForFreshLaunch}: politely terminates every live launch
+     * whose application id matches {@code applicationId}, incrementing
+     * {@code outcome.terminated} per success. Sets {@code outcome.error} (and stops) when a
+     * matching launch is MCP-owned (another test run in progress) or fails to terminate in
+     * time — the SAME two messages the inline loop returned. Leaves {@code outcome.error}
+     * {@code null} when the pass completes cleanly.
+     */
+    private static void terminateMatchingLiveLaunches(ILaunchManager launchManager,
+            IProject project, String applicationId, int terminateTimeoutSeconds,
+            TerminationOutcome outcome)
+    {
+        for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager,
+            project.getName()))
+        {
+            if (!applicationId.equals(LaunchConfigUtils.getApplicationIdFor(live)))
             {
-                // Error path: do NOT mark prepared — the next call must recompute.
-                return new PreLaunchResult(false, terminated, updateErr.get());
+                continue;
             }
-            // Success path: mark prepared with the generation-keyed snapshot.
+            String name = live.getLaunchConfiguration() != null
+                ? live.getLaunchConfiguration().getName() : UNKNOWN_LABEL;
+            // Identity-equals lookup against the OWNED registry — relies on
+            // the invariant that callers pass the exact ILaunch instance
+            // returned by workingCopy.launch() to registerOwnedLaunch.
+            if (OWNED_LAUNCHES.contains(live))
+            {
+                outcome.error = "Another test run is already in progress for this IB " //$NON-NLS-1$
+                    + "(launch '" + name + "'). Wait for it to finish " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "(call this tool again later with the same arguments), " //$NON-NLS-1$
+                    + "or call `terminate_launch` to stop it first."; //$NON-NLS-1$
+                return;
+            }
+            boolean done = terminateAndWait(live, terminateTimeoutSeconds);
+            if (!done)
+            {
+                outcome.error = "Could not terminate previous launch '" + name //$NON-NLS-1$
+                    + "' within " + terminateTimeoutSeconds //$NON-NLS-1$
+                    + "s. Call `terminate_launch` with `force=true` to kill " //$NON-NLS-1$
+                    + "the stuck process, then retry."; //$NON-NLS-1$
+                return;
+            }
+            outcome.terminated++;
+        }
+    }
+
+    /**
+     * Second pass of {@link #prepareForFreshLaunch}: disconnects stale Attach launches on
+     * the project. Attach configs don't carry a real {@code ATTR_APPLICATION_ID}
+     * ({@code getApplicationIdFor} synthesises {@code "attach:<name>"}, which never equals a
+     * runtime client's UUID, so the first pass never sweeps them); a lingering Attach can
+     * mask which 1C client holds the IB. Killing an Attach launch is just a debugger
+     * disconnect — the 1C server keeps running. Sets {@code outcome.error} only for an
+     * MCP-owned Attach (the same fast-fail message as before); a non-confirming disconnect
+     * is logged and skipped (best-effort), and each confirmed disconnect increments
+     * {@code outcome.terminated}.
+     */
+    private static void sweepStaleAttachLaunches(ILaunchManager launchManager, IProject project,
+            int terminateTimeoutSeconds, TerminationOutcome outcome)
+    {
+        for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager,
+            project.getName()))
+        {
+            if (!LaunchConfigUtils.isAttachConfig(live.getLaunchConfiguration()))
+            {
+                continue;
+            }
+            String name = live.getLaunchConfiguration() != null
+                ? live.getLaunchConfiguration().getName() : UNKNOWN_LABEL;
+            // Defensive: today both YAXUnit tools register only runtime
+            // launches, so an Attach in OWNED is purely hypothetical. If a
+            // future tool starts registering Attach launches as owned, we
+            // intentionally fast-fail here rather than skipping — at the
+            // attach-pass level we don't know which IB the foreign attach
+            // targets, and silent skip would risk a spawn that hangs on a
+            // locked IB until the MCP timeout. The error message points the
+            // caller at terminate_launch, which is the right escape hatch.
+            if (OWNED_LAUNCHES.contains(live))
+            {
+                outcome.error = "An Attach debug session for this project is owned by another " //$NON-NLS-1$
+                    + "MCP tool (launch '" + name + "'). Wait for it to finish, " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "or call `terminate_launch` to disconnect it first."; //$NON-NLS-1$
+                return;
+            }
+            boolean done = terminateAndWait(live, terminateTimeoutSeconds);
+            if (!done)
+            {
+                // An Attach disconnect that doesn't complete is unusual but
+                // not fatal to the test run: Attach launches don't hold the
+                // IB lock (the foreign 1C client does), so a stuck disconnect
+                // shouldn't block the new spawn. Log and continue.
+                Activator.logError("Could not disconnect stale Attach launch '" //$NON-NLS-1$
+                    + name + "' within " + terminateTimeoutSeconds //$NON-NLS-1$
+                    + "s, continuing with the auto-chain", null); //$NON-NLS-1$
+                continue;
+            }
+            // Surface attach disconnects in the log because the per-call
+            // PreLaunchResult counter slips them into the same total as
+            // runtime terminations — without this line, post-mortems can't
+            // tell which launches the second pass swept.
+            Activator.logInfo("Pre-launch auto-chain disconnected stale Attach launch '" //$NON-NLS-1$
+                + name + "' on project " + project.getName()); //$NON-NLS-1$
+            outcome.terminated++;
+        }
+    }
+
+    /**
+     * Final stage of {@link #prepareForFreshLaunch} after the terminate passes: forces the
+     * scoped derived-data recompute, then either defers the DB update to the launch
+     * delegate (standalone-server applications) or runs {@link #updateApplicationIfNeeded}
+     * and gates on it, marking the scope prepared on the success paths only. Returns the
+     * SAME {@link PreLaunchResult} (ok / error, with the supplied {@code terminated} count)
+     * the inline tail produced.
+     *
+     * @param terminated the swept-launch count accumulated by the terminate passes
+     */
+    private static PreLaunchResult finalizeFreshLaunchPrep(IProject project, String applicationId,
+            IApplicationManager appManager, String updateScope, int terminated)
+    {
+        // Selectively force a derived-data recompute of projects that have
+        // had file changes since the last successful prepare (dirty projects).
+        // Clean projects get only a cheap derived-data drain. Without the
+        // forced recompute for dirty projects, an extension (.cfe) edited just
+        // before the launch is never regenerated (the derived-data wait no-ops
+        // when nothing is scheduled) and appManager.update() consumes the
+        // stale export artifact — so the first test run executes the old
+        // extension, missing freshly added tests. updateScope narrows the
+        // project scope FIRST; the dirty filter is applied within that scope.
+        //
+        // The snapshot is taken INSIDE recomputeAndSettleIfDirty, BEFORE the
+        // recompute begins. We receive it back so we can pass it to
+        // markPrepared on the success paths — a change arriving DURING the
+        // recompute bumps the generation counter; the conditional remove in
+        // markPrepared then fails and the project stays dirty (stale-.cfe fix).
+        List<IProject> scopeProjects = resolveUpdateScope(project, updateScope);
+        Map<String, Long> dirtySnapshot = recomputeAndSettleIfDirty(scopeProjects);
+
+        // A STANDALONE-SERVER application (literal
+        // "ServerApplication." id prefix) must NOT be DB-updated out-of-band
+        // here. IApplicationManager.update on a ServerApplication routes through
+        // ServerApplicationBehaviourDelegate.update →
+        // JobBasedServerModulePublisher.publish, which STARTS the standalone
+        // server in RUN mode and caches a live designer-agent connection in the
+        // global DesignerSessionPool; the launch delegate then needs the server
+        // in DEBUG mode, and the restart's teardown of that cached connection
+        // wedges the launch. Defer to the delegate's coordinated path instead —
+        // EDT's native ApplicationUiSupport.ensureUpdated prepares the server
+        // directly in the target mode FIRST and only then updates (no restart).
+        // Both YAXUnit tools arm LaunchUpdateDialogAutoConfirmer around
+        // workingCopy.launch, so the delegate's "Application update" dialog
+        // (shown only when the IB is stale) is auto-pressed; when the IB is in
+        // sync there is no dialog at all. The terminate-stale passes and the
+        // recompute/settle above still ran — they do not open IB connections.
+        if (DebugServerTargetSupport.isServerApplicationId(applicationId))
+        {
+            Activator.logInfo("Pre-launch auto-chain: server application: deferring DB update " //$NON-NLS-1$
+                + "to the launch delegate's coordinated path (auto-confirmed): applicationId=" //$NON-NLS-1$
+                + applicationId);
+            // Success path: mark all scope projects as prepared with the
+            // generation-keyed snapshot so the next call skips the recompute
+            // when nothing changed (and keeps dirty flag on a change-during-recompute).
             PreLaunchChangeTracker.markPrepared(scopeProjects, dirtySnapshot);
             return new PreLaunchResult(true, terminated, null);
         }
+
+        // settleAfterPossibleRecompute=true: we JUST forced a recompute, so a cached
+        // UPDATED may lag the freshly regenerated .cfe — wait out the settle window
+        // before trusting "no update needed". The settle is kept
+        // UNCONDITIONALLY: the lagging UPDATE_STATE_CHANGED push this window
+        // exists for arrives AFTER the recompute drain (it is emitted by the
+        // applications-layer infobase-sync checker, which the drained build /
+        // derived-data job families do NOT cover), so no during-drain probe can
+        // prove it will not come. The plain debug_launch path passes false
+        // (immediate return on UPDATED) to avoid that ~5s cost.
+        Optional<String> updateErr = updateApplicationIfNeeded(project, applicationId,
+            appManager, true);
+        if (updateErr.isPresent())
+        {
+            // Error path: do NOT mark prepared — the next call must recompute.
+            return new PreLaunchResult(false, terminated, updateErr.get());
+        }
+        // Success path: mark prepared with the generation-keyed snapshot.
+        PreLaunchChangeTracker.markPrepared(scopeProjects, dirtySnapshot);
+        return new PreLaunchResult(true, terminated, null);
     }
 
     /**

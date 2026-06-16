@@ -327,8 +327,9 @@ public class CreateProjectTool implements IMcpTool
         }
 
         // 3. Validate kind-specific parameter constraints
-        String constraintErr = validateKindConstraints(projectKind, isExtension, isExternalObjects,
-            versionStr, baseProjectName, prefix, purposeStr, compatModeStr, synonym, comment, scriptVariantStr);
+        String constraintErr = validateKindConstraints(new KindConstraintInputs(projectKind, isExtension,
+            isExternalObjects, versionStr, baseProjectName, prefix, purposeStr, compatModeStr, synonym, comment,
+            scriptVariantStr));
         if (constraintErr != null)
         {
             return constraintErr;
@@ -363,20 +364,19 @@ public class CreateProjectTool implements IMcpTool
         }
 
         // Dispatch to kind-specific handler
+        CreateRequest request = new CreateRequest(configName, projectName, versionStr, baseProjectName, prefix,
+            synonym, comment, purposeStr, compatModeStr, scriptVariantStr, standardChecks, commonChecks);
         if (isExtension)
         {
-            return executeExtension(configName, projectName, baseProjectName, prefix, synonym, comment,
-                purposeStr, compatModeStr, standardChecks, commonChecks);
+            return executeExtension(request);
         }
         else if (isConfiguration)
         {
-            return executeConfiguration(configName, projectName, versionStr, synonym, comment,
-                scriptVariantStr, standardChecks, commonChecks);
+            return executeConfiguration(request);
         }
         else
         {
-            return executeExternalObjects(configName, projectName, versionStr, scriptVariantStr,
-                standardChecks, commonChecks);
+            return executeExternalObjects(request);
         }
     }
 
@@ -424,63 +424,118 @@ public class CreateProjectTool implements IMcpTool
 
     /**
      * Validates the kind-specific parameter constraints (which parameters are allowed for
-     * which {@code projectKind}) plus the strict scriptVariant value check.
+     * which {@code projectKind}) plus the strict scriptVariant value check. Thin orchestrator:
+     * delegates to the per-group validators and returns the first non-null error.
      *
      * @return a ready-to-return JSON error string when a constraint is violated, or
      *     {@code null} when all constraints pass
      */
-    private static String validateKindConstraints(String projectKind, boolean isExtension,
-        boolean isExternalObjects, String versionStr, String baseProjectName, String prefix,
-        String purposeStr, String compatModeStr, String synonym, String comment, String scriptVariantStr)
+    private static String validateKindConstraints(KindConstraintInputs in)
     {
-        if (isExtension && versionStr != null && !versionStr.isEmpty())
+        String err = validateExtensionInheritedParams(in);
+        if (err != null)
+        {
+            return err;
+        }
+        err = validateNonExtensionParams(in);
+        if (err != null)
+        {
+            return err;
+        }
+        err = validateExternalObjectsParams(in);
+        if (err != null)
+        {
+            return err;
+        }
+        return validateScriptVariantValue(in);
+    }
+
+    /**
+     * Rejects parameters that an extension always inherits from its base configuration
+     * ({@code version}, {@code scriptVariant}) when {@code projectKind=extension}.
+     *
+     * @return a ready-to-return JSON error string, or {@code null} when valid
+     */
+    private static String validateExtensionInheritedParams(KindConstraintInputs in)
+    {
+        if (in.isExtension && in.versionStr != null && !in.versionStr.isEmpty())
         {
             return ToolResult.error(
                 "'version' is not valid for projectKind=extension: " //$NON-NLS-1$
                     + "the extension always inherits the version from the base configuration. " //$NON-NLS-1$
                     + "Remove the 'version' parameter.").toJson(); //$NON-NLS-1$
         }
-        if (!isExtension && baseProjectName != null && !baseProjectName.isEmpty())
-        {
-            return ToolResult.error(
-                "'baseProjectName' is only valid for projectKind=extension. " //$NON-NLS-1$
-                    + "Remove the 'baseProjectName' parameter for kind=" + projectKind + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        if (!isExtension && prefix != null && !prefix.isEmpty())
-        {
-            return ToolResult.error("'prefix' is only valid for projectKind=extension.").toJson(); //$NON-NLS-1$
-        }
-        if (!isExtension && purposeStr != null && !purposeStr.isEmpty())
-        {
-            return ToolResult.error("'purpose' is only valid for projectKind=extension.").toJson(); //$NON-NLS-1$
-        }
-        if (!isExtension && compatModeStr != null && !compatModeStr.isEmpty())
-        {
-            return ToolResult.error("'compatibilityMode' is only valid for projectKind=extension.").toJson(); //$NON-NLS-1$
-        }
-        if (isExternalObjects && synonym != null && !synonym.isEmpty())
-        {
-            return ToolResult.error("'synonym' is not valid for projectKind=externalObjects.").toJson(); //$NON-NLS-1$
-        }
-        if (isExternalObjects && comment != null && !comment.isEmpty())
-        {
-            return ToolResult.error("'comment' is not valid for projectKind=externalObjects.").toJson(); //$NON-NLS-1$
-        }
-        if (isExtension && scriptVariantStr != null && !scriptVariantStr.isEmpty())
+        if (in.isExtension && in.scriptVariantStr != null && !in.scriptVariantStr.isEmpty())
         {
             return ToolResult.error(
                 "'scriptVariant' is not valid for projectKind=extension: " //$NON-NLS-1$
                     + "the extension always inherits the scriptVariant from the base configuration. " //$NON-NLS-1$
                     + "Remove the 'scriptVariant' parameter.").toJson(); //$NON-NLS-1$
         }
+        return null;
+    }
 
-        // Strict scriptVariant validation: must be exactly "Russian" or "English" (case-insensitive)
-        // when supplied for configuration or externalObjects.
-        if (!isExtension && scriptVariantStr != null && !scriptVariantStr.isEmpty()
-            && !SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
-            && !SCRIPT_ENGLISH.equalsIgnoreCase(scriptVariantStr))
+    /**
+     * Rejects extension-only parameters ({@code baseProjectName}, {@code prefix}, {@code purpose},
+     * {@code compatibilityMode}) when {@code projectKind} is not {@code extension}.
+     *
+     * @return a ready-to-return JSON error string, or {@code null} when valid
+     */
+    private static String validateNonExtensionParams(KindConstraintInputs in)
+    {
+        if (!in.isExtension && in.baseProjectName != null && !in.baseProjectName.isEmpty())
         {
-            return ToolResult.error("Invalid scriptVariant value: '" + scriptVariantStr //$NON-NLS-1$
+            return ToolResult.error(
+                "'baseProjectName' is only valid for projectKind=extension. " //$NON-NLS-1$
+                    + "Remove the 'baseProjectName' parameter for kind=" + in.projectKind + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!in.isExtension && in.prefix != null && !in.prefix.isEmpty())
+        {
+            return ToolResult.error("'prefix' is only valid for projectKind=extension.").toJson(); //$NON-NLS-1$
+        }
+        if (!in.isExtension && in.purposeStr != null && !in.purposeStr.isEmpty())
+        {
+            return ToolResult.error("'purpose' is only valid for projectKind=extension.").toJson(); //$NON-NLS-1$
+        }
+        if (!in.isExtension && in.compatModeStr != null && !in.compatModeStr.isEmpty())
+        {
+            return ToolResult.error("'compatibilityMode' is only valid for projectKind=extension.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Rejects externalObjects-incompatible parameters ({@code synonym}, {@code comment}) when
+     * {@code projectKind=externalObjects}.
+     *
+     * @return a ready-to-return JSON error string, or {@code null} when valid
+     */
+    private static String validateExternalObjectsParams(KindConstraintInputs in)
+    {
+        if (in.isExternalObjects && in.synonym != null && !in.synonym.isEmpty())
+        {
+            return ToolResult.error("'synonym' is not valid for projectKind=externalObjects.").toJson(); //$NON-NLS-1$
+        }
+        if (in.isExternalObjects && in.comment != null && !in.comment.isEmpty())
+        {
+            return ToolResult.error("'comment' is not valid for projectKind=externalObjects.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Strict scriptVariant value validation: must be exactly {@code "Russian"} or {@code "English"}
+     * (case-insensitive) when supplied for configuration or externalObjects.
+     *
+     * @return a ready-to-return JSON error string, or {@code null} when valid
+     */
+    private static String validateScriptVariantValue(KindConstraintInputs in)
+    {
+        if (!in.isExtension && in.scriptVariantStr != null && !in.scriptVariantStr.isEmpty()
+            && !SCRIPT_RUSSIAN.equalsIgnoreCase(in.scriptVariantStr)
+            && !SCRIPT_ENGLISH.equalsIgnoreCase(in.scriptVariantStr))
+        {
+            return ToolResult.error("Invalid scriptVariant value: '" + in.scriptVariantStr //$NON-NLS-1$
                 + "'. Allowed values: 'Russian', 'English'.").toJson(); //$NON-NLS-1$
         }
         return null;
@@ -488,17 +543,19 @@ public class CreateProjectTool implements IMcpTool
 
     // ─────────────────────── EXTENSION path ──────────────────────────────────
 
-    private String executeExtension(String configName, String projectName, String baseProjectName,
-        String prefix, String synonym, String comment, String purposeStr, String compatModeStr,
-        boolean standardChecks, boolean commonChecks)
+    private String executeExtension(CreateRequest req)
     {
+        String configName = req.configName;
+        String prefix = req.prefix;
+
         // Validate the base project and new project name (read-only)
-        BaseProjectResolution baseResolution = validateExtensionBaseProject(configName, projectName, baseProjectName);
+        BaseProjectResolution baseResolution =
+            validateExtensionBaseProject(configName, req.projectName, req.baseProjectName);
         if (baseResolution.error != null)
         {
             return baseResolution.error;
         }
-        baseProjectName = baseResolution.baseProjectName;
+        String baseProjectName = baseResolution.baseProjectName;
         String effectiveProjectName = baseResolution.effectiveProjectName;
         IProject baseIProject = baseResolution.baseIProject;
 
@@ -515,7 +572,7 @@ public class CreateProjectTool implements IMcpTool
         ScriptVariant scriptVariant = services.scriptVariant;
 
         // Validate purpose
-        PurposeResolution purposeResolution = resolveExtensionPurpose(purposeStr);
+        PurposeResolution purposeResolution = resolveExtensionPurpose(req.purposeStr);
         if (purposeResolution.error != null)
         {
             return purposeResolution.error;
@@ -523,7 +580,7 @@ public class CreateProjectTool implements IMcpTool
         ConfigurationExtensionPurpose purpose = purposeResolution.purpose;
 
         // Validate CompatibilityMode if supplied
-        CompatModeResolution compatModeResolution = resolveCompatibilityMode(compatModeStr);
+        CompatModeResolution compatModeResolution = resolveCompatibilityMode(req.compatModeStr);
         if (compatModeResolution.error != null)
         {
             return compatModeResolution.error;
@@ -544,13 +601,10 @@ public class CreateProjectTool implements IMcpTool
         {
             config.setConfigurationExtensionCompatibilityMode(compatMode);
         }
-        if (comment != null && !comment.isEmpty())
-        {
-            config.setComment(comment);
-        }
+        applyComment(config, req.comment);
 
         // Set synonym via language-code-keyed EMap
-        boolean synonymApplied = applyExtensionSynonym(config, baseConfig, configName, synonym);
+        boolean synonymApplied = applyExtensionSynonym(config, baseConfig, configName, req.synonym);
 
         // Create the extension project in a background Job
         final IProject[] createdHolder = new IProject[1];
@@ -578,15 +632,14 @@ public class CreateProjectTool implements IMcpTool
             }
         };
 
-        final ScriptVariant finalScriptVariant = scriptVariant;
-        final ConfigurationExtensionPurpose finalPurpose = purpose;
+        ExtensionResponseData responseData = new ExtensionResponseData(finalEffectiveProjectName, configName,
+            baseProjectName, prefix, purpose, scriptVariant, version, synonymApplied);
 
         CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, KIND_EXTENSION);
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full extension response
-            return buildExtensionSlowResponse(finalEffectiveProjectName, configName, baseProjectName, prefix,
-                finalPurpose, finalScriptVariant, version, synonymApplied);
+            return buildExtensionSlowResponse(responseData);
         }
         if (jobResult.errorJson != null)
         {
@@ -608,19 +661,20 @@ public class CreateProjectTool implements IMcpTool
         String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], KIND_EXTENSION);
 
         // Apply v8codestyle preferences
-        Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
+        Map<String, Object> codestyleMap =
+            applyCodestylePrefs(finalEffectiveProjectName, req.standardChecks, req.commonChecks);
 
-        return buildExtensionSuccessResponse(finalEffectiveProjectName, configName, baseProjectName, prefix,
-            finalPurpose, finalScriptVariant, version, projectState, codestyleMap, synonymApplied);
+        return buildExtensionSuccessResponse(responseData, projectState, codestyleMap);
     }
 
     // ─────────────────────── CONFIGURATION path ──────────────────────────────
 
-    private String executeConfiguration(String configName, String projectName, String versionStr,
-        String synonym, String comment, String scriptVariantStr, boolean standardChecks, boolean commonChecks)
+    private String executeConfiguration(CreateRequest req)
     {
+        String configName = req.configName;
+
         // Derive default EDT project name: <configName>
-        String effectiveProjectName = (projectName != null) ? projectName : configName;
+        String effectiveProjectName = (req.projectName != null) ? req.projectName : configName;
 
         // Check the new project name does not already exist
         if (ProjectContext.of(effectiveProjectName).exists())
@@ -629,40 +683,26 @@ public class CreateProjectTool implements IMcpTool
                 + ERR_PROJECT_EXISTS_SUFFIX).toJson();
         }
 
-        // Parse version
-        Version version;
-        try
+        // Parse version (read-only)
+        VersionResolution versionResolution = parseVersion(req.versionStr);
+        if (versionResolution.error != null)
         {
-            version = (versionStr != null) ? new Version(versionStr) : Version.LATEST;
+            return versionResolution.error;
         }
-        catch (Exception e)
-        {
-            return ToolResult.error("Invalid version string '" + versionStr //$NON-NLS-1$
-                + "'. Use a dot-separated version like '8.3.27'. " //$NON-NLS-1$
-                + "Original error: " + e.getMessage()).toJson(); //$NON-NLS-1$
-        }
+        Version version = versionResolution.version;
 
-        // Resolve MD factory
-        IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
-        if (factory == null)
+        // Resolve MD factory and IConfigurationProjectManager (read-only)
+        ConfigurationServices services = resolveConfigurationServices();
+        if (services.error != null)
         {
-            return ToolResult.error("IModelObjectFactory (MD) not available. MdPlugin may not be ready.").toJson(); //$NON-NLS-1$
+            return services.error;
         }
+        IModelObjectFactory factory = services.factory;
+        IConfigurationProjectManager configMgr = services.configMgr;
 
-        // Resolve IConfigurationProjectManager
-        IConfigurationProjectManager configMgr = Activator.getDefault().getConfigurationProjectManager();
-        if (configMgr == null)
-        {
-            return ToolResult.error(
-                "IConfigurationProjectManager service not available. The EDT platform may not be ready.").toJson(); //$NON-NLS-1$
-        }
-
-        // Resolve scriptVariant
-        boolean isRussian = scriptVariantStr == null || scriptVariantStr.isEmpty()
-            || SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr);
-        ScriptVariant scriptVariant = isRussian ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
-        String langCode = isRussian ? "ru" : "en"; //$NON-NLS-1$ //$NON-NLS-2$
-        String langName = isRussian ? SCRIPT_RUSSIAN : SCRIPT_ENGLISH;
+        // Resolve scriptVariant and language tokens (read-only)
+        ConfigurationScript script = resolveConfigurationScript(req.scriptVariantStr);
+        ScriptVariant scriptVariant = script.scriptVariant;
 
         // Build Configuration model object (NOT inside a BM transaction)
         Configuration config = (Configuration) factory.create(MdClassPackage.Literals.CONFIGURATION, version);
@@ -674,24 +714,13 @@ public class CreateProjectTool implements IMcpTool
 
         // Ensure the configuration has a default Language (per ConfigurationWizard recipe)
         // If fillDefaultReferences already produced a language, reuse it; otherwise create one.
-        String effectiveLangCode = langCode;
-        setupConfigurationLanguage(config, langCode, langName);
+        setupConfigurationLanguage(config, script.langCode, script.langName);
 
         // Optional attributes
-        if (comment != null && !comment.isEmpty())
-        {
-            config.setComment(comment);
-        }
+        applyComment(config, req.comment);
 
         // Set synonym via language-code-keyed EMap
-        String synonymValue = (synonym != null && !synonym.isEmpty()) ? synonym : configName;
-        boolean synonymApplied = false;
-        EMap<String, String> synonymMap = config.getSynonym();
-        if (synonymMap != null)
-        {
-            synonymMap.put(effectiveLangCode, synonymValue);
-            synonymApplied = true;
-        }
+        boolean synonymApplied = applyConfigurationSynonym(config, script.langCode, req.synonym, configName);
 
         // Create the configuration project in a background Job
         final IProject[] createdHolder = new IProject[1];
@@ -718,14 +747,12 @@ public class CreateProjectTool implements IMcpTool
             }
         };
 
-        final ScriptVariant finalScriptVariant = scriptVariant;
-
         CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, KIND_CONFIGURATION);
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full configuration response
             return buildConfigurationSlowResponse(finalEffectiveProjectName, configName,
-                finalScriptVariant, finalVersion, synonymApplied);
+                scriptVariant, finalVersion, synonymApplied);
         }
         if (jobResult.errorJson != null)
         {
@@ -745,18 +772,68 @@ public class CreateProjectTool implements IMcpTool
         String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], KIND_CONFIGURATION);
 
         // Apply v8codestyle preferences
-        Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
+        Map<String, Object> codestyleMap =
+            applyCodestylePrefs(finalEffectiveProjectName, req.standardChecks, req.commonChecks);
 
+        return buildConfigurationSuccessResponse(finalEffectiveProjectName, configName, scriptVariant,
+            finalVersion, projectState, codestyleMap, synonymApplied);
+    }
+
+    /**
+     * Maps the {@code scriptVariant} parameter string to a {@link ScriptVariant} plus its
+     * language code/name tokens (read-only). Defaults to Russian when blank.
+     */
+    private static ConfigurationScript resolveConfigurationScript(String scriptVariantStr)
+    {
+        boolean isRussian = scriptVariantStr == null || scriptVariantStr.isEmpty()
+            || SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr);
+        ScriptVariant scriptVariant = isRussian ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
+        String langCode = isRussian ? "ru" : "en"; //$NON-NLS-1$ //$NON-NLS-2$
+        String langName = isRussian ? SCRIPT_RUSSIAN : SCRIPT_ENGLISH;
+        return new ConfigurationScript(scriptVariant, langCode, langName);
+    }
+
+    /**
+     * Applies the synonym to the in-memory standalone {@link Configuration} via its
+     * language-code-keyed {@code synonym} EMap (in-memory model mutation only). The synonym
+     * value defaults to {@code configName} when {@code synonym} is blank.
+     *
+     * @return {@code true} when the synonym was applied; {@code false} when no synonym map
+     *     was available on the new Configuration
+     */
+    private static boolean applyConfigurationSynonym(Configuration config, String langCode, String synonym,
+        String configName)
+    {
+        String synonymValue = (synonym != null && !synonym.isEmpty()) ? synonym : configName;
+        EMap<String, String> synonymMap = config.getSynonym();
+        if (synonymMap != null)
+        {
+            synonymMap.put(langCode, synonymValue);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Builds the normal success JSON response for a created standalone configuration project
+     * (read-only), adding {@code synonymNote} when the synonym could not be applied.
+     *
+     * @return the response JSON string
+     */
+    private static String buildConfigurationSuccessResponse(String effectiveProjectName, String configName,
+        ScriptVariant scriptVariant, Version version, String projectState, Map<String, Object> codestyleMap,
+        boolean synonymApplied)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put(McpKeys.PROJECT, finalEffectiveProjectName)
+            .put(McpKeys.PROJECT, effectiveProjectName)
             .put(KEY_PROJECT_KIND, KIND_CONFIGURATION)
             .put("name", configName) //$NON-NLS-1$
-            .put(KEY_SCRIPT_VARIANT, finalScriptVariant.getLiteral())
-            .put(KEY_VERSION, finalVersion.toString())
+            .put(KEY_SCRIPT_VARIANT, scriptVariant.getLiteral())
+            .put(KEY_VERSION, version.toString())
             .put(KEY_STATE, projectState)
             .put(KEY_CODESTYLE, codestyleMap)
-            .put(McpKeys.MESSAGE, "Configuration project '" + finalEffectiveProjectName + "' created."); //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "Configuration project '" + effectiveProjectName + "' created."); //$NON-NLS-1$ //$NON-NLS-2$
         if (!synonymApplied)
         {
             result.put(KEY_SYNONYM_NOTE,
@@ -844,11 +921,13 @@ public class CreateProjectTool implements IMcpTool
 
     // ─────────────────────── EXTERNAL OBJECTS path ───────────────────────────
 
-    private String executeExternalObjects(String configName, String projectName, String versionStr,
-        String scriptVariantStr, boolean standardChecks, boolean commonChecks)
+    private String executeExternalObjects(CreateRequest req)
     {
+        String configName = req.configName;
+        String scriptVariantStr = req.scriptVariantStr;
+
         // Derive default EDT project name: <configName>
-        String effectiveProjectName = (projectName != null) ? projectName : configName;
+        String effectiveProjectName = (req.projectName != null) ? req.projectName : configName;
 
         // Check the new project name does not already exist
         if (ProjectContext.of(effectiveProjectName).exists())
@@ -857,18 +936,13 @@ public class CreateProjectTool implements IMcpTool
                 + ERR_PROJECT_EXISTS_SUFFIX).toJson();
         }
 
-        // Parse version
-        Version version;
-        try
+        // Parse version (read-only)
+        VersionResolution versionResolution = parseVersion(req.versionStr);
+        if (versionResolution.error != null)
         {
-            version = (versionStr != null) ? new Version(versionStr) : Version.LATEST;
+            return versionResolution.error;
         }
-        catch (Exception e)
-        {
-            return ToolResult.error("Invalid version string '" + versionStr //$NON-NLS-1$
-                + "'. Use a dot-separated version like '8.3.27'. " //$NON-NLS-1$
-                + "Original error: " + e.getMessage()).toJson(); //$NON-NLS-1$
-        }
+        Version version = versionResolution.version;
 
         // Resolve IExternalObjectProjectManager
         IExternalObjectProjectManager extObjMgr = Activator.getDefault().getExternalObjectProjectManager();
@@ -927,34 +1001,49 @@ public class CreateProjectTool implements IMcpTool
         // Wait for lifecycle STARTED
         String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], KIND_EXTERNAL_OBJECTS);
 
+        // Apply v8codestyle preferences
+        Map<String, Object> codestyleMap =
+            applyCodestylePrefs(finalEffectiveProjectName, req.standardChecks, req.commonChecks);
+
+        return buildExternalObjectsSuccessResponse(new ExternalObjectsSuccessInputs(extObjMgr,
+            finalEffectiveProjectName, configName, finalVersion, createdHolder[0], projectState,
+            scriptVariantStr, codestyleMap));
+    }
+
+    /**
+     * Builds the normal success JSON response for a created externalObjects project. Applies the
+     * requested scriptVariant post-create (non-fatal on failure, mirroring the original inline
+     * block exactly) and emits the canonical literal/note when supplied.
+     *
+     * @return the response JSON string
+     */
+    private static String buildExternalObjectsSuccessResponse(ExternalObjectsSuccessInputs in)
+    {
         // Post-create: apply scriptVariant if supplied (non-fatal on failure)
         // Input is guaranteed "Russian" or "English" (case-insensitive) by the shared validation above.
         String scriptVariantNote = null;
         ScriptVariant requestedSv = null;
-        if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
+        if (in.scriptVariantStr != null && !in.scriptVariantStr.isEmpty())
         {
-            requestedSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
+            requestedSv = SCRIPT_RUSSIAN.equalsIgnoreCase(in.scriptVariantStr)
                 ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
-            scriptVariantNote = applyExternalObjectsScriptVariant(extObjMgr, finalEffectiveProjectName,
-                createdHolder[0], requestedSv, projectState);
+            scriptVariantNote = applyExternalObjectsScriptVariant(in.extObjMgr, in.effectiveProjectName,
+                in.createdProject, requestedSv, in.projectState);
         }
 
-        // Apply v8codestyle preferences
-        Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
-
-        String message = "External objects project '" + finalEffectiveProjectName + "' created."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String message = "External objects project '" + in.effectiveProjectName + "' created."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (scriptVariantNote != null)
         {
             message = message + " " + scriptVariantNote; //$NON-NLS-1$
         }
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put(McpKeys.PROJECT, finalEffectiveProjectName)
+            .put(McpKeys.PROJECT, in.effectiveProjectName)
             .put(KEY_PROJECT_KIND, KIND_EXTERNAL_OBJECTS)
-            .put("name", configName) //$NON-NLS-1$
-            .put(KEY_VERSION, finalVersion.toString())
-            .put(KEY_STATE, projectState)
-            .put(KEY_CODESTYLE, codestyleMap)
+            .put("name", in.configName) //$NON-NLS-1$
+            .put(KEY_VERSION, in.version.toString())
+            .put(KEY_STATE, in.projectState)
+            .put(KEY_CODESTYLE, in.codestyleMap)
             .put(McpKeys.MESSAGE, message);
         if (requestedSv != null)
         {
@@ -1047,6 +1136,65 @@ public class CreateProjectTool implements IMcpTool
     }
 
     // ─────────────────────── Shared helpers ──────────────────────────────────
+
+    /**
+     * Parses the optional platform-version string (read-only). A {@code null} {@code versionStr}
+     * yields {@link Version#LATEST}; a malformed value yields a ready-to-return JSON error.
+     *
+     * @return a {@link VersionResolution} carrying the parsed {@link Version}, or a ready-to-return
+     *     JSON error for a malformed value
+     */
+    private static VersionResolution parseVersion(String versionStr)
+    {
+        try
+        {
+            Version version = (versionStr != null) ? new Version(versionStr) : Version.LATEST;
+            return new VersionResolution(null, version);
+        }
+        catch (Exception e)
+        {
+            return new VersionResolution(ToolResult.error("Invalid version string '" + versionStr //$NON-NLS-1$
+                + "'. Use a dot-separated version like '8.3.27'. " //$NON-NLS-1$
+                + "Original error: " + e.getMessage()).toJson(), null); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Resolves the {@link IModelObjectFactory} and {@link IConfigurationProjectManager} services
+     * required by the standalone-configuration path (read-only lookups).
+     *
+     * @return {@link ConfigurationServices#ok} with the resolved services, or
+     *     {@link ConfigurationServices#failure} carrying a ready-to-return JSON error
+     */
+    private static ConfigurationServices resolveConfigurationServices()
+    {
+        IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
+        if (factory == null)
+        {
+            return ConfigurationServices.failure(
+                ToolResult.error("IModelObjectFactory (MD) not available. MdPlugin may not be ready.").toJson()); //$NON-NLS-1$
+        }
+
+        IConfigurationProjectManager configMgr = Activator.getDefault().getConfigurationProjectManager();
+        if (configMgr == null)
+        {
+            return ConfigurationServices.failure(ToolResult.error(
+                "IConfigurationProjectManager service not available. The EDT platform may not be ready.").toJson()); //$NON-NLS-1$
+        }
+        return ConfigurationServices.ok(factory, configMgr);
+    }
+
+    /**
+     * Sets the optional free-text comment on the in-memory {@link Configuration} when non-blank
+     * (in-memory model mutation only). No-op when {@code comment} is {@code null} or empty.
+     */
+    private static void applyComment(Configuration config, String comment)
+    {
+        if (comment != null && !comment.isEmpty())
+        {
+            config.setComment(comment);
+        }
+    }
 
     /** Status codes returned by {@link #runCreateJob}. */
     private enum CreateStatus
@@ -1183,6 +1331,205 @@ public class CreateProjectTool implements IMcpTool
         {
             this.error = error;
             this.compatMode = compatMode;
+        }
+    }
+
+    /**
+     * Immutable bundle of the raw parameter values needed by {@link #validateKindConstraints}
+     * and its per-group sub-validators (avoids an over-long parameter list).
+     */
+    private static final class KindConstraintInputs
+    {
+        final String projectKind;
+        final boolean isExtension;
+        final boolean isExternalObjects;
+        final String versionStr;
+        final String baseProjectName;
+        final String prefix;
+        final String purposeStr;
+        final String compatModeStr;
+        final String synonym;
+        final String comment;
+        final String scriptVariantStr;
+
+        private KindConstraintInputs(String projectKind, boolean isExtension, boolean isExternalObjects,
+            String versionStr, String baseProjectName, String prefix, String purposeStr, String compatModeStr,
+            String synonym, String comment, String scriptVariantStr)
+        {
+            this.projectKind = projectKind;
+            this.isExtension = isExtension;
+            this.isExternalObjects = isExternalObjects;
+            this.versionStr = versionStr;
+            this.baseProjectName = baseProjectName;
+            this.prefix = prefix;
+            this.purposeStr = purposeStr;
+            this.compatModeStr = compatModeStr;
+            this.synonym = synonym;
+            this.comment = comment;
+            this.scriptVariantStr = scriptVariantStr;
+        }
+    }
+
+    /**
+     * Immutable bundle of the normalized request parameters passed to the kind-specific
+     * {@code executeXxx} handlers (avoids an over-long parameter list). Field values are the
+     * post-normalization values computed in {@link #execute}.
+     */
+    private static final class CreateRequest
+    {
+        final String configName;
+        final String projectName;
+        final String versionStr;
+        final String baseProjectName;
+        final String prefix;
+        final String synonym;
+        final String comment;
+        final String purposeStr;
+        final String compatModeStr;
+        final String scriptVariantStr;
+        final boolean standardChecks;
+        final boolean commonChecks;
+
+        private CreateRequest(String configName, String projectName, String versionStr, String baseProjectName,
+            String prefix, String synonym, String comment, String purposeStr, String compatModeStr,
+            String scriptVariantStr, boolean standardChecks, boolean commonChecks)
+        {
+            this.configName = configName;
+            this.projectName = projectName;
+            this.versionStr = versionStr;
+            this.baseProjectName = baseProjectName;
+            this.prefix = prefix;
+            this.synonym = synonym;
+            this.comment = comment;
+            this.purposeStr = purposeStr;
+            this.compatModeStr = compatModeStr;
+            this.scriptVariantStr = scriptVariantStr;
+            this.standardChecks = standardChecks;
+            this.commonChecks = commonChecks;
+        }
+    }
+
+    /**
+     * Immutable bundle of the common fields shared by the extension success and slow-path
+     * response builders (avoids an over-long parameter list).
+     */
+    private static final class ExtensionResponseData
+    {
+        final String effectiveProjectName;
+        final String configName;
+        final String baseProjectName;
+        final String prefix;
+        final ConfigurationExtensionPurpose purpose;
+        final ScriptVariant scriptVariant;
+        final Version version;
+        final boolean synonymApplied;
+
+        private ExtensionResponseData(String effectiveProjectName, String configName, String baseProjectName,
+            String prefix, ConfigurationExtensionPurpose purpose, ScriptVariant scriptVariant, Version version,
+            boolean synonymApplied)
+        {
+            this.effectiveProjectName = effectiveProjectName;
+            this.configName = configName;
+            this.baseProjectName = baseProjectName;
+            this.prefix = prefix;
+            this.purpose = purpose;
+            this.scriptVariant = scriptVariant;
+            this.version = version;
+            this.synonymApplied = synonymApplied;
+        }
+    }
+
+    /**
+     * Outcome of {@link #parseVersion}: either a ready-to-return JSON {@code error}, or the
+     * parsed {@link Version}. Exactly one field is non-null.
+     */
+    private static final class VersionResolution
+    {
+        final String error;
+        final Version version;
+
+        private VersionResolution(String error, Version version)
+        {
+            this.error = error;
+            this.version = version;
+        }
+    }
+
+    /**
+     * Outcome of {@link #resolveConfigurationServices}: either a ready-to-return JSON {@code error},
+     * or the resolved {@link IModelObjectFactory} and {@link IConfigurationProjectManager}. The
+     * value fields are non-null exactly when {@code error} is null.
+     */
+    private static final class ConfigurationServices
+    {
+        final String error;
+        final IModelObjectFactory factory;
+        final IConfigurationProjectManager configMgr;
+
+        private ConfigurationServices(String error, IModelObjectFactory factory,
+            IConfigurationProjectManager configMgr)
+        {
+            this.error = error;
+            this.factory = factory;
+            this.configMgr = configMgr;
+        }
+
+        static ConfigurationServices failure(String error)
+        {
+            return new ConfigurationServices(error, null, null);
+        }
+
+        static ConfigurationServices ok(IModelObjectFactory factory, IConfigurationProjectManager configMgr)
+        {
+            return new ConfigurationServices(null, factory, configMgr);
+        }
+    }
+
+    /**
+     * Immutable result of {@link #resolveConfigurationScript}: the {@link ScriptVariant} plus the
+     * language code and name tokens for the default Language.
+     */
+    private static final class ConfigurationScript
+    {
+        final ScriptVariant scriptVariant;
+        final String langCode;
+        final String langName;
+
+        private ConfigurationScript(ScriptVariant scriptVariant, String langCode, String langName)
+        {
+            this.scriptVariant = scriptVariant;
+            this.langCode = langCode;
+            this.langName = langName;
+        }
+    }
+
+    /**
+     * Immutable bundle of the inputs needed by {@link #buildExternalObjectsSuccessResponse}
+     * (avoids an over-long parameter list).
+     */
+    private static final class ExternalObjectsSuccessInputs
+    {
+        final IExternalObjectProjectManager extObjMgr;
+        final String effectiveProjectName;
+        final String configName;
+        final Version version;
+        final IProject createdProject;
+        final String projectState;
+        final String scriptVariantStr;
+        final Map<String, Object> codestyleMap;
+
+        private ExternalObjectsSuccessInputs(IExternalObjectProjectManager extObjMgr, String effectiveProjectName,
+            String configName, Version version, IProject createdProject, String projectState,
+            String scriptVariantStr, Map<String, Object> codestyleMap)
+        {
+            this.extObjMgr = extObjMgr;
+            this.effectiveProjectName = effectiveProjectName;
+            this.configName = configName;
+            this.version = version;
+            this.createdProject = createdProject;
+            this.projectState = projectState;
+            this.scriptVariantStr = scriptVariantStr;
+            this.codestyleMap = codestyleMap;
         }
     }
 
@@ -1464,28 +1811,26 @@ public class CreateProjectTool implements IMcpTool
      * Mirrors the normal success response, adding {@code synonymNote} when the synonym could not
      * be applied.
      */
-    private static String buildExtensionSlowResponse(String effectiveProjectName, String configName,
-        String baseProjectName, String prefix, ConfigurationExtensionPurpose purpose, ScriptVariant scriptVariant,
-        Version version, boolean synonymApplied)
+    private static String buildExtensionSlowResponse(ExtensionResponseData data)
     {
         ToolResult slowResult = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put(McpKeys.PROJECT, effectiveProjectName)
+            .put(McpKeys.PROJECT, data.effectiveProjectName)
             .put(KEY_PROJECT_KIND, KIND_EXTENSION)
-            .put("name", configName) //$NON-NLS-1$
-            .put(KEY_BASE_PROJECT, baseProjectName)
-            .put(KEY_PREFIX, prefix)
-            .put(KEY_PURPOSE, purpose.getLiteral())
-            .put(KEY_SCRIPT_VARIANT, scriptVariant.getLiteral())
-            .put(KEY_VERSION, version.toString())
+            .put("name", data.configName) //$NON-NLS-1$
+            .put(KEY_BASE_PROJECT, data.baseProjectName)
+            .put(KEY_PREFIX, data.prefix)
+            .put(KEY_PURPOSE, data.purpose.getLiteral())
+            .put(KEY_SCRIPT_VARIANT, data.scriptVariant.getLiteral())
+            .put(KEY_VERSION, data.version.toString())
             .put(KEY_STATE, VAL_CREATED)
             .put(KEY_CODESTYLE, slowPathCodestyleMap())
-            .put(McpKeys.MESSAGE, "Extension project '" + effectiveProjectName //$NON-NLS-1$
-                + "' created and bound to '" + baseProjectName //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, "Extension project '" + data.effectiveProjectName //$NON-NLS-1$
+                + "' created and bound to '" + data.baseProjectName //$NON-NLS-1$
                 + "' (creation completed past the " //$NON-NLS-1$
                 + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
         // Mirror the normal success path: report when the synonym could not be applied.
-        if (!synonymApplied)
+        if (!data.synonymApplied)
         {
             slowResult.put(KEY_SYNONYM_NOTE,
                 "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
@@ -1498,25 +1843,24 @@ public class CreateProjectTool implements IMcpTool
      * Builds the normal success JSON response for a created extension project (read-only),
      * adding {@code synonymNote} when the synonym could not be applied.
      */
-    private static String buildExtensionSuccessResponse(String effectiveProjectName, String configName,
-        String baseProjectName, String prefix, ConfigurationExtensionPurpose purpose, ScriptVariant scriptVariant,
-        Version version, String projectState, Map<String, Object> codestyleMap, boolean synonymApplied)
+    private static String buildExtensionSuccessResponse(ExtensionResponseData data, String projectState,
+        Map<String, Object> codestyleMap)
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put(McpKeys.PROJECT, effectiveProjectName)
+            .put(McpKeys.PROJECT, data.effectiveProjectName)
             .put(KEY_PROJECT_KIND, KIND_EXTENSION)
-            .put("name", configName) //$NON-NLS-1$
-            .put(KEY_BASE_PROJECT, baseProjectName)
-            .put(KEY_PREFIX, prefix)
-            .put(KEY_PURPOSE, purpose.getLiteral())
-            .put(KEY_SCRIPT_VARIANT, scriptVariant.getLiteral())
-            .put(KEY_VERSION, version.toString())
+            .put("name", data.configName) //$NON-NLS-1$
+            .put(KEY_BASE_PROJECT, data.baseProjectName)
+            .put(KEY_PREFIX, data.prefix)
+            .put(KEY_PURPOSE, data.purpose.getLiteral())
+            .put(KEY_SCRIPT_VARIANT, data.scriptVariant.getLiteral())
+            .put(KEY_VERSION, data.version.toString())
             .put(KEY_STATE, projectState)
             .put(KEY_CODESTYLE, codestyleMap)
-            .put(McpKeys.MESSAGE, "Extension project '" + effectiveProjectName //$NON-NLS-1$
-                + "' created and bound to '" + baseProjectName + "'."); //$NON-NLS-1$ //$NON-NLS-2$
-        if (!synonymApplied)
+            .put(McpKeys.MESSAGE, "Extension project '" + data.effectiveProjectName //$NON-NLS-1$
+                + "' created and bound to '" + data.baseProjectName + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!data.synonymApplied)
         {
             result.put(KEY_SYNONYM_NOTE,
                 "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$

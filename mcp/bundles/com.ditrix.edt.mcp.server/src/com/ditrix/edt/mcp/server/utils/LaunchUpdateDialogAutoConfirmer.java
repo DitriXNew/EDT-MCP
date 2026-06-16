@@ -724,35 +724,57 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             return null;
         }
-        String firstSeen = null;
-        String text = labelLikeText(control);
-        if (text != null && !text.trim().isEmpty())
+        // This control's own label-like text: a 1003-prefix match short-circuits;
+        // otherwise it is the running best-effort fallback.
+        String firstSeen = ownLabelMatch(control);
+        if (firstSeen != null && isDebugSessionExistsBody(firstSeen))
         {
-            if (isDebugSessionExistsBody(text))
-            {
-                return text;
-            }
-            firstSeen = text;
+            return firstSeen;
         }
         if (control instanceof Composite)
         {
-            for (Control child : ((Composite)control).getChildren())
+            return scanChildren((Composite)control, depth, firstSeen);
+        }
+        return firstSeen;
+    }
+
+    /**
+     * The control's OWN label-like text when non-blank, else {@code null}. Pure
+     * sub-block of {@link #findBodyText}: a {@link #isDebugSessionExistsBody}
+     * prefix match is preserved for the caller to short-circuit on.
+     */
+    private static String ownLabelMatch(Control control)
+    {
+        String text = labelLikeText(control);
+        return text != null && !text.trim().isEmpty() ? text : null;
+    }
+
+    /**
+     * Pre-order scan of a composite's children for {@link #findBodyText}: returns
+     * the first child text matching a 1003 prefix, else {@code firstSeen} (the
+     * parent's running best-effort fallback, kept if the parent already had one or
+     * promoted to the first non-blank child text otherwise). Same skipping and
+     * first-wins fallback semantics as the inline loop it replaces.
+     */
+    private static String scanChildren(Composite composite, int depth, String firstSeen)
+    {
+        String best = firstSeen;
+        for (Control child : composite.getChildren())
+        {
+            String childText = findBodyText(child, depth + 1);
+            if (childText != null)
             {
-                String childText = findBodyText(child, depth + 1);
-                if (childText != null)
+                if (isDebugSessionExistsBody(childText))
                 {
-                    if (isDebugSessionExistsBody(childText))
-                    {
-                        return childText;
-                    }
-                    if (firstSeen == null)
-                    {
-                        firstSeen = childText;
-                    }
+                    return childText;
+                }
+                if (best == null)
+                {
+                    best = childText;
                 }
             }
         }
-        return firstSeen;
+        return best;
     }
 
     /** @return the text of a {@link Label}/{@link CLabel}/{@link Text}/{@link Link}, else {@code null}. */

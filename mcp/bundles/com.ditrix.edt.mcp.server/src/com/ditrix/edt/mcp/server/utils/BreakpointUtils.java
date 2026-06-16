@@ -192,41 +192,67 @@ public final class BreakpointUtils
             IBreakpointManager bpManager)
     {
         Bundle debugCoreBundle = Platform.getBundle(BSL_DEBUG_CORE_BUNDLE);
-        if (debugCoreBundle != null)
-        {
-            for (String className : BSL_BREAKPOINT_CLASSES)
-            {
-                try
-                {
-                    Class<?> cls = debugCoreBundle.loadClass(className);
-                    Constructor<?> ctor = findConstructor(cls);
-                    if (ctor != null)
-                    {
-                        Object instance = ctor.newInstance(file, lineNumber);
-                        if (instance instanceof IBreakpoint)
-                        {
-                            IBreakpoint bp = (IBreakpoint) instance;
-                            // EDT's constructor creates the marker but does not register
-                            // with the breakpoint manager — do it explicitly.
-                            bpManager.addBreakpoint(bp);
-                            return bp;
-                        }
-                    }
-                }
-                catch (ClassNotFoundException cnf)
-                {
-                    // try next class name
-                }
-                catch (Exception ex)
-                {
-                    Activator.logError("Failed to instantiate " + className, ex); //$NON-NLS-1$
-                }
-            }
-        }
-        else
+        if (debugCoreBundle == null)
         {
             Activator.logError("Bundle " + BSL_DEBUG_CORE_BUNDLE //$NON-NLS-1$
                     + " not found — falling back to marker", new IllegalStateException("bundle missing")); //$NON-NLS-1$ //$NON-NLS-2$
+            return null;
+        }
+
+        for (String className : BSL_BREAKPOINT_CLASSES)
+        {
+            IBreakpoint bp = tryCreateEdtBreakpointFor(debugCoreBundle, className, file, lineNumber, bpManager);
+            if (bp != null)
+            {
+                return bp;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Attempts a single candidate class: loads it from {@code debugCoreBundle}, finds an
+     * {@code (IResource/IFile, int)} constructor, instantiates the breakpoint and registers it with the
+     * manager (EDT's constructor creates the marker but does not register). Returns the created
+     * breakpoint, or {@code null} when the class/constructor is unavailable or instantiation fails — so
+     * the caller falls through to the next candidate. {@link ClassNotFoundException} is silent (try next
+     * name); any other failure is logged, exactly as in the former inline loop body.
+     *
+     * @param debugCoreBundle the owning bundle whose class loader resolves {@code className}
+     * @param className        the candidate fully-qualified breakpoint class name
+     * @param file             the resource the breakpoint is on
+     * @param lineNumber       the 1-based line number
+     * @param bpManager        the breakpoint manager to register with
+     * @return the created EDT breakpoint, or {@code null} to try the next candidate
+     */
+    private static IBreakpoint tryCreateEdtBreakpointFor(Bundle debugCoreBundle, String className,
+            IFile file, int lineNumber, IBreakpointManager bpManager)
+    {
+        try
+        {
+            Class<?> cls = debugCoreBundle.loadClass(className);
+            Constructor<?> ctor = findConstructor(cls);
+            if (ctor == null)
+            {
+                return null;
+            }
+            Object instance = ctor.newInstance(file, lineNumber);
+            if (instance instanceof IBreakpoint)
+            {
+                IBreakpoint bp = (IBreakpoint) instance;
+                // EDT's constructor creates the marker but does not register
+                // with the breakpoint manager — do it explicitly.
+                bpManager.addBreakpoint(bp);
+                return bp;
+            }
+        }
+        catch (ClassNotFoundException cnf)
+        {
+            // try next class name
+        }
+        catch (Exception ex)
+        {
+            Activator.logError("Failed to instantiate " + className, ex); //$NON-NLS-1$
         }
         return null;
     }

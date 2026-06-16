@@ -803,6 +803,31 @@ public class MetadataReferenceService
             String className = object.eClass().getName();
 
             // Map class names to readable categories
+            String category = mapClassNameToCategory(className);
+            if (category != null)
+            {
+                return category;
+            }
+
+            // Check if it's an MdObject
+            if (object instanceof MdObject)
+            {
+                MdObject mdObject = (MdObject) object;
+                return mdObject.eClass().getName();
+            }
+
+            return className;
+        }
+
+        /**
+         * Maps an EClass name to a readable reference category by the same ordered
+         * {@code contains} checks as the original inline chain (first match wins),
+         * or {@code null} when none matches. Pure helper extracted from
+         * {@link #getCategoryFromObject}; the {@code null} result lets the caller
+         * apply the unchanged MdObject / raw-class-name fallback.
+         */
+        private static String mapClassNameToCategory(String className)
+        {
             if (className.contains("Subsystem")) return "Subsystems"; //$NON-NLS-1$ //$NON-NLS-2$
             if (className.contains("Role")) return "Roles"; //$NON-NLS-1$ //$NON-NLS-2$
             if (className.contains("CommonModule")) return "Common modules"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -819,15 +844,7 @@ public class MetadataReferenceService
             if (className.contains("TypeDescription")) return "Type descriptions"; //$NON-NLS-1$ //$NON-NLS-2$
             if (className.contains("FunctionalOption")) return "Functional options"; //$NON-NLS-1$ //$NON-NLS-2$
             if (className.contains("Template")) return "Templates"; //$NON-NLS-1$ //$NON-NLS-2$
-
-            // Check if it's an MdObject
-            if (object instanceof MdObject)
-            {
-                MdObject mdObject = (MdObject) object;
-                return mdObject.eClass().getName();
-            }
-
-            return className;
+            return null;
         }
 
         /**

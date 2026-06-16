@@ -160,7 +160,9 @@ public class MetadataRenameService
 
         // Phase 2: build markdown with YAML frontmatter
         StringBuilder sb = new StringBuilder();
-        appendFrontmatter(sb, objectFqn, newName, allChanges, allProblems, exactMatches, enabledCount, shown);
+        PreviewSummary summary = new PreviewSummary(objectFqn, newName, allChanges.size(), enabledCount,
+            allProblems.size(), exactMatches.size(), shown);
+        appendFrontmatter(sb, summary);
         appendChangePointsTable(sb, allChanges, shown);
         appendCodeContext(sb, allChanges, shown);
         appendProblemsSection(sb, allProblems);
@@ -205,15 +207,17 @@ public class MetadataRenameService
                 Change nativeChange = nativeItem.getNativeChange();
                 if (nativeChange != null)
                 {
-                    collectFlatChanges(nativeChange, null, null, exactMatches, allChanges, indexCounter, title,
+                    ScanContext ctx = new ScanContext(exactMatches, allChanges, indexCounter, title,
                         item.isOptional(), oldName);
+                    collectFlatChanges(nativeChange, null, null, ctx);
                 }
             }
             else
             {
                 allChanges.add(new ChangePoint(
-                    indexCounter[0]++, "rename", null, null, //$NON-NLS-1$
-                    item.getName(), item.isOptional(), item.isChecked(), title));
+                    indexCounter[0]++, "rename", //$NON-NLS-1$
+                    item.getName(), item.isOptional(), item.isChecked(), title,
+                    CodeLocation.of(null, null)));
             }
         }
     }
@@ -266,31 +270,58 @@ public class MetadataRenameService
         return pb.toString();
     }
 
+    /**
+     * Immutable bundle of the preview header totals: the rename identity ({@code objectFqn} /
+     * {@code newName}) and the four counts rendered in the YAML frontmatter (total / enabled change
+     * points, problems, debug exact matches) plus {@code shown}. Carried so {@link #appendFrontmatter}
+     * reads exactly the same values in the same order while staying within the parameter limit.
+     */
+    private static final class PreviewSummary
+    {
+        final String objectFqn;
+        final String newName;
+        final int totalChanges;
+        final long enabledCount;
+        final int problemCount;
+        final int exactMatchCount;
+        final int shown;
+
+        PreviewSummary(String objectFqn, String newName, int totalChanges, long enabledCount,
+            int problemCount, int exactMatchCount, int shown)
+        {
+            this.objectFqn = objectFqn;
+            this.newName = newName;
+            this.totalChanges = totalChanges;
+            this.enabledCount = enabledCount;
+            this.problemCount = problemCount;
+            this.exactMatchCount = exactMatchCount;
+            this.shown = shown;
+        }
+    }
+
     /** Appends the YAML frontmatter, title, totals and (when truncated) the "showing N of M" note. */
-    private void appendFrontmatter(StringBuilder sb, String objectFqn, String newName,
-        List<ChangePoint> allChanges, List<String> allProblems, Map<String, ExactMatchInfo> exactMatches,
-        long enabledCount, int shown)
+    private void appendFrontmatter(StringBuilder sb, PreviewSummary summary)
     {
         sb.append("---\n"); //$NON-NLS-1$
         sb.append("action: preview\n"); //$NON-NLS-1$
-        sb.append("objectFqn: ").append(objectFqn).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("newName: ").append(newName).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("totalChanges: ").append(allChanges.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("enabledChanges: ").append(enabledCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("problems: ").append(allProblems.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("debugExactMatches: ").append(exactMatches.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("objectFqn: ").append(summary.objectFqn).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("newName: ").append(summary.newName).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("totalChanges: ").append(summary.totalChanges).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("enabledChanges: ").append(summary.enabledCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("problems: ").append(summary.problemCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("debugExactMatches: ").append(summary.exactMatchCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("---\n\n"); //$NON-NLS-1$
 
-        sb.append("# Refactoring Preview: Rename `").append(objectFqn) //$NON-NLS-1$
-          .append("` \u2192 `").append(newName).append("`\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("# Refactoring Preview: Rename `").append(summary.objectFqn) //$NON-NLS-1$
+          .append("` \u2192 `").append(summary.newName).append("`\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        sb.append("**Total change points:** ").append(allChanges.size()) //$NON-NLS-1$
-          .append(" | **Enabled by default:** ").append(enabledCount).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("**Total change points:** ").append(summary.totalChanges) //$NON-NLS-1$
+          .append(" | **Enabled by default:** ").append(summary.enabledCount).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        if (allChanges.size() > shown)
+        if (summary.totalChanges > summary.shown)
         {
-            sb.append("_Showing ").append(shown).append(" of ").append(allChanges.size()) //$NON-NLS-1$ //$NON-NLS-2$
-              .append(" changes. Pass `maxResults=").append(allChanges.size()) //$NON-NLS-1$
+            sb.append("_Showing ").append(summary.shown).append(" of ").append(summary.totalChanges) //$NON-NLS-1$ //$NON-NLS-2$
+              .append(" changes. Pass `maxResults=").append(summary.totalChanges) //$NON-NLS-1$
               .append("` to see all._\n\n"); //$NON-NLS-1$
         }
     }
@@ -393,6 +424,40 @@ public class MetadataRenameService
             + "(optional only; one index may span several context rows - skipping it skips them all).\n"); //$NON-NLS-1$
     }
 
+    /**
+     * Immutable holder for the source-location coordinates of a preview row / exact match:
+     * the owning object FQN and project plus the (1-based) line/column, the surrounding code
+     * snippet and the containing method name. Bundled so the {@link ChangePoint} and
+     * {@link ExactMatchInfo} constructors stay within the parameter limit while reading the
+     * same values in the same order. A "no location" instance uses {@code -1}/{@code null}.
+     */
+    private static final class CodeLocation
+    {
+        final String fqn;
+        final String project;
+        final int lineNumber;
+        final int columnNumber;
+        final String codeContext;
+        final String methodName;
+
+        CodeLocation(String fqn, String project, int lineNumber, int columnNumber, String codeContext,
+            String methodName)
+        {
+            this.fqn = fqn;
+            this.project = project;
+            this.lineNumber = lineNumber;
+            this.columnNumber = columnNumber;
+            this.codeContext = codeContext;
+            this.methodName = methodName;
+        }
+
+        /** Location carrying only fqn/project (no line/column/context/method). */
+        static CodeLocation of(String fqn, String project)
+        {
+            return new CodeLocation(fqn, project, -1, -1, null, null);
+        }
+    }
+
     /** Simple data holder for a single change point in preview. */
     private static class ChangePoint
     {
@@ -408,27 +473,20 @@ public class MetadataRenameService
         final String codeContext;
         final String methodName;
 
-        ChangePoint(int index, String type, String fqn, String project, String description,
-            boolean optional, boolean enabled, String ignored)
-        {
-            this(index, type, fqn, project, description, optional, enabled, ignored, -1, -1, null, null);
-        }
-
-        ChangePoint(int index, String type, String fqn, String project, String description,
-            boolean optional, boolean enabled, String ignored,
-            int lineNumber, int columnNumber, String codeContext, String methodName)
+        ChangePoint(int index, String type, String description,
+            boolean optional, boolean enabled, String ignored, CodeLocation location)
         {
             this.index = index;
             this.type = type;
-            this.fqn = fqn;
-            this.project = project;
+            this.fqn = location.fqn;
+            this.project = location.project;
             this.description = description;
             this.optional = optional;
             this.enabled = enabled;
-            this.lineNumber = lineNumber;
-            this.columnNumber = columnNumber;
-            this.codeContext = codeContext;
-            this.methodName = methodName;
+            this.lineNumber = location.lineNumber;
+            this.columnNumber = location.columnNumber;
+            this.codeContext = location.codeContext;
+            this.methodName = location.methodName;
         }
     }
 
@@ -443,17 +501,16 @@ public class MetadataRenameService
         final String fqn;
         final String project;
 
-        ExactMatchInfo(String filePath, int matchOffset, int lineNumber, int columnNumber, String codeContext,
-            String methodName, String fqn, String project)
+        ExactMatchInfo(String filePath, int matchOffset, CodeLocation location)
         {
             this.filePath = filePath;
             this.matchOffset = matchOffset;
-            this.lineNumber = lineNumber;
-            this.columnNumber = columnNumber;
-            this.codeContext = codeContext;
-            this.methodName = methodName;
-            this.fqn = fqn;
-            this.project = project;
+            this.lineNumber = location.lineNumber;
+            this.columnNumber = location.columnNumber;
+            this.codeContext = location.codeContext;
+            this.methodName = location.methodName;
+            this.fqn = location.fqn;
+            this.project = location.project;
         }
     }
 
@@ -482,12 +539,38 @@ public class MetadataRenameService
     }
 
     /**
+     * Immutable per-scan context threaded through the change-tree walk and the per-leaf scan helpers.
+     * Bundles the state that stays constant for one top-level refactoring item: the exact-match index,
+     * the change-point accumulator, the shared leaf-index counter, the refactoring title, the optional
+     * flag and the old object name. Carried so the recursive/scan helpers stay within the parameter
+     * limit while reading exactly the same values in the same order as before.
+     */
+    private static final class ScanContext
+    {
+        final Map<String, ExactMatchInfo> exactMatches;
+        final List<ChangePoint> result;
+        final int[] indexCounter;
+        final String refactoringTitle;
+        final boolean optional;
+        final String oldName;
+
+        ScanContext(Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
+            String refactoringTitle, boolean optional, String oldName)
+        {
+            this.exactMatches = exactMatches;
+            this.result = result;
+            this.indexCounter = indexCounter;
+            this.refactoringTitle = refactoringTitle;
+            this.optional = optional;
+            this.oldName = oldName;
+        }
+    }
+
+    /**
      * Recursively collects leaf changes from LTK change tree into a flat list with global indices.
      * Extracts line number and code context (±3 lines + containing method) for TextChange leaves.
      */
-    private void collectFlatChanges(Change change, String currentFqn, String currentProject,
-        Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
-        String refactoringTitle, boolean optional, String oldName)
+    private void collectFlatChanges(Change change, String currentFqn, String currentProject, ScanContext ctx)
     {
         if (change instanceof BmObjectTextContentCompositeChange<?> bmComposite)
         {
@@ -500,28 +583,24 @@ public class MetadataRenameService
         }
         if (change instanceof CompositeChange composite)
         {
-            recurseComposite(composite, currentFqn, currentProject, exactMatches, result, indexCounter,
-                refactoringTitle, optional, oldName);
+            recurseComposite(composite, currentFqn, currentProject, ctx);
         }
         else
         {
-            collectLeafChange(change, currentFqn, currentProject, exactMatches, result, indexCounter,
-                refactoringTitle, optional);
+            collectLeafChange(change, currentFqn, currentProject, ctx);
         }
     }
 
     /** Recurses into the children of a composite change, preserving the inherited fqn/project context. */
     private void recurseComposite(CompositeChange composite, String currentFqn, String currentProject,
-        Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
-        String refactoringTitle, boolean optional, String oldName)
+        ScanContext ctx)
     {
         Change[] children = composite.getChildren();
         if (children != null && children.length > 0)
         {
             for (Change child : children)
             {
-                collectFlatChanges(child, currentFqn, currentProject, exactMatches, result, indexCounter,
-                    refactoringTitle, optional, oldName);
+                collectFlatChanges(child, currentFqn, currentProject, ctx);
             }
         }
     }
@@ -531,34 +610,32 @@ public class MetadataRenameService
      * either the exact-match rows, the BSL/source extracted rows, or the bare fallback row. Mirrors
      * the leaf numbering of {@link #walkLeafChanges} so a preview {@code #index} stays a stable handle.
      */
-    private void collectLeafChange(Change change, String currentFqn, String currentProject,
-        Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
-        String refactoringTitle, boolean optional)
+    private void collectLeafChange(Change change, String currentFqn, String currentProject, ScanContext ctx)
     {
         // One index per leaf change - this MUST match the leaf numbering in
         // walkLeafChanges()/applyDisableToChange() so a preview index stays a
         // stable cross-call handle for disableIndices. A leaf may render as
         // several display rows (multiple exact matches / text edits) or none
         // (suppressed), but it always consumes exactly one index. (card A2)
-        int leafIndex = indexCounter[0]++;
-        boolean hasExactMatches = exactMatches != null && !exactMatches.isEmpty();
+        int leafIndex = ctx.indexCounter[0]++;
+        boolean hasExactMatches = ctx.exactMatches != null && !ctx.exactMatches.isEmpty();
         boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
         boolean isFullTextSearchChange = isFullTextSearchSourceFileChange(change);
         LeafScan scan = new LeafScan(currentFqn, currentProject);
-        List<ExactMatchInfo> exactMatchInfos = findExactMatchInfos(change, exactMatches);
+        List<ExactMatchInfo> exactMatchInfos = findExactMatchInfos(change, ctx.exactMatches);
         logPreviewMapping(change, scan.fqn, scan.project, exactMatchInfos.size());
         if (!exactMatchInfos.isEmpty())
         {
-            addExactMatchChangePoints(change, leafIndex, scan, exactMatchInfos, result, refactoringTitle, optional);
+            addExactMatchChangePoints(change, leafIndex, scan, exactMatchInfos, ctx);
             return;
         }
         else if (change instanceof BmObjectTextContentChange<?> bmChange)
         {
-            scanBmTextContentChange(change, bmChange, leafIndex, scan, result, refactoringTitle, optional);
+            scanBmTextContentChange(change, bmChange, leafIndex, scan, ctx);
         }
         else
         {
-            scanSourceFileChange(change, leafIndex, scan, result, refactoringTitle, optional);
+            scanSourceFileChange(change, leafIndex, scan, ctx);
         }
 
         if (scan.addedFallbackChange)
@@ -571,24 +648,25 @@ public class MetadataRenameService
             return;
         }
 
-        result.add(new ChangePoint(
-            indexCounter[0]++, BSL_REF, scan.fqn, scan.project,
-            change.getName(), optional, change.isEnabled(), refactoringTitle,
-            -1, -1, null, null));
+        ctx.result.add(new ChangePoint(
+            ctx.indexCounter[0]++, BSL_REF,
+            change.getName(), ctx.optional, change.isEnabled(), ctx.refactoringTitle,
+            CodeLocation.of(scan.fqn, scan.project)));
     }
 
     /** Emits one change point per resolved exact-match, defaulting fqn/project to the leaf context. */
     private void addExactMatchChangePoints(Change change, int leafIndex, LeafScan scan,
-        List<ExactMatchInfo> exactMatchInfos, List<ChangePoint> result, String refactoringTitle, boolean optional)
+        List<ExactMatchInfo> exactMatchInfos, ScanContext ctx)
     {
         for (ExactMatchInfo exactMatch : exactMatchInfos)
         {
             String exactFqn = exactMatch.fqn != null ? exactMatch.fqn : scan.fqn;
             String exactProject = exactMatch.project != null ? exactMatch.project : scan.project;
-            result.add(new ChangePoint(
-                leafIndex, BSL_REF, exactFqn, exactProject,
-                change.getName(), optional, change.isEnabled(), refactoringTitle,
-                exactMatch.lineNumber, exactMatch.columnNumber, exactMatch.codeContext, exactMatch.methodName));
+            ctx.result.add(new ChangePoint(
+                leafIndex, BSL_REF,
+                change.getName(), ctx.optional, change.isEnabled(), ctx.refactoringTitle,
+                new CodeLocation(exactFqn, exactProject, exactMatch.lineNumber, exactMatch.columnNumber,
+                    exactMatch.codeContext, exactMatch.methodName)));
         }
     }
 
@@ -597,7 +675,7 @@ public class MetadataRenameService
      * adding one change point per leaf edit. Swallows extraction errors exactly as before (logs only).
      */
     private void scanBmTextContentChange(Change change, BmObjectTextContentChange<?> bmChange, int leafIndex,
-        LeafScan scan, List<ChangePoint> result, String refactoringTitle, boolean optional)
+        LeafScan scan, ScanContext ctx)
     {
         try
         {
@@ -616,8 +694,7 @@ public class MetadataRenameService
                 if (!leafEdits.isEmpty())
                 {
                     Module module = bmObj instanceof Module bslModule ? bslModule : null;
-                    addLeafEditChangePoints(change, leafIndex, scan, leafEdits, content, module, result,
-                        refactoringTitle, optional);
+                    addLeafEditChangePoints(change, leafIndex, scan, leafEdits, content, module, ctx);
                     scan.addedFallbackChange = true;
                 }
             }
@@ -632,8 +709,7 @@ public class MetadataRenameService
      * Extracts line/column/context for a source-file change, refining scan.fqn/project and adding one
      * change point per leaf edit. Swallows extraction errors exactly as before (logs only).
      */
-    private void scanSourceFileChange(Change change, int leafIndex, LeafScan scan, List<ChangePoint> result,
-        String refactoringTitle, boolean optional)
+    private void scanSourceFileChange(Change change, int leafIndex, LeafScan scan, ScanContext ctx)
     {
         try
         {
@@ -655,8 +731,7 @@ public class MetadataRenameService
                     {
                         Module module = BslModuleUtils.loadModule(file.getProject(),
                             BslModuleUtils.extractModulePath(file.getFullPath().toString()));
-                        addLeafEditChangePoints(change, leafIndex, scan, leafEdits, content, module, result,
-                            refactoringTitle, optional);
+                        addLeafEditChangePoints(change, leafIndex, scan, leafEdits, content, module, ctx);
                         scan.addedFallbackChange = true;
                     }
                 }
@@ -673,7 +748,7 @@ public class MetadataRenameService
      * appends a change point carrying the leaf's shared global index and the refined fqn/project.
      */
     private void addLeafEditChangePoints(Change change, int leafIndex, LeafScan scan, List<TextEdit> leafEdits,
-        String content, Module module, List<ChangePoint> result, String refactoringTitle, boolean optional)
+        String content, Module module, ScanContext ctx)
     {
         for (TextEdit leafEdit : leafEdits)
         {
@@ -681,10 +756,11 @@ public class MetadataRenameService
             int matchedColumnNumber = computeColumnNumber(content, leafEdit.getOffset());
             String matchedCodeContext = extractContext(content, matchedLineNumber);
             String matchedMethodName = resolveContainingMethod(module, content, matchedLineNumber);
-            result.add(new ChangePoint(
-                leafIndex, BSL_REF, scan.fqn, scan.project,
-                change.getName(), optional, change.isEnabled(), refactoringTitle,
-                matchedLineNumber, matchedColumnNumber, matchedCodeContext, matchedMethodName));
+            ctx.result.add(new ChangePoint(
+                leafIndex, BSL_REF,
+                change.getName(), ctx.optional, change.isEnabled(), ctx.refactoringTitle,
+                new CodeLocation(scan.fqn, scan.project, matchedLineNumber, matchedColumnNumber,
+                    matchedCodeContext, matchedMethodName)));
         }
     }
 
@@ -833,8 +909,9 @@ public class MetadataRenameService
 
             List<ChangePoint> edtChanges = new ArrayList<>();
             int[] indexCounter = {0};
-            collectFlatChanges(edtChange, null, null, exactMatches, edtChanges, indexCounter, "edt-preview", false, //$NON-NLS-1$
+            ScanContext ctx = new ScanContext(exactMatches, edtChanges, indexCounter, "edt-preview", false, //$NON-NLS-1$
                 targetObject.getName());
+            collectFlatChanges(edtChange, null, null, ctx);
             return edtChanges;
         }
         catch (Exception e)
@@ -890,16 +967,17 @@ public class MetadataRenameService
             ChangePoint edt = edtBslPreviewChanges.get(i);
             allChanges.set(changeIndex, new ChangePoint(
                 original.index, original.type,
-                edt.fqn != null ? edt.fqn : original.fqn,
-                edt.project != null ? edt.project : original.project,
                 original.description,
                 original.optional,
                 original.enabled,
                 null,
-                edt.lineNumber,
-                edt.columnNumber,
-                edt.codeContext,
-                edt.methodName));
+                new CodeLocation(
+                    edt.fqn != null ? edt.fqn : original.fqn,
+                    edt.project != null ? edt.project : original.project,
+                    edt.lineNumber,
+                    edt.columnNumber,
+                    edt.codeContext,
+                    edt.methodName)));
         }
     }
 
@@ -961,8 +1039,8 @@ public class MetadataRenameService
             {
                 methodName = findContainingMethodText(content, lineNumber);
             }
-            return new ExactMatchInfo(file.getFullPath().toString(), fileOffset, lineNumber, columnNumber,
-                codeContext, methodName, fqn, project);
+            return new ExactMatchInfo(file.getFullPath().toString(), fileOffset,
+                new CodeLocation(fqn, project, lineNumber, columnNumber, codeContext, methodName));
         }
         catch (Exception e)
         {
@@ -996,8 +1074,8 @@ public class MetadataRenameService
             int columnNumber = computeColumnNumber(content, textOffset);
             String project = object instanceof IBmObject bmObject ? bmObject.bmGetEngine().getId() : null;
             String fqn = object instanceof IBmObject bmObject ? bmObject.bmGetTopObject().bmGetFqn() : null;
-            return new ExactMatchInfo(null, textOffset, lineNumber, columnNumber, extractContext(content, lineNumber),
-                null, fqn, project);
+            return new ExactMatchInfo(null, textOffset,
+                new CodeLocation(fqn, project, lineNumber, columnNumber, extractContext(content, lineNumber), null));
         }
         catch (Exception e)
         {
@@ -1645,25 +1723,37 @@ public class MetadataRenameService
                 continue;
             for (IRefactoringItem item : items)
             {
-                if (item instanceof INativeChangeRefactoringItem nativeItem)
-                {
-                    Change nativeChange = nativeItem.getNativeChange();
-                    if (nativeChange != null)
-                    {
-                        applyDisableToChange(nativeChange, disableIndices, indexCounter);
-                    }
-                    // If all leaf changes under this native item are disabled, uncheck the item itself
-                    if (nativeChange != null && nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
-                    {
-                        nativeItem.setChecked(false);
-                    }
-                }
-                else
-                {
-                    // Regular rename item — not skippable (non-optional), just advance index
-                    indexCounter[0]++;
-                }
+                applyDisableToItem(item, disableIndices, indexCounter);
             }
+        }
+    }
+
+    /**
+     * Applies {@code disableIndices} to a single refactoring item, advancing {@code indexCounter} by the
+     * same amount as the preview-side walk: native items disable their matching leaf changes (and uncheck
+     * the optional item when every leaf is disabled), while plain rename items consume one index. Extracted
+     * verbatim from {@link #applyDisableIndices} so it mutates the same in-memory state at the same point.
+     */
+    private void applyDisableToItem(IRefactoringItem item, java.util.Set<Integer> disableIndices,
+        int[] indexCounter)
+    {
+        if (item instanceof INativeChangeRefactoringItem nativeItem)
+        {
+            Change nativeChange = nativeItem.getNativeChange();
+            if (nativeChange != null)
+            {
+                applyDisableToChange(nativeChange, disableIndices, indexCounter);
+            }
+            // If all leaf changes under this native item are disabled, uncheck the item itself
+            if (nativeChange != null && nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
+            {
+                nativeItem.setChecked(false);
+            }
+        }
+        else
+        {
+            // Regular rename item — not skippable (non-optional), just advance index
+            indexCounter[0]++;
         }
     }
 

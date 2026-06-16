@@ -99,20 +99,54 @@ public class SetBreakpointTool implements IMcpTool
             : JsonUtils.extractStringArgument(params, KEY_MODULE);
         int lineNumber = JsonUtils.extractIntArgument(params, KEY_LINE_NUMBER, -1);
 
+        ResolvedTarget target = validateAndResolve(projectName, module, lineNumber);
+        if (target.error != null)
+        {
+            return target.error;
+        }
+
+        try
+        {
+            IBreakpoint bp = BreakpointUtils.createLineBreakpoint(target.file, lineNumber);
+            return buildSuccessResult(bp, target.file, module, lineNumber);
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Failed to set breakpoint", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to set breakpoint: " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Validates the input arguments and resolves the target {@code .bsl} file —
+     * the side-effect-free pre-flight extracted from {@link #execute}. Returns a
+     * holder carrying either the resolved {@link IFile} or the exact error JSON the
+     * inline guards produced (same value, same case); the caller re-checks
+     * {@code error} and returns it unchanged, leaving the mutating
+     * {@code createLineBreakpoint} call inline.
+     *
+     * @param projectName the EDT project (required for module-relative paths)
+     * @param module the module identifier (already collapsed from modulePath/alias)
+     * @param lineNumber the requested 1-based line
+     * @return a {@link ResolvedTarget} with a non-null {@code file} on success,
+     *         or a non-null {@code error} otherwise
+     */
+    private static ResolvedTarget validateAndResolve(String projectName, String module, int lineNumber)
+    {
         if (module == null || module.isEmpty())
         {
-            return ToolResult.error("modulePath is required").toJson(); //$NON-NLS-1$
+            return ResolvedTarget.error(ToolResult.error("modulePath is required").toJson()); //$NON-NLS-1$
         }
         if (lineNumber < 1)
         {
-            return ToolResult.error("lineNumber must be >= 1").toJson(); //$NON-NLS-1$
+            return ResolvedTarget.error(ToolResult.error("lineNumber must be >= 1").toJson()); //$NON-NLS-1$
         }
 
         boolean modulePathStyle = !BreakpointUtils.looksLikeAbsolutePath(module);
         if (modulePathStyle && (projectName == null || projectName.isEmpty()))
         {
-            return ToolResult.error(
-                    "projectName is required when modulePath is given as an EDT module path").toJson(); //$NON-NLS-1$
+            return ResolvedTarget.error(ToolResult.error(
+                "projectName is required when modulePath is given as an EDT module path").toJson()); //$NON-NLS-1$
         }
 
         if (modulePathStyle)
@@ -122,26 +156,44 @@ public class SetBreakpointTool implements IMcpTool
             String building = ProjectStateChecker.buildingErrorOrNull(projectName);
             if (building != null)
             {
-                return ToolResult.error(building).toJson();
+                return ResolvedTarget.error(ToolResult.error(building).toJson());
             }
         }
 
         IFile file = BreakpointUtils.resolveModuleFile(projectName, module);
         if (file == null || !file.exists())
         {
-            return ToolResult.error("Module file not found: " + module //$NON-NLS-1$
-                    + (modulePathStyle ? " in project " + projectName : "")).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            return ResolvedTarget.error(ToolResult.error("Module file not found: " + module //$NON-NLS-1$
+                + (modulePathStyle ? " in project " + projectName : "")).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return ResolvedTarget.file(file);
+    }
+
+    /**
+     * Holder threading the validation/resolution early-return out of
+     * {@link #validateAndResolve}: exactly one of {@code file} / {@code error} is
+     * non-null. {@code error} carries the same error JSON (same case) the inline
+     * guards returned.
+     */
+    private static final class ResolvedTarget
+    {
+        final IFile file;
+        final String error;
+
+        private ResolvedTarget(IFile file, String error)
+        {
+            this.file = file;
+            this.error = error;
         }
 
-        try
+        static ResolvedTarget file(IFile file)
         {
-            IBreakpoint bp = BreakpointUtils.createLineBreakpoint(file, lineNumber);
-            return buildSuccessResult(bp, file, module, lineNumber);
+            return new ResolvedTarget(file, null);
         }
-        catch (Exception e)
+
+        static ResolvedTarget error(String error)
         {
-            Activator.logError("Failed to set breakpoint", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to set breakpoint: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return new ResolvedTarget(null, error);
         }
     }
 

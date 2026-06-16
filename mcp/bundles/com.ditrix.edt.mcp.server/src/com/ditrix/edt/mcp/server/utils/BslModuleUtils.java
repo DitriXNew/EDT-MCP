@@ -742,37 +742,145 @@ public final class BslModuleUtils
             int lineNum = i + 1;
             String line = allLines.get(i);
 
-            Matcher startMatcher = REGION_START_PATTERN.matcher(line);
-            if (startMatcher.find())
+            RegionScanResult result = scanRegionLine(line, lineNum, targetLine, regionStack);
+            if (result.resolved)
             {
-                regionStack.add(startMatcher.group(1));
-                if (lineNum >= targetLine)
-                {
-                    return regionStack.get(regionStack.size() - 1);
-                }
-                continue;
-            }
-
-            if (REGION_END_PATTERN.matcher(line).find())
-            {
-                if (lineNum >= targetLine && !regionStack.isEmpty())
-                {
-                    return regionStack.get(regionStack.size() - 1);
-                }
-                if (!regionStack.isEmpty())
-                {
-                    regionStack.remove(regionStack.size() - 1);
-                }
-                continue;
-            }
-
-            if (lineNum >= targetLine)
-            {
-                return regionStack.isEmpty() ? null : regionStack.get(regionStack.size() - 1);
+                return result.regionName;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Carries the outcome of scanning a single line in {@link #findRegionForLine}.
+     * When {@link #resolved} is {@code true} the scan has reached the target line
+     * and {@link #regionName} (which may be {@code null}) is the final answer;
+     * otherwise the loop must continue.
+     */
+    private static final class RegionScanResult
+    {
+        final boolean resolved;
+        final String regionName;
+
+        private RegionScanResult(boolean resolved, String regionName)
+        {
+            this.resolved = resolved;
+            this.regionName = regionName;
+        }
+
+        /** Keep scanning: the target line has not been reached yet. */
+        static RegionScanResult keepScanning()
+        {
+            return new RegionScanResult(false, null);
+        }
+
+        /** Target reached: {@code regionName} (possibly null) is the final answer. */
+        static RegionScanResult resolved(String regionName)
+        {
+            return new RegionScanResult(true, regionName);
+        }
+    }
+
+    /**
+     * Processes one line of the region scan, mutating {@code regionStack} for
+     * #Region/#EndRegion directives. Returns a {@link RegionScanResult} telling the
+     * caller whether the target line has been reached (and, if so, the enclosing
+     * region name) or whether it should keep scanning.
+     *
+     * @param line       the raw source line
+     * @param lineNum    1-based number of {@code line}
+     * @param targetLine the 1-based line whose region is sought
+     * @param regionStack the running stack of open region names (mutated in place)
+     * @return the scan result for this line
+     */
+    private static RegionScanResult scanRegionLine(String line, int lineNum, int targetLine,
+        List<String> regionStack)
+    {
+        RegionScanResult startResult = handleRegionStart(line, lineNum, targetLine, regionStack);
+        if (startResult != null)
+        {
+            return startResult;
+        }
+
+        RegionScanResult endResult = handleRegionEnd(line, lineNum, targetLine, regionStack);
+        if (endResult != null)
+        {
+            return endResult;
+        }
+
+        // Plain line: resolve once the target is reached, otherwise keep scanning.
+        if (lineNum >= targetLine)
+        {
+            return RegionScanResult.resolved(topRegion(regionStack));
+        }
+        return RegionScanResult.keepScanning();
+    }
+
+    /**
+     * Handles a #Region/#Область start directive: pushes the region name and, if the
+     * target line has been reached, resolves to the (now innermost) region.
+     *
+     * @param line       the raw source line
+     * @param lineNum    1-based number of {@code line}
+     * @param targetLine the 1-based line whose region is sought
+     * @param regionStack the running stack of open region names (mutated in place)
+     * @return a scan result if this is a start directive, or {@code null} otherwise
+     */
+    private static RegionScanResult handleRegionStart(String line, int lineNum, int targetLine,
+        List<String> regionStack)
+    {
+        Matcher startMatcher = REGION_START_PATTERN.matcher(line);
+        if (!startMatcher.find())
+        {
+            return null;
+        }
+        regionStack.add(startMatcher.group(1));
+        if (lineNum >= targetLine)
+        {
+            return RegionScanResult.resolved(topRegion(regionStack));
+        }
+        return RegionScanResult.keepScanning();
+    }
+
+    /**
+     * Handles a #EndRegion/#КонецОбласти end directive: if the target line has been
+     * reached it resolves to the innermost open region; otherwise it pops the stack.
+     *
+     * @param line       the raw source line
+     * @param lineNum    1-based number of {@code line}
+     * @param targetLine the 1-based line whose region is sought
+     * @param regionStack the running stack of open region names (mutated in place)
+     * @return a scan result if this is an end directive, or {@code null} otherwise
+     */
+    private static RegionScanResult handleRegionEnd(String line, int lineNum, int targetLine,
+        List<String> regionStack)
+    {
+        if (!REGION_END_PATTERN.matcher(line).find())
+        {
+            return null;
+        }
+        if (lineNum >= targetLine && !regionStack.isEmpty())
+        {
+            return RegionScanResult.resolved(topRegion(regionStack));
+        }
+        if (!regionStack.isEmpty())
+        {
+            regionStack.remove(regionStack.size() - 1);
+        }
+        return RegionScanResult.keepScanning();
+    }
+
+    /**
+     * Returns the innermost (top-of-stack) open region name, or {@code null} when no
+     * region is currently open.
+     *
+     * @param regionStack the stack of open region names
+     * @return the top region name, or {@code null} if the stack is empty
+     */
+    private static String topRegion(List<String> regionStack)
+    {
+        return regionStack.isEmpty() ? null : regionStack.get(regionStack.size() - 1);
     }
 
     /**

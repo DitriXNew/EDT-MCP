@@ -117,99 +117,25 @@ public class GenerateTranslationStringsTool implements IMcpTool
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         List<String> targetLanguages = JsonUtils.extractArrayArgument(params, TARGET_LANGUAGES);
-        String storageId = JsonUtils.extractStringArgument(params, STORAGE_ID);
         boolean collectInterface = JsonUtils.extractBooleanArgument(params, COLLECT_INTERFACE, true);
         boolean collectModel = JsonUtils.extractBooleanArgument(params, COLLECT_MODEL, true);
-        String collectModelType = JsonUtils.extractStringArgument(params, COLLECT_MODEL_TYPE);
-        String fillUpType = JsonUtils.extractStringArgument(params, FILL_UP_TYPE);
-        String providerId = JsonUtils.extractStringArgument(params, "providerId"); //$NON-NLS-1$
 
-        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
-        if (err != null)
+        // Parse + default + validate the scalar/string arguments (no side effects).
+        Options opts = parseOptions(params, projectName, targetLanguages);
+        if (opts.error != null)
         {
-            return err;
-        }
-        if (targetLanguages == null || targetLanguages.isEmpty())
-        {
-            return ToolResult.error("targetLanguages is required (e.g. [\"en\"])").toJson(); //$NON-NLS-1$
-        }
-
-        // Apply defaults for optional parameters.
-        if (storageId == null || storageId.isEmpty()) storageId = DEFAULT_STORAGE_ID;
-        if (collectModelType == null || collectModelType.isEmpty()) collectModelType = DEFAULT_COLLECT_MODEL_TYPE;
-        if (fillUpType == null || fillUpType.isEmpty()) fillUpType = DEFAULT_FILL_UP_TYPE;
-        if (providerId == null) providerId = ""; //$NON-NLS-1$
-
-        if (FILL_UP_FROM_PROVIDER.equals(fillUpType) && providerId.isEmpty())
-        {
-            return ToolResult.error(
-                "providerId is required when fillUpType=FROM_PROVIDER. " //$NON-NLS-1$
-              + "Use get_translation_project_info to list available providers.").toJson(); //$NON-NLS-1$
+            return opts.error;
         }
 
         try
         {
-            // Resolve the IProject first so AI clients get the most specific
-            // diagnostic ("Project not found" / "Project is closed") for bad
-            // names. The readiness pre-check below refuses only the transient
-            // BUILDING state and returns null for a missing/closed/unknown
-            // project, so a bad name reaches these value-naming branches.
-            ProjectContext ctx = ProjectContext.of(projectName);
-            if (!ctx.exists())
+            // Resolve the configuration project and the LanguageTool API (no side
+            // effects; same value/case errors as before).
+            Resolved resolved = resolveProjectAndApi(projectName);
+            if (resolved.error != null)
             {
-                return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+                return resolved.error;
             }
-            if (!ctx.isOpen())
-            {
-                return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
-            }
-            IProject project = ctx.project();
-
-            // Refuse only the transient BUILDING state; a missing/closed project
-            // falls through to the value-naming "Project not found" below.
-            String building = ProjectStateChecker.buildingErrorOrNull(projectName);
-            if (building != null)
-            {
-                return ToolResult.error(building).toJson();
-            }
-
-            // Reject dictionary storage projects, extensions and any
-            // non-configuration EDT project — they would either resolve to a
-            // non-null IDtProject and fail deep inside LangTool with a
-            // confusing error, or simply do nothing useful.
-            if (!project.hasNature(V8_CONFIGURATION_NATURE))
-            {
-                return ToolResult.error(
-                    "Not a V8 configuration project: " + projectName //$NON-NLS-1$
-                  + ". This action must be run on the configuration project (V8ConfigurationNature), " //$NON-NLS-1$
-                  + "not on a dictionary storage project or extension.").toJson(); //$NON-NLS-1$
-            }
-
-            IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-            IDtProject dtProject = dtProjectManager != null ? dtProjectManager.getDtProject(project) : null;
-            if (dtProject == null)
-            {
-                return ToolResult.error(
-                    "EDT has not yet resolved an IDtProject for: " + projectName //$NON-NLS-1$
-                  + ". The project may still be indexing — please retry.").toJson(); //$NON-NLS-1$
-            }
-
-            Object api = Activator.getDefault().getGenerateTranslationStringsApi();
-            if (api == null)
-            {
-                return ToolResult.error(
-                    "LanguageTool IGenerateTranslationStringsApi is not available. " //$NON-NLS-1$
-                  + "Install LanguageTool in EDT.").toJson(); //$NON-NLS-1$
-            }
-
-            // Build fillUpAndProviderId argument. Provider suffix is meaningful
-            // only for FROM_PROVIDER (other modes ignore providerId — appending
-            // it would produce malformed values like FROM_SOURCE_LANGUAGE:foo).
-            // The earlier validation already enforced non-empty providerId when
-            // fillUpType is FROM_PROVIDER, so no extra check is needed here.
-            String fillUpAndProviderId = FILL_UP_FROM_PROVIDER.equals(fillUpType)
-                ? fillUpType + ":" + providerId //$NON-NLS-1$
-                : fillUpType;
 
             // Reflection call:
             // IGenerateTranslationStringsApi.generateTranslationStrings(
@@ -223,38 +149,227 @@ public class GenerateTranslationStringsTool implements IMcpTool
             //     String collectModelType,       // ANY|NONE|COMPUTED_ONLY|UNKNOWN_ONLY|TAGS_ONLY
             //     boolean checkTranslationsInAnyAvailableStorage,
             //     Map<String,String> filterParameters)
-            Method method = api.getClass().getMethod("generateTranslationStrings", //$NON-NLS-1$
+            Method method = resolved.api.getClass().getMethod("generateTranslationStrings", //$NON-NLS-1$
                 IDtProject.class, List.class, String.class, String.class, Path.class,
                 boolean.class, boolean.class, String.class, boolean.class, Map.class);
-            method.invoke(api,
-                dtProject,
+            method.invoke(resolved.api,
+                resolved.dtProject,
                 targetLanguages,
-                storageId,
-                fillUpAndProviderId,
+                opts.storageId,
+                opts.fillUpAndProviderId(),
                 null,
                 collectModel,
                 collectInterface,
-                collectModelType,
+                opts.collectModelType,
                 Boolean.FALSE,
                 Collections.emptyMap());
 
-            BuildUtils.waitForDerivedData(project);
+            BuildUtils.waitForDerivedData(resolved.project);
 
             return FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
                 .put(McpKeys.PROJECT, projectName)
                 .put(TARGET_LANGUAGES, String.join(", ", targetLanguages)) //$NON-NLS-1$
-                .put(STORAGE_ID, storageId)
+                .put(STORAGE_ID, opts.storageId)
                 .put(COLLECT_INTERFACE, collectInterface)
                 .put(COLLECT_MODEL, collectModel)
-                .put(COLLECT_MODEL_TYPE, collectModelType)
-                .put(FILL_UP_TYPE, fillUpType)
+                .put(COLLECT_MODEL_TYPE, opts.collectModelType)
+                .put(FILL_UP_TYPE, opts.fillUpType)
                 .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
                 .wrapContent("Translation strings generated."); //$NON-NLS-1$
         }
         catch (Exception e)
         {
             return CliReflectionErrors.toErrorJson(e, "Generate translation strings", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * Extracts, defaults and validates the scalar/string options (no side
+     * effects). Returns a holder carrying either the populated {@link Options} or
+     * the exact error JSON the inline guards produced (same value, same case); the
+     * caller re-checks {@code error}. {@code projectName}/{@code targetLanguages}
+     * are passed in already-extracted and validated here for the required-argument
+     * and non-empty-languages checks.
+     */
+    private static Options parseOptions(Map<String, String> params, String projectName, List<String> targetLanguages)
+    {
+        String storageId = JsonUtils.extractStringArgument(params, STORAGE_ID);
+        String collectModelType = JsonUtils.extractStringArgument(params, COLLECT_MODEL_TYPE);
+        String fillUpType = JsonUtils.extractStringArgument(params, FILL_UP_TYPE);
+        String providerId = JsonUtils.extractStringArgument(params, "providerId"); //$NON-NLS-1$
+
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
+        if (err != null)
+        {
+            return Options.error(err);
+        }
+        if (targetLanguages == null || targetLanguages.isEmpty())
+        {
+            return Options.error(
+                ToolResult.error("targetLanguages is required (e.g. [\"en\"])").toJson()); //$NON-NLS-1$
+        }
+
+        // Apply defaults for optional parameters.
+        if (storageId == null || storageId.isEmpty()) storageId = DEFAULT_STORAGE_ID;
+        if (collectModelType == null || collectModelType.isEmpty()) collectModelType = DEFAULT_COLLECT_MODEL_TYPE;
+        if (fillUpType == null || fillUpType.isEmpty()) fillUpType = DEFAULT_FILL_UP_TYPE;
+        if (providerId == null) providerId = ""; //$NON-NLS-1$
+
+        if (FILL_UP_FROM_PROVIDER.equals(fillUpType) && providerId.isEmpty())
+        {
+            return Options.error(ToolResult.error(
+                "providerId is required when fillUpType=FROM_PROVIDER. " //$NON-NLS-1$
+              + "Use get_translation_project_info to list available providers.").toJson()); //$NON-NLS-1$
+        }
+
+        return Options.of(storageId, collectModelType, fillUpType, providerId);
+    }
+
+    /**
+     * Resolves the configuration {@link IProject}, its {@link IDtProject} and the
+     * LanguageTool API for {@code projectName}, in the same order and with the same
+     * value/case diagnostics as the original inline chain (most-specific
+     * "Project not found"/"closed" first, then BUILDING, then nature, then
+     * IDtProject, then API). No side effects. Returns a holder carrying either the
+     * resolved trio or the exact error JSON; the caller re-checks {@code error}.
+     *
+     * @throws org.eclipse.core.runtime.CoreException from {@code IProject.hasNature}
+     */
+    private static Resolved resolveProjectAndApi(String projectName) throws org.eclipse.core.runtime.CoreException
+    {
+        // Resolve the IProject first so AI clients get the most specific
+        // diagnostic ("Project not found" / "Project is closed") for bad
+        // names. The readiness pre-check below refuses only the transient
+        // BUILDING state and returns null for a missing/closed/unknown
+        // project, so a bad name reaches these value-naming branches.
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return Resolved.error(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
+        }
+        if (!ctx.isOpen())
+        {
+            return Resolved.error(ToolResult.error("Project is closed: " + projectName).toJson()); //$NON-NLS-1$
+        }
+        IProject project = ctx.project();
+
+        // Refuse only the transient BUILDING state; a missing/closed project
+        // falls through to the value-naming "Project not found" below.
+        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        if (building != null)
+        {
+            return Resolved.error(ToolResult.error(building).toJson());
+        }
+
+        // Reject dictionary storage projects, extensions and any
+        // non-configuration EDT project — they would either resolve to a
+        // non-null IDtProject and fail deep inside LangTool with a
+        // confusing error, or simply do nothing useful.
+        if (!project.hasNature(V8_CONFIGURATION_NATURE))
+        {
+            return Resolved.error(ToolResult.error(
+                "Not a V8 configuration project: " + projectName //$NON-NLS-1$
+              + ". This action must be run on the configuration project (V8ConfigurationNature), " //$NON-NLS-1$
+              + "not on a dictionary storage project or extension.").toJson()); //$NON-NLS-1$
+        }
+
+        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
+        IDtProject dtProject = dtProjectManager != null ? dtProjectManager.getDtProject(project) : null;
+        if (dtProject == null)
+        {
+            return Resolved.error(ToolResult.error(
+                "EDT has not yet resolved an IDtProject for: " + projectName //$NON-NLS-1$
+              + ". The project may still be indexing — please retry.").toJson()); //$NON-NLS-1$
+        }
+
+        Object api = Activator.getDefault().getGenerateTranslationStringsApi();
+        if (api == null)
+        {
+            return Resolved.error(ToolResult.error(
+                "LanguageTool IGenerateTranslationStringsApi is not available. " //$NON-NLS-1$
+              + "Install LanguageTool in EDT.").toJson()); //$NON-NLS-1$
+        }
+
+        return Resolved.of(project, dtProject, api);
+    }
+
+    /**
+     * Holder for the parsed/defaulted/validated scalar options (no side effects):
+     * exactly one of the value fields / {@code error} is meaningful. {@code error}
+     * carries the same error JSON (same case) the inline guards returned.
+     */
+    private static final class Options
+    {
+        final String storageId;
+        final String collectModelType;
+        final String fillUpType;
+        final String providerId;
+        final String error;
+
+        private Options(String storageId, String collectModelType, String fillUpType, String providerId,
+            String error)
+        {
+            this.storageId = storageId;
+            this.collectModelType = collectModelType;
+            this.fillUpType = fillUpType;
+            this.providerId = providerId;
+            this.error = error;
+        }
+
+        static Options of(String storageId, String collectModelType, String fillUpType, String providerId)
+        {
+            return new Options(storageId, collectModelType, fillUpType, providerId, null);
+        }
+
+        static Options error(String error)
+        {
+            return new Options(null, null, null, null, error);
+        }
+
+        /**
+         * Builds the {@code fillUpAndProviderId} argument. Provider suffix is
+         * meaningful only for FROM_PROVIDER (other modes ignore providerId —
+         * appending it would produce malformed values like
+         * FROM_SOURCE_LANGUAGE:foo). The earlier validation already enforced
+         * non-empty providerId when fillUpType is FROM_PROVIDER.
+         */
+        String fillUpAndProviderId()
+        {
+            return FILL_UP_FROM_PROVIDER.equals(fillUpType)
+                ? fillUpType + ":" + providerId //$NON-NLS-1$
+                : fillUpType;
+        }
+    }
+
+    /**
+     * Holder for the resolved configuration project / IDtProject / LanguageTool
+     * API: exactly one of the value trio / {@code error} is non-null. {@code error}
+     * carries the same error JSON (same case) the inline guards returned.
+     */
+    private static final class Resolved
+    {
+        final IProject project;
+        final IDtProject dtProject;
+        final Object api;
+        final String error;
+
+        private Resolved(IProject project, IDtProject dtProject, Object api, String error)
+        {
+            this.project = project;
+            this.dtProject = dtProject;
+            this.api = api;
+            this.error = error;
+        }
+
+        static Resolved of(IProject project, IDtProject dtProject, Object api)
+        {
+            return new Resolved(project, dtProject, api, null);
+        }
+
+        static Resolved error(String error)
+        {
+            return new Resolved(null, null, null, error);
         }
     }
 

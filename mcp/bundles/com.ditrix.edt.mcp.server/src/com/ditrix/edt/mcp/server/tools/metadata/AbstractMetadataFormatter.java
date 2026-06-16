@@ -442,35 +442,67 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         List<EStructuralFeature> features = eObject.eClass().getEAllStructuralFeatures();
         for (EStructuralFeature feature : features)
         {
-            if (feature.isDerived() || feature.isTransient() || feature.isVolatile())
+            if (isUnclassifiableFeature(eObject, feature))
             {
                 continue;
             }
-            if (!eObject.eIsSet(feature))
-            {
-                continue;
-            }
+            classifyFeatureInto(feature, simpleAttributes, singleReferences, crossReferences);
+        }
+    }
 
-            if (feature instanceof EAttribute)
+    /**
+     * Tests whether a feature is excluded from {@link #classifySetFeatures} before any
+     * bucket routing: derived/transient/volatile (computed, not stored) and unset
+     * features are skipped, matching the two leading {@code continue} guards of the
+     * original inline loop.
+     *
+     * @param eObject the object whose feature-set state is checked
+     * @param feature the structural feature to test
+     * @return {@code true} if the feature should not be classified
+     */
+    private static boolean isUnclassifiableFeature(EObject eObject, EStructuralFeature feature)
+    {
+        if (feature.isDerived() || feature.isTransient() || feature.isVolatile())
+        {
+            return true;
+        }
+        return !eObject.eIsSet(feature);
+    }
+
+    /**
+     * Routes one set, stored feature into its bucket: {@link EAttribute}s to
+     * {@code simpleAttributes}, single non-containment references to
+     * {@code singleReferences}, and many non-containment references to
+     * {@code crossReferences}; containment references and non-attribute/reference
+     * features are dropped. Matches the per-feature body of {@link #classifySetFeatures}.
+     *
+     * @param feature the feature to route
+     * @param simpleAttributes receives a matching {@link EAttribute}
+     * @param singleReferences receives a matching single non-containment reference
+     * @param crossReferences receives a matching many non-containment reference
+     */
+    private static void classifyFeatureInto(EStructuralFeature feature, List<EAttribute> simpleAttributes,
+        List<EReference> singleReferences, List<EReference> crossReferences)
+    {
+        if (feature instanceof EAttribute)
+        {
+            simpleAttributes.add((EAttribute) feature);
+        }
+        else if (feature instanceof EReference)
+        {
+            EReference ref = (EReference) feature;
+            if (ref.isContainment())
             {
-                simpleAttributes.add((EAttribute) feature);
+                // Containment references are typically handled separately.
+                return;
             }
-            else if (feature instanceof EReference)
+            if (!ref.isMany())
             {
-                EReference ref = (EReference) feature;
-                if (ref.isContainment())
-                {
-                    // Containment references are typically handled separately.
-                    continue;
-                }
-                if (!ref.isMany())
-                {
-                    singleReferences.add(ref);
-                }
-                else
-                {
-                    crossReferences.add(ref);
-                }
+                singleReferences.add(ref);
+            }
+            else
+            {
+                crossReferences.add(ref);
             }
         }
     }

@@ -340,124 +340,195 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         // --- 4. Prepare the directory ---
-        if (register)
+        String prepareError = prepareInfobaseDirectory(infobaseDir, register);
+        if (prepareError != null)
         {
-            // mode=register: the infobase must already exist on disk; do NOT create it.
-            String registerError = validateRegisterPath(infobaseDir);
-            if (registerError != null)
-            {
-                return registerError;
-            }
-        }
-        else
-        {
-            // mode=create: create the target directory if it does not exist yet.
-            try
-            {
-                Files.createDirectories(infobaseDir);
-            }
-            catch (Exception e)
-            {
-                return ToolResult.error("Cannot create infobase directory '" + infobaseDir //$NON-NLS-1$
-                    + "': " + e.getMessage()).toJson(); //$NON-NLS-1$
-            }
+            return prepareError;
         }
 
         // --- 5. Build the FILE infobase reference ---
         InfobaseReference ibRef = buildInfobaseReference(infobaseDir, infobaseName);
 
         // --- 6. Create the database (create) or register the existing one (register) ---
-        if (register)
+        String databaseError = register
+            ? registerExistingInfobase(ibManager, ibRef, infobaseDir)
+            : createNewInfobase(ibRef, platform, infobaseName, infobaseDir);
+        if (databaseError != null)
         {
-            // mode=register: add the existing infobase to EDT directly. No 1cv8 launch, no
-            // platform runtime needed — this is a fast, synchronous EMF registration.
-            try
-            {
-                ibManager.add(ibRef, null);
-            }
-            catch (Exception e)
-            {
-                Activator.logError("create_infobase: register failed for " + infobaseDir, e); //$NON-NLS-1$
-                return ToolResult.error("Could not register the infobase at '" + infobaseDir //$NON-NLS-1$
-                    + "': " + e.getMessage() //$NON-NLS-1$
-                    + ". Ensure it is a valid file infobase that is not already registered.").toJson(); //$NON-NLS-1$
-            }
-            Activator.logInfo("create_infobase: registered existing infobase at " + infobaseDir); //$NON-NLS-1$
-        }
-        else
-        {
-            // mode=create: a brand-new database via the platform creation operation. This shells
-            // out to 1cv8, so probe for a registered platform runtime first (fail fast, no hang)
-            // and run perform() in a bounded background Job (never on the UI thread).
-            IInfobaseCreationOperation creationOp = resolveCreationOperation();
-            if (creationOp == null)
-            {
-                return ToolResult.error("No 1C platform runtime is registered in EDT - cannot " //$NON-NLS-1$
-                    + "create a new infobase. Register a 1C:Enterprise platform installation in EDT " //$NON-NLS-1$
-                    + "(Window -> Preferences -> 1C:Enterprise -> Installed Installations) and retry, " //$NON-NLS-1$
-                    + "or use mode='register' for an existing infobase.").toJson(); //$NON-NLS-1$
-            }
-
-            final IInfobaseCreationOperation.Descriptor descriptor =
-                buildCreationDescriptor(ibRef, platform);
-
-            final IInfobaseCreationOperation finalOp = creationOp;
-            final AtomicReference<Exception> jobError = new AtomicReference<>();
-            final String jobInfobaseName = infobaseName;
-
-            Job createJob = new Job("Create infobase: " + jobInfobaseName) //$NON-NLS-1$
-            {
-                @Override
-                protected org.eclipse.core.runtime.IStatus run(
-                        org.eclipse.core.runtime.IProgressMonitor monitor)
-                {
-                    try
-                    {
-                        finalOp.perform(descriptor, monitor);
-                    }
-                    catch (Exception e)
-                    {
-                        jobError.set(e);
-                    }
-                    return org.eclipse.core.runtime.Status.OK_STATUS;
-                }
-            };
-            createJob.setUser(false);
-            createJob.setSystem(true);
-            createJob.schedule();
-
-            try
-            {
-                boolean finished = createJob.join(
-                    TimeUnit.SECONDS.toMillis(CREATE_TIMEOUT_SECONDS), null);
-                if (!finished)
-                {
-                    createJob.cancel();
-                    return ToolResult.error("Infobase creation timed out after " //$NON-NLS-1$
-                        + CREATE_TIMEOUT_SECONDS + " seconds. The 1cv8 process may still be running. " //$NON-NLS-1$
-                        + "Check the EDT log and the target directory '" + infobaseDir //$NON-NLS-1$
-                        + "' for partial results.").toJson(); //$NON-NLS-1$
-                }
-            }
-            catch (InterruptedException e)
-            {
-                Thread.currentThread().interrupt();
-                return ToolResult.error("Infobase creation was interrupted.").toJson(); //$NON-NLS-1$
-            }
-
-            if (jobError.get() != null)
-            {
-                Exception ex = jobError.get();
-                Activator.logError("create_infobase: creation failed for " + infobaseDir, ex); //$NON-NLS-1$
-                return ToolResult.error("Infobase creation failed: " + ex.getMessage() //$NON-NLS-1$
-                    + ". Verify that a compatible 1C platform is installed and that the " //$NON-NLS-1$
-                    + "target directory '" + infobaseDir + "' is accessible.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-
-            Activator.logInfo("create_infobase: infobase created at " + infobaseDir); //$NON-NLS-1$
+            return databaseError;
         }
 
         // --- 7. Associate with the project ---
+        String associateError = associateInfobase(assocManager, project, ibRef, infobaseDir, projectName);
+        if (associateError != null)
+        {
+            return associateError;
+        }
+
+        // --- 8. Optionally set as default ---
+        String setDefaultNote = setDefault ? applySetDefault(appManager, project, ibRef) : null;
+
+        // --- 9. Read back and return ---
+        ResultContext rc = new ResultContext(projectName, infobaseDir, infobaseName, appManager, project);
+        return buildSuccessResult(rc, ibRef, setDefaultNote, register);
+    }
+
+    /**
+     * Prepares the infobase directory for the create/register step (step 4). For mode='register' this
+     * is the read-only {@link #validateRegisterPath(Path)} check; for mode='create' it creates the
+     * target directory ({@code Files.createDirectories}) at the SAME sequence point as before. Returns a
+     * ready error tool-result JSON on the SAME early-return cases the inline code produced, else
+     * {@code null}.
+     */
+    private static String prepareInfobaseDirectory(Path infobaseDir, boolean register)
+    {
+        if (register)
+        {
+            // mode=register: the infobase must already exist on disk; do NOT create it.
+            return validateRegisterPath(infobaseDir);
+        }
+        // mode=create: create the target directory if it does not exist yet.
+        try
+        {
+            Files.createDirectories(infobaseDir);
+        }
+        catch (Exception e)
+        {
+            return ToolResult.error("Cannot create infobase directory '" + infobaseDir //$NON-NLS-1$
+                + "': " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Registers an EXISTING infobase with EDT (mode='register', step 6): adds the reference to EDT
+     * directly via {@code IInfobaseManager.add} — a fast, synchronous EMF registration, no 1cv8 launch.
+     * The {@code add} side effect stays inline here at the SAME sequence point. Returns a ready error
+     * tool-result JSON on the SAME failure case the inline code produced, else {@code null}.
+     */
+    private static String registerExistingInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
+            Path infobaseDir)
+    {
+        try
+        {
+            ibManager.add(ibRef, null);
+        }
+        catch (Exception e)
+        {
+            Activator.logError("create_infobase: register failed for " + infobaseDir, e); //$NON-NLS-1$
+            return ToolResult.error("Could not register the infobase at '" + infobaseDir //$NON-NLS-1$
+                + "': " + e.getMessage() //$NON-NLS-1$
+                + ". Ensure it is a valid file infobase that is not already registered.").toJson(); //$NON-NLS-1$
+        }
+        Activator.logInfo("create_infobase: registered existing infobase at " + infobaseDir); //$NON-NLS-1$
+        return null;
+    }
+
+    /**
+     * Creates a brand-new database via the platform creation operation (mode='create', step 6). Probes
+     * for a registered platform runtime first (fail fast, no hang), then runs {@code perform()} in a
+     * bounded background Job (never on the UI thread) — the {@code perform} side effect and the Job
+     * schedule stay inline here at the SAME sequence point. Returns a ready error tool-result JSON on
+     * the SAME early-return cases (no runtime / timeout / interrupted / job error) the inline code
+     * produced, else {@code null}.
+     */
+    private static String createNewInfobase(InfobaseReference ibRef, String platform,
+            String infobaseName, Path infobaseDir)
+    {
+        IInfobaseCreationOperation creationOp = resolveCreationOperation();
+        if (creationOp == null)
+        {
+            return ToolResult.error("No 1C platform runtime is registered in EDT - cannot " //$NON-NLS-1$
+                + "create a new infobase. Register a 1C:Enterprise platform installation in EDT " //$NON-NLS-1$
+                + "(Window -> Preferences -> 1C:Enterprise -> Installed Installations) and retry, " //$NON-NLS-1$
+                + "or use mode='register' for an existing infobase.").toJson(); //$NON-NLS-1$
+        }
+
+        final IInfobaseCreationOperation.Descriptor descriptor =
+            buildCreationDescriptor(ibRef, platform);
+
+        final IInfobaseCreationOperation finalOp = creationOp;
+        final AtomicReference<Exception> jobError = new AtomicReference<>();
+        final String jobInfobaseName = infobaseName;
+
+        Job createJob = new Job("Create infobase: " + jobInfobaseName) //$NON-NLS-1$
+        {
+            @Override
+            protected org.eclipse.core.runtime.IStatus run(
+                    org.eclipse.core.runtime.IProgressMonitor monitor)
+            {
+                try
+                {
+                    finalOp.perform(descriptor, monitor);
+                }
+                catch (Exception e)
+                {
+                    jobError.set(e);
+                }
+                return org.eclipse.core.runtime.Status.OK_STATUS;
+            }
+        };
+        createJob.setUser(false);
+        createJob.setSystem(true);
+        createJob.schedule();
+
+        String waitError = awaitCreateJob(createJob, infobaseDir);
+        if (waitError != null)
+        {
+            return waitError;
+        }
+
+        if (jobError.get() != null)
+        {
+            Exception ex = jobError.get();
+            Activator.logError("create_infobase: creation failed for " + infobaseDir, ex); //$NON-NLS-1$
+            return ToolResult.error("Infobase creation failed: " + ex.getMessage() //$NON-NLS-1$
+                + ". Verify that a compatible 1C platform is installed and that the " //$NON-NLS-1$
+                + "target directory '" + infobaseDir + "' is accessible.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        Activator.logInfo("create_infobase: infobase created at " + infobaseDir); //$NON-NLS-1$
+        return null;
+    }
+
+    /**
+     * Joins the create Job with the bounded {@link #CREATE_TIMEOUT_SECONDS} timeout and maps the
+     * outcome to the SAME error tool-result JSON the inline code produced: a timeout message (Job
+     * cancelled) when it did not finish, or an interrupted message (interrupt flag restored) when the
+     * join threw. Returns {@code null} when the Job finished within the budget. The {@code InterruptedException}
+     * from {@code join} is handled inline here (not propagated) exactly as before.
+     */
+    private static String awaitCreateJob(Job createJob, Path infobaseDir)
+    {
+        try
+        {
+            boolean finished = createJob.join(
+                TimeUnit.SECONDS.toMillis(CREATE_TIMEOUT_SECONDS), null);
+            if (!finished)
+            {
+                createJob.cancel();
+                return ToolResult.error("Infobase creation timed out after " //$NON-NLS-1$
+                    + CREATE_TIMEOUT_SECONDS + " seconds. The 1cv8 process may still be running. " //$NON-NLS-1$
+                    + "Check the EDT log and the target directory '" + infobaseDir //$NON-NLS-1$
+                    + "' for partial results.").toJson(); //$NON-NLS-1$
+            }
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return ToolResult.error("Infobase creation was interrupted.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Associates the infobase with the project (step 7): the {@code associate} side effect stays inline
+     * here at the SAME sequence point. Returns a ready error tool-result JSON on the SAME failure case
+     * the inline code produced, else {@code null}.
+     */
+    private static String associateInfobase(IInfobaseAssociationManager assocManager, IProject project,
+            InfobaseReference ibRef, Path infobaseDir, String projectName)
+    {
         try
         {
             assocManager.associate(project, ibRef, InfobaseAssociationSettings.notSynchronized());
@@ -470,38 +541,37 @@ public class CreateInfobaseTool implements IMcpTool
                 + "': " + e.getMessage() //$NON-NLS-1$
                 + ". Use delete_infobase to clean up if needed.").toJson(); //$NON-NLS-1$
         }
-
         Activator.logInfo("create_infobase: associated with project " + projectName); //$NON-NLS-1$
+        return null;
+    }
 
-        // --- 8. Optionally set as default ---
-        String setDefaultNote = null;
-        if (setDefault)
+    /**
+     * Optionally sets the new infobase as the project's default application (step 8): the
+     * {@code setDefaultApplication} side effect stays inline here at the SAME sequence point. Non-fatal —
+     * returns the SAME nullable {@code setDefaultNote} the inline code produced ({@code null} when the
+     * default was set or the failure was swallowed; a note when the new app was not found yet).
+     */
+    private static String applySetDefault(IApplicationManager appManager, IProject project,
+            InfobaseReference ibRef)
+    {
+        try
         {
-            try
+            IApplication newApp = findNewApplication(appManager, project, ibRef);
+            if (newApp == null)
             {
-                IApplication newApp = findNewApplication(appManager, project, ibRef);
-                if (newApp == null)
-                {
-                    setDefaultNote = "; the new infobase was created but could not be set as " //$NON-NLS-1$
-                        + "default yet - set it manually or retry"; //$NON-NLS-1$
-                    Activator.logError("create_infobase: setDefault skipped — new app not found yet", //$NON-NLS-1$
-                        null);
-                }
-                else
-                {
-                    appManager.setDefaultApplication(project, newApp);
-                }
+                Activator.logError("create_infobase: setDefault skipped — new app not found yet", //$NON-NLS-1$
+                    null);
+                return "; the new infobase was created but could not be set as " //$NON-NLS-1$
+                    + "default yet - set it manually or retry"; //$NON-NLS-1$
             }
-            catch (Exception e)
-            {
-                // Non-fatal: the infobase was created and associated; only the default-setting failed.
-                Activator.logError("create_infobase: setDefault failed", e); //$NON-NLS-1$
-            }
+            appManager.setDefaultApplication(project, newApp);
         }
-
-        // --- 9. Read back and return ---
-        return buildSuccessResult(projectName, infobaseDir, infobaseName,
-            appManager, project, ibRef, setDefaultNote, register);
+        catch (Exception e)
+        {
+            // Non-fatal: the infobase was created and associated; only the default-setting failed.
+            Activator.logError("create_infobase: setDefault failed", e); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**
@@ -679,34 +749,15 @@ public class CreateInfobaseTool implements IMcpTool
     private String createStandaloneServer(String projectName, Path infobaseDir,
             String infobaseName, String platform, boolean setDefault)
     {
-        // --- 1. Resolve project ---
-        ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.exists())
+        // --- 1-2. Resolve project + services ---
+        StandaloneContext sctx = resolveStandaloneContext(projectName);
+        if (sctx.error != null)
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return sctx.error;
         }
-        if (!ctx.isOpen())
-        {
-            return ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
-                + ". Open the project in EDT first.").toJson(); //$NON-NLS-1$
-        }
-        IProject project = ctx.project();
-
-        // --- 2. Acquire services ---
-        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
-        if (appManager == null)
-        {
-            return ToolResult.error("IApplicationManager service is not available").toJson(); //$NON-NLS-1$
-        }
-
-        Object serverService = acquireStandaloneServerService();
-        if (serverService == null)
-        {
-            return ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
-                + "standalone-server feature is missing. Install a 1C platform >= 8.3.23 with the " //$NON-NLS-1$
-                + "standalone server and ensure the EDT standalone-server plugins are present.") //$NON-NLS-1$
-                .toJson();
-        }
+        IProject project = sctx.project;
+        IApplicationManager appManager = sctx.appManager;
+        Object serverService = sctx.serverService;
 
         // --- 3. Fail-fast runtime probe (BEFORE the Job, so "no runtime" fails instantly) ---
         final String versionMask = orEmpty(platform);
@@ -738,7 +789,8 @@ public class CreateInfobaseTool implements IMcpTool
 
         // --- 7. Run the one-shot create in a bounded background Job (ibcmd shell-out) ---
         final Object finalService = serverService;
-        final InfobaseReference finalIbRef = ibRef;
+        final ServerCreateArgs createArgs = new ServerCreateArgs(versionMask, projectName, ibRef,
+            clusterPort, clusterRegistryDirectory, publicationPath);
         final String jobInfobaseName = infobaseName;
         final AtomicReference<Object> jobResult = new AtomicReference<>();
         final AtomicReference<Exception> jobError = new AtomicReference<>();
@@ -751,8 +803,7 @@ public class CreateInfobaseTool implements IMcpTool
             {
                 try
                 {
-                    Object pair = ssCreateServerWithInfobase(finalService, versionMask, projectName,
-                        finalIbRef, clusterPort, clusterRegistryDirectory, publicationPath, monitor);
+                    Object pair = ssCreateServerWithInfobase(finalService, createArgs, monitor);
                     // createServerWithInfobase registers the server with the module's create flag = false,
                     // so the served file infobase (1Cv8.1CD) is never physically written — the server then
                     // fails to start ("Информационная база не обнаружена"). Materialize it now (same step
@@ -775,23 +826,10 @@ public class CreateInfobaseTool implements IMcpTool
         createJob.setSystem(true);
         createJob.schedule();
 
-        try
+        String waitError = awaitStandaloneJob(createJob, infobaseDir);
+        if (waitError != null)
         {
-            boolean finished = createJob.join(
-                TimeUnit.SECONDS.toMillis(CREATE_TIMEOUT_SECONDS), null);
-            if (!finished)
-            {
-                createJob.cancel();
-                return ToolResult.error("Standalone-server creation timed out after " //$NON-NLS-1$
-                    + CREATE_TIMEOUT_SECONDS + " seconds. The ibcmd process may still be running. " //$NON-NLS-1$
-                    + "Check the EDT log and the directory '" + infobaseDir //$NON-NLS-1$
-                    + "' for partial results.").toJson(); //$NON-NLS-1$
-            }
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-            return ToolResult.error("Standalone-server creation was interrupted.").toJson(); //$NON-NLS-1$
+            return waitError;
         }
 
         if (jobError.get() != null)
@@ -831,8 +869,114 @@ public class CreateInfobaseTool implements IMcpTool
         int actualPort = urlToPort(url);
 
         // --- 9. Read back applications and return ---
-        return buildStandaloneServerResult(projectName, infobaseDir, effectiveName, actualPort,
-            webUrl, setDefault, appManager, project);
+        ResultContext rc = new ResultContext(projectName, infobaseDir, effectiveName, appManager, project);
+        return buildStandaloneServerResult(rc, actualPort, webUrl, setDefault);
+    }
+
+    /**
+     * Resolves the configuration project, the {@link IApplicationManager} and the (reflective)
+     * standalone-server service for {@link #createStandaloneServer} (steps 1-2; read-only). Returns a
+     * {@link StandaloneContext} whose {@code error} field carries the tool-result JSON for the SAME
+     * early-return cases the inline code produced (project missing / closed; {@code IApplicationManager}
+     * unavailable; standalone-server service unavailable); otherwise {@code error} is {@code null} and
+     * the {@code project}/{@code appManager}/{@code serverService} fields are populated.
+     */
+    private static StandaloneContext resolveStandaloneContext(String projectName)
+    {
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return StandaloneContext.error(
+                ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
+        }
+        if (!ctx.isOpen())
+        {
+            return StandaloneContext.error(ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+                + ". Open the project in EDT first.").toJson()); //$NON-NLS-1$
+        }
+
+        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
+        if (appManager == null)
+        {
+            return StandaloneContext.error(
+                ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
+        }
+
+        Object serverService = acquireStandaloneServerService();
+        if (serverService == null)
+        {
+            return StandaloneContext.error(ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
+                + "standalone-server feature is missing. Install a 1C platform >= 8.3.23 with the " //$NON-NLS-1$
+                + "standalone server and ensure the EDT standalone-server plugins are present.") //$NON-NLS-1$
+                .toJson());
+        }
+
+        return StandaloneContext.of(ctx.project(), appManager, serverService);
+    }
+
+    /**
+     * Joins the standalone-server create Job with the bounded {@link #CREATE_TIMEOUT_SECONDS} timeout
+     * and maps the outcome to the SAME error tool-result JSON the inline code produced: a timeout
+     * message (Job cancelled) when it did not finish, or an interrupted message (interrupt flag
+     * restored) when the join threw. Returns {@code null} when the Job finished within the budget. The
+     * {@code InterruptedException} from {@code join} is handled inline here (not propagated) exactly as
+     * before.
+     */
+    private static String awaitStandaloneJob(Job createJob, Path infobaseDir)
+    {
+        try
+        {
+            boolean finished = createJob.join(
+                TimeUnit.SECONDS.toMillis(CREATE_TIMEOUT_SECONDS), null);
+            if (!finished)
+            {
+                createJob.cancel();
+                return ToolResult.error("Standalone-server creation timed out after " //$NON-NLS-1$
+                    + CREATE_TIMEOUT_SECONDS + " seconds. The ibcmd process may still be running. " //$NON-NLS-1$
+                    + "Check the EDT log and the directory '" + infobaseDir //$NON-NLS-1$
+                    + "' for partial results.").toJson(); //$NON-NLS-1$
+            }
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return ToolResult.error("Standalone-server creation was interrupted.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Holder for the project + {@link IApplicationManager} + standalone-server service resolved by
+     * {@link #resolveStandaloneContext(String)}. When {@code error} is non-null it carries a ready
+     * tool-result JSON and the other fields are unset; otherwise {@code error} is {@code null} and the
+     * fields are populated.
+     */
+    private static final class StandaloneContext
+    {
+        final String error;
+        final IProject project;
+        final IApplicationManager appManager;
+        final Object serverService;
+
+        private StandaloneContext(String error, IProject project, IApplicationManager appManager,
+                Object serverService)
+        {
+            this.error = error;
+            this.project = project;
+            this.appManager = appManager;
+            this.serverService = serverService;
+        }
+
+        static StandaloneContext error(String error)
+        {
+            return new StandaloneContext(error, null, null, null);
+        }
+
+        static StandaloneContext of(IProject project, IApplicationManager appManager,
+                Object serverService)
+        {
+            return new StandaloneContext(null, project, appManager, serverService);
+        }
     }
 
     /**
@@ -929,17 +1073,16 @@ public class CreateInfobaseTool implements IMcpTool
      * {@code Pair<IServer, StandaloneServerInfobase>} as an {@code Object} (cast to {@code Pair} by the
      * caller). Unwraps and rethrows the real failure cause so the caller reports an honest error.
      */
-    private static Object ssCreateServerWithInfobase(Object service, String versionMask,
-            String projectName, InfobaseReference ib, int clusterPort, String clusterRegistryDirectory,
-            String publicationPath, IProgressMonitor monitor) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    private static Object ssCreateServerWithInfobase(Object service, ServerCreateArgs args,
+            IProgressMonitor monitor) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Method m = service.getClass().getMethod("createServerWithInfobase", //$NON-NLS-1$
             String.class, String.class, InfobaseReference.class, int.class, String.class, String.class,
             IProgressMonitor.class);
         try
         {
-            return m.invoke(service, versionMask, projectName, ib, clusterPort, clusterRegistryDirectory,
-                publicationPath, monitor);
+            return m.invoke(service, args.versionMask, args.projectName, args.ib, args.clusterPort,
+                args.clusterRegistryDirectory, args.publicationPath, monitor);
         }
         catch (java.lang.reflect.InvocationTargetException ite)
         {
@@ -949,6 +1092,33 @@ public class CreateInfobaseTool implements IMcpTool
                 throw (Exception)cause;
             }
             throw new IllegalStateException(cause != null ? cause : ite);
+        }
+    }
+
+    /**
+     * Immutable parameter-object bundling the six positional arguments forwarded to the reflective
+     * {@code IStandaloneServerService.createServerWithInfobase(...)} call (everything except the service
+     * receiver and the progress monitor). Keeps {@link #ssCreateServerWithInfobase} under the
+     * parameter-count threshold without changing the reflective invocation.
+     */
+    private static final class ServerCreateArgs
+    {
+        final String versionMask;
+        final String projectName;
+        final InfobaseReference ib;
+        final int clusterPort;
+        final String clusterRegistryDirectory;
+        final String publicationPath;
+
+        ServerCreateArgs(String versionMask, String projectName, InfobaseReference ib, int clusterPort,
+                String clusterRegistryDirectory, String publicationPath)
+        {
+            this.versionMask = versionMask;
+            this.projectName = projectName;
+            this.ib = ib;
+            this.clusterPort = clusterPort;
+            this.clusterRegistryDirectory = clusterRegistryDirectory;
+            this.publicationPath = publicationPath;
         }
     }
 
@@ -1228,12 +1398,12 @@ public class CreateInfobaseTool implements IMcpTool
      * builds the success JSON for the standalone-server path. Uses the same short bounded re-poll as
      * the file path to absorb the provision-delegate listener race.
      */
-    private static String buildStandaloneServerResult(String projectName, Path infobaseDir,
-            String infobaseName, int actualPort, String webUrl, boolean setDefault,
-            IApplicationManager appManager, IProject project)
+    private static String buildStandaloneServerResult(ResultContext rc, int actualPort, String webUrl,
+            boolean setDefault)
     {
         // Read back the applications (bounded re-poll) and locate the just-created wst-server.
-        ServerReadBack readBack = pollForNewServerApplication(appManager, project, infobaseName);
+        ServerReadBack readBack =
+            pollForNewServerApplication(rc.appManager, rc.project, rc.infobaseName);
         JsonArray appsArray = readBack.appsArray;
         String newAppId = readBack.newAppId;
         IApplication newApp = readBack.newApp;
@@ -1248,7 +1418,7 @@ public class CreateInfobaseTool implements IMcpTool
             {
                 try
                 {
-                    appManager.setDefaultApplication(project, newApp);
+                    rc.appManager.setDefaultApplication(rc.project, newApp);
                 }
                 catch (Exception e)
                 {
@@ -1269,9 +1439,9 @@ public class CreateInfobaseTool implements IMcpTool
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, "created") //$NON-NLS-1$
             .put(KEY_APPLICATION_KIND, KIND_STANDALONE_SERVER)
-            .put(McpKeys.PROJECT, projectName)
-            .put(KEY_INFOBASE_FILE, infobaseDir.toAbsolutePath().toString())
-            .put(KEY_INFOBASE_NAME, infobaseName)
+            .put(McpKeys.PROJECT, rc.projectName)
+            .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
+            .put(KEY_INFOBASE_NAME, rc.infobaseName)
             .put(KEY_APPLICATIONS, appsArray);
 
         // Report the ACTUAL auto-allocated port only when we could resolve it from the web URL; // NOSONAR explanatory comment, not commented-out code
@@ -1289,8 +1459,8 @@ public class CreateInfobaseTool implements IMcpTool
             result.put(McpKeys.APPLICATION_ID, newAppId);
         }
 
-        result.put(McpKeys.MESSAGE, buildStandaloneServerMessage(projectName, infobaseDir,
-            infobaseName, actualPort, webUrl, setDefaultNote));
+        result.put(McpKeys.MESSAGE, buildStandaloneServerMessage(rc.projectName, rc.infobaseDir,
+            rc.infobaseName, actualPort, webUrl, setDefaultNote));
 
         return result.toJson();
     }
@@ -1307,61 +1477,74 @@ public class CreateInfobaseTool implements IMcpTool
             IProject project, String infobaseName)
     {
         JsonArray appsArray = new JsonArray();
-        String newAppId = null;
-        IApplication newApp = null;
+        IApplication[] newAppHolder = new IApplication[1];
 
         for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
         {
             appsArray = new JsonArray();
-            newAppId = null;
-            newApp = null;
+            newAppHolder[0] = null;
 
-            try
+            if (!readBackServerApplications(appManager, project, infobaseName, appsArray, newAppHolder))
             {
-                List<IApplication> applications = appManager.getApplications(project);
-                if (applications != null)
+                break; // Read failed (logged) — stop re-polling.
+            }
+
+            if (newAppHolder[0] != null)
+            {
+                break; // Found the new server — no need to re-poll.
+            }
+
+            if (poll < READ_BACK_MAX_POLLS - 1 && !sleepBetweenPolls())
+            {
+                break; // Interrupted — stop re-polling.
+            }
+        }
+
+        IApplication newApp = newAppHolder[0];
+        String newAppId = newApp != null ? newApp.getId() : null;
+        return new ServerReadBack(appsArray, newAppId, newApp);
+    }
+
+    /**
+     * Reads the project's applications once, populating {@code appsArray} with one JSON object per
+     * application (same shape as {@code get_applications}) and storing the JUST-created standalone
+     * server — a {@code wst-server} application whose name matches {@code infobaseName} (NOT merely the
+     * first wst-server, which could be a pre-existing one) — in {@code newAppHolder[0]} (left
+     * {@code null} when not yet visible). Read-only.
+     *
+     * @return {@code true} if the read completed (whether or not the new server was found),
+     *         {@code false} if reading the applications failed (already logged) so the caller stops
+     *         re-polling
+     */
+    private static boolean readBackServerApplications(IApplicationManager appManager, IProject project,
+            String infobaseName, JsonArray appsArray, IApplication[] newAppHolder)
+    {
+        try
+        {
+            List<IApplication> applications = appManager.getApplications(project);
+            if (applications != null)
+            {
+                for (IApplication app : applications)
                 {
-                    for (IApplication app : applications)
+                    appsArray.add(toApplicationJson(appManager, app));
+                    // Identify the JUST-created standalone server by its name (a wst-server app whose
+                    // name matches the new infobase) — NOT merely the first wst-server app, which could
+                    // be a pre-existing standalone server already bound to this project.
+                    String typeId = app.getType() != null ? app.getType().getId() : null;
+                    if (newAppHolder[0] == null && StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId)
+                        && infobaseName.equals(app.getName()))
                     {
-                        appsArray.add(toApplicationJson(appManager, app));
-                        // Identify the JUST-created standalone server by its name (a wst-server app whose
-                        // name matches the new infobase) — NOT merely the first wst-server app, which could
-                        // be a pre-existing standalone server already bound to this project.
-                        String typeId = app.getType() != null ? app.getType().getId() : null;
-                        if (newAppId == null && StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId)
-                            && infobaseName.equals(app.getName()))
-                        {
-                            newAppId = app.getId();
-                            newApp = app;
-                        }
+                        newAppHolder[0] = app;
                     }
                 }
             }
-            catch (ApplicationException e)
-            {
-                Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
-                break;
-            }
-
-            if (newAppId != null)
-            {
-                break;
-            }
-
-            if (poll < READ_BACK_MAX_POLLS - 1)
-            {
-                try
-                {
-                    Thread.sleep(READ_BACK_POLL_DELAY_MS);
-                }
-                catch (InterruptedException ie)
-                {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
+            return true;
         }
-        return new ServerReadBack(appsArray, newAppId, newApp);
+        catch (ApplicationException e)
+        {
+            Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
+            return false;
+        }
     }
 
     /**
@@ -1416,6 +1599,32 @@ public class CreateInfobaseTool implements IMcpTool
             this.appsArray = appsArray;
             this.newAppId = newAppId;
             this.newApp = newApp;
+        }
+    }
+
+    /**
+     * Immutable parameter-object bundling the identity + read-back inputs shared by the success-result
+     * builders ({@link #buildSuccessResult} and {@link #buildStandaloneServerResult}): the project
+     * name/handle, the infobase directory and display name, and the {@link IApplicationManager} used
+     * for the application read-back. Keeps those builders under the parameter-count threshold without
+     * changing what they compute.
+     */
+    private static final class ResultContext
+    {
+        final String projectName;
+        final Path infobaseDir;
+        final String infobaseName;
+        final IApplicationManager appManager;
+        final IProject project;
+
+        ResultContext(String projectName, Path infobaseDir, String infobaseName,
+                IApplicationManager appManager, IProject project)
+        {
+            this.projectName = projectName;
+            this.infobaseDir = infobaseDir;
+            this.infobaseName = infobaseName;
+            this.appManager = appManager;
+            this.project = project;
         }
     }
 
@@ -1538,9 +1747,8 @@ public class CreateInfobaseTool implements IMcpTool
      * @param setDefaultNote optional note appended to the message when setDefault could not be
      *        completed (null = no note)
      */
-    private static String buildSuccessResult(String projectName, Path infobaseDir,
-            String infobaseName, IApplicationManager appManager,
-            IProject project, InfobaseReference ibRef, String setDefaultNote, boolean register)
+    private static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef,
+            String setDefaultNote, boolean register)
     {
         JsonArray appsArray = new JsonArray();
         String newAppId = null;
@@ -1553,7 +1761,7 @@ public class CreateInfobaseTool implements IMcpTool
             newAppId = null;
             String[] newAppIdHolder = new String[1];
 
-            if (!readBackApplications(appManager, project, ibRef, appsArray, newAppIdHolder))
+            if (!readBackApplications(rc.appManager, rc.project, ibRef, appsArray, newAppIdHolder))
             {
                 break; // Read failed (logged) — stop re-polling.
             }
@@ -1573,9 +1781,9 @@ public class CreateInfobaseTool implements IMcpTool
         String verb = register ? "registered" : "created"; //$NON-NLS-1$ //$NON-NLS-2$
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, verb)
-            .put(McpKeys.PROJECT, projectName)
-            .put(KEY_INFOBASE_FILE, infobaseDir.toAbsolutePath().toString())
-            .put(KEY_INFOBASE_NAME, infobaseName)
+            .put(McpKeys.PROJECT, rc.projectName)
+            .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
+            .put(KEY_INFOBASE_NAME, rc.infobaseName)
             .put(KEY_APPLICATIONS, appsArray);
 
         if (newAppId != null)
@@ -1583,9 +1791,9 @@ public class CreateInfobaseTool implements IMcpTool
             result.put(McpKeys.APPLICATION_ID, newAppId);
         }
 
-        String message = "Infobase '" + infobaseName //$NON-NLS-1$
-            + "' " + verb + " at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$ //$NON-NLS-2$
-            + "' and bound to project '" + projectName //$NON-NLS-1$
+        String message = "Infobase '" + rc.infobaseName //$NON-NLS-1$
+            + "' " + verb + " at '" + rc.infobaseDir.toAbsolutePath() //$NON-NLS-1$ //$NON-NLS-2$
+            + "' and bound to project '" + rc.projectName //$NON-NLS-1$
             + "'. Use update_database to push the configuration into the infobase." //$NON-NLS-1$
             + (setDefaultNote != null ? setDefaultNote : ""); //$NON-NLS-1$
         result.put(McpKeys.MESSAGE, message);

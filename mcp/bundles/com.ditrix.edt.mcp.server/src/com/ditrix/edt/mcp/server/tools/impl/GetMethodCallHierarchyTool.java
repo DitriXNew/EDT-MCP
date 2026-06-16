@@ -222,6 +222,9 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         List<CallerInfo> callers = new ArrayList<>();
         int totalReferences = 0;
 
+        // Loop-invariant identity of the target method (same across every candidate).
+        CallerSearch search = new CallerSearch(methodUri, methodName, targetModuleName, limit);
+
         for (IFile candidate : candidates)
         {
             String relToSrc = candidate.getProjectRelativePath().removeFirstSegments(1).toString();
@@ -245,8 +248,8 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
 
             boolean candidateIsTarget = relToSrc.equalsIgnoreCase(modulePath);
-            totalReferences += scanCandidateInvocations(candidateModule, methodUri, methodName,
-                targetModuleName, candidateIsTarget, relToSrc, callers, limit);
+            totalReferences += scanCandidateInvocations(candidateModule, search,
+                candidateIsTarget, relToSrc, callers);
         }
 
         return formatCallersOutput(modulePath, methodName, callers, totalReferences);
@@ -260,18 +263,14 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      * loop-local {@code continue} statements stay confined to this scan.
      *
      * @param candidateModule the module to scan
-     * @param methodUri the URI of the target method
-     * @param methodName the target method name
-     * @param targetModuleName the simple name of the module declaring the target method
+     * @param search the loop-invariant target-method identity (URI, name, declaring module, limit)
      * @param candidateIsTarget {@code true} when this candidate is the module declaring the method
      * @param relToSrc the candidate's source-relative path, used when building a {@link CallerInfo}
      * @param callers the shared accumulator of matched callers (appended to, never reassigned)
-     * @param limit the maximum number of callers to retain in {@code callers}
      * @return the number of invocations in this candidate that target the method
      */
-    private int scanCandidateInvocations(Module candidateModule, URI methodUri, String methodName,
-        String targetModuleName, boolean candidateIsTarget, String relToSrc, List<CallerInfo> callers,
-        int limit)
+    private int scanCandidateInvocations(Module candidateModule, CallerSearch search,
+        boolean candidateIsTarget, String relToSrc, List<CallerInfo> callers)
     {
         int matched = 0;
         for (Iterator<EObject> iter = candidateModule.eAllContents(); iter.hasNext();)
@@ -282,17 +281,40 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 continue;
             }
             Invocation inv = (Invocation)obj;
-            if (!invocationTargetsMethod(inv, methodUri, methodName, targetModuleName, candidateIsTarget))
+            if (!invocationTargetsMethod(inv, search.methodUri, search.methodName,
+                search.targetModuleName, candidateIsTarget))
             {
                 continue;
             }
             matched++;
-            if (callers.size() < limit)
+            if (callers.size() < search.limit)
             {
-                callers.add(buildCallerInfo(inv, relToSrc, methodName));
+                callers.add(buildCallerInfo(inv, relToSrc, search.methodName));
             }
         }
         return matched;
+    }
+
+    /**
+     * Immutable holder for the loop-invariant identity of the target method shared by every
+     * candidate scan in {@link #findCallers}: the method URI, its name, the simple name of the
+     * declaring module and the caller {@code limit}. Bundles the parameters without changing any
+     * value.
+     */
+    private static final class CallerSearch
+    {
+        final URI methodUri;
+        final String methodName;
+        final String targetModuleName;
+        final int limit;
+
+        CallerSearch(URI methodUri, String methodName, String targetModuleName, int limit)
+        {
+            this.methodUri = methodUri;
+            this.methodName = methodName;
+            this.targetModuleName = targetModuleName;
+            this.limit = limit;
+        }
     }
 
     /**

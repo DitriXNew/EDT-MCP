@@ -188,75 +188,77 @@ public class ListModulesTool implements IMcpTool
         }
         Configuration config = resolved.configuration();
 
+        CollectContext scanCtx = new CollectContext(project, modules, objectName, nameFilter);
+
         switch (type)
         {
             case "commonmodules": //$NON-NLS-1$
-                collectSingleModuleType(project, modules, objectName, nameFilter,
+                collectSingleModuleType(scanCtx,
                     config.getCommonModules(), CommonModule::getName,
                     "CommonModules", MODULE_BSL, MODULE, "CommonModule"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "documents": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getDocuments(), Document::getName, "Documents", "Document"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "catalogs": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getCatalogs(), Catalog::getName, "Catalogs", "Catalog"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "informationregisters": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getInformationRegisters(), InformationRegister::getName,
                     "InformationRegisters", "InformationRegister"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "accumulationregisters": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getAccumulationRegisters(), AccumulationRegister::getName,
                     "AccumulationRegisters", "AccumulationRegister"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "reports": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getReports(), Report::getName, "Reports", "Report"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "dataprocessors": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getDataProcessors(), DataProcessor::getName,
                     "DataProcessors", "DataProcessor"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "exchangeplans": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getExchangePlans(), ExchangePlan::getName,
                     "ExchangePlans", "ExchangePlan"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "businessprocesses": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getBusinessProcesses(), BusinessProcess::getName,
                     "BusinessProcesses", "BusinessProcess"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "tasks": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getTasks(), Task::getName, "Tasks", "Task"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "constants": //$NON-NLS-1$
-                collectMultiModuleType(project, modules, objectName, nameFilter,
+                collectMultiModuleType(scanCtx,
                     config.getConstants(), Constant::getName, "Constants", "Constant"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "commoncommands": //$NON-NLS-1$
-                collectSingleModuleType(project, modules, objectName, nameFilter,
+                collectSingleModuleType(scanCtx,
                     config.getCommonCommands(), CommonCommand::getName,
                     "CommonCommands", "CommandModule.bsl", "CommandModule", "CommonCommand"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 break;
             case "commonforms": //$NON-NLS-1$
-                collectSingleModuleType(project, modules, objectName, nameFilter,
+                collectSingleModuleType(scanCtx,
                     config.getCommonForms(), CommonForm::getName,
                     "CommonForms", MODULE_BSL, "FormModule", "CommonForm"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 break;
             case "webservices": //$NON-NLS-1$
-                collectSingleModuleType(project, modules, objectName, nameFilter,
+                collectSingleModuleType(scanCtx,
                     config.getWebServices(), WebService::getName,
                     "WebServices", MODULE_BSL, MODULE, "WebService"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
             case "httpservices": //$NON-NLS-1$
-                collectSingleModuleType(project, modules, objectName, nameFilter,
+                collectSingleModuleType(scanCtx,
                     config.getHttpServices(), HTTPService::getName,
                     "HTTPServices", MODULE_BSL, MODULE, "HTTPService"); //$NON-NLS-1$ //$NON-NLS-2$
                 break;
@@ -274,13 +276,34 @@ public class ListModulesTool implements IMcpTool
     // ========== Generic collection methods ==========
 
     /**
+     * Invariant inputs shared by every per-type collector call: the target
+     * project, the accumulating module list, and the two optional filters
+     * ({@code objectName} / {@code nameFilter}). Identical across all metadata
+     * types, so bundled once per {@code execute} and threaded into the generic
+     * collectors. Fields and read order match the previous flat parameters.
+     */
+    private static final class CollectContext
+    {
+        final IProject project;
+        final List<ModuleInfo> modules;
+        final String objectName;
+        final String nameFilter;
+
+        CollectContext(IProject project, List<ModuleInfo> modules, String objectName,
+                String nameFilter)
+        {
+            this.project = project;
+            this.modules = modules;
+            this.objectName = objectName;
+            this.nameFilter = nameFilter;
+        }
+    }
+
+    /**
      * Generic collector for metadata types with a single known BSL module file.
      * Used for CommonModules, CommonCommands, CommonForms, WebServices, HTTPServices.
      *
-     * @param project the workspace project
-     * @param modules target list for collected module info
-     * @param objectName optional filter by object name (case-insensitive)
-     * @param nameFilter optional filter by module path substring
+     * @param ctx the invariant scan context (project, target list, filters)
      * @param objects the metadata objects to iterate
      * @param nameGetter function to extract the name from a metadata object
      * @param folderName the folder name in src/ (e.g. "CommonModules", "WebServices")
@@ -288,20 +311,21 @@ public class ListModulesTool implements IMcpTool
      * @param moduleType the module type label (e.g. "Module", "FormModule", "CommandModule")
      * @param parentType the parent type label (e.g. "CommonModule", "WebService")
      */
-    private <T> void collectSingleModuleType(IProject project, List<ModuleInfo> modules,
-        String objectName, String nameFilter, Iterable<T> objects, Function<T, String> nameGetter,
-        String folderName, String fileName, String moduleType, String parentType)
+    private <T> void collectSingleModuleType(CollectContext ctx, Iterable<T> objects,
+        Function<T, String> nameGetter, String folderName, String fileName, String moduleType,
+        String parentType)
     {
         for (T obj : objects)
         {
             String name = nameGetter.apply(obj);
-            if (objectName != null && !objectName.isEmpty()
-                && !name.equalsIgnoreCase(objectName))
+            if (ctx.objectName != null && !ctx.objectName.isEmpty()
+                && !name.equalsIgnoreCase(ctx.objectName))
             {
                 continue;
             }
             String path = folderName + "/" + name + "/" + fileName; //$NON-NLS-1$ //$NON-NLS-2$
-            addIfExists(project, modules, path, moduleType, parentType, name, nameFilter);
+            addIfExists(ctx.project, ctx.modules, path, moduleType, parentType, name,
+                ctx.nameFilter);
         }
     }
 
@@ -310,29 +334,25 @@ public class ListModulesTool implements IMcpTool
      * Recursively scans the object directory for all .bsl files.
      * Used for Documents, Catalogs, Registers, Reports, DataProcessors, etc.
      *
-     * @param project the workspace project
-     * @param modules target list for collected module info
-     * @param objectName optional filter by object name (case-insensitive)
-     * @param nameFilter optional filter by module path substring
+     * @param ctx the invariant scan context (project, target list, filters)
      * @param objects the metadata objects to iterate
      * @param nameGetter function to extract the name from a metadata object
      * @param folderName the folder name in src/ (e.g. "Documents", "Catalogs")
      * @param parentType the parent type label (e.g. "Document", "Catalog")
      */
-    private <T> void collectMultiModuleType(IProject project, List<ModuleInfo> modules,
-        String objectName, String nameFilter, Iterable<T> objects, Function<T, String> nameGetter,
-        String folderName, String parentType)
+    private <T> void collectMultiModuleType(CollectContext ctx, Iterable<T> objects,
+        Function<T, String> nameGetter, String folderName, String parentType)
     {
         for (T obj : objects)
         {
             String name = nameGetter.apply(obj);
-            if (objectName != null && !objectName.isEmpty()
-                && !name.equalsIgnoreCase(objectName))
+            if (ctx.objectName != null && !ctx.objectName.isEmpty()
+                && !name.equalsIgnoreCase(ctx.objectName))
             {
                 continue;
             }
-            collectAllBslModules(project, modules, folderName + "/" + name, //$NON-NLS-1$
-                parentType, name, nameFilter);
+            collectAllBslModules(ctx.project, ctx.modules, folderName + "/" + name, //$NON-NLS-1$
+                parentType, name, ctx.nameFilter);
         }
     }
 

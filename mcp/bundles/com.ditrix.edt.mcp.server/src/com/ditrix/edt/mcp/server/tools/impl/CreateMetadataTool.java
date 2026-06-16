@@ -18,6 +18,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
@@ -343,8 +344,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         if (target.topLevel)
         {
-            return createTopLevel(project, config, projectName, target, normFqn, props, synonymLanguage,
-                typeSpecific, normReport);
+            return createTopLevel(new TopLevelRequest(project, config, projectName, target, normFqn,
+                props, synonymLanguage, typeSpecific, normReport));
         }
         return createMember(project, projectName, target, normFqn, props, synonymLanguage, normReport);
     }
@@ -384,53 +385,71 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
     // ---- top-level creation (mirrors the former create_metadata_object) -------------------------
 
-    private String createTopLevel(IProject project, Configuration config, String projectName,
-        CreateTarget target, String normFqn, Props props, String synonymLanguage,
-        TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
+    /**
+     * Immutable inputs for a top-level object create, grouping the request so
+     * {@link #createTopLevel(TopLevelRequest)} takes one holder instead of a long argument list.
+     */
+    private static final class TopLevelRequest
+    {
+        final IProject project;
+        final Configuration config;
+        final String projectName;
+        final CreateTarget target;
+        final String normFqn;
+        final Props props;
+        final String synonymLanguage;
+        final TypeSpecific typeSpecific;
+        final MdNameNormalizer.Report normReport;
+
+        TopLevelRequest(IProject project, Configuration config, String projectName,
+            CreateTarget target, String normFqn, Props props, String synonymLanguage,
+            TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
+        {
+            this.project = project;
+            this.config = config;
+            this.projectName = projectName;
+            this.target = target;
+            this.normFqn = normFqn;
+            this.props = props;
+            this.synonymLanguage = synonymLanguage;
+            this.typeSpecific = typeSpecific;
+            this.normReport = normReport;
+        }
+    }
+
+    private String createTopLevel(TopLevelRequest req)
     {
         // Any configuration top-level type resolved by MetadataTypeUtils is attempted: the EDT
         // model-object factory produces the EDT "New"-wizard default content. A type the factory
         // cannot instantiate fails gracefully below (clean error, no crash) rather than via a
         // hand-maintained allow-list.
-        EStructuralFeature collection = config.eClass().getEStructuralFeature(target.configFeatureName);
-        if (collection == null || !(collection.getEType() instanceof EClass))
+        EClass eClass = resolveCollectionElementType(req.config, req.target.configFeatureName);
+        if (eClass == null)
         {
             return ToolResult.error("Could not resolve configuration collection '" //$NON-NLS-1$
-                + target.configFeatureName + "'").toJson(); //$NON-NLS-1$
+                + req.target.configFeatureName + "'").toJson(); //$NON-NLS-1$
         }
-        final EClass eClass = (EClass)collection.getEType();
 
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (v8ProjectManager == null || factory == null || bmModelManager == null)
+        BmContext bm = resolveBmContext(req.project, req.projectName);
+        if (bm.hasError())
         {
-            return ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
+            return bm.error;
         }
-        IV8Project v8Project = v8ProjectManager.getProject(project);
-        if (v8Project == null)
-        {
-            return ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
-        }
-        final Version version = v8Project.getVersion();
-        IBmModel bmModel = bmModelManager.getModel(project);
-        if (bmModel == null)
-        {
-            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
-        }
-        if (!(config instanceof IBmObject))
+        if (!(req.config instanceof IBmObject))
         {
             return ToolResult.error("Configuration is not a BM object").toJson(); //$NON-NLS-1$
         }
-        final long configBmId = ((IBmObject)config).bmGetId();
-        final String configFqn = ((IBmObject)config).bmGetFqn();
-        final String name = target.childName;
-        final String configFeatureName = target.configFeatureName;
+        final long configBmId = ((IBmObject)req.config).bmGetId();
+        final String configFqn = ((IBmObject)req.config).bmGetFqn();
+        final String name = req.target.childName;
+        final String configFeatureName = req.target.configFeatureName;
+        final IModelObjectFactory factory = bm.factory;
+        final Version version = bm.version;
 
         final EClass createdKind;
         try
         {
-            createdKind = BmTransactions.<EClass>write(bmModel, "CreateMetadataObject", (tx, pm) -> //$NON-NLS-1$
+            createdKind = BmTransactions.<EClass>write(bm.bmModel, "CreateMetadataObject", (tx, pm) -> //$NON-NLS-1$
             {
                 Configuration cfg = (Configuration)tx.getObjectById(configBmId);
                 if (cfg == null)
@@ -444,10 +463,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         + "' object"); //$NON-NLS-1$
                 }
                 newObject.setName(name);
-                applyScalarProps(newObject, props, synonymLanguage);
+                applyScalarProps(newObject, req.props, req.synonymLanguage);
                 // Type-specific defaults applied on top of the factory's default content.
-                typeSpecific.applyTo(newObject);
-                tx.attachTopObject((IBmObject)newObject, normFqn);
+                req.typeSpecific.applyTo(newObject);
+                tx.attachTopObject((IBmObject)newObject, req.normFqn);
                 addToCollection(cfg, configFeatureName, newObject);
                 factory.fillDefaultReferences(newObject);
                 return newObject.eClass();
@@ -459,15 +478,39 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
+        boolean persisted =
+            BmTransactions.forceExportToDisk(req.project, dirtyFqns(req.normFqn, configFqn));
+        return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
+            req.synonymLanguage, req.typeSpecific, req.normReport));
+    }
+
+    /**
+     * Resolves the EClass of the configuration containment collection named {@code featureName},
+     * or {@code null} when the feature is absent or not an EClass-typed collection. Side-effect-free.
+     */
+    private static EClass resolveCollectionElementType(Configuration config, String featureName)
+    {
+        EStructuralFeature collection = config.eClass().getEStructuralFeature(featureName);
+        if (collection == null || !(collection.getEType() instanceof EClass))
+        {
+            return null;
+        }
+        return (EClass)collection.getEType();
+    }
+
+    /**
+     * Builds the force-export dirty list for a top-object create: the new object's FQN plus the
+     * configuration FQN (which registers the object) when present. Side-effect-free.
+     */
+    private static List<String> dirtyFqns(String normFqn, String configFqn)
+    {
         java.util.List<String> dirty = new java.util.ArrayList<>();
         dirty.add(normFqn);
         if (configFqn != null && !configFqn.isEmpty())
         {
             dirty.add(configFqn);
         }
-        boolean persisted = BmTransactions.forceExportToDisk(project, dirty);
-        return success(normFqn, createdKind, name, persisted, props, synonymLanguage, typeSpecific,
-            normReport);
+        return dirty;
     }
 
     // ---- member creation (mirrors the former add_metadata_attribute, generalized) ---------------
@@ -483,24 +526,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Top object is not a BM object").toJson(); //$NON-NLS-1$
         }
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        if (bmModelManager == null || factory == null || v8ProjectManager == null)
+        BmContext bm = resolveBmContext(project, projectName);
+        if (bm.hasError())
         {
-            return ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
+            return bm.error;
         }
-        IBmModel bmModel = bmModelManager.getModel(project);
-        if (bmModel == null)
-        {
-            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
-        }
-        IV8Project v8Project = v8ProjectManager.getProject(project);
-        if (v8Project == null)
-        {
-            return ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
-        }
-        final Version version = v8Project.getVersion();
 
         final long topBmId = ((IBmObject)target.topObject).bmGetId();
         final String[] parts = normFqn.split("\\."); //$NON-NLS-1$
@@ -513,58 +543,19 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final boolean factoryInitialized = isFactoryInitializedChild(elementType);
         // The top object that owns the member's .mdo file (members live inside the top object's file).
         final String topFqn = topFqn(normFqn);
+        final IModelObjectFactory factory = bm.factory;
+        final Version version = bm.version;
 
         final EClass createdKind;
         try
         {
-            createdKind = BmTransactions.<EClass>write(bmModel, "CreateMetadataMember", (tx, pm) -> //$NON-NLS-1$
+            createdKind = BmTransactions.<EClass>write(bm.bmModel, "CreateMetadataMember", (tx, pm) -> //$NON-NLS-1$
             {
-                EObject top = (EObject)tx.getObjectById(topBmId);
-                if (top == null)
-                {
-                    throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
-                }
-                EObject owner = MetadataNodeResolver.resolveOwnerInTx(top, parts);
-                if (owner == null)
-                {
-                    throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$
-                }
-                if (childByName(owner, feature, name) != null)
-                {
-                    throw new RuntimeException("Member already exists: " + name); //$NON-NLS-1$
-                }
-                MdObject child;
-                if (factoryInitialized)
-                {
-                    // The parent-aware factory wires the type's default content (produced types,
-                    // form/template type); fall back to a bare create only if the factory declines.
-                    child = (MdObject)factory.create(elementType, owner, version);
-                    if (child == null)
-                    {
-                        child = (MdObject)EcoreUtil.create(elementType);
-                    }
-                    child.setName(name);
-                    if (child.getUuid() == null)
-                    {
-                        child.setUuid(UUID.randomUUID());
-                    }
-                    // The factory does not default a template's type; set the platform default.
-                    if (child instanceof BasicTemplate && ((BasicTemplate)child).getTemplateType() == null)
-                    {
-                        ((BasicTemplate)child).setTemplateType(TemplateType.SPREADSHEET_DOCUMENT);
-                    }
-                    applyScalarProps(child, props, synonymLanguage);
-                    addToFeature(owner, feature, child);
-                    factory.fillDefaultReferences(child);
-                }
-                else
-                {
-                    child = (MdObject)EcoreUtil.create(elementType);
-                    child.setName(name);
-                    child.setUuid(UUID.randomUUID());
-                    applyScalarProps(child, props, synonymLanguage);
-                    addToFeature(owner, feature, child);
-                }
+                EObject owner = resolveMemberOwnerInTx(tx, topBmId, parts, feature, name);
+                MemberChildSpec spec =
+                    new MemberChildSpec(factory, elementType, owner, version, name, props,
+                        synonymLanguage, feature);
+                MdObject child = createMemberChild(spec, factoryInitialized);
                 return child.eClass();
             });
         }
@@ -575,7 +566,124 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
 
         boolean persisted = BmTransactions.forceExportToDisk(project, topFqn);
-        return success(normFqn, createdKind, name, persisted, props, synonymLanguage, null, normReport);
+        return success(new SuccessInfo(normFqn, createdKind, name, persisted, props, synonymLanguage,
+            null, normReport));
+    }
+
+    /**
+     * Re-fetches the member's TOP object by {@code topBmId} inside the transaction and re-navigates
+     * to the leaf's owner BY NAME (per the FQN {@code parts}), then asserts the new member does not
+     * already exist on {@code feature}. Returns the resolved owner. Runs inside the write
+     * transaction; performs no mutation.
+     *
+     * @throws RuntimeException if the top object or owner cannot be re-resolved, or the member exists
+     */
+    private static EObject resolveMemberOwnerInTx(IBmTransaction tx, long topBmId, String[] parts,
+        EStructuralFeature feature, String name)
+    {
+        EObject top = (EObject)tx.getObjectById(topBmId);
+        if (top == null)
+        {
+            throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
+        }
+        EObject owner = MetadataNodeResolver.resolveOwnerInTx(top, parts);
+        if (owner == null)
+        {
+            throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$
+        }
+        if (childByName(owner, feature, name) != null)
+        {
+            throw new RuntimeException("Member already exists: " + name); //$NON-NLS-1$
+        }
+        return owner;
+    }
+
+    /**
+     * Immutable inputs for building one member child inside the write transaction, grouping the
+     * arguments so the child-creation helpers stay within the parameter limit.
+     */
+    private static final class MemberChildSpec
+    {
+        final IModelObjectFactory factory;
+        final EClass elementType;
+        final EObject owner;
+        final Version version;
+        final String name;
+        final Props props;
+        final String synonymLanguage;
+        final EStructuralFeature feature;
+
+        MemberChildSpec(IModelObjectFactory factory, EClass elementType, EObject owner,
+            Version version, String name, Props props, String synonymLanguage,
+            EStructuralFeature feature)
+        {
+            this.factory = factory;
+            this.elementType = elementType;
+            this.owner = owner;
+            this.version = version;
+            this.name = name;
+            this.props = props;
+            this.synonymLanguage = synonymLanguage;
+            this.feature = feature;
+        }
+    }
+
+    /**
+     * Creates and attaches one member child to its (tx-fetched) owner, dispatching to the
+     * factory-initialized or the plain construction path. Performs the irreversible BM mutation; runs
+     * inside the write transaction at the same point the inline code did.
+     *
+     * @return the created child
+     */
+    private static MdObject createMemberChild(MemberChildSpec spec, boolean factoryInitialized)
+    {
+        return factoryInitialized ? createFactoryInitializedChild(spec) : createPlainChild(spec);
+    }
+
+    /**
+     * Factory-initialized member path (Form / Template / Recalculation): the parent-aware factory
+     * wires the type's default content; a bare create is the fallback when the factory declines.
+     * Performs the BM mutation inside the write transaction.
+     *
+     * @return the created and attached child
+     */
+    private static MdObject createFactoryInitializedChild(MemberChildSpec spec)
+    {
+        MdObject child = (MdObject)spec.factory.create(spec.elementType, spec.owner, spec.version);
+        if (child == null)
+        {
+            child = (MdObject)EcoreUtil.create(spec.elementType);
+        }
+        child.setName(spec.name);
+        if (child.getUuid() == null)
+        {
+            child.setUuid(UUID.randomUUID());
+        }
+        // The factory does not default a template's type; set the platform default.
+        if (child instanceof BasicTemplate && ((BasicTemplate)child).getTemplateType() == null)
+        {
+            ((BasicTemplate)child).setTemplateType(TemplateType.SPREADSHEET_DOCUMENT);
+        }
+        applyScalarProps(child, spec.props, spec.synonymLanguage);
+        addToFeature(spec.owner, spec.feature, child);
+        spec.factory.fillDefaultReferences(child);
+        return child;
+    }
+
+    /**
+     * Plain member path (Attribute, Command, ...): a bare {@code EcoreUtil.create}, named, given a
+     * UUID and attached. Performs the BM mutation inside the write transaction.
+     *
+     * @return the created and attached child
+     */
+    private static MdObject createPlainChild(MemberChildSpec spec)
+    {
+        MdObject child = (MdObject)EcoreUtil.create(spec.elementType);
+        child.setName(spec.name);
+        child.setUuid(UUID.randomUUID());
+        applyScalarProps(child, spec.props, spec.synonymLanguage);
+        addToFeature(spec.owner, spec.feature, child);
+        return child;
     }
 
     // ---- form-content member creation (the cross-model hop into the editable Form) ---------------
@@ -603,50 +711,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
 
-        // Form-member properties: title (+ language), parent (nest a visual item), the binding
-        // target for a Field (dataPath/attribute -> the form attribute) or a Button (command), and
-        // a Group's explicit type (Popup/Pages/Page/CommandBar/ButtonGroup/ColumnGroup/UsualGroup).
-        String titleVal = null;
-        String titleLang = null;
-        String parentName = null;
-        String bindTarget = null;
-        for (JsonObject prop : properties)
+        FormMemberProps fmProps = new FormMemberProps();
+        String propErr = parseFormMemberProperties(properties, kind, normReport, fmProps);
+        if (propErr != null)
         {
-            String pName = asString(prop.get("name")); //$NON-NLS-1$
-            if (pName == null || pName.isEmpty())
-            {
-                return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
-            }
-            switch (pName.toLowerCase())
-            {
-                case "title": //$NON-NLS-1$
-                    titleVal = normReport.apply("title", asString(prop.get(KEY_VALUE))); //$NON-NLS-1$
-                    titleLang = asString(prop.get(KEY_LANGUAGE));
-                    break;
-                case "parent": //$NON-NLS-1$
-                    parentName = asString(prop.get(KEY_VALUE));
-                    break;
-                case "type": //$NON-NLS-1$
-                    if (kind != FormElementWriter.Kind.GROUP)
-                    {
-                        return ToolResult.error("Property 'type' is supported at creation only for " //$NON-NLS-1$
-                            + "a form Group (the group kind, e.g. Popup or Pages). Set other " //$NON-NLS-1$
-                            + "elements' types via modify_metadata.").toJson(); //$NON-NLS-1$
-                    }
-                    bindTarget = asString(prop.get(KEY_VALUE));
-                    break;
-                case "datapath": //$NON-NLS-1$
-                case "attribute": //$NON-NLS-1$
-                case "command": //$NON-NLS-1$
-                    bindTarget = asString(prop.get(KEY_VALUE));
-                    break;
-                default:
-                    return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' is not supported for a form " //$NON-NLS-1$
-                        + "element. This version applies: title (with optional language), parent " //$NON-NLS-1$
-                        + "(nest a visual item), dataPath/attribute (a Field's bound attribute), " //$NON-NLS-1$
-                        + "command (a Button's bound command), type (a Group's kind). Set other " //$NON-NLS-1$
-                        + "properties via modify_metadata.").toJson(); //$NON-NLS-1$
-            }
+            return propErr;
         }
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
@@ -658,9 +727,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         Configuration config = ctx.config;
 
         final FormElementWriter.Kind fKind = kind;
-        final String parent = parentName;
-        final String bind = bindTarget;
-        final String titleText = titleVal;
+        final String parent = fmProps.parentName;
+        final String bind = fmProps.bindTarget;
+        final String titleText = fmProps.titleVal;
         // The designer's auto-children (extended tooltip / context menu) get script-variant
         // localized name suffixes, like FormObjectDefaultNameProvider.
         final boolean russianAutoNames = config.getScriptVariant() == ScriptVariant.RUSSIAN;
@@ -677,8 +746,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             final String titleLanguage;
             try
             {
-                titleLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, titleVal,
-                    titleLang, "the title"); //$NON-NLS-1$
+                titleLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, fmProps.titleVal,
+                    fmProps.titleLang, "the title"); //$NON-NLS-1$
             }
             catch (IllegalArgumentException e)
             {
@@ -715,6 +784,69 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted);
         normReport.addTo(formResult);
         return formResult.put(McpKeys.MESSAGE, "Created " + normFqn).toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The parsed creation-time properties of a form member: the title (+ language), the parent to
+     * nest under, and the binding target (a Field's dataPath/attribute, a Button's command, or a
+     * Group's kind).
+     */
+    private static final class FormMemberProps
+    {
+        String titleVal;
+        String titleLang;
+        String parentName;
+        String bindTarget;
+    }
+
+    /**
+     * Parses the form-member {@code properties} array into {@code out}, applying the 'ё'->'е'
+     * report to the title. Side-effect-free apart from filling {@code out}: returns a JSON error
+     * string when a property is malformed, unsupported, or (for {@code type}) used on a non-Group,
+     * or {@code null} on success.
+     */
+    private String parseFormMemberProperties(List<JsonObject> properties, FormElementWriter.Kind kind,
+        MdNameNormalizer.Report normReport, FormMemberProps out)
+    {
+        for (JsonObject prop : properties)
+        {
+            String pName = asString(prop.get("name")); //$NON-NLS-1$
+            if (pName == null || pName.isEmpty())
+            {
+                return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
+            }
+            switch (pName.toLowerCase())
+            {
+                case "title": //$NON-NLS-1$
+                    out.titleVal = normReport.apply("title", asString(prop.get(KEY_VALUE))); //$NON-NLS-1$
+                    out.titleLang = asString(prop.get(KEY_LANGUAGE));
+                    break;
+                case "parent": //$NON-NLS-1$
+                    out.parentName = asString(prop.get(KEY_VALUE));
+                    break;
+                case "type": //$NON-NLS-1$
+                    if (kind != FormElementWriter.Kind.GROUP)
+                    {
+                        return ToolResult.error("Property 'type' is supported at creation only for " //$NON-NLS-1$
+                            + "a form Group (the group kind, e.g. Popup or Pages). Set other " //$NON-NLS-1$
+                            + "elements' types via modify_metadata.").toJson(); //$NON-NLS-1$
+                    }
+                    out.bindTarget = asString(prop.get(KEY_VALUE));
+                    break;
+                case "datapath": //$NON-NLS-1$
+                case "attribute": //$NON-NLS-1$
+                case "command": //$NON-NLS-1$
+                    out.bindTarget = asString(prop.get(KEY_VALUE));
+                    break;
+                default:
+                    return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' is not supported for a form " //$NON-NLS-1$
+                        + "element. This version applies: title (with optional language), parent " //$NON-NLS-1$
+                        + "(nest a visual item), dataPath/attribute (a Field's bound attribute), " //$NON-NLS-1$
+                        + "command (a Button's bound command), type (a Group's kind). Set other " //$NON-NLS-1$
+                        + "properties via modify_metadata.").toJson(); //$NON-NLS-1$
+            }
+        }
+        return null;
     }
 
     // ---- form-OBJECT creation (the BasicForm mdo + its renderable content Form) ------------------
@@ -767,18 +899,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Owner object is not a BM object").toJson(); //$NON-NLS-1$
         }
 
-        // The same duplicate / stale-intent precondition every other create applies (the main branch
-        // checks via resolveExisting; a 4-part form FQN resolves on the owner's forms collection).
-        // The in-transaction "Form already exists" guard below stays as the race-safety net.
-        if (FormElementWriter.findOwnedForm(owner, ref.formName) != null)
+        String existsErr = checkFormObjectNotExists(owner, ref.formName, normFqn, expectedNotExists);
+        if (existsErr != null)
         {
-            if (expectedNotExists)
-            {
-                return ToolResult.error("Precondition failed: you set expectedNotExists, but " + normFqn //$NON-NLS-1$
-                    + " already exists. Your snapshot is stale - re-read with get_metadata_objects, " //$NON-NLS-1$
-                    + "then update the existing node instead of creating a duplicate.").toJson(); //$NON-NLS-1$
-            }
-            return ToolResult.error("Node already exists: " + normFqn).toJson(); //$NON-NLS-1$
+            return existsErr;
         }
 
         // Resolve the synonym language now (needs the configuration); only when a synonym was given.
@@ -793,30 +917,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error(e.getMessage()).toJson();
         }
 
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IModelObjectFactory mdFactory = Activator.getDefault().getModelObjectFactory();
-        IModelObjectFactory formFactory = Activator.getDefault().getFormModelObjectFactory();
-        ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (v8ProjectManager == null || mdFactory == null || bmModelManager == null)
+        FormObjectServices svc = resolveFormObjectServices(project, projectName);
+        if (svc.hasError())
         {
-            return ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
-        }
-        if (fqnGenerator == null)
-        {
-            return ToolResult.error("ITopObjectFqnGenerator not available (needed to attach the content " //$NON-NLS-1$
-                + "form under its canonical FQN)").toJson(); //$NON-NLS-1$
-        }
-        IV8Project v8Project = v8ProjectManager.getProject(project);
-        if (v8Project == null)
-        {
-            return ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
-        }
-        final Version version = v8Project.getVersion();
-        IBmModel bmModel = bmModelManager.getModel(project);
-        if (bmModel == null)
-        {
-            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
+            return svc.error;
         }
 
         final long ownerBmId = ((IBmObject)owner).bmGetId();
@@ -832,7 +936,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String contentFormFqn;
         try
         {
-            contentFormFqn = BmTransactions.<String>write(bmModel, "CreateFormObject", (tx, pm) -> //$NON-NLS-1$
+            contentFormFqn = BmTransactions.<String>write(svc.bmModel, "CreateFormObject", (tx, pm) -> //$NON-NLS-1$
             {
                 EObject txOwner = (EObject)tx.getObjectById(ownerBmId);
                 if (!(txOwner instanceof MdObject))
@@ -840,8 +944,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
                 }
                 return FormElementWriter.createForm(tx, (MdObject)txOwner, formName, synonymLanguage,
-                    synonym, comment, fSetAsDefault, mdFactory, formFactory, fqnGenerator, version,
-                    russianAutoNames);
+                    synonym, comment, fSetAsDefault, svc.mdFactory, svc.formFactory, svc.fqnGenerator,
+                    svc.version, russianAutoNames);
             });
         }
         catch (Exception e)
@@ -852,6 +956,103 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         // Persist BOTH the content form's own Form.form (its FQN, generated inside the tx) and the owner
         // .mdo (which registers the new form in its <forms> and, when setAsDefault, the default-form ref).
+        List<String> dirty = formObjectDirtyFqns(contentFormFqn, ownerFqn);
+        boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(project, dirty);
+
+        return buildFormObjectResult(normFqn, formName, persisted, setAsDefault, props,
+            synonymLanguage, normReport);
+    }
+
+    /**
+     * Applies the duplicate / stale-intent precondition for a form OBJECT create (a 4-part form FQN
+     * resolves on the owner's forms collection). Side-effect-free: returns a JSON error string when
+     * the form already exists (a sharper message when {@code expectedNotExists}), or {@code null}
+     * when it does not.
+     */
+    private static String checkFormObjectNotExists(MdObject owner, String formName, String normFqn,
+        boolean expectedNotExists)
+    {
+        if (FormElementWriter.findOwnedForm(owner, formName) == null)
+        {
+            return null;
+        }
+        if (expectedNotExists)
+        {
+            return ToolResult.error("Precondition failed: you set expectedNotExists, but " + normFqn //$NON-NLS-1$
+                + " already exists. Your snapshot is stale - re-read with get_metadata_objects, " //$NON-NLS-1$
+                + "then update the existing node instead of creating a duplicate.").toJson(); //$NON-NLS-1$
+        }
+        return ToolResult.error("Node already exists: " + normFqn).toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The EDT services a form OBJECT create needs (the mdclass and form model-object factories, the
+     * top-object FQN generator, the BM model and the platform version), or a ready-to-return JSON
+     * error when any required service is unavailable.
+     */
+    private static final class FormObjectServices
+    {
+        IModelObjectFactory mdFactory;
+        IModelObjectFactory formFactory;
+        ITopObjectFqnGenerator fqnGenerator;
+        IBmModel bmModel;
+        Version version;
+        /** Non-null when resolution failed: a JSON error to return verbatim. */
+        String error;
+
+        boolean hasError()
+        {
+            return error != null;
+        }
+    }
+
+    /**
+     * Resolves the services needed to create a form OBJECT for {@code project} (named
+     * {@code projectName} for error messages), or returns a holder carrying a JSON error when any
+     * required service is unavailable. Side-effect-free.
+     */
+    private static FormObjectServices resolveFormObjectServices(IProject project, String projectName)
+    {
+        FormObjectServices svc = new FormObjectServices();
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        svc.mdFactory = Activator.getDefault().getModelObjectFactory();
+        svc.formFactory = Activator.getDefault().getFormModelObjectFactory();
+        svc.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (v8ProjectManager == null || svc.mdFactory == null || bmModelManager == null)
+        {
+            svc.error = ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
+            return svc;
+        }
+        if (svc.fqnGenerator == null)
+        {
+            svc.error = ToolResult.error("ITopObjectFqnGenerator not available (needed to attach the " //$NON-NLS-1$
+                + "content form under its canonical FQN)").toJson(); //$NON-NLS-1$
+            return svc;
+        }
+        IV8Project v8Project = v8ProjectManager.getProject(project);
+        if (v8Project == null)
+        {
+            svc.error = ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
+            return svc;
+        }
+        svc.version = v8Project.getVersion();
+        svc.bmModel = bmModelManager.getModel(project);
+        if (svc.bmModel == null)
+        {
+            svc.error = ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
+            return svc;
+        }
+        return svc;
+    }
+
+    /**
+     * Builds the force-export dirty list for a form OBJECT create: the content form's own Form.form
+     * (its FQN, generated inside the tx) and the owner .mdo (which registers the form), each when
+     * present. Side-effect-free.
+     */
+    private static List<String> formObjectDirtyFqns(String contentFormFqn, String ownerFqn)
+    {
         java.util.List<String> dirty = new java.util.ArrayList<>();
         if (contentFormFqn != null && !contentFormFqn.isEmpty())
         {
@@ -861,8 +1062,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             dirty.add(ownerFqn);
         }
-        boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(project, dirty);
+        return dirty;
+    }
 
+    /** Builds the success JSON for a created form OBJECT. Side-effect-free: pure formatting. */
+    private String buildFormObjectResult(String normFqn, String formName, boolean persisted,
+        boolean setAsDefault, Props props, String synonymLanguage, MdNameNormalizer.Report normReport)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -928,21 +1134,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String langCode = MetadataLanguageUtils.resolveLanguageCode(config, null);
 
         final String eventName = ref.name;
-        final String fProc = procName;
-        final String fCallType = callType;
+        final String[] createdKind = new String[1];
         final boolean commandOwner =
             FormElementWriter.kindForToken(ref.itemKindToken) == FormElementWriter.Kind.COMMAND;
-        final String[] createdKind = new String[1];
-
-        // For an EXTENSION event handler the most likely cause of a missing form is that the base form
-        // was never adopted into the extension, so the not-found advisory points at adopt_metadata_object.
-        String formNotFound = "Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
-            + "'Type.Object.Form.FormName' or 'CommonForm.FormName'."; //$NON-NLS-1$
-        if (extensionHandler)
-        {
-            formNotFound += " If this is a base form, adopt it into the extension first via " //$NON-NLS-1$
-                + "adopt_metadata_object."; //$NON-NLS-1$
-        }
+        final HandlerWriteSpec spec = new HandlerWriteSpec(ref, eventName, procName, version,
+            langCode, callType, commandOwner, createdKind);
+        final String formNotFound = handlerFormNotFound(normFqn, extensionHandler);
 
         final boolean persisted;
         try
@@ -950,28 +1147,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, config,
                 ref.formPath, formNotFound);
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormHandler", //$NON-NLS-1$
-                (formModel, tx) ->
-                {
-                    // Form-level handlers attach to the form root; item-level handlers
-                    // (Type.Object.Form.F.Field.Item.Handler.Event) attach to the named item; a
-                    // COMMAND ref (Type.Object.Form.F.Command.C.Handler.Action) attaches to the
-                    // form command.
-                    EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
-                    if (container == null)
-                    {
-                        throw new IllegalStateException(commandOwner
-                            ? "Form command not found: " + ref.itemName //$NON-NLS-1$
-                                + ". Create the command first, then add the handler." //$NON-NLS-1$
-                            : "Form item not found: " + ref.itemName //$NON-NLS-1$
-                                + ". Create the item first, then add the handler."); //$NON-NLS-1$
-                    }
-                    String err = FormElementWriter.createHandler(container, eventName, fProc, version,
-                        langCode, fCallType, createdKind);
-                    if (err != null)
-                    {
-                        throw new IllegalStateException(err);
-                    }
-                });
+                (formModel, tx) -> writeHandler(formModel, spec));
         }
         catch (Exception e)
         {
@@ -984,8 +1160,83 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create form handler: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        return buildHandlerResult(ref, normFqn, eventName, fProc, callType, extensionHandler,
-            createdKind[0], persisted);
+        return buildHandlerResult(new HandlerResultInfo(ref, normFqn, eventName, procName, callType,
+            extensionHandler, createdKind[0], persisted));
+    }
+
+    /**
+     * Immutable inputs for writing a form event handler inside the write transaction, grouping the
+     * arguments so {@link #writeHandler(EObject, HandlerWriteSpec)} stays within the parameter limit.
+     */
+    private static final class HandlerWriteSpec
+    {
+        final FormElementWriter.FormMemberRef ref;
+        final String eventName;
+        final String procName;
+        final Version version;
+        final String langCode;
+        final String callType;
+        final boolean commandOwner;
+        final String[] createdKind;
+
+        HandlerWriteSpec(FormElementWriter.FormMemberRef ref, String eventName, String procName,
+            Version version, String langCode, String callType, boolean commandOwner,
+            String[] createdKind)
+        {
+            this.ref = ref;
+            this.eventName = eventName;
+            this.procName = procName;
+            this.version = version;
+            this.langCode = langCode;
+            this.callType = callType;
+            this.commandOwner = commandOwner;
+            this.createdKind = createdKind;
+        }
+    }
+
+    /**
+     * Builds the "form not found" advisory for a handler create. For an EXTENSION event handler the
+     * most likely cause is that the base form was never adopted, so the message points at
+     * adopt_metadata_object. Side-effect-free.
+     */
+    private static String handlerFormNotFound(String normFqn, boolean extensionHandler)
+    {
+        String formNotFound = "Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
+            + "'Type.Object.Form.FormName' or 'CommonForm.FormName'."; //$NON-NLS-1$
+        if (extensionHandler)
+        {
+            formNotFound += " If this is a base form, adopt it into the extension first via " //$NON-NLS-1$
+                + "adopt_metadata_object."; //$NON-NLS-1$
+        }
+        return formNotFound;
+    }
+
+    /**
+     * Resolves the handler's container (form root, the named item, or the form command) on the
+     * re-fetched content form and writes the handler. Form-level handlers attach to the form root;
+     * item-level handlers ({@code ...Form.F.Field.Item.Handler.Event}) to the named item; a COMMAND
+     * ref ({@code ...Form.F.Command.C.Handler.Action}) to the form command. Performs the BM mutation
+     * inside the write transaction.
+     *
+     * @throws IllegalStateException if the container is missing or the writer rejects the event
+     */
+    private static void writeHandler(EObject formModel, HandlerWriteSpec spec)
+    {
+        EObject container = FormElementWriter.resolveHandlerContainer(formModel, spec.ref);
+        if (container == null)
+        {
+            throw new IllegalStateException(spec.commandOwner
+                ? "Form command not found: " + spec.ref.itemName //$NON-NLS-1$
+                    + ". Create the command first, then add the handler." //$NON-NLS-1$
+                : "Form item not found: " + spec.ref.itemName //$NON-NLS-1$
+                    + ". Create the item first, then add the handler."); //$NON-NLS-1$
+        }
+        String err = FormElementWriter.createHandler(container, spec.eventName, spec.procName,
+            spec.version, spec.langCode, spec.callType, spec.createdKind);
+        if (err != null)
+        {
+            throw new IllegalStateException(err);
+        }
     }
 
     /**
@@ -1019,38 +1270,68 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Immutable description of a created form event handler, grouping the result inputs so
+     * {@link #buildHandlerResult(HandlerResultInfo)} takes one holder instead of a long argument
+     * list.
+     */
+    private static final class HandlerResultInfo
+    {
+        final FormElementWriter.FormMemberRef ref;
+        final String normFqn;
+        final String eventName;
+        final String fProc;
+        final String callType;
+        final boolean extensionHandler;
+        /** The kind reported by the writer ({@code null} =&gt; {@code "EventHandler"}). */
+        final String createdKind;
+        final boolean persisted;
+
+        HandlerResultInfo(FormElementWriter.FormMemberRef ref, String normFqn, String eventName,
+            String fProc, String callType, boolean extensionHandler, String createdKind,
+            boolean persisted)
+        {
+            this.ref = ref;
+            this.normFqn = normFqn;
+            this.eventName = eventName;
+            this.fProc = fProc;
+            this.callType = callType;
+            this.extensionHandler = extensionHandler;
+            this.createdKind = createdKind;
+            this.persisted = persisted;
+        }
+    }
+
+    /**
      * Builds the success JSON for a created form event handler (location string, message and result
      * fields). Side-effect-free: pure formatting of the already-applied change.
-     *
-     * @param createdKind the kind reported by the writer ({@code null} =&gt; {@code "EventHandler"})
      */
-    private String buildHandlerResult(FormElementWriter.FormMemberRef ref, String normFqn,
-        String eventName, String fProc, String callType, boolean extensionHandler,
-        String createdKind, boolean persisted)
+    private String buildHandlerResult(HandlerResultInfo info)
     {
-        String location = ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath; //$NON-NLS-1$
-        String effectiveProc = (fProc == null || fProc.isEmpty()) ? eventName : fProc;
+        String location = info.ref.isItemLevel()
+            ? info.ref.formPath + "." + info.ref.itemName : info.ref.formPath; //$NON-NLS-1$
+        String effectiveProc =
+            (info.fProc == null || info.fProc.isEmpty()) ? info.eventName : info.fProc;
         String message;
-        if (extensionHandler)
+        if (info.extensionHandler)
         {
-            message = "Created extension (" + callType + ") handler for event '" + eventName //$NON-NLS-1$ //$NON-NLS-2$
+            message = "Created extension (" + info.callType + ") handler for event '" + info.eventName //$NON-NLS-1$ //$NON-NLS-2$
                 + "' on " + location + ". Add the BSL procedure '" + effectiveProc //$NON-NLS-1$ //$NON-NLS-2$
                 + "' to the extension form module via write_module_source."; //$NON-NLS-1$
         }
         else
         {
-            message = "Created handler for event '" + eventName + "' on " + location; //$NON-NLS-1$ //$NON-NLS-2$
+            message = "Created handler for event '" + info.eventName + "' on " + location; //$NON-NLS-1$ //$NON-NLS-2$
         }
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put("fqn", normFqn) //$NON-NLS-1$
-            .put("kind", createdKind != null ? createdKind : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
-            .put("name", eventName) //$NON-NLS-1$
-            .put(KEY_PERSISTED, persisted)
+            .put("fqn", info.normFqn) //$NON-NLS-1$
+            .put("kind", info.createdKind != null ? info.createdKind : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("name", info.eventName) //$NON-NLS-1$
+            .put(KEY_PERSISTED, info.persisted)
             .put(McpKeys.MESSAGE, message);
-        if (extensionHandler)
+        if (info.extensionHandler)
         {
-            result.put(KEY_CALL_TYPE, callType);
+            result.put(KEY_CALL_TYPE, info.callType);
         }
         return result.toJson();
     }
@@ -1074,6 +1355,58 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     // ---- helpers --------------------------------------------------------------------------------
+
+    /**
+     * The EDT services a BM-backed create needs (the model-object factory, the BM model, the platform
+     * version), or a ready-to-return JSON error when any is unavailable. Resolved once by
+     * {@link #resolveBmContext} so the creation methods stay free of the repeated service-lookup
+     * guards.
+     */
+    private static final class BmContext
+    {
+        IModelObjectFactory factory;
+        IBmModel bmModel;
+        Version version;
+        /** Non-null when resolution failed: a JSON error to return verbatim. */
+        String error;
+
+        boolean hasError()
+        {
+            return error != null;
+        }
+    }
+
+    /**
+     * Resolves the model-object factory, BM model and platform version for {@code project} (named
+     * {@code projectName} for error messages), or returns a holder carrying a JSON error when any
+     * service is unavailable. Side-effect-free.
+     */
+    private static BmContext resolveBmContext(IProject project, String projectName)
+    {
+        BmContext ctx = new BmContext();
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        ctx.factory = Activator.getDefault().getModelObjectFactory();
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (v8ProjectManager == null || ctx.factory == null || bmModelManager == null)
+        {
+            ctx.error = ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
+            return ctx;
+        }
+        IV8Project v8Project = v8ProjectManager.getProject(project);
+        if (v8Project == null)
+        {
+            ctx.error = ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
+            return ctx;
+        }
+        ctx.version = v8Project.getVersion();
+        ctx.bmModel = bmModelManager.getModel(project);
+        if (ctx.bmModel == null)
+        {
+            ctx.error = ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
+            return ctx;
+        }
+        return ctx;
+    }
 
     /** The supported, parsed properties. */
     private static final class Props
@@ -1179,33 +1512,62 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return parts.length >= 2 ? parts[0] + "." + parts[1] : normFqn; //$NON-NLS-1$
     }
 
-    private String success(String fqn, EClass kind, String name, boolean persisted, Props props,
-        String synonymLanguage, TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
+    /**
+     * Immutable description of a successfully created mdclass node, grouping the success-result
+     * inputs so {@link #success(SuccessInfo)} takes one holder instead of a long argument list.
+     */
+    private static final class SuccessInfo
+    {
+        final String fqn;
+        final EClass kind;
+        final String name;
+        final boolean persisted;
+        final Props props;
+        final String synonymLanguage;
+        /** Type-specific options to echo back; {@code null} for a member create. */
+        final TypeSpecific typeSpecific;
+        final MdNameNormalizer.Report normReport;
+
+        SuccessInfo(String fqn, EClass kind, String name, boolean persisted, Props props,
+            String synonymLanguage, TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
+        {
+            this.fqn = fqn;
+            this.kind = kind;
+            this.name = name;
+            this.persisted = persisted;
+            this.props = props;
+            this.synonymLanguage = synonymLanguage;
+            this.typeSpecific = typeSpecific;
+            this.normReport = normReport;
+        }
+    }
+
+    private String success(SuccessInfo info)
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put("fqn", fqn) //$NON-NLS-1$
-            .put("kind", kind != null ? kind.getName() : null) //$NON-NLS-1$
-            .put("name", name) //$NON-NLS-1$
-            .put(KEY_PERSISTED, persisted);
-        if (props.synonym != null && !props.synonym.isEmpty() && synonymLanguage != null)
+            .put("fqn", info.fqn) //$NON-NLS-1$
+            .put("kind", info.kind != null ? info.kind.getName() : null) //$NON-NLS-1$
+            .put("name", info.name) //$NON-NLS-1$
+            .put(KEY_PERSISTED, info.persisted);
+        if (info.props.synonym != null && !info.props.synonym.isEmpty() && info.synonymLanguage != null)
         {
-            result.put(KEY_SYNONYM, props.synonym).put(KEY_LANGUAGE, synonymLanguage);
+            result.put(KEY_SYNONYM, info.props.synonym).put(KEY_LANGUAGE, info.synonymLanguage);
         }
-        if (typeSpecific != null)
+        if (info.typeSpecific != null)
         {
-            if (typeSpecific.commonModuleFlags != null)
+            if (info.typeSpecific.commonModuleFlags != null)
             {
-                result.put(KEY_COMMON_MODULE_KIND, typeSpecific.commonModuleFlags.kind.token());
+                result.put(KEY_COMMON_MODULE_KIND, info.typeSpecific.commonModuleFlags.kind.token());
             }
-            if (typeSpecific.xdtoNamespace != null)
+            if (info.typeSpecific.xdtoNamespace != null)
             {
-                result.put(KEY_TARGET_NAMESPACE, typeSpecific.xdtoNamespace);
+                result.put(KEY_TARGET_NAMESPACE, info.typeSpecific.xdtoNamespace);
             }
         }
-        normReport.addTo(result);
+        info.normReport.addTo(result);
         return result
-            .put(McpKeys.MESSAGE, "Created " + fqn) //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, "Created " + info.fqn) //$NON-NLS-1$
             .toJson();
     }
 
@@ -1403,20 +1765,49 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final boolean privileged;
         final ReturnValuesReuse returnValuesReuse;
 
-        private CommonModuleFlags(CommonModuleKind kind, boolean clientManagedApplication,
-            boolean clientOrdinaryApplication, boolean server, boolean serverCall,
-            boolean externalConnection, boolean global, boolean privileged,
-            ReturnValuesReuse returnValuesReuse)
+        /**
+         * Immutable bundle of the eight CommonModule flag features, in the canonical order
+         * clientManaged, clientOrdinary, server, serverCall, externalConnection, global, privileged,
+         * reuse. Groups them into a single value so the {@link CommonModuleFlags} constructor takes
+         * one holder instead of a long boolean argument list.
+         */
+        static final class FlagSet
+        {
+            final boolean clientManagedApplication;
+            final boolean clientOrdinaryApplication;
+            final boolean server;
+            final boolean serverCall;
+            final boolean externalConnection;
+            final boolean global;
+            final boolean privileged;
+            final ReturnValuesReuse returnValuesReuse;
+
+            FlagSet(boolean clientManagedApplication, boolean clientOrdinaryApplication,
+                boolean server, boolean serverCall, boolean externalConnection, boolean global,
+                boolean privileged, ReturnValuesReuse returnValuesReuse)
+            {
+                this.clientManagedApplication = clientManagedApplication;
+                this.clientOrdinaryApplication = clientOrdinaryApplication;
+                this.server = server;
+                this.serverCall = serverCall;
+                this.externalConnection = externalConnection;
+                this.global = global;
+                this.privileged = privileged;
+                this.returnValuesReuse = returnValuesReuse;
+            }
+        }
+
+        private CommonModuleFlags(CommonModuleKind kind, FlagSet flags)
         {
             this.kind = kind;
-            this.clientManagedApplication = clientManagedApplication;
-            this.clientOrdinaryApplication = clientOrdinaryApplication;
-            this.server = server;
-            this.serverCall = serverCall;
-            this.externalConnection = externalConnection;
-            this.global = global;
-            this.privileged = privileged;
-            this.returnValuesReuse = returnValuesReuse;
+            this.clientManagedApplication = flags.clientManagedApplication;
+            this.clientOrdinaryApplication = flags.clientOrdinaryApplication;
+            this.server = flags.server;
+            this.serverCall = flags.serverCall;
+            this.externalConnection = flags.externalConnection;
+            this.global = flags.global;
+            this.privileged = flags.privileged;
+            this.returnValuesReuse = flags.returnValuesReuse;
         }
 
         void applyTo(CommonModule module)
@@ -1491,10 +1882,21 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         private static void validateModifiers(CommonModuleKind kind, boolean serverCall,
             boolean privileged, ReturnValuesReuse reuse)
         {
+            validateServerCall(kind, serverCall);
+            validatePrivileged(kind, serverCall, privileged, reuse);
+            validateReuse(kind, reuse);
+        }
+
+        /**
+         * Rejects {@code serverCall} on a non-server kind. Side-effect-free.
+         *
+         * @throws IllegalArgumentException if serverCall is set on a kind that is not server-side
+         */
+        private static void validateServerCall(CommonModuleKind kind, boolean serverCall)
+        {
             boolean serverSideKind = kind == CommonModuleKind.SERVER
                 || kind == CommonModuleKind.SERVER_CALL
                 || kind == CommonModuleKind.CLIENT_SERVER;
-
             if (serverCall && !serverSideKind)
             {
                 // Covers every non-server kind, including 'Global' (a global module is a
@@ -1507,6 +1909,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         ? " A 'Global' module is a client module and cannot be a server-call target." //$NON-NLS-1$
                         : "")); //$NON-NLS-1$
             }
+        }
+
+        /**
+         * Rejects {@code privileged} unless it is the lone modifier on the {@code Server} kind.
+         * Side-effect-free.
+         *
+         * @throws IllegalArgumentException if privileged is combined with a non-Server kind,
+         *             serverCall or returnValuesReuse
+         */
+        private static void validatePrivileged(CommonModuleKind kind, boolean serverCall,
+            boolean privileged, ReturnValuesReuse reuse)
+        {
             if (privileged && kind != CommonModuleKind.SERVER)
             {
                 throw new IllegalArgumentException("privileged requires the 'Server' kind " //$NON-NLS-1$
@@ -1521,28 +1935,37 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 throw new IllegalArgumentException("privileged is not valid together with returnValuesReuse."); //$NON-NLS-1$
             }
+        }
 
-            // returnValuesReuse only produces a validator-accepted module when it is either DontUse,
-            // or DuringSession on a kind that has a cached variant (Server, ServerCall, ClientManaged,
-            // ClientOrdinary). DuringRequest and reuse on Global/ClientServer have no canonical combo.
-            if (reuse != ReturnValuesReuse.DONT_USE)
+        /**
+         * Rejects a {@code returnValuesReuse} that has no validator-accepted module: only DontUse,
+         * or DuringSession on a kind with a cached variant (Server, ServerCall, ClientManaged,
+         * ClientOrdinary), is allowed. DuringRequest and reuse on Global/ClientServer have no
+         * canonical combo. Side-effect-free.
+         *
+         * @throws IllegalArgumentException if the reuse/kind combination has no canonical combo
+         */
+        private static void validateReuse(CommonModuleKind kind, ReturnValuesReuse reuse)
+        {
+            if (reuse == ReturnValuesReuse.DONT_USE)
             {
-                if (reuse == ReturnValuesReuse.DURING_REQUEST)
-                {
-                    throw new IllegalArgumentException("returnValuesReuse 'DuringRequest' has no " //$NON-NLS-1$
-                        + "standards-compliant common-module combination; use 'DuringSession' for a " //$NON-NLS-1$
-                        + "cached module, or 'DontUse'."); //$NON-NLS-1$
-                }
-                boolean reuseKind = kind == CommonModuleKind.SERVER
-                    || kind == CommonModuleKind.SERVER_CALL
-                    || kind == CommonModuleKind.CLIENT_MANAGED
-                    || kind == CommonModuleKind.CLIENT_ORDINARY;
-                if (!reuseKind)
-                {
-                    throw new IllegalArgumentException("returnValuesReuse 'DuringSession' is only valid " //$NON-NLS-1$
-                        + "for the 'Server', 'ServerCall', 'ClientManaged' or 'ClientOrdinary' kinds; " //$NON-NLS-1$
-                        + "it is not valid for kind '" + kind.token() + "'."); //$NON-NLS-1$ //$NON-NLS-2$
-                }
+                return;
+            }
+            if (reuse == ReturnValuesReuse.DURING_REQUEST)
+            {
+                throw new IllegalArgumentException("returnValuesReuse 'DuringRequest' has no " //$NON-NLS-1$
+                    + "standards-compliant common-module combination; use 'DuringSession' for a " //$NON-NLS-1$
+                    + "cached module, or 'DontUse'."); //$NON-NLS-1$
+            }
+            boolean reuseKind = kind == CommonModuleKind.SERVER
+                || kind == CommonModuleKind.SERVER_CALL
+                || kind == CommonModuleKind.CLIENT_MANAGED
+                || kind == CommonModuleKind.CLIENT_ORDINARY;
+            if (!reuseKind)
+            {
+                throw new IllegalArgumentException("returnValuesReuse 'DuringSession' is only valid " //$NON-NLS-1$
+                    + "for the 'Server', 'ServerCall', 'ClientManaged' or 'ClientOrdinary' kinds; " //$NON-NLS-1$
+                    + "it is not valid for kind '" + kind.token() + "'."); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
 
@@ -1556,6 +1979,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         private static CommonModuleFlags toCanonicalFlags(CommonModuleKind kind, boolean serverCall,
             boolean privileged, boolean cached)
         {
+            ReturnValuesReuse reuse =
+                cached ? ReturnValuesReuse.DURING_SESSION : ReturnValuesReuse.DONT_USE;
             switch (kind)
             {
             case SERVER:
@@ -1563,34 +1988,34 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 if (privileged)
                 {
                     // SERVER_FULL_ACCESS: server-only, privileged.
-                    return new CommonModuleFlags(kind, false, false, true, false, false, false, true,
-                        ReturnValuesReuse.DONT_USE);
+                    return new CommonModuleFlags(kind, new FlagSet(false, false, true, false, false,
+                        false, true, ReturnValuesReuse.DONT_USE));
                 }
                 if (serverCall)
                 {
                     // SERVER_CALL / SERVER_CALL_CACHED: server + server call, no client flags.
-                    return new CommonModuleFlags(kind, false, false, true, true, false, false, false,
-                        cached ? ReturnValuesReuse.DURING_SESSION : ReturnValuesReuse.DONT_USE);
+                    return new CommonModuleFlags(kind, new FlagSet(false, false, true, true, false,
+                        false, false, reuse));
                 }
                 // SERVER / SERVER_CACHED: client ordinary + external connection + server.
-                return new CommonModuleFlags(kind, false, true, true, false, true, false, false,
-                    cached ? ReturnValuesReuse.DURING_SESSION : ReturnValuesReuse.DONT_USE);
+                return new CommonModuleFlags(kind, new FlagSet(false, true, true, false, true, false,
+                    false, reuse));
 
             case CLIENT_MANAGED:
             case CLIENT_ORDINARY:
                 // CLIENT / CLIENT_CACHED: both client flags set (the canonical client module).
-                return new CommonModuleFlags(kind, true, true, false, false, false, false, false,
-                    cached ? ReturnValuesReuse.DURING_SESSION : ReturnValuesReuse.DONT_USE);
+                return new CommonModuleFlags(kind, new FlagSet(true, true, false, false, false, false,
+                    false, reuse));
 
             case CLIENT_SERVER:
                 // CLIENT_SERVER: both client flags + server + external connection.
-                return new CommonModuleFlags(kind, true, true, true, false, true, false, false,
-                    ReturnValuesReuse.DONT_USE);
+                return new CommonModuleFlags(kind, new FlagSet(true, true, true, false, true, false,
+                    false, ReturnValuesReuse.DONT_USE));
 
             case GLOBAL:
                 // CLIENT_GLOBAL: both client flags + global.
-                return new CommonModuleFlags(kind, true, true, false, false, false, true, false,
-                    ReturnValuesReuse.DONT_USE);
+                return new CommonModuleFlags(kind, new FlagSet(true, true, false, false, false, true,
+                    false, ReturnValuesReuse.DONT_USE));
 
             default:
                 throw new IllegalArgumentException("Unsupported commonModuleKind: " + kind.token()); //$NON-NLS-1$

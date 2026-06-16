@@ -472,6 +472,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return moveFormItem(ctx, normFqn, ref, properties);
         }
 
+        // Ordinary property modify: the remaining (non-handler, non-command, non-move) case.
+        return modifyFormMemberProperties(ctx, normFqn, ref, properties, normReport);
+    }
+
+    /**
+     * Modifies the ordinary (non-handler, non-command, non-move) properties of a form member, the
+     * remaining case of {@link #modifyFormMember} once those three structural branches are ruled out.
+     * Resolves the platform version, then validates + applies every property inside ONE BM write
+     * transaction (the member is re-navigated by name inside the tx; a validation failure throws
+     * {@link FormValidationException} carrying its JSON error BEFORE any {@code eSet}, so the tx rolls
+     * back with no partial mutation) and force-exports the CONTENT form to disk. Extracted verbatim
+     * from {@link #modifyFormMember}: the BM write transaction (apply loop + forceExport via
+     * {@code writeEditableForm}) stays INLINE here, and the early-returns return the SAME JSON in the
+     * SAME case.
+     */
+    private String modifyFormMemberProperties(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
+        MdNameNormalizer.Report normReport)
+    {
         Configuration config = ctx.config;
         IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
         IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
@@ -1283,6 +1302,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     // ---- helpers --------------------------------------------------------------------------------
 
+    /**
+     * The STYLE_VALUE-only binding of a {@link PreparedChange}: the sibling {@code type} feature
+     * (Color / Font) and the {@link StyleElementType} to set on it alongside the value, so the style
+     * item's type stays consistent with the value it holds. A parameter-object that keeps the
+     * {@link PreparedChange} constructor below the 7-parameter bar; {@code null} for every non-style
+     * change. Carries no behaviour.
+     */
+    private static final class StyleBinding
+    {
+        private final EStructuralFeature typeFeature;
+        private final StyleElementType type;
+
+        StyleBinding(EStructuralFeature typeFeature, StyleElementType type)
+        {
+            this.typeFeature = typeFeature;
+            this.type = type;
+        }
+    }
+
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
     private static final class PreparedChange
     {
@@ -1295,14 +1333,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         private final String localizedValue;
         /** For a REFERENCE: the target's bmId. For a MANY_REFERENCE: the targets' bmIds in order. */
         private final List<Long> referenceBmIds;
-        /** For a STYLE_VALUE: the sibling `type` feature (Color / Font), set alongside the value. */
-        private final EStructuralFeature styleTypeFeature;
-        /** For a STYLE_VALUE: the StyleElementType to set on {@link #styleTypeFeature}. */
-        private final StyleElementType styleType;
+        /** For a STYLE_VALUE: the sibling `type` feature + StyleElementType; {@code null} otherwise. */
+        private final StyleBinding styleBinding;
 
         private PreparedChange(EStructuralFeature feature, Kind kind, Object scalarValue,
             String language, String localizedValue, List<Long> referenceBmIds,
-            EStructuralFeature styleTypeFeature, StyleElementType styleType)
+            StyleBinding styleBinding)
         {
             this.feature = feature;
             this.kind = kind;
@@ -1310,30 +1346,29 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             this.localizedLanguage = language;
             this.localizedValue = localizedValue;
             this.referenceBmIds = referenceBmIds;
-            this.styleTypeFeature = styleTypeFeature;
-            this.styleType = styleType;
+            this.styleBinding = styleBinding;
         }
 
         static PreparedChange scalar(EStructuralFeature feature, Object value)
         {
-            return new PreparedChange(feature, Kind.SCALAR, value, null, null, null, null, null);
+            return new PreparedChange(feature, Kind.SCALAR, value, null, null, null, null);
         }
 
         static PreparedChange localized(EStructuralFeature feature, String language, String value)
         {
-            return new PreparedChange(feature, Kind.LOCALIZED, null, language, value, null, null, null);
+            return new PreparedChange(feature, Kind.LOCALIZED, null, language, value, null, null);
         }
 
         static PreparedChange reference(EStructuralFeature feature, long targetBmId)
         {
             return new PreparedChange(feature, Kind.REFERENCE, null, null, null,
-                java.util.Collections.singletonList(targetBmId), null, null);
+                java.util.Collections.singletonList(targetBmId), null);
         }
 
         static PreparedChange manyReference(EStructuralFeature feature, List<Long> targetBmIds)
         {
             return new PreparedChange(feature, Kind.MANY_REFERENCE, null, null, null, targetBmIds,
-                null, null);
+                null);
         }
 
         /**
@@ -1346,7 +1381,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             Value styleValue, StyleElementType type)
         {
             return new PreparedChange(valueFeature, Kind.STYLE_VALUE, styleValue, null, null, null,
-                typeFeature, type);
+                new StyleBinding(typeFeature, type));
         }
 
         String featureName()
@@ -1392,9 +1427,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     // Keep the style item's `type` consistent with the value it now holds (Color / Font),
                     // then set the freshly-built (detached) mcore Value as its containment `value`.
-                    if (styleTypeFeature != null && styleType != null)
+                    if (styleBinding != null && styleBinding.typeFeature != null
+                        && styleBinding.type != null)
                     {
-                        target.eSet(styleTypeFeature, styleType);
+                        target.eSet(styleBinding.typeFeature, styleBinding.type);
                     }
                     target.eSet(feature, scalarValue);
                     return;

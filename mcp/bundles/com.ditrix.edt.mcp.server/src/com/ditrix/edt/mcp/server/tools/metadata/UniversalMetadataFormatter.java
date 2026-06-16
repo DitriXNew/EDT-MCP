@@ -633,63 +633,50 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     {
         addSectionHeader(sb, name);
         startTable(sb, "Index", "Characteristic Types", "Key Field", "Types Filter Field", "Types Filter Value", "Characteristic Values", "Object Field", "Type Field", "Value Field"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
-        
+
         int index = 0;
         for (Object item : items)
         {
             if (item instanceof CharacteristicsDescription)
             {
-                CharacteristicsDescription charDesc = (CharacteristicsDescription) item;
-                
-                // CharacteristicTypes (MdObject)
-                String typesSource = DASH;
-                if (charDesc.getCharacteristicTypes() != null)
-                {
-                    typesSource = formatEObjectReference(charDesc.getCharacteristicTypes());
-                }
-                
-                // KeyField (Field)
-                String keyField = charDesc.getKeyField() != null ? formatEObjectReference(charDesc.getKeyField()) : DASH;
-                
-                // TypesFilterField (Field)
-                String typesFilterField = charDesc.getTypesFilterField() != null ? formatEObjectReference(charDesc.getTypesFilterField()) : DASH;
-                
-                // TypesFilterValue (Value)
-                String filterValue = DASH;
-                if (charDesc.getTypesFilterValue() != null)
-                {
-                    filterValue = formatEObjectReference(charDesc.getTypesFilterValue());
-                }
-                
-                // CharacteristicValues (MdObject) 
-                String valuesSource = DASH;
-                if (charDesc.getCharacteristicValues() != null)
-                {
-                    valuesSource = formatEObjectReference(charDesc.getCharacteristicValues());
-                }
-                
-                // ObjectField (Field)
-                String objectField = charDesc.getObjectField() != null ? formatEObjectReference(charDesc.getObjectField()) : DASH;
-                
-                // TypeField (Field)
-                String typeField = charDesc.getTypeField() != null ? formatEObjectReference(charDesc.getTypeField()) : DASH;
-                
-                // ValueField (Field)
-                String valueField = charDesc.getValueField() != null ? formatEObjectReference(charDesc.getValueField()) : DASH;
-                
-                addTableRow(sb, 
-                    String.valueOf(index++),
-                    typesSource,
-                    keyField,
-                    typesFilterField,
-                    filterValue,
-                    valuesSource,
-                    objectField,
-                    typeField,
-                    valueField
-                );
+                appendCharacteristicRow(sb, (CharacteristicsDescription) item, index++);
             }
         }
+    }
+
+    /**
+     * Appends one table row for a single {@link CharacteristicsDescription}. Each reference cell is
+     * rendered via {@link #refOrDash(EObject)} (a {@code null} reference becomes {@link #DASH}); the
+     * column order matches the header in {@link #formatCharacteristicsCollection}. Behaviour-identical
+     * to the former inline body.
+     *
+     * @param sb       output buffer
+     * @param charDesc the characteristics description to render
+     * @param index    the 0-based row index shown in the first column
+     */
+    private void appendCharacteristicRow(StringBuilder sb, CharacteristicsDescription charDesc, int index)
+    {
+        addTableRow(sb,
+            String.valueOf(index),
+            refOrDash(charDesc.getCharacteristicTypes()),
+            refOrDash(charDesc.getKeyField()),
+            refOrDash(charDesc.getTypesFilterField()),
+            refOrDash(charDesc.getTypesFilterValue()),
+            refOrDash(charDesc.getCharacteristicValues()),
+            refOrDash(charDesc.getObjectField()),
+            refOrDash(charDesc.getTypeField()),
+            refOrDash(charDesc.getValueField())
+        );
+    }
+
+    /**
+     * Renders an {@link EObject} reference cell: {@link #formatEObjectReference(EObject)} when present,
+     * otherwise {@link #DASH}. Mirrors the original per-field {@code x != null ? format(x) : DASH}
+     * guard so empty references keep showing a dash.
+     */
+    private String refOrDash(EObject ref)
+    {
+        return ref != null ? formatEObjectReference(ref) : DASH;
     }
     
     /**
