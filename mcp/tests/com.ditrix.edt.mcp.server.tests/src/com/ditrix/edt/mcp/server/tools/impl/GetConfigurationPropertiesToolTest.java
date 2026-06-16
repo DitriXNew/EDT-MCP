@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 import org.junit.Test;
 
@@ -92,7 +93,7 @@ public class GetConfigurationPropertiesToolTest
         if (requiredIdx >= 0)
         {
             String tail = schema.substring(requiredIdx);
-            assertTrue("projectName must NOT be required", !tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("projectName must NOT be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 

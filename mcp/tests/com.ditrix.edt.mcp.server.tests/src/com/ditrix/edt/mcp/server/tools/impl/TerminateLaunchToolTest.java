@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -129,8 +130,8 @@ public class TerminateLaunchToolTest
         assertTrue("file name should derive from config name",
             name.startsWith("terminate-") && name.endsWith(".md"));
         // Should be sanitised — no slashes or spaces in the middle
-        assertTrue("file name should be sanitised", !name.contains(" "));
-        assertTrue("file name should be sanitised", !name.contains("/"));
+        assertFalse("file name should be sanitised", name.contains(" "));
+        assertFalse("file name should be sanitised", name.contains("/"));
     }
 
     @Test

@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -80,7 +81,7 @@ public class RevalidateObjectsToolTest
         String tail = schema.substring(requiredIdx);
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         // The objects filter is optional (empty/absent = full-project revalidation).
-        assertTrue("objects must NOT be required", !tail.contains("\"objects\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("objects must NOT be required", tail.contains("\"objects\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -87,8 +88,8 @@ public class GetSubsystemContentToolTest
         String requiredBlock = schema.substring(open, close + 1);
         assertTrue("projectName must be required", requiredBlock.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("subsystemFqn must be required", requiredBlock.contains("\"subsystemFqn\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("recursive must NOT be required", !requiredBlock.contains("\"recursive\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("language must NOT be required", !requiredBlock.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("recursive must NOT be required", requiredBlock.contains("\"recursive\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("language must NOT be required", requiredBlock.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

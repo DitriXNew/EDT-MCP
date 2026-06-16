@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -79,7 +80,7 @@ public class GetObjectsByTagsToolTest
         String requiredBlock = schema.substring(open, close + 1);
         assertTrue("projectName must be required", requiredBlock.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("tags must be required", requiredBlock.contains("\"tags\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("limit must NOT be required", !requiredBlock.contains("\"limit\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("limit must NOT be required", requiredBlock.contains("\"limit\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== Argument validation (no live tag store needed) ====================

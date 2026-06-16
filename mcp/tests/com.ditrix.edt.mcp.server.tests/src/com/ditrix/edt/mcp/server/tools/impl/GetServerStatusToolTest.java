@@ -13,7 +13,6 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
-import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;

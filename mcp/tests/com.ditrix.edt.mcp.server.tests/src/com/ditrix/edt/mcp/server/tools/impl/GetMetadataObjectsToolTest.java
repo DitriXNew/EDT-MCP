@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -109,9 +110,9 @@ public class GetMetadataObjectsToolTest
         assertTrue("projectName must be required", requiredBlock.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("metadataType must NOT be required", //$NON-NLS-1$
             !requiredBlock.contains("\"metadataType\"")); //$NON-NLS-1$
-        assertTrue("nameFilter must NOT be required", !requiredBlock.contains("\"nameFilter\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("limit must NOT be required", !requiredBlock.contains("\"limit\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("language must NOT be required", !requiredBlock.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nameFilter must NOT be required", requiredBlock.contains("\"nameFilter\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("limit must NOT be required", requiredBlock.contains("\"limit\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("language must NOT be required", requiredBlock.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== Metadata: output schema ====================
