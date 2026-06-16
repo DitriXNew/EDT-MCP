@@ -242,7 +242,7 @@ public final class UpdateChecker
         if (responseCode != HttpURLConnection.HTTP_OK)
         {
             Activator.logInfo("EDT MCP Server update check: GitHub API returned HTTP " + responseCode); //$NON-NLS-1$
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         StringBuilder sb = new StringBuilder();
@@ -283,7 +283,7 @@ public final class UpdateChecker
                 return new String[] { tagName, body, htmlUrl };
             }
         }
-        return null;
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
 
     /**

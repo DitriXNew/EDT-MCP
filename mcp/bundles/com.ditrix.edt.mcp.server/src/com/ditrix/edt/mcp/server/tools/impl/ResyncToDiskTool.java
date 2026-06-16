@@ -228,7 +228,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // Configuration.mdo, so the destructive step must be an explicit opt-in, never
         // a side effect of a diagnostic run.
         boolean cleanDangling = JsonUtils.extractBooleanArgument(params, KEY_CLEAN_DANGLING_REFERENCES, false);
-        // Default FALSE: only the objects whose .mdo is actually missing are exported;
+        // Default FALSE: only the objects whose .mdo is actually missing are exported; // NOSONAR explanatory comment, not commented-out code
         // true re-exports everything (a full disk refresh, slow on the UI thread).
         boolean fullExport = JsonUtils.extractBooleanArgument(params, KEY_FULL_EXPORT, false);
 
@@ -528,7 +528,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
 
         // Detection (and, when remove=true, mutation) run inside one BM write task so
         // the same transaction that observes the proxies also removes them atomically.
-        // The task body only reports whether it removed anything IN the transaction;
+        // The task body only reports whether it removed anything IN the transaction; // NOSONAR explanatory comment, not commented-out code
         // the removedFromModel claim is made by runRemovalWriteTask AFTER
         // BmTransactions.write returned, i.e. only once the transaction actually
         // committed - a failed commit must not be reported as "Removed N".

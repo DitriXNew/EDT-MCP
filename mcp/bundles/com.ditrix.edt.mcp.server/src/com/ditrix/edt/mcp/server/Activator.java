@@ -64,7 +64,7 @@ public class Activator extends AbstractUIPlugin
     public void start(BundleContext context) throws Exception
     {
         super.start(context);
-        plugin = this;
+        plugin = this; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
         mcpServer = new McpServer();
 
         // In Tycho headless test runtime, avoid eager workspace/UI/platform initialization.
@@ -105,7 +105,7 @@ public class Activator extends AbstractUIPlugin
         orchestrator.stop(isHeadless());
 
         logInfo("EDT MCP Server plugin stopped"); //$NON-NLS-1$
-        plugin = null;
+        plugin = null; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
         super.stop(context);
     }
 

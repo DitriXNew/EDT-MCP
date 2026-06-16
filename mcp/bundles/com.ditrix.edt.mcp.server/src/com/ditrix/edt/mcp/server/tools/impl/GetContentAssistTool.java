@@ -661,7 +661,7 @@ public class GetContentAssistTool implements IMcpTool
     {
         if (containsFilter == null || containsFilter.isEmpty())
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
         String[] filterParts = containsFilter.toLowerCase().split(","); //$NON-NLS-1$
         for (int i = 0; i < filterParts.length; i++)

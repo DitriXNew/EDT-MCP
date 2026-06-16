@@ -101,7 +101,7 @@ public final class BreakpointUtils
         }
         // Single shared module resolver (BslModuleUtils.resolveModuleFile) handles
         // BOTH an absolute filesystem path and a src/-relative path. For the
-        // absolute case the project is not needed (resolution is by location);
+        // absolute case the project is not needed (resolution is by location); // NOSONAR explanatory comment, not commented-out code
         // for the src/-relative case resolve the project and pass it through.
         IProject project = null;
         if (!BslModuleUtils.looksLikeAbsolutePath(module))

@@ -215,7 +215,7 @@ public final class DebugServerTargetSupport
         try
         {
             Method listMethod = manager.getClass().getMethod("listDebugTargets"); //$NON-NLS-1$
-            listMethod.setAccessible(true);
+            listMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object targets = listMethod.invoke(manager);
             if (!(targets instanceof Iterable<?>))
             {
@@ -979,11 +979,11 @@ public final class DebugServerTargetSupport
         try
         {
             Method m = target.getClass().getMethod(getter);
-            m.setAccessible(true);
+            m.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object v = m.invoke(target);
             return v != null ? v.toString() : null;
         }
-        catch (Throwable e)
+        catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             return null;
         }
@@ -1011,7 +1011,7 @@ public final class DebugServerTargetSupport
         try
         {
             Method m = target.getClass().getMethod("getApplication"); //$NON-NLS-1$
-            m.setAccessible(true);
+            m.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object app = m.invoke(target);
             if (app instanceof java.util.Optional<?>)
             {
@@ -1019,7 +1019,7 @@ public final class DebugServerTargetSupport
             }
             return app;
         }
-        catch (Throwable e)
+        catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             return null;
         }
@@ -1036,7 +1036,7 @@ public final class DebugServerTargetSupport
         try
         {
             Method m = application.getClass().getMethod("getProject"); //$NON-NLS-1$
-            m.setAccessible(true);
+            m.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object project = m.invoke(application);
             if (project == null)
             {
@@ -1044,7 +1044,7 @@ public final class DebugServerTargetSupport
             }
             return reflectString(project, "getName"); //$NON-NLS-1$
         }
-        catch (Throwable e)
+        catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             return null;
         }

@@ -167,8 +167,8 @@ public final class EditorScreenshotHelper
         try
         {
             Field bufferedField = serviceClass.getDeclaredField(bufferedFlagField);
-            bufferedField.setAccessible(true);
-            bufferedField.setBoolean(null, true);
+            bufferedField.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            bufferedField.setBoolean(null, true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
         }
         catch (Exception e)
         {
@@ -452,7 +452,7 @@ public final class EditorScreenshotHelper
         {
             return null;
         }
-        findPageMethod.setAccessible(true);
+        findPageMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
         return findPageMethod.invoke(editorPart, FORM_MAIN_PAGE_ID);
     }
 
@@ -487,7 +487,7 @@ public final class EditorScreenshotHelper
     /**
      * Gets the active form editor page via the static FormEditor API.
      */
-    public static Object getActiveFormEditorPage() throws Exception
+    public static Object getActiveFormEditorPage() throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Class<?> editorClass = Class.forName(FORM_EDITOR_CLASS);
         Method method = editorClass.getMethod("getActiveFormEditorPage"); //$NON-NLS-1$
@@ -558,7 +558,7 @@ public final class EditorScreenshotHelper
             {
                 return null;
             }
-            method.setAccessible(true);
+            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object fqn = method.invoke(model);
             return fqn != null ? fqn.toString() : null;
         }
@@ -955,7 +955,7 @@ public final class EditorScreenshotHelper
         }
         if (syncPathReachable)
         {
-            // The synchronous hooks are present but did not produce a (fresh) image within the budget;
+            // The synchronous hooks are present but did not produce a (fresh) image within the budget; // NOSONAR explanatory comment, not commented-out code
             // one last check (the render task may have settled while pumping events).
             return hasFreshImage(representation, baseline, requireNewInstance);
         }
@@ -1023,8 +1023,8 @@ public final class EditorScreenshotHelper
                 try
                 {
                     Field field = type.getDeclaredField(FORM_IMAGE_DATA_FIELD);
-                    field.setAccessible(true);
-                    field.set(representation, null);
+                    field.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+                    field.set(representation, null); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
                     return true;
                 }
                 catch (NoSuchFieldException e)
@@ -1121,7 +1121,7 @@ public final class EditorScreenshotHelper
 
             // Synchronous sibling of getMappingRootAsync: compute the CommandInterfaceMapping root on
             // THIS thread instead of the background thread whose syncExec callback gets dropped.
-            getMappingRoot.setAccessible(true);
+            getMappingRoot.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object cmiMapping = getMappingRoot.invoke(controller, cmiMappingClass);
             if (cmiMapping == null)
             {
@@ -1135,7 +1135,7 @@ public final class EditorScreenshotHelper
 
             // Invoke the private rebuildInternal(Form, CommandInterfaceMapping, NativeRenderEvent,
             // boolean) directly: this is the synchronous body the async handler would have run.
-            rebuildInternal.setAccessible(true);
+            rebuildInternal.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             // updateOnly=false → force a full layout/render pass for this form.
             rebuildInternal.invoke(representation, form, cmiMapping, event, Boolean.FALSE);
 
@@ -1259,7 +1259,7 @@ public final class EditorScreenshotHelper
         try
         {
             Method method = representation.getClass().getDeclaredMethod(FORM_IMAGE_METHOD);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             ImageData data = (ImageData)method.invoke(representation);
             if (data != null && data.width > 0 && data.height > 0)
             {
@@ -1414,7 +1414,7 @@ public final class EditorScreenshotHelper
         try
         {
             Method rebuildMethod = representation.getClass().getDeclaredMethod(REBUILD_METHOD, boolean.class);
-            rebuildMethod.setAccessible(true);
+            rebuildMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             rebuildMethod.invoke(representation, true);
 
             Display display = Display.getCurrent();
@@ -1545,7 +1545,7 @@ public final class EditorScreenshotHelper
                 ReflectionUtils.findMethod(editorPart.getClass(), "setActivePage", String.class); //$NON-NLS-1$
             if (setActivePageMethod != null)
             {
-                setActivePageMethod.setAccessible(true);
+                setActivePageMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
                 setActivePageMethod.invoke(editorPart, FORM_MAIN_PAGE_ID);
             }
         }

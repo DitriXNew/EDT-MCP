@@ -222,7 +222,7 @@ public class EdtServices
     public void dispose()
     {
         // Close service trackers (each closeTracker() closes when non-null and returns null,
-        // exactly reproducing the former "if (t != null) { t.close(); t = null; }" per-field block).
+        // exactly reproducing the former "if (t != null) { t.close(); t = null; }" per-field block). // NOSONAR explanatory comment, not commented-out code
         v8ProjectManagerTracker = closeTracker(v8ProjectManagerTracker);
         dtProjectManagerTracker = closeTracker(dtProjectManagerTracker);
         configurationProviderTracker = closeTracker(configurationProviderTracker);
@@ -586,7 +586,7 @@ public class EdtServices
         IModelObjectFactory factory = formModelObjectFactoryTracker.getService();
         if (factory == null)
         {
-            // The form bundle is lazily activated and registers its services in start();
+            // The form bundle is lazily activated and registers its services in start(); // NOSONAR explanatory comment, not commented-out code
             // trip the activation, then re-read the tracker.
             Bundle formBundle = Platform.getBundle(FORM_BUNDLE_ID);
             if (formBundle == null)

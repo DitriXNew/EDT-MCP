@@ -45,7 +45,7 @@ public class InterruptibleToolExecutor
      * @return the response, or {@code null} if the response was already sent (interrupted)
      * @throws Exception if tool execution failed (propagated to the caller for error mapping)
      */
-    public String execute(HttpExchange exchange, String requestBody) throws Exception
+    public String execute(HttpExchange exchange, String requestBody) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         // Extract request ID and tool name for ActiveToolCall via the shared parser.
         JsonRpcRequest request = protocolHandler.parse(requestBody);

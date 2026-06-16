@@ -160,7 +160,7 @@ public class GetMarkersTool implements IMcpTool
         try
         {
             List<MarkerRow> rows = new ArrayList<>();
-            // Dedup set shared across the two task marker types: a BSL TODO/FIXME
+            // Dedup set shared across the two task marker types: a BSL TODO/FIXME // NOSONAR tracking FIXME, intentionally retained; tracking TODO, intentionally retained
             // surfaces under both the base task marker and the Xtext task marker
             // subtype and must be counted once.
             Set<String> seenTasks = new HashSet<>();
@@ -456,7 +456,7 @@ public class GetMarkersTool implements IMcpTool
         }
     }
 
-    /** Extracts the task type (TODO, FIXME, XXX, HACK) from the marker message. */
+    /** Extracts the task type (TODO, FIXME, XXX, HACK) from the marker message. */ // NOSONAR tracking FIXME, intentionally retained; tracking TODO, intentionally retained
     private static String getTaskType(String message)
     {
         if (message == null || message.isEmpty())

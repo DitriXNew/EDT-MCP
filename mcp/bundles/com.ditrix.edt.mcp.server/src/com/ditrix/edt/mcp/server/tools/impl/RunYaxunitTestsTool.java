@@ -342,7 +342,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
 
             // No active launch. Deliver a previously reported Pending result EXACTLY ONCE: a re-call
-            // fetching the result of a run that finished after a Pending response gets the report;
+            // fetching the result of a run that finished after a Pending response gets the report; // NOSONAR explanatory comment, not commented-out code
             // any later call with the same key falls through to a fresh run. There is NO time-based
             // cache, so a genuine re-run always re-executes the tests.
             String pendingResult = tryDeliverPendingResult(runKey, reportDir, projectName, applicationId);
@@ -1011,7 +1011,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                             jobEntry.error = result.getError();
                         }
                     }
-                    catch (Throwable e)
+                    catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
                     {
                         // Throwable, not Exception: an Error escaping the prep must still
                         // surface as a prep failure — otherwise the retry call would see
@@ -1536,7 +1536,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         {
             return;
         }
-        // try-with-resources releases the file-system handle held by Files.walk's stream;
+        // try-with-resources releases the file-system handle held by Files.walk's stream; // NOSONAR explanatory comment, not commented-out code
         // on Windows, leaving it open can prevent subsequent deletions of the same path.
         try (java.util.stream.Stream<Path> stream = Files.walk(tempDir))
         {

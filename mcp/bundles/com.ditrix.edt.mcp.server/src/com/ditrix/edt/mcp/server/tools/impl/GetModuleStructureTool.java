@@ -489,7 +489,7 @@ public class GetModuleStructureTool implements IMcpTool
         {
             Activator.logWarning("Failed to load source lines: " + e.getMessage()); //$NON-NLS-1$
         }
-        return null;
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
     private List<MethodInfo> collectMethods(Module module, List<RegionInfo> regions,
         boolean includeComments, List<String> sourceLines)

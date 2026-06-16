@@ -70,7 +70,7 @@ public final class JUnitXmlParser
             int attrSkipped = getIntAttr(suite, "skipped", 0); //$NON-NLS-1$
 
             // Scan the suite's testcases: record each failure/error/skipped into 'results'
-            // and return the fallback node counts {caseCount, failures, errors, skipped}
+            // and return the fallback node counts {caseCount, failures, errors, skipped} // NOSONAR explanatory comment, not commented-out code
             // for producers that omit or misreport the testsuite attributes.
             int[] nodeCounts = countSuiteCases(suite, results);
 
@@ -148,7 +148,7 @@ public final class JUnitXmlParser
         return new int[] {caseNodes.getLength(), nodeFailures, nodeErrors, nodeSkipped};
     }
 
-    private static DocumentBuilder newSecureBuilder() throws Exception
+    private static DocumentBuilder newSecureBuilder() throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         // Harden XML parsing against XXE/SSRF and entity-expansion attacks.

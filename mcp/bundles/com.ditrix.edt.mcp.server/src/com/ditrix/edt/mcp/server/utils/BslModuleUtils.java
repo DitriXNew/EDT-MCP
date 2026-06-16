@@ -423,7 +423,7 @@ public final class BslModuleUtils
         }
 
         List<String> lines = new ArrayList<>();
-        // Wrap in BufferedInputStream to support mark/reset for BOM detection;
+        // Wrap in BufferedInputStream to support mark/reset for BOM detection; // NOSONAR explanatory comment, not commented-out code
         // rawIs is closed by try-with-resources since BufferedInputStream wraps it
         try (InputStream input = new BufferedInputStream(rawIs))
         {

@@ -917,7 +917,7 @@ public class CreateInfobaseTool implements IMcpTool
             Object opt = m.invoke(service, versionMask, null);
             return (opt instanceof Optional) && ((Optional<?>)opt).isPresent();
         }
-        catch (Throwable t)
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             Activator.logError("create_infobase: standalone-server runtime probe failed", t); //$NON-NLS-1$
             return false;
@@ -931,7 +931,7 @@ public class CreateInfobaseTool implements IMcpTool
      */
     private static Object ssCreateServerWithInfobase(Object service, String versionMask,
             String projectName, InfobaseReference ib, int clusterPort, String clusterRegistryDirectory,
-            String publicationPath, IProgressMonitor monitor) throws Exception
+            String publicationPath, IProgressMonitor monitor) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Method m = service.getClass().getMethod("createServerWithInfobase", //$NON-NLS-1$
             String.class, String.class, InfobaseReference.class, int.class, String.class, String.class,
@@ -1013,7 +1013,7 @@ public class CreateInfobaseTool implements IMcpTool
 
     /** Reflectively invokes the first public method of {@code target} matching name + arg count. */
     private static Object ssInvoke(Object target, String name, int argCount, Object... args)
-        throws Exception
+        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Method m = ssMethod(target.getClass(), name, argCount);
         if (m == null)
@@ -1083,7 +1083,7 @@ public class CreateInfobaseTool implements IMcpTool
             Object name = m.invoke(standaloneServerInfobase);
             return (name instanceof String) ? (String)name : null;
         }
-        catch (Throwable t)
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             Activator.logError("create_infobase: could not read standalone-server infobase name", t); //$NON-NLS-1$
             return null;
@@ -1274,7 +1274,7 @@ public class CreateInfobaseTool implements IMcpTool
             .put(KEY_INFOBASE_NAME, infobaseName)
             .put(KEY_APPLICATIONS, appsArray);
 
-        // Report the ACTUAL auto-allocated port only when we could resolve it from the web URL;
+        // Report the ACTUAL auto-allocated port only when we could resolve it from the web URL; // NOSONAR explanatory comment, not commented-out code
         // never echo the requested/hint port (EDT ignores it for a FILE-backed standalone server).
         if (actualPort > 0)
         {
@@ -1458,7 +1458,7 @@ public class CreateInfobaseTool implements IMcpTool
     {
         try
         {
-            // PlatformServicesCore is an INTERNAL class of the platform-services.core bundle;
+            // PlatformServicesCore is an INTERNAL class of the platform-services.core bundle; // NOSONAR explanatory comment, not commented-out code
             // it is not exported, so Class.forName via OUR bundle classloader cannot see it.
             // Load it through the OWNING bundle's classloader instead (the same pattern
             // EdtServices uses for the form bundle's internal service class).
@@ -1472,7 +1472,7 @@ public class CreateInfobaseTool implements IMcpTool
             // Touching a class trips the bundle's lazy activation so getDefault() is populated.
             Class<?> coreClass = psCoreBundle.loadClass(PLATFORM_SERVICES_CORE_CLASS);
             java.lang.reflect.Method getDefault = coreClass.getDeclaredMethod("getDefault"); //$NON-NLS-1$
-            getDefault.setAccessible(true);
+            getDefault.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object coreInstance = getDefault.invoke(null);
             if (coreInstance == null)
             {
@@ -1487,7 +1487,7 @@ public class CreateInfobaseTool implements IMcpTool
             }
             java.lang.reflect.Method getInjector =
                 coreClass.getDeclaredMethod("getInjector"); //$NON-NLS-1$
-            getInjector.setAccessible(true);
+            getInjector.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object injector = getInjector.invoke(coreInstance);
             if (injector == null)
             {

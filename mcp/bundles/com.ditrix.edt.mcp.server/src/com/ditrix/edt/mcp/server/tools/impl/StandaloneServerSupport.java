@@ -233,7 +233,7 @@ final class StandaloneServerSupport
                 .invoke(standaloneServerInfobaseModule);
             return id != null ? id.toString() : null;
         }
-        catch (Throwable t)
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             Activator.logError("delete_infobase: could not read standalone-server infobaseId", t); //$NON-NLS-1$
             return null;
@@ -282,7 +282,7 @@ final class StandaloneServerSupport
             }
             return (dir instanceof String) ? (String)dir : null;
         }
-        catch (Throwable t)
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             Activator.logError("delete_infobase: could not read standalone-server database directory", t); //$NON-NLS-1$
             return null;
@@ -329,7 +329,7 @@ final class StandaloneServerSupport
                 }
             }
         }
-        catch (Throwable t)
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             Activator.logError("delete_infobase: server-by-name scan failed", t); //$NON-NLS-1$
         }
@@ -400,9 +400,9 @@ final class StandaloneServerSupport
             {
                 return RegistryCleanup.FAILED;
             }
-            modulesF.setAccessible(true);
-            mapperF.setAccessible(true);
-            locF.setAccessible(true);
+            modulesF.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            mapperF.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            locF.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
 
             @SuppressWarnings("unchecked")
             Map<Object, Object> modules = (Map<Object, Object>)modulesF.get(delegate);

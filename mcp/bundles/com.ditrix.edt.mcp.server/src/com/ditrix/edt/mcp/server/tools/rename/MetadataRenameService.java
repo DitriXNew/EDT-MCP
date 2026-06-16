@@ -1248,7 +1248,7 @@ public class MetadataRenameService
             try
             {
                 java.lang.reflect.Field field = type.getDeclaredField(fieldName);
-                field.setAccessible(true);
+                field.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
                 return field.get(target);
             }
             catch (Exception e)
@@ -1260,12 +1260,12 @@ public class MetadataRenameService
     }
 
     private static Object invokeMethod(Object target, String methodName, Class<?>[] parameterTypes, Object... args)
-        throws Exception
+        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         java.lang.reflect.Method method = findMethod(target.getClass(), methodName, parameterTypes);
         if (!method.canAccess(target))
         {
-            method.setAccessible(true);
+            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
         }
         return method.invoke(target, args);
     }
@@ -1352,7 +1352,7 @@ public class MetadataRenameService
         }
     }
 
-    private static Object getBslInjector() throws Exception
+    private static Object getBslInjector() throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Class<?> activatorClass = getClassOrThrow("com._1c.g5.v8.dt.bsl.ui.internal.BslActivator"); //$NON-NLS-1$
         Object activator = activatorClass.getMethod(GET_INSTANCE).invoke(null);
@@ -1360,7 +1360,7 @@ public class MetadataRenameService
             "com._1c.g5.v8.dt.bsl.Bsl"); //$NON-NLS-1$
     }
 
-    private static Object getSearchCoreInjector() throws Exception
+    private static Object getSearchCoreInjector() throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Class<?> pluginClass = getClassOrThrow("com._1c.g5.v8.dt.internal.search.core.SearchCorePlugin"); //$NON-NLS-1$
         Object plugin = pluginClass.getMethod("getDefault").invoke(null); //$NON-NLS-1$
@@ -1375,7 +1375,7 @@ public class MetadataRenameService
             getClassOrThrow("org.eclipse.emf.common.util.URI"), //$NON-NLS-1$
             getClassOrThrow("org.eclipse.emf.ecore.EClass"), //$NON-NLS-1$
             getClassOrThrow("com._1c.g5.v8.bm.core.IBmObject")); //$NON-NLS-1$
-        constructor.setAccessible(true);
+        constructor.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
         return constructor.newInstance(EcoreUtil.getURI(targetObject), targetObject.eClass(), targetObject);
     }
 
@@ -1419,7 +1419,7 @@ public class MetadataRenameService
             java.lang.reflect.Method method = findMethod(target.getClass(), methodName, new Class<?>[0]);
             if (!method.canAccess(target))
             {
-                method.setAccessible(true);
+                method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             }
             return method.invoke(target);
         }

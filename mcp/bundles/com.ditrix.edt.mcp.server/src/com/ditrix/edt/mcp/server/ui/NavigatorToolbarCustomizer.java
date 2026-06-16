@@ -267,6 +267,6 @@ public class NavigatorToolbarCustomizer {
 
         partListener = null;
         initialized = false;
-        instance = null;
+        instance = null; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
     }
 }

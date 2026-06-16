@@ -133,7 +133,7 @@ public final class GuideLoader
                 sb.append(buf, 0, n);
             }
         }
-        // Trim trailing whitespace/newlines so the rendered "## Guide\n<body>" is tidy;
+        // Trim trailing whitespace/newlines so the rendered "## Guide\n<body>" is tidy; // NOSONAR explanatory comment, not commented-out code
         // keep leading content intact.
         int end = sb.length();
         while (end > 0 && Character.isWhitespace(sb.charAt(end - 1)))

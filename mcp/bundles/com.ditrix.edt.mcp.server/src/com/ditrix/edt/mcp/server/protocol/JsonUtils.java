@@ -253,13 +253,13 @@ public final class JsonUtils
     {
         if (params == null || argumentName == null)
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
         
         String value = params.get(argumentName);
         if (value == null || value.isEmpty())
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
         
         value = value.trim();
@@ -317,7 +317,7 @@ public final class JsonUtils
         {
             // Fall through to comma-separated parsing
         }
-        return null;
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
 
     /**

@@ -148,7 +148,7 @@ public class SearchInCodeTool implements IMcpTool
             .getParameterValue(NAME, KEY_MAX_RESULTS, DEFAULT_MAX_RESULTS);
         int configuredContextLines = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, KEY_CONTEXT_LINES, DEFAULT_CONTEXT_LINES);
-        // Canonical param is "limit" (consistent with other paginated tools);
+        // Canonical param is "limit" (consistent with other paginated tools); // NOSONAR explanatory comment, not commented-out code
         // "maxResults" is kept as a deprecated alias (precedence: limit, then maxResults).
         int maxResultsAlias = JsonUtils.extractIntArgument(params, KEY_MAX_RESULTS, configuredMaxResults);
         int maxResults = JsonUtils.extractIntArgument(params, "limit", maxResultsAlias); //$NON-NLS-1$

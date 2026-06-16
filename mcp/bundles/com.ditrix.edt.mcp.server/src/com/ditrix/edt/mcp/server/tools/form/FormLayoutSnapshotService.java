@@ -305,7 +305,7 @@ public class FormLayoutSnapshotService
         Map<String, Object> bounds = getBounds(presentation, layoutProjection, viewProjection);
         if (!fullMode && !hasPositiveBounds(bounds))
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         Map<String, Object> item = new LinkedHashMap<>();
@@ -370,7 +370,7 @@ public class FormLayoutSnapshotService
             return boundsMap(rectangle.x, rectangle.y, rectangle.width, rectangle.height);
         }
 
-        return null;
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
 
     private String getBoundsSource(Object presentation, Object layoutProjection, Object viewProjection)
@@ -407,7 +407,7 @@ public class FormLayoutSnapshotService
     {
         if (layout == null)
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         Object left = invokeNoArg(layout, "getLeft"); //$NON-NLS-1$
@@ -420,7 +420,7 @@ public class FormLayoutSnapshotService
                 ((Number)width).intValue(), ((Number)height).intValue());
         }
 
-        return null;
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
 
     private Map<String, Object> boundsMap(int left, int top, int width, int height)
@@ -781,7 +781,7 @@ public class FormLayoutSnapshotService
     {
         if (!(value instanceof EObject))
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         EObject object = (EObject)value;
@@ -869,7 +869,7 @@ public class FormLayoutSnapshotService
             {
                 method = target.getClass().getMethod(methodName, Object.class);
             }
-            method.setAccessible(true);
+            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             return method.invoke(target, argument);
         }
         catch (Exception e)
@@ -895,7 +895,7 @@ public class FormLayoutSnapshotService
             return boundsMap(0, 0, controlImageData.width, controlImageData.height);
         }
 
-        return null;
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
 
     private int countElementsWithBounds(List<Map<String, Object>> elements)

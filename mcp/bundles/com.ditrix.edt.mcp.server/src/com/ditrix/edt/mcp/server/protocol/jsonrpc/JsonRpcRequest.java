@@ -79,14 +79,14 @@ public class JsonRpcRequest
     {
         if (params == null)
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
         Object args = params.get("arguments"); //$NON-NLS-1$
         if (args instanceof Map)
         {
             return (Map<String, Object>) args;
         }
-        return null;
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
     
     /**

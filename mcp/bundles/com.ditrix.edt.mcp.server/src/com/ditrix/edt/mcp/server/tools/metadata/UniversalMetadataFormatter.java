@@ -176,7 +176,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     {
         if (!(feature instanceof EReference))
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         EReference ref = (EReference) feature;
@@ -184,24 +184,24 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         // Only process containment many-valued references
         if (!ref.isContainment() || !ref.isMany())
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         // Skip derived, transient, volatile
         if (ref.isDerived() || ref.isTransient() || ref.isVolatile())
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         if (!mdObject.eIsSet(ref))
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         Object value = mdObject.eGet(ref);
         if (!(value instanceof Collection))
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
 
         return (Collection<?>) value;

@@ -1328,7 +1328,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         if (value == null)
         {
-            return null;
+            return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
         }
         String v = value.trim().toLowerCase();
         if ("true".equals(v) || "1".equals(v) || "yes".equals(v)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -1339,7 +1339,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return Boolean.FALSE;
         }
-        return null;
+        return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
     }
 
     private static Integer parseInteger(String value)

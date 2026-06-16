@@ -158,7 +158,7 @@ public final class MetadataTypeBuilder
             {
                 // The generic getRefType(MdObject) dispatcher does NOT route Enum (it has a separate
                 // overload) and THROWS AssertionError for kinds with no ref type (registers, reports,
-                // ...). AssertionError is an Error, so it would escape the tool's catch(Exception) -
+                // ...). AssertionError is an Error, so it would escape the tool's catch(Exception) - // NOSONAR explanatory comment, not commented-out code
                 // route Enum explicitly and convert the AssertionError into a clean error Result.
                 refType = (target instanceof com._1c.g5.v8.dt.metadata.mdclass.Enum)
                     ? MdTypeUtil.getRefType((com._1c.g5.v8.dt.metadata.mdclass.Enum)target)

@@ -348,12 +348,12 @@ public final class StyleValueBuilder
     {
         if (obj == null || !obj.has(name))
         {
-            return null;
+            return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
         }
         JsonElement el = obj.get(name);
         if (el == null || !el.isJsonPrimitive())
         {
-            return null;
+            return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
         }
         JsonPrimitive p = el.getAsJsonPrimitive();
         if (p.isBoolean())
@@ -369,7 +369,7 @@ public final class StyleValueBuilder
         {
             return Boolean.FALSE;
         }
-        return null;
+        return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
     }
 
     private static String summarizeFont(String faceName, Integer height, boolean bold, boolean italic,

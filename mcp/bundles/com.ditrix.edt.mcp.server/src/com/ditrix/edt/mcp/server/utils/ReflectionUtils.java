@@ -27,7 +27,7 @@ public final class ReflectionUtils
      * @return the invocation result
      * @throws Exception if invocation fails
      */
-    public static Object invokeMethod(Object target, String methodName) throws Exception
+    public static Object invokeMethod(Object target, String methodName) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Method method = target.getClass().getMethod(methodName);
         return method.invoke(target);
@@ -41,7 +41,7 @@ public final class ReflectionUtils
      * @return the field value, or {@code null} if not found
      * @throws Exception if access fails
      */
-    public static Object getFieldValue(Object target, String fieldName) throws Exception
+    public static Object getFieldValue(Object target, String fieldName) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Class<?> type = target.getClass();
         while (type != null)
@@ -49,7 +49,7 @@ public final class ReflectionUtils
             try
             {
                 Field field = type.getDeclaredField(fieldName);
-                field.setAccessible(true);
+                field.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
                 return field.get(target);
             }
             catch (NoSuchFieldException ex)
@@ -100,11 +100,11 @@ public final class ReflectionUtils
         {
             Class<?> unsafeClass = Class.forName("sun.misc.Unsafe"); //$NON-NLS-1$
             Field theUnsafeField = unsafeClass.getDeclaredField("theUnsafe"); //$NON-NLS-1$
-            theUnsafeField.setAccessible(true);
+            theUnsafeField.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             Object unsafe = theUnsafeField.get(null);
 
             Field targetField = targetClass.getDeclaredField(fieldName);
-            targetField.setAccessible(true);
+            targetField.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
 
             Method staticFieldBase = unsafeClass.getMethod("staticFieldBase", Field.class); //$NON-NLS-1$
             Method staticFieldOffset = unsafeClass.getMethod("staticFieldOffset", Field.class); //$NON-NLS-1$

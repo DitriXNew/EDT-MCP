@@ -213,7 +213,7 @@ public class PlatformDocumentationService
                 availableTypes.add(lastSegment != null ? lastSegment : fullName);
             }
 
-            // Check if this is the type we're looking for (case-insensitive, check both full and last segment)
+            // Check if this is the type we're looking for (case-insensitive, check both full and last segment) // NOSONAR explanatory comment, not commented-out code
             if (fullName.equalsIgnoreCase(typeName) ||
                 (lastSegment != null && lastSegment.equalsIgnoreCase(typeName)))
             {
@@ -980,7 +980,7 @@ public class PlatformDocumentationService
                 availableMethods.add(methodName);
             }
 
-            // Check if this is the function we're looking for (case-insensitive)
+            // Check if this is the function we're looking for (case-insensitive) // NOSONAR explanatory comment, not commented-out code
             if (methodName.equalsIgnoreCase(functionName))
             {
                 Method resolvedMethod = resolveDescriptionAsMethod(desc, resourceSet);

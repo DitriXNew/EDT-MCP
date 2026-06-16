@@ -359,7 +359,7 @@ public class SymbolInfoService
                     "getTextHover", int.class, int.class); //$NON-NLS-1$
             if (getTextHoverMethod != null)
             {
-                getTextHoverMethod.setAccessible(true);
+                getTextHoverMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
                 Object result = getTextHoverMethod.invoke(sourceViewer, offset, 0);
                 if (result instanceof ITextHover)
                 {

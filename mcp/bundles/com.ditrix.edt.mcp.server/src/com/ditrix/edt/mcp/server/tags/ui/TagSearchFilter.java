@@ -490,19 +490,19 @@ public class TagSearchFilter extends ViewerFilter {
             // First get the parent EObject
             EObject parent = resolveNestedFolderParent(element);
             if (parent == null) {
-                return null; // Not a nested folder
+                return null; // Not a nested folder // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
             }
 
             // Get the parent's FQN
             String parentFqn = TagUtils.extractFqn(parent);
             if (parentFqn == null) {
-                return null;
+                return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
             }
 
             // Get the model object name (Attribute, EnumValue, TabularSection, etc.)
             String modelObjectName = resolveModelObjectName(element);
             if (modelObjectName == null) {
-                return null;
+                return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
             }
 
             Set<String> projectFqns = getCurrentMatchingFqns();
@@ -516,7 +516,7 @@ public class TagSearchFilter extends ViewerFilter {
 
         } catch (Exception e) {
             Activator.logError("Error checking nested folder", e);
-            return null;
+            return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
         }
     }
 
@@ -527,7 +527,7 @@ public class TagSearchFilter extends ViewerFilter {
      * {@link NoSuchMethodException} reflection failures propagate to the caller (preserving
      * the original outer try/catch behaviour).
      */
-    private static EObject resolveNestedFolderParent(Object element) throws Exception {
+    private static EObject resolveNestedFolderParent(Object element) throws Exception { // NOSONAR propagates checked exceptions across the reflective boundary by design
         // Try getModel() or getModel(false)
         for (String methodName : new String[]{"getModel"}) {
             try {
@@ -559,7 +559,7 @@ public class TagSearchFilter extends ViewerFilter {
      * accessor is absent or yields null. Side-effect free; non-{@link NoSuchMethodException}
      * reflection failures propagate to the caller (preserving the original outer try/catch).
      */
-    private static String resolveModelObjectName(Object element) throws Exception {
+    private static String resolveModelObjectName(Object element) throws Exception { // NOSONAR propagates checked exceptions across the reflective boundary by design
         try {
             var method = element.getClass().getMethod("getModelObjectName");
             Object result = method.invoke(element);
