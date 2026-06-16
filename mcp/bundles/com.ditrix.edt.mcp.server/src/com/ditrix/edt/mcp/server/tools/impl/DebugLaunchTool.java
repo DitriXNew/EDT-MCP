@@ -370,58 +370,23 @@ public class DebugLaunchTool implements IMcpTool
 
             // Verify application exists and get its name
             IApplicationManager appManager = Activator.getDefault().getApplicationManager();
-            String applicationName = applicationId; // Default to ID if can't get name
-            IApplication application = null;
-
-            if (appManager != null)
+            ApplicationResolution appResolution = resolveApplication(project, applicationId, appManager);
+            if (appResolution.error != null)
             {
-                try
-                {
-                    Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
-                    if (!appOpt.isPresent())
-                    {
-                        return ToolResult.error("Application not found: " + applicationId + //$NON-NLS-1$
-                                ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
-                    }
-                    application = appOpt.get();
-                    applicationName = application.getName();
-                }
-                catch (ApplicationException e)
-                {
-                    Activator.logError("Error checking application", e); //$NON-NLS-1$
-                    // Continue - we'll try to find launch config anyway
-                }
+                return appResolution.error;
             }
+            String applicationName = appResolution.applicationName;
+            IApplication application = appResolution.application;
 
-            // Unified existing-session decision — the SAME
-            // CLIENT-typed-thread-discriminated detector + restartIfRunning handling
-            // the by-name path uses, so both call styles behave identically. A live
-            // DEBUG client target OR a debug-target-less RUN-mode launch
-            // short-circuits (the legacy already-running guard); a standalone-SERVER session
-            // sharing this app id — even a debug-mode one with a live SERVER-typed
-            // thread — does NOT (the client proceeds and attaches). To force a fresh
-            // launch when restartIfRunning is false, terminate_launch first.
-            ExistingClientSession existingByApp =
-                LaunchLifecycleUtils.resolveExistingClientSession(applicationId);
-            if (existingByApp != null)
+            // Unified existing-session decision (see helper): a live DEBUG client target
+            // OR a debug-target-less RUN-mode launch short-circuits; a standalone-SERVER
+            // session sharing this app id does NOT. Returns null to fall through and
+            // (re)launch, otherwise the short-circuit / already-running payload.
+            String existingSessionResult =
+                handleExistingByAppSession(applicationId, projectName, restartIfRunning);
+            if (existingSessionResult != null)
             {
-                ILaunchConfiguration activeConfig = existingByApp.launch != null
-                    ? existingByApp.launch.getLaunchConfiguration() : null;
-                AlreadyRunningContext runningCtx = new AlreadyRunningContext(ALREADY_RUNNING_MESSAGE);
-                runningCtx.project = projectName;
-                runningCtx.attach = Boolean.FALSE;
-                if (activeConfig != null)
-                {
-                    runningCtx.launchConfiguration = activeConfig.getName();
-                }
-                String shortCircuit = handleExistingClientSession(existingByApp, applicationId,
-                    restartIfRunning, runningCtx);
-                if (shortCircuit != null)
-                {
-                    return shortCircuit;
-                }
-                // restartIfRunning=true: the old client was terminated — fall through
-                // and relaunch.
+                return existingSessionResult;
             }
 
             // Update database before launch if requested. Routes through the
@@ -512,6 +477,103 @@ public class DebugLaunchTool implements IMcpTool
             Activator.logError("Unexpected error during debug launch", e); //$NON-NLS-1$
             return ToolResult.error("Unexpected error: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Resolves the application by id and its display name for the legacy
+     * project+applicationId path. Mirrors the original inline guard: when {@code appManager}
+     * is null the application stays unresolved (name defaults to the id); a present manager
+     * that cannot find the id yields an {@code error} payload, while an
+     * {@link ApplicationException} is logged and swallowed so the caller still tries to
+     * find a launch configuration.
+     *
+     * @param project the project to look the application up in
+     * @param applicationId the application id to resolve
+     * @param appManager the application manager (may be null)
+     * @return an {@link ApplicationResolution}; its {@code error} is non-null only when the
+     *     id was definitively not found
+     */
+    private static ApplicationResolution resolveApplication(IProject project, String applicationId,
+        IApplicationManager appManager)
+    {
+        ApplicationResolution resolution = new ApplicationResolution();
+        resolution.applicationName = applicationId; // Default to ID if can't get name
+
+        if (appManager != null)
+        {
+            try
+            {
+                Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+                if (!appOpt.isPresent())
+                {
+                    resolution.error = ToolResult.error("Application not found: " + applicationId + //$NON-NLS-1$
+                            ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
+                    return resolution;
+                }
+                resolution.application = appOpt.get();
+                resolution.applicationName = resolution.application.getName();
+            }
+            catch (ApplicationException e)
+            {
+                Activator.logError("Error checking application", e); //$NON-NLS-1$
+                // Continue - we'll try to find launch config anyway
+            }
+        }
+        return resolution;
+    }
+
+    /**
+     * Unified existing-session decision for the project+applicationId path — the SAME
+     * CLIENT-typed-thread-discriminated detector + restartIfRunning handling the by-name
+     * path uses, so both call styles behave identically. A live DEBUG client target OR a
+     * debug-target-less RUN-mode launch short-circuits (the legacy already-running guard);
+     * a standalone-SERVER session sharing this app id — even a debug-mode one with a live
+     * SERVER-typed thread — does NOT (the client proceeds and attaches). To force a fresh
+     * launch when restartIfRunning is false, terminate_launch first.
+     *
+     * @param applicationId the application id to match an existing client session on
+     * @param projectName the project name echoed into the already-running payload
+     * @param restartIfRunning whether to terminate an existing client and relaunch
+     * @return the short-circuit / already-running payload, or {@code null} to fall through
+     *     and (re)launch (no existing client, or restartIfRunning terminated the old one)
+     */
+    private String handleExistingByAppSession(String applicationId, String projectName,
+        boolean restartIfRunning)
+    {
+        ExistingClientSession existingByApp =
+            LaunchLifecycleUtils.resolveExistingClientSession(applicationId);
+        if (existingByApp != null)
+        {
+            ILaunchConfiguration activeConfig = existingByApp.launch != null
+                ? existingByApp.launch.getLaunchConfiguration() : null;
+            AlreadyRunningContext runningCtx = new AlreadyRunningContext(ALREADY_RUNNING_MESSAGE);
+            runningCtx.project = projectName;
+            runningCtx.attach = Boolean.FALSE;
+            if (activeConfig != null)
+            {
+                runningCtx.launchConfiguration = activeConfig.getName();
+            }
+            String shortCircuit = handleExistingClientSession(existingByApp, applicationId,
+                restartIfRunning, runningCtx);
+            if (shortCircuit != null)
+            {
+                return shortCircuit;
+            }
+            // restartIfRunning=true: the old client was terminated — fall through
+            // and relaunch.
+        }
+        return null;
+    }
+
+    /**
+     * Holder for {@link #resolveApplication}: the resolved {@link IApplication} (may stay
+     * null) and its display name, or an {@code error} payload the caller returns as-is.
+     */
+    private static class ApplicationResolution
+    {
+        IApplication application;
+        String applicationName;
+        String error;
     }
 
     /**

@@ -127,68 +127,99 @@ public final class InterceptionUtils
             Set<String> lines = new LinkedHashSet<>();
             if (svc.isExtensionModule(module))
             {
-                // This extension module -> the core methods its methods intercept.
-                for (Method method : module.getMethods())
-                {
-                    Map<Pragma, Method> sources = svc.getSourceMethod(method);
-                    if (sources == null)
-                    {
-                        continue;
-                    }
-                    for (Map.Entry<Pragma, Method> entry : sources.entrySet())
-                    {
-                        Method baseMethod = entry.getValue();
-                        String baseName = baseMethod != null ? baseMethod.getName() : pragmaTarget(entry.getKey());
-                        lines.add("`" + safeName(method) + "` -> intercepts core method `" + baseName //$NON-NLS-1$ //$NON-NLS-2$
-                            + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$
-                    }
-                }
+                collectModuleExtensionSide(svc, module, lines);
             }
             else
             {
-                // Inverse: every extension module that adopts this base module; list
-                // each of its methods that resolves back to a method here.
-                Collection<Module> extensionModules = svc.getExtensionModules(module);
-                if (extensionModules != null)
-                {
-                    for (Module extModule : extensionModules)
-                    {
-                        String extProject = projectName(extModule);
-                        for (Method extMethod : extModule.getMethods())
-                        {
-                            Map<Pragma, Method> sources = svc.getSourceMethod(extMethod);
-                            if (sources == null)
-                            {
-                                continue;
-                            }
-                            for (Map.Entry<Pragma, Method> entry : sources.entrySet())
-                            {
-                                Method baseMethod = entry.getValue();
-                                String baseName = baseMethod != null ? baseMethod.getName() : pragmaTarget(entry.getKey());
-                                lines.add("`" + baseName + "` <- intercepted by extension `" + extProject //$NON-NLS-1$ //$NON-NLS-2$
-                                    + "`: `" + safeName(extMethod) + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
-                            }
-                        }
-                    }
-                }
+                collectModuleBaseSide(svc, module, lines);
             }
             if (lines.isEmpty())
             {
                 return null;
             }
-            StringBuilder sb = new StringBuilder();
-            sb.append("\n## Extension interception\n\n"); //$NON-NLS-1$
-            for (String line : lines)
-            {
-                sb.append("- ").append(line).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            return sb.toString();
+            return buildFooterSection(lines);
         }
         catch (RuntimeException e)
         {
             Activator.logWarning("module interception footer unavailable: " + e.getMessage()); //$NON-NLS-1$
             return null;
         }
+    }
+
+    /**
+     * Module extension-side: for an extension {@code module}, lists the core methods
+     * each of its methods intercepts (one line per resolving annotation pragma).
+     */
+    private static void collectModuleExtensionSide(IModuleExtensionService svc, Module module, Set<String> lines)
+    {
+        // This extension module -> the core methods its methods intercept.
+        for (Method method : module.getMethods())
+        {
+            Map<Pragma, Method> sources = svc.getSourceMethod(method);
+            if (sources == null)
+            {
+                continue;
+            }
+            for (Map.Entry<Pragma, Method> entry : sources.entrySet())
+            {
+                String baseName = baseMethodName(entry);
+                lines.add("`" + safeName(method) + "` -> intercepts core method `" + baseName //$NON-NLS-1$ //$NON-NLS-2$
+                    + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /**
+     * Module base-side (inverse): for a base {@code module}, lists every extension
+     * module that adopts it and each of its methods that resolves back to a method here.
+     */
+    private static void collectModuleBaseSide(IModuleExtensionService svc, Module module, Set<String> lines)
+    {
+        Collection<Module> extensionModules = svc.getExtensionModules(module);
+        if (extensionModules == null)
+        {
+            return;
+        }
+        for (Module extModule : extensionModules)
+        {
+            String extProject = projectName(extModule);
+            for (Method extMethod : extModule.getMethods())
+            {
+                Map<Pragma, Method> sources = svc.getSourceMethod(extMethod);
+                if (sources == null)
+                {
+                    continue;
+                }
+                for (Map.Entry<Pragma, Method> entry : sources.entrySet())
+                {
+                    String baseName = baseMethodName(entry);
+                    lines.add("`" + baseName + "` <- intercepted by extension `" + extProject //$NON-NLS-1$ //$NON-NLS-2$
+                        + "`: `" + safeName(extMethod) + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
+    }
+
+    /**
+     * The resolved core-method name for a source-map entry: the target method's name
+     * when it resolved, otherwise the annotation pragma's quoted target.
+     */
+    private static String baseMethodName(Map.Entry<Pragma, Method> entry)
+    {
+        Method baseMethod = entry.getValue();
+        return baseMethod != null ? baseMethod.getName() : pragmaTarget(entry.getKey());
+    }
+
+    /** Assembles the {@code ## Extension interception} markdown section from collected lines. */
+    private static String buildFooterSection(Set<String> lines)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n## Extension interception\n\n"); //$NON-NLS-1$
+        for (String line : lines)
+        {
+            sb.append("- ").append(line).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.toString();
     }
 
     /**
@@ -204,8 +235,7 @@ public final class InterceptionUtils
         }
         for (Map.Entry<Pragma, Method> entry : sources.entrySet())
         {
-            Method baseMethod = entry.getValue();
-            String baseName = baseMethod != null ? baseMethod.getName() : pragmaTarget(entry.getKey());
+            String baseName = baseMethodName(entry);
             lines.add("**Extension interception** — `" + safeName(extensionMethod) //$NON-NLS-1$
                 + "` intercepts core method `" + baseName + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
         }

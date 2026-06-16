@@ -182,62 +182,10 @@ public class GetMarkersTool implements IMcpTool
                 projects = ProjectContext.allProjects();
             }
 
-            for (IProject project : projects)
-            {
-                if (!project.isOpen())
-                {
-                    continue;
-                }
+            collectMarkerRows(projects, includeBookmarks, includeTasks, filePath, priorityFilter,
+                limit, rows, seenTasks);
 
-                if (includeBookmarks && rows.size() < limit)
-                {
-                    collectBookmarks(project, rows, filePath, limit);
-                }
-                if (includeTasks && rows.size() < limit)
-                {
-                    collectTasks(project, TASK_MARKER_TYPE, rows, seenTasks, filePath, priorityFilter, limit);
-                    if (rows.size() < limit)
-                    {
-                        collectTasks(project, XTEXT_TASK_MARKER_TYPE, rows, seenTasks, filePath, priorityFilter, limit);
-                    }
-                }
-
-                if (rows.size() >= limit)
-                {
-                    break;
-                }
-            }
-
-            md.append("## Markers\n\n"); //$NON-NLS-1$
-            md.append("**Found:** ").append(rows.size()).append(" markers"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (rows.size() >= limit)
-            {
-                md.append(Pagination.limitReachedNotice(limit));
-            }
-            md.append("\n\n"); //$NON-NLS-1$
-
-            if (rows.isEmpty())
-            {
-                md.append("*No markers found.*\n"); //$NON-NLS-1$
-            }
-            else
-            {
-                // Table header (cells escaped by MarkdownUtils.tableRow). The Path
-                // already carries the project name as its first segment, so there
-                // is no separate Project column.
-                md.append(MarkdownUtils.tableHeader("Kind", "Type", "Priority", "Message", "Path", "Line")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-
-                for (MarkerRow row : rows)
-                {
-                    md.append(MarkdownUtils.tableRow(
-                        row.kind,
-                        row.type,
-                        row.priority,
-                        row.message,
-                        row.path,
-                        String.valueOf(row.line)));
-                }
-            }
+            appendMarkersTable(md, rows, limit);
         }
         catch (Exception e)
         {
@@ -246,6 +194,94 @@ public class GetMarkersTool implements IMcpTool
         }
 
         return md.toString();
+    }
+
+    /**
+     * Scans the resolved projects for the selected marker families, appending the
+     * collected rows to {@code rows} (and de-duplicating task markers via
+     * {@code seenTasks}). Stops once {@code limit} rows have been gathered.
+     *
+     * @param projects the projects to scan (already resolved/filtered)
+     * @param includeBookmarks whether to scan bookmark markers
+     * @param includeTasks whether to scan task markers
+     * @param filePath case-insensitive path-substring filter (null/empty = no filter)
+     * @param priorityFilter task priority filter (null = no filter); ignored for bookmarks
+     * @param limit maximum number of rows to collect (already clamped)
+     * @param rows accumulator the collected rows are appended to
+     * @param seenTasks dedup set shared across the two task marker types
+     */
+    private static void collectMarkerRows(IProject[] projects, boolean includeBookmarks,
+        boolean includeTasks, String filePath, Integer priorityFilter, int limit,
+        List<MarkerRow> rows, Set<String> seenTasks)
+    {
+        for (IProject project : projects)
+        {
+            if (!project.isOpen())
+            {
+                continue;
+            }
+
+            if (includeBookmarks && rows.size() < limit)
+            {
+                collectBookmarks(project, rows, filePath, limit);
+            }
+            if (includeTasks && rows.size() < limit)
+            {
+                collectTasks(project, TASK_MARKER_TYPE, rows, seenTasks, filePath, priorityFilter, limit);
+                if (rows.size() < limit)
+                {
+                    collectTasks(project, XTEXT_TASK_MARKER_TYPE, rows, seenTasks, filePath, priorityFilter, limit);
+                }
+            }
+
+            if (rows.size() >= limit)
+            {
+                break;
+            }
+        }
+    }
+
+    /**
+     * Renders the collected marker {@code rows} as the markdown report body,
+     * appending to {@code md}: the heading, the found-count (with the limit-reached
+     * notice when applicable) and either the empty-state line or the markers table.
+     *
+     * @param md the buffer the report body is appended to
+     * @param rows the collected marker rows
+     * @param limit the (clamped) row limit, used to detect the limit-reached case
+     */
+    private static void appendMarkersTable(StringBuilder md, List<MarkerRow> rows, int limit)
+    {
+        md.append("## Markers\n\n"); //$NON-NLS-1$
+        md.append("**Found:** ").append(rows.size()).append(" markers"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (rows.size() >= limit)
+        {
+            md.append(Pagination.limitReachedNotice(limit));
+        }
+        md.append("\n\n"); //$NON-NLS-1$
+
+        if (rows.isEmpty())
+        {
+            md.append("*No markers found.*\n"); //$NON-NLS-1$
+        }
+        else
+        {
+            // Table header (cells escaped by MarkdownUtils.tableRow). The Path
+            // already carries the project name as its first segment, so there
+            // is no separate Project column.
+            md.append(MarkdownUtils.tableHeader("Kind", "Type", "Priority", "Message", "Path", "Line")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+
+            for (MarkerRow row : rows)
+            {
+                md.append(MarkdownUtils.tableRow(
+                    row.kind,
+                    row.type,
+                    row.priority,
+                    row.message,
+                    row.path,
+                    String.valueOf(row.line)));
+            }
+        }
     }
 
     /**

@@ -598,15 +598,7 @@ public class GetContentAssistTool implements IMcpTool
         }
 
         // Parse contains filter into lowercase parts
-        String[] filterParts = null;
-        if (containsFilter != null && !containsFilter.isEmpty())
-        {
-            filterParts = containsFilter.toLowerCase().split(","); //$NON-NLS-1$
-            for (int i = 0; i < filterParts.length; i++)
-            {
-                filterParts[i] = filterParts[i].trim();
-            }
-        }
+        String[] filterParts = parseContainsFilter(containsFilter);
 
         List<Map<String, Object>> proposalList = new ArrayList<>();
         int count = 0;
@@ -620,23 +612,10 @@ public class GetContentAssistTool implements IMcpTool
                 String displayString = proposal.getDisplayString();
 
                 // Apply contains filter
-                if (filterParts != null)
+                if (filterParts != null && !matchesFilter(displayString, filterParts))
                 {
-                    boolean matches = false;
-                    String displayLower = displayString.toLowerCase();
-                    for (String part : filterParts)
-                    {
-                        if (!part.isEmpty() && displayLower.contains(part))
-                        {
-                            matches = true;
-                            break;
-                        }
-                    }
-                    if (!matches)
-                    {
-                        filteredOut++;
-                        continue;
-                    }
+                    filteredOut++;
+                    continue;
                 }
 
                 // Apply offset (skip first N matching proposals)
@@ -652,43 +631,7 @@ public class GetContentAssistTool implements IMcpTool
                     break;
                 }
 
-                // LinkedHashMap to keep a stable, readable field order per proposal.
-                Map<String, Object> proposalObj = new LinkedHashMap<>();
-                proposalObj.put("displayString", displayString); //$NON-NLS-1$
-
-                // Only get documentation if extendedDocumentation is true
-                if (extendedDocumentation)
-                {
-                    // Get additional info (documentation)
-                    // Use ICompletionProposalExtension5 for async-capable proposals
-                    String additionalInfo = null;
-                    if (proposal instanceof ICompletionProposalExtension5)
-                    {
-                        // Get documentation using progress monitor
-                        Object info = ((ICompletionProposalExtension5) proposal)
-                            .getAdditionalProposalInfo(new NullProgressMonitor());
-                        if (info != null)
-                        {
-                            additionalInfo = info.toString();
-                        }
-                    }
-                    else
-                    {
-                        additionalInfo = proposal.getAdditionalProposalInfo();
-                    }
-
-                    if (additionalInfo != null && !additionalInfo.isEmpty())
-                    {
-                        // Strip HTML tags and CSS styles for cleaner output
-                        String cleanInfo = cleanHtmlContent(additionalInfo);
-                        if (!cleanInfo.isEmpty())
-                        {
-                            proposalObj.put("documentation", cleanInfo); //$NON-NLS-1$
-                        }
-                    }
-                }
-
-                proposalList.add(proposalObj);
+                proposalList.add(buildProposalObject(proposal, displayString, extendedDocumentation));
                 count++;
             }
         }
@@ -705,7 +648,106 @@ public class GetContentAssistTool implements IMcpTool
             .put("proposals", proposalList) //$NON-NLS-1$
             .toJson();
     }
-    
+
+    /**
+     * Parses the comma-separated {@code contains} filter into trimmed, lowercased parts.
+     * Returns {@code null} when no filter is supplied (caller treats null as "no filter"),
+     * preserving the original behavior where an empty/absent filter keeps all proposals.
+     *
+     * @param containsFilter the raw comma-separated filter, possibly null/empty
+     * @return the lowercased trimmed parts, or null when no filter was supplied
+     */
+    private static String[] parseContainsFilter(String containsFilter)
+    {
+        if (containsFilter == null || containsFilter.isEmpty())
+        {
+            return null;
+        }
+        String[] filterParts = containsFilter.toLowerCase().split(","); //$NON-NLS-1$
+        for (int i = 0; i < filterParts.length; i++)
+        {
+            filterParts[i] = filterParts[i].trim();
+        }
+        return filterParts;
+    }
+
+    /**
+     * Returns true when the display string contains any non-empty filter part
+     * (case-insensitive), matching the original inline filter loop.
+     *
+     * @param displayString the proposal display string
+     * @param filterParts the lowercased trimmed filter parts (non-null)
+     * @return true if at least one non-empty part is a substring of the display string
+     */
+    private static boolean matchesFilter(String displayString, String[] filterParts)
+    {
+        String displayLower = displayString.toLowerCase();
+        for (String part : filterParts)
+        {
+            if (!part.isEmpty() && displayLower.contains(part))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Builds the per-proposal map ({@code displayString} plus, when requested and
+     * available, cleaned {@code documentation}). Uses a LinkedHashMap to keep a stable,
+     * readable field order, exactly as the original inline block did.
+     *
+     * @param proposal the completion proposal
+     * @param displayString the proposal's already-read display string
+     * @param extendedDocumentation whether to include documentation
+     * @return the proposal object map
+     */
+    private static Map<String, Object> buildProposalObject(ICompletionProposal proposal,
+        String displayString, boolean extendedDocumentation)
+    {
+        // LinkedHashMap to keep a stable, readable field order per proposal.
+        Map<String, Object> proposalObj = new LinkedHashMap<>();
+        proposalObj.put("displayString", displayString); //$NON-NLS-1$
+
+        // Only get documentation if extendedDocumentation is true
+        if (extendedDocumentation)
+        {
+            String additionalInfo = extractAdditionalInfo(proposal);
+            if (additionalInfo != null && !additionalInfo.isEmpty())
+            {
+                // Strip HTML tags and CSS styles for cleaner output
+                String cleanInfo = cleanHtmlContent(additionalInfo);
+                if (!cleanInfo.isEmpty())
+                {
+                    proposalObj.put("documentation", cleanInfo); //$NON-NLS-1$
+                }
+            }
+        }
+        return proposalObj;
+    }
+
+    /**
+     * Reads a proposal's additional info (documentation), using
+     * {@link ICompletionProposalExtension5} with a {@link NullProgressMonitor} for
+     * async-capable proposals and the plain accessor otherwise. May return null.
+     *
+     * @param proposal the completion proposal
+     * @return the additional-info string, or null when none is available
+     */
+    private static String extractAdditionalInfo(ICompletionProposal proposal)
+    {
+        // Get additional info (documentation)
+        // Use ICompletionProposalExtension5 for async-capable proposals
+        if (proposal instanceof ICompletionProposalExtension5)
+        {
+            // Get documentation using progress monitor
+            Object info = ((ICompletionProposalExtension5) proposal)
+                .getAdditionalProposalInfo(new NullProgressMonitor());
+            return info != null ? info.toString() : null;
+        }
+        return proposal.getAdditionalProposalInfo();
+    }
+
     /**
      * Converts HTML content to Markdown format using CopyDown library.
      * 

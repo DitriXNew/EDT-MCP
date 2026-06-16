@@ -81,61 +81,16 @@ public class TagsMenuContribution extends CompoundContributionItem {
         }
         
         // Collect all selected objects grouped by project
-        Map<IProject, List<String>> objectsByProject = new HashMap<>();
-        for (Iterator<?> it = structuredSelection.iterator(); it.hasNext();) {
-            Object element = it.next();
-            EObject eObject = TagUtils.extractMdObject(element);
-            if (eObject == null) {
-                continue;
-            }
-            
-            IProject project = TagUtils.extractProject(eObject);
-            String fqn = TagUtils.extractFqn(eObject);
-            
-            if (project != null && fqn != null) {
-                objectsByProject.computeIfAbsent(project, k -> new ArrayList<>()).add(fqn);
-            }
-        }
-        
+        Map<IProject, List<String>> objectsByProject = collectObjectsByProject(structuredSelection);
+
         if (objectsByProject.isEmpty()) {
             return new IContributionItem[0];
         }
-        
+
         // Collect all unique tags from all projects and their assignment state
         // Also track the minimum index for each tag across all projects
-        Map<String, TagState> tagStates = new HashMap<>();
-        
-        for (Map.Entry<IProject, List<String>> entry : objectsByProject.entrySet()) {
-            IProject project = entry.getKey();
-            List<String> fqns = entry.getValue();
-            
-            List<Tag> projectTags = tagService.getTags(project);
-            
-            for (int tagIndex = 0; tagIndex < projectTags.size(); tagIndex++) {
-                Tag tag = projectTags.get(tagIndex);
-                String tagName = tag.getName();
-                TagState state = tagStates.computeIfAbsent(tagName, 
-                    k -> new TagState(tag.getColor()));
-                
-                // Track the minimum storage index (for hotkey display)
-                // Use 1-based index (1-10), convert 10 to 0 for display
-                int hotkeyIndex = tagIndex + 1;
-                if (hotkeyIndex <= 10 && (state.hotkeyIndex == -1 || hotkeyIndex < state.hotkeyIndex)) {
-                    state.hotkeyIndex = hotkeyIndex;
-                }
-                
-                for (String fqn : fqns) {
-                    Set<Tag> assignedTags = tagService.getObjectTags(project, fqn);
-                    boolean hasTag = assignedTags.stream()
-                        .anyMatch(t -> t.getName().equals(tagName));
-                    if (hasTag) {
-                        state.assignedCount++;
-                    }
-                    state.totalCount++;
-                }
-            }
-        }
-        
+        Map<String, TagState> tagStates = buildTagStates(objectsByProject);
+
         if (tagStates.isEmpty()) {
             return new IContributionItem[0];
         }
@@ -158,10 +113,73 @@ public class TagsMenuContribution extends CompoundContributionItem {
         
         // Add separator before "Manage Tags..."
         items[sortedTagNames.size()] = new SeparatorItem();
-        
+
         return items;
     }
-    
+
+    /**
+     * Groups the selected metadata objects by their owning project, keeping only the
+     * elements that resolve to both a project and an FQN.
+     */
+    private Map<IProject, List<String>> collectObjectsByProject(IStructuredSelection structuredSelection) {
+        Map<IProject, List<String>> objectsByProject = new HashMap<>();
+        for (Iterator<?> it = structuredSelection.iterator(); it.hasNext();) {
+            Object element = it.next();
+            EObject eObject = TagUtils.extractMdObject(element);
+            if (eObject == null) {
+                continue;
+            }
+
+            IProject project = TagUtils.extractProject(eObject);
+            String fqn = TagUtils.extractFqn(eObject);
+
+            if (project != null && fqn != null) {
+                objectsByProject.computeIfAbsent(project, k -> new ArrayList<>()).add(fqn);
+            }
+        }
+        return objectsByProject;
+    }
+
+    /**
+     * Builds the union of tags across all projects, tracking each tag's assignment counts
+     * (assigned/total) and minimum hotkey index for the menu.
+     */
+    private Map<String, TagState> buildTagStates(Map<IProject, List<String>> objectsByProject) {
+        Map<String, TagState> tagStates = new HashMap<>();
+
+        for (Map.Entry<IProject, List<String>> entry : objectsByProject.entrySet()) {
+            IProject project = entry.getKey();
+            List<String> fqns = entry.getValue();
+
+            List<Tag> projectTags = tagService.getTags(project);
+
+            for (int tagIndex = 0; tagIndex < projectTags.size(); tagIndex++) {
+                Tag tag = projectTags.get(tagIndex);
+                String tagName = tag.getName();
+                TagState state = tagStates.computeIfAbsent(tagName,
+                    k -> new TagState(tag.getColor()));
+
+                // Track the minimum storage index (for hotkey display)
+                // Use 1-based index (1-10), convert 10 to 0 for display
+                int hotkeyIndex = tagIndex + 1;
+                if (hotkeyIndex <= 10 && (state.hotkeyIndex == -1 || hotkeyIndex < state.hotkeyIndex)) {
+                    state.hotkeyIndex = hotkeyIndex;
+                }
+
+                for (String fqn : fqns) {
+                    Set<Tag> assignedTags = tagService.getObjectTags(project, fqn);
+                    boolean hasTag = assignedTags.stream()
+                        .anyMatch(t -> t.getName().equals(tagName));
+                    if (hasTag) {
+                        state.assignedCount++;
+                    }
+                    state.totalCount++;
+                }
+            }
+        }
+        return tagStates;
+    }
+
     /**
      * State for tracking tag assignment across multiple objects.
      */

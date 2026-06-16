@@ -232,25 +232,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         countColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
             public String getText(Object element) {
-                if (element instanceof TagEntry entry) {
-                    Set<String> objects = tagService.findObjectsByTag(entry.project(), entry.tag().getName());
-                    if (searchPattern != null) {
-                        int filteredCount = 0;
-                        int totalCount = objects.size();
-                        for (String fqn : objects) {
-                            if (matchesSearch(fqn)) {
-                                filteredCount++;
-                            }
-                        }
-                        return filteredCount + "/" + totalCount;
-                    }
-                    return String.valueOf(objects.size());
-                } else if (element instanceof IProject project) {
-                    // Show total tags count for project
-                    List<Tag> tags = tagService.getTags(project);
-                    return "(" + tags.size() + " tags)";
-                }
-                return "";
+                return countColumnText(element);
             }
         });
         
@@ -261,40 +243,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         tagsTreeViewer.addCheckStateListener(new ICheckStateListener() {
             @Override
             public void checkStateChanged(CheckStateChangedEvent event) {
-                Object element = event.getElement();
-                boolean checked = event.getChecked();
-                
-                if (element instanceof IProject project) {
-                    // Check/uncheck all tags in this project
-                    List<Tag> tags = tagService.getTags(project);
-                    Set<String> projectTags = selectedTagsByProject.computeIfAbsent(project, p -> new HashSet<>());
-                    
-                    if (checked) {
-                        for (Tag tag : tags) {
-                            projectTags.add(tag.getName());
-                            tagsTreeViewer.setChecked(new TagEntry(project, tag), true);
-                        }
-                    } else {
-                        projectTags.clear();
-                        for (Tag tag : tags) {
-                            tagsTreeViewer.setChecked(new TagEntry(project, tag), false);
-                        }
-                    }
-                    // Reset grayed state when explicitly checking/unchecking project
-                    tagsTreeViewer.setGrayed(project, false);
-                    
-                } else if (element instanceof TagEntry entry) {
-                    Set<String> projectTags = selectedTagsByProject.computeIfAbsent(entry.project(), p -> new HashSet<>());
-                    if (checked) {
-                        projectTags.add(entry.tag().getName());
-                    } else {
-                        projectTags.remove(entry.tag().getName());
-                    }
-                    // Update parent project checkbox state
-                    updateProjectCheckState(entry.project());
-                }
-                
-                updateFilteredResults();
+                handleCheckStateChanged(event.getElement(), event.getChecked());
             }
         });
         
@@ -302,7 +251,87 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         tagsTreeViewer.setInput(ResourcesPlugin.getWorkspace().getRoot());
         tagsTreeViewer.expandAll();
     }
-    
+
+    /**
+     * Computes the text for the count column of the tags tree: for a tag entry
+     * the (optionally search-filtered) object count, for a project the number of
+     * tags it has.
+     */
+    private String countColumnText(Object element) {
+        if (element instanceof TagEntry entry) {
+            Set<String> objects = tagService.findObjectsByTag(entry.project(), entry.tag().getName());
+            if (searchPattern != null) {
+                int filteredCount = 0;
+                int totalCount = objects.size();
+                for (String fqn : objects) {
+                    if (matchesSearch(fqn)) {
+                        filteredCount++;
+                    }
+                }
+                return filteredCount + "/" + totalCount;
+            }
+            return String.valueOf(objects.size());
+        } else if (element instanceof IProject project) {
+            // Show total tags count for project
+            List<Tag> tags = tagService.getTags(project);
+            return "(" + tags.size() + " tags)";
+        }
+        return "";
+    }
+
+    /**
+     * Handles a checkbox state change in the tags tree, then refreshes the
+     * filtered results. Runs on the UI thread (invoked from the check-state
+     * listener).
+     */
+    private void handleCheckStateChanged(Object element, boolean checked) {
+        if (element instanceof IProject project) {
+            applyProjectCheck(project, checked);
+        } else if (element instanceof TagEntry entry) {
+            applyTagEntryCheck(entry, checked);
+        }
+
+        updateFilteredResults();
+    }
+
+    /**
+     * Checks or unchecks all tags of a project and resets its grayed state.
+     */
+    private void applyProjectCheck(IProject project, boolean checked) {
+        // Check/uncheck all tags in this project
+        List<Tag> tags = tagService.getTags(project);
+        Set<String> projectTags = selectedTagsByProject.computeIfAbsent(project, p -> new HashSet<>());
+
+        if (checked) {
+            for (Tag tag : tags) {
+                projectTags.add(tag.getName());
+                tagsTreeViewer.setChecked(new TagEntry(project, tag), true);
+            }
+        } else {
+            projectTags.clear();
+            for (Tag tag : tags) {
+                tagsTreeViewer.setChecked(new TagEntry(project, tag), false);
+            }
+        }
+        // Reset grayed state when explicitly checking/unchecking project
+        tagsTreeViewer.setGrayed(project, false);
+    }
+
+    /**
+     * Checks or unchecks a single tag entry and updates its parent project's
+     * checkbox state.
+     */
+    private void applyTagEntryCheck(TagEntry entry, boolean checked) {
+        Set<String> projectTags = selectedTagsByProject.computeIfAbsent(entry.project(), p -> new HashSet<>());
+        if (checked) {
+            projectTags.add(entry.tag().getName());
+        } else {
+            projectTags.remove(entry.tag().getName());
+        }
+        // Update parent project checkbox state
+        updateProjectCheckState(entry.project());
+    }
+
     /**
      * Create context menu for the tags tree.
      */

@@ -515,77 +515,32 @@ public class TagSearchFilter extends ViewerFilter {
     private Boolean checkNestedObjectFolder(Object element) {
         try {
             // First get the parent EObject
-            EObject parent = null;
-            
-            // Try getModel() or getModel(false)
-            for (String methodName : new String[]{"getModel"}) {
-                try {
-                    // Try getModel(boolean)
-                    var method = element.getClass().getMethod(methodName, boolean.class);
-                    Object result = method.invoke(element, false);
-                    if (result instanceof EObject eObj) {
-                        parent = eObj;
-                        break;
-                    }
-                } catch (NoSuchMethodException e) {
-                    // Try without parameter
-                    try {
-                        var method = element.getClass().getMethod(methodName);
-                        Object result = method.invoke(element);
-                        if (result instanceof EObject eObj) {
-                            parent = eObj;
-                            break;
-                        }
-                    } catch (NoSuchMethodException e2) {
-                        // Ignore
-                    }
-                }
-            }
-            
+            EObject parent = resolveNestedFolderParent(element);
             if (parent == null) {
                 return null; // Not a nested folder
             }
-            
+
             // Get the parent's FQN
             String parentFqn = TagUtils.extractFqn(parent);
             if (parentFqn == null) {
                 return null;
             }
-            
-            // Get the model object name (Attribute, EnumValue, TabularSection, etc.)
-            String modelObjectName = readModelObjectName(element);
 
+            // Get the model object name (Attribute, EnumValue, TabularSection, etc.)
+            String modelObjectName = resolveModelObjectName(element);
             if (modelObjectName == null) {
                 return null;
             }
-            
+
             Set<String> projectFqns = getCurrentMatchingFqns();
-            
+
             // Map folder model object names to FQN type prefixes
             // For example, "Attribute" in Document -> "DocumentAttribute"
             // "EnumValue" in Enum -> "EnumValue"
             String fqnTypePrefix = mapModelObjectNameToFqnType(parentFqn, modelObjectName);
-            
-            if (fqnTypePrefix == null) {
-                // No mapping, fall back to checking if any matching FQN contains this segment
-                for (String fqn : projectFqns) {
-                    if (fqn.contains("." + modelObjectName + ".") && fqn.startsWith(parentFqn + ".")) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            
-            // Check if any matching FQN is a child of parent.FqnType.*
-            String searchPrefix = parentFqn + "." + fqnTypePrefix + ".";
-            for (String fqn : projectFqns) {
-                if (fqn.startsWith(searchPrefix)) {
-                    return true;
-                }
-            }
-            
-            return false;
-            
+
+            return matchesNestedFolderChild(projectFqns, parentFqn, modelObjectName, fqnTypePrefix);
+
         } catch (Exception e) {
             Activator.logError("Error checking nested folder", e);
             return null;
@@ -593,16 +548,45 @@ public class TagSearchFilter extends ViewerFilter {
     }
 
     /**
-     * Reflectively reads the {@code getModelObjectName()} value of a folder element
-     * (e.g. "Attribute", "EnumValue", "TabularSection").
-     *
-     * @param element the folder element
-     * @return the model object name, or {@code null} if the element has no such method
-     *         or returns {@code null}
-     * @throws ReflectiveOperationException if the reflective invocation fails (other than
-     *         the no-such-method case, which is treated as "not a nested folder")
+     * Resolves the parent {@link EObject} of a nested object folder via reflection: tries
+     * {@code getModel(boolean)} then {@code getModel()}. Returns the parent EObject, or
+     * {@code null} when neither accessor yields an EObject. Side-effect free; non-
+     * {@link NoSuchMethodException} reflection failures propagate to the caller (preserving
+     * the original outer try/catch behaviour).
      */
-    private String readModelObjectName(Object element) throws ReflectiveOperationException {
+    private static EObject resolveNestedFolderParent(Object element) throws Exception {
+        // Try getModel() or getModel(false)
+        for (String methodName : new String[]{"getModel"}) {
+            try {
+                // Try getModel(boolean)
+                var method = element.getClass().getMethod(methodName, boolean.class);
+                Object result = method.invoke(element, false);
+                if (result instanceof EObject eObj) {
+                    return eObj;
+                }
+            } catch (NoSuchMethodException e) {
+                // Try without parameter
+                try {
+                    var method = element.getClass().getMethod(methodName);
+                    Object result = method.invoke(element);
+                    if (result instanceof EObject eObj) {
+                        return eObj;
+                    }
+                } catch (NoSuchMethodException e2) {
+                    // Ignore
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Reads the folder's model object name (Attribute, EnumValue, TabularSection, etc.) via the
+     * reflective {@code getModelObjectName()} accessor. Returns the name, or {@code null} when the
+     * accessor is absent or yields null. Side-effect free; non-{@link NoSuchMethodException}
+     * reflection failures propagate to the caller (preserving the original outer try/catch).
+     */
+    private static String resolveModelObjectName(Object element) throws Exception {
         try {
             var method = element.getClass().getMethod("getModelObjectName");
             Object result = method.invoke(element);
@@ -615,6 +599,35 @@ public class TagSearchFilter extends ViewerFilter {
         return null;
     }
 
+    /**
+     * Decides whether any matching FQN is a child of the nested folder. With a known
+     * {@code fqnTypePrefix}, a child is {@code parentFqn.fqnTypePrefix.*}; without a mapping, it
+     * falls back to any FQN that contains {@code .modelObjectName.} and starts with {@code parentFqn.}.
+     * Pure computation over the supplied FQN set.
+     */
+    private static boolean matchesNestedFolderChild(Set<String> projectFqns, String parentFqn,
+        String modelObjectName, String fqnTypePrefix) {
+        if (fqnTypePrefix == null) {
+            // No mapping, fall back to checking if any matching FQN contains this segment
+            for (String fqn : projectFqns) {
+                if (fqn.contains("." + modelObjectName + ".") && fqn.startsWith(parentFqn + ".")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Check if any matching FQN is a child of parent.FqnType.*
+        String searchPrefix = parentFqn + "." + fqnTypePrefix + ".";
+        for (String fqn : projectFqns) {
+            if (fqn.startsWith(searchPrefix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+    
     /**
      * Maps a model object name (from getModelObjectName) to the FQN type prefix.
      * For example:

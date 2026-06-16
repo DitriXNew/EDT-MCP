@@ -185,63 +185,30 @@ public class GetProjectErrorsTool implements IMcpTool
         try
         {
             IMarkerManager markerManager = Activator.getDefault().getMarkerManager();
-            
+
             if (markerManager == null)
             {
                 return ToolResult.error("IMarkerManager service is not available").toJson(); //$NON-NLS-1$
             }
-            
+
             final ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
             IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
 
             // Parse severity filter
             final MarkerSeverity finalSeverityFilter = parseSeverityFilter(severity);
             final String finalCheckId = checkId;
-            
+
             // Validate project if specified
-            if (projectName != null && !projectName.isEmpty())
+            String projectNotFound = projectNotFoundErrorOrNull(projectName);
+            if (projectNotFound != null)
             {
-                ProjectContext ctx = ProjectContext.of(projectName);
-                if (!ctx.exists())
-                {
-                    return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
-                }
+                return projectNotFound;
             }
-            
-            // Normalize object FQNs to support both English and Russian metadata type names.
-            // For each input FQN, generate all variants (original + English + Russian, lowercased)
-            // so we can match markers regardless of the configuration language.
-            // Using Set for deduplication of variants.
-            final Set<String> finalObjects = new HashSet<>();
-            if (objects != null)
-            {
-                for (String fqn : objects)
-                {
-                    finalObjects.addAll(MetadataTypeUtils.getAllFqnVariants(fqn));
-                }
-            }
-            
-            // Group markers by project in a single pass. getProject() does not touch
-            // resolvedDataCache, so this is safe outside a BM transaction. Grouping once avoids
-            // re-streaming all markers per project (previously O(markers x projects)).
-            // Marker presentation must still be resolved inside a BM read transaction bound to
-            // a single project's model, so processing below stays project by project.
-            Map<IProject, List<Marker>> markersByProject = new LinkedHashMap<>();
-            markerManager.markers().forEach(marker -> {
-                IProject markerProject = marker.getProject();
-                if (markerProject == null || !markerProject.exists())
-                {
-                    return;
-                }
-                if (projectName != null && !projectName.isEmpty()
-                    && !projectName.equals(markerProject.getName()))
-                {
-                    return;
-                }
-                markersByProject.computeIfAbsent(markerProject, k -> new ArrayList<>()).add(marker);
-            });
-            
-            final List<ErrorInfo> errors = new ArrayList<>();
+
+            final Set<String> finalObjects = buildObjectFilterVariants(objects);
+
+            Map<IProject, List<Marker>> markersByProject = groupMarkersByProject(markerManager, projectName);
+
             // Markers whose presentation could not be resolved even inside a transaction.
             // They are NOT dropped, but they are surfaced differently depending on context,
             // so we track the two cases separately to keep the warning text honest:
@@ -250,140 +217,309 @@ public class GetProjectErrorsTool implements IMcpTool
             //    filter is active and the location could not be resolved to test membership.
             final int[] unresolvedShown = {0};
             final int[] unresolvedFilteredOut = {0};
-            
-            for (Map.Entry<IProject, List<Marker>> entry : markersByProject.entrySet())
-            {
-                if (errors.size() >= limit)
-                {
-                    break;
-                }
-                
-                final List<Marker> projectMarkers = entry.getValue();
-                final int remaining = limit - errors.size();
-                
-                // Resolve the project's BM model so getObjectPresentation() can lazily
-                // resolve the marker target inside a read transaction. The getModel(IProject)
-                // overload is the idiomatic path used across the plugin (FindReferencesTool,
-                // CreateMetadataTool, tag tools), so no IDtProjectManager is needed.
-                IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
-                
-                Runnable collector = () -> projectMarkers.stream()
-                    .map(marker -> buildIfMatches(marker, finalSeverityFilter, finalCheckId,
-                        finalObjects, checkRepository, unresolvedShown, unresolvedFilteredOut))
-                    .filter(error -> error != null)
-                    .limit(remaining)
-                    .forEach(errors::add);
-                
-                if (bmModel != null)
-                {
-                    BmTransactions.<Void>read(bmModel, "CollectProjectErrors", (tx, pm) -> { //$NON-NLS-1$
-                        collector.run();
-                        return null;
-                    });
-                }
-                else
-                {
-                    // Not an EDT project (no BM model): best effort. Per-marker access is
-                    // still guarded, so an unresolved marker is reported, never dropped.
-                    collector.run();
-                }
-            }
-            
+
+            final List<ErrorInfo> errors = collectErrors(markersByProject, bmModelManager,
+                finalSeverityFilter, finalCheckId, finalObjects, checkRepository, limit,
+                unresolvedShown, unresolvedFilteredOut);
+
             // Build Markdown response for better readability and context efficiency
             StringBuilder md = new StringBuilder();
-            
+
             if (errors.isEmpty())
             {
-                md.append("# No Errors Found\n\n"); //$NON-NLS-1$
-                if (projectName != null && !projectName.isEmpty())
-                {
-                    md.append("Project: **").append(projectName).append("**\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                if (severity != null && !severity.isEmpty())
-                {
-                    md.append("Severity filter: ").append(severity).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                if (objects != null && !objects.isEmpty())
-                {
-                    md.append("Objects filter: ").append(String.join(", ", objects)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                md.append("\nNo configuration problems match the specified criteria."); //$NON-NLS-1$
+                appendNoErrorsSection(md, projectName, severity, objects);
             }
             else
             {
-                md.append("# Configuration Problems\n\n"); //$NON-NLS-1$
-                md.append("**Found:** ").append(errors.size()); //$NON-NLS-1$
-                if (errors.size() >= limit)
-                {
-                    md.append(Pagination.limitReachedNotice(limit));
-                }
-                md.append("\n\n"); //$NON-NLS-1$
-                
-                // Build table matching EDT's Configuration Problems view, plus a structural
-                // locator (Module path + Line) that feeds read_module_source / set_breakpoint.
-                // Built via the shared MarkdownUtils table builder so every cell is escaped.
-                // concise (default) drops the secondary 'Has docs' column to save tokens;
-                // detailed keeps the full historical set of columns. Every essential /
-                // actionable column (Description, Location, Module path, Line, Check code)
-                // is present in BOTH modes.
-                if (detailed)
-                {
-                    md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
-                        "Module path", "Line", "Check code", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                }
-                else
-                {
-                    md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
-                        "Module path", "Line", "Check code")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                }
+                appendProblemsTable(md, errors, limit, detailed);
+            }
 
-                for (ErrorInfo error : errors)
-                {
-                    // Show symbolic check ID if available, otherwise show check code
-                    String displayCheckId = error.checkId != null && !error.checkId.isEmpty()
-                        ? error.checkId
-                        : error.checkCode;
-                    // Wrap the check code in backticks; tableRow escapes the cell, so do NOT
-                    // pre-escape here (double-escaping would mangle a pipe in the id).
-                    String checkCell = "`" + (displayCheckId != null ? displayCheckId : "") + "`"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    String modulePathCell = error.modulePath != null ? error.modulePath : ""; //$NON-NLS-1$
-                    String lineCell = error.line != null ? error.line.toString() : ""; //$NON-NLS-1$
+            appendUnresolvedWarnings(md, unresolvedShown, unresolvedFilteredOut);
 
-                    if (detailed)
-                    {
-                        md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
-                            modulePathCell, lineCell, checkCell,
-                            error.hasDocumentation ? "true" : "false")); //$NON-NLS-1$ //$NON-NLS-2$
-                    }
-                    else
-                    {
-                        md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
-                            modulePathCell, lineCell, checkCell));
-                    }
-                }
-            }
-            
-            // Surface unresolved markers explicitly instead of silently dropping them.
-            // Two distinct cases, reported separately so each warning matches reality.
-            if (unresolvedShown[0] > 0)
-            {
-                md.append("\n> ⚠️ ").append(unresolvedShown[0]) //$NON-NLS-1$
-                  .append(" marker(s) could not be resolved and are shown with a placeholder location. ") //$NON-NLS-1$
-                  .append("Run clean_project / revalidate_objects to refresh them."); //$NON-NLS-1$
-            }
-            if (unresolvedFilteredOut[0] > 0)
-            {
-                md.append("\n> ⚠️ ").append(unresolvedFilteredOut[0]) //$NON-NLS-1$
-                  .append(" marker(s) were excluded from the object filter because their location could not be resolved. ") //$NON-NLS-1$
-                  .append("Run clean_project / revalidate_objects, or remove the objects filter, to include them."); //$NON-NLS-1$
-            }
-            
             return md.toString();
         }
         catch (Exception e)
         {
             Activator.logError("Error getting project errors", e); //$NON-NLS-1$
             return ToolResult.error("Failed to get project errors: " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Validates an explicit {@code projectName} filter. Returns the ready-to-return JSON error
+     * payload when the project is specified but does not exist, or {@code null} when no project
+     * was specified or it exists (in which case processing continues).
+     *
+     * @param projectName the project name filter, may be {@code null}/empty
+     * @return the JSON error string to return, or {@code null} to continue
+     */
+    private static String projectNotFoundErrorOrNull(String projectName)
+    {
+        if (projectName != null && !projectName.isEmpty())
+        {
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (!ctx.exists())
+            {
+                return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Normalizes the input object FQNs to support both English and Russian metadata type names.
+     * For each input FQN, generates all variants (original + English + Russian, lowercased) so
+     * markers can be matched regardless of the configuration language. A {@link Set} is used to
+     * deduplicate the variants. A {@code null} input yields an empty set.
+     *
+     * @param objects the requested object FQN filters, may be {@code null}
+     * @return the deduplicated, lowercased FQN variants (never {@code null})
+     */
+    private static Set<String> buildObjectFilterVariants(List<String> objects)
+    {
+        final Set<String> finalObjects = new HashSet<>();
+        if (objects != null)
+        {
+            for (String fqn : objects)
+            {
+                finalObjects.addAll(MetadataTypeUtils.getAllFqnVariants(fqn));
+            }
+        }
+        return finalObjects;
+    }
+
+    /**
+     * Groups all markers by their owning project in a single pass, honoring an optional
+     * {@code projectName} filter. {@link Marker#getProject()} does not touch
+     * {@code resolvedDataCache}, so this is safe outside a BM transaction. Grouping once avoids
+     * re-streaming all markers per project (previously O(markers x projects)). Marker
+     * presentation must still be resolved inside a BM read transaction bound to a single
+     * project's model, so the subsequent processing stays project by project.
+     *
+     * @param markerManager the marker manager supplying the markers
+     * @param projectName the project name filter, may be {@code null}/empty for all projects
+     * @return markers grouped by project, in encounter order
+     */
+    private static Map<IProject, List<Marker>> groupMarkersByProject(IMarkerManager markerManager,
+        String projectName)
+    {
+        Map<IProject, List<Marker>> markersByProject = new LinkedHashMap<>();
+        markerManager.markers().forEach(marker -> {
+            IProject markerProject = marker.getProject();
+            if (markerProject == null || !markerProject.exists())
+            {
+                return;
+            }
+            if (projectName != null && !projectName.isEmpty()
+                && !projectName.equals(markerProject.getName()))
+            {
+                return;
+            }
+            markersByProject.computeIfAbsent(markerProject, k -> new ArrayList<>()).add(marker);
+        });
+        return markersByProject;
+    }
+
+    /**
+     * Collects matching {@link ErrorInfo} entries from the per-project markers, applying the
+     * severity/checkId/objects filters and respecting {@code limit}. Each project's markers are
+     * processed inside a BM read transaction (when a model is available) so that
+     * {@link Marker#getObjectPresentation()} can resolve lazily; projects without a BM model are
+     * processed best-effort. The {@code unresolvedShown}/{@code unresolvedFilteredOut} holders
+     * are advanced as markers fail to resolve.
+     *
+     * @param markersByProject the markers grouped by project, in processing order
+     * @param bmModelManager the BM model manager, may be {@code null}
+     * @param severityFilter the severity filter, or {@code null} for all severities
+     * @param checkId the checkId substring filter, may be {@code null}/empty
+     * @param objects the normalized object FQN variants (empty for no object filter)
+     * @param checkRepository the check repository for symbolic id resolution, may be {@code null}
+     * @param limit the maximum number of collected errors
+     * @param unresolvedShown out-counter for markers reported with a placeholder location
+     * @param unresolvedFilteredOut out-counter for markers excluded by an active object filter
+     * @return the collected errors, capped at {@code limit}
+     */
+    private static List<ErrorInfo> collectErrors(Map<IProject, List<Marker>> markersByProject,
+        IBmModelManager bmModelManager, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, ICheckRepository checkRepository, int limit,
+        int[] unresolvedShown, int[] unresolvedFilteredOut)
+    {
+        final List<ErrorInfo> errors = new ArrayList<>();
+        for (Map.Entry<IProject, List<Marker>> entry : markersByProject.entrySet())
+        {
+            if (errors.size() >= limit)
+            {
+                break;
+            }
+
+            final List<Marker> projectMarkers = entry.getValue();
+            final int remaining = limit - errors.size();
+
+            // Resolve the project's BM model so getObjectPresentation() can lazily
+            // resolve the marker target inside a read transaction. The getModel(IProject)
+            // overload is the idiomatic path used across the plugin (FindReferencesTool,
+            // CreateMetadataTool, tag tools), so no IDtProjectManager is needed.
+            IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
+
+            Runnable collector = () -> projectMarkers.stream()
+                .map(marker -> buildIfMatches(marker, severityFilter, checkId,
+                    objects, checkRepository, unresolvedShown, unresolvedFilteredOut))
+                .filter(error -> error != null)
+                .limit(remaining)
+                .forEach(errors::add);
+
+            if (bmModel != null)
+            {
+                BmTransactions.<Void>read(bmModel, "CollectProjectErrors", (tx, pm) -> { //$NON-NLS-1$
+                    collector.run();
+                    return null;
+                });
+            }
+            else
+            {
+                // Not an EDT project (no BM model): best effort. Per-marker access is
+                // still guarded, so an unresolved marker is reported, never dropped.
+                collector.run();
+            }
+        }
+        return errors;
+    }
+
+    /**
+     * Appends the "No Errors Found" Markdown section, echoing whichever filters were applied
+     * (project, severity, objects), to {@code md}.
+     *
+     * @param md the Markdown builder to append to
+     * @param projectName the project filter, may be {@code null}/empty
+     * @param severity the severity filter, may be {@code null}/empty
+     * @param objects the object filters, may be {@code null}/empty
+     */
+    private static void appendNoErrorsSection(StringBuilder md, String projectName, String severity,
+        List<String> objects)
+    {
+        md.append("# No Errors Found\n\n"); //$NON-NLS-1$
+        if (projectName != null && !projectName.isEmpty())
+        {
+            md.append("Project: **").append(projectName).append("**\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (severity != null && !severity.isEmpty())
+        {
+            md.append("Severity filter: ").append(severity).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (objects != null && !objects.isEmpty())
+        {
+            md.append("Objects filter: ").append(String.join(", ", objects)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        md.append("\nNo configuration problems match the specified criteria."); //$NON-NLS-1$
+    }
+
+    /**
+     * Appends the "Configuration Problems" Markdown section — the found-count header, the
+     * table header and one row per error — to {@code md}.
+     *
+     * @param md the Markdown builder to append to
+     * @param errors the collected errors (must be non-empty)
+     * @param limit the result limit (drives the "limit reached" notice)
+     * @param detailed when {@code true} include the secondary {@code Has docs} column
+     */
+    private static void appendProblemsTable(StringBuilder md, List<ErrorInfo> errors, int limit,
+        boolean detailed)
+    {
+        md.append("# Configuration Problems\n\n"); //$NON-NLS-1$
+        md.append("**Found:** ").append(errors.size()); //$NON-NLS-1$
+        if (errors.size() >= limit)
+        {
+            md.append(Pagination.limitReachedNotice(limit));
+        }
+        md.append("\n\n"); //$NON-NLS-1$
+
+        appendProblemsTableHeader(md, detailed);
+        for (ErrorInfo error : errors)
+        {
+            appendProblemRow(md, error, detailed);
+        }
+    }
+
+    /**
+     * Appends the Configuration Problems table header to {@code md}. Built via the shared
+     * {@link MarkdownUtils} table builder so every cell is escaped. concise (default) drops the
+     * secondary 'Has docs' column to save tokens; detailed keeps the full historical set of
+     * columns. Every essential / actionable column (Description, Location, Module path, Line,
+     * Check code) is present in BOTH modes.
+     *
+     * @param md the Markdown builder to append to
+     * @param detailed when {@code true} include the secondary {@code Has docs} column
+     */
+    private static void appendProblemsTableHeader(StringBuilder md, boolean detailed)
+    {
+        if (detailed)
+        {
+            md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
+                "Module path", "Line", "Check code", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        else
+        {
+            md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
+                "Module path", "Line", "Check code")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+    }
+
+    /**
+     * Appends a single Configuration Problems table row for {@code error} to {@code md},
+     * matching the column set selected by {@code detailed}.
+     *
+     * @param md the Markdown builder to append to
+     * @param error the error to render
+     * @param detailed when {@code true} include the secondary {@code Has docs} cell
+     */
+    private static void appendProblemRow(StringBuilder md, ErrorInfo error, boolean detailed)
+    {
+        // Show symbolic check ID if available, otherwise show check code
+        String displayCheckId = error.checkId != null && !error.checkId.isEmpty()
+            ? error.checkId
+            : error.checkCode;
+        // Wrap the check code in backticks; tableRow escapes the cell, so do NOT
+        // pre-escape here (double-escaping would mangle a pipe in the id).
+        String checkCell = "`" + (displayCheckId != null ? displayCheckId : "") + "`"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String modulePathCell = error.modulePath != null ? error.modulePath : ""; //$NON-NLS-1$
+        String lineCell = error.line != null ? error.line.toString() : ""; //$NON-NLS-1$
+
+        if (detailed)
+        {
+            md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
+                modulePathCell, lineCell, checkCell,
+                error.hasDocumentation ? "true" : "false")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
+                modulePathCell, lineCell, checkCell));
+        }
+    }
+
+    /**
+     * Surfaces unresolved markers explicitly instead of silently dropping them, appending the
+     * two distinct warning blocks to {@code md} when their counters are positive. They are
+     * reported separately so each warning matches reality.
+     *
+     * @param md the Markdown builder to append to
+     * @param unresolvedShown count of markers reported with a placeholder location
+     * @param unresolvedFilteredOut count of markers excluded by an active object filter
+     */
+    private static void appendUnresolvedWarnings(StringBuilder md, int[] unresolvedShown,
+        int[] unresolvedFilteredOut)
+    {
+        if (unresolvedShown[0] > 0)
+        {
+            md.append("\n> ⚠️ ").append(unresolvedShown[0]) //$NON-NLS-1$
+              .append(" marker(s) could not be resolved and are shown with a placeholder location. ") //$NON-NLS-1$
+              .append("Run clean_project / revalidate_objects to refresh them."); //$NON-NLS-1$
+        }
+        if (unresolvedFilteredOut[0] > 0)
+        {
+            md.append("\n> ⚠️ ").append(unresolvedFilteredOut[0]) //$NON-NLS-1$
+              .append(" marker(s) were excluded from the object filter because their location could not be resolved. ") //$NON-NLS-1$
+              .append("Run clean_project / revalidate_objects, or remove the objects filter, to include them."); //$NON-NLS-1$
         }
     }
     
@@ -434,37 +570,11 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         
         // Objects filter (FQN matching against the resolved object presentation)
-        if (!objects.isEmpty())
+        if (excludedByObjectsFilter(objects, presentationResolved, objectPresentation, unresolvedFilteredOut))
         {
-            if (!presentationResolved)
-            {
-                // Cannot resolve the location, so we cannot decide membership for an
-                // explicit object filter. The marker is excluded from the result; count it
-                // separately so the caller is warned that it was filtered out, not shown.
-                unresolvedFilteredOut[0]++;
-                return null;
-            }
-            if (objectPresentation.isEmpty())
-            {
-                return null;
-            }
-            
-            String presentationLower = objectPresentation.toLowerCase();
-            boolean matched = false;
-            for (String fqnVariant : objects)
-            {
-                if (presentationLower.contains(fqnVariant))
-                {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched)
-            {
-                return null;
-            }
+            return null;
         }
-        
+
         // Build the ErrorInfo, reusing the already resolved symbolic check id and presentation.
         ErrorInfo error = new ErrorInfo();
         error.checkCode = shortUid;
@@ -491,7 +601,45 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         return error;
     }
-    
+
+    /**
+     * Decides whether the marker is excluded by an explicit objects filter, matching the
+     * resolved object presentation against the FQN variants. Returns {@code false} when no
+     * objects filter is active. As a side effect, increments {@code unresolvedFilteredOut}
+     * for a marker whose presentation could not be resolved while a filter is active (the
+     * marker is excluded but counted separately so the caller can warn about it).
+     */
+    static boolean excludedByObjectsFilter(Set<String> objects, boolean presentationResolved,
+        String objectPresentation, int[] unresolvedFilteredOut)
+    {
+        if (objects.isEmpty())
+        {
+            return false;
+        }
+        if (!presentationResolved)
+        {
+            // Cannot resolve the location, so we cannot decide membership for an
+            // explicit object filter. The marker is excluded from the result; count it
+            // separately so the caller is warned that it was filtered out, not shown.
+            unresolvedFilteredOut[0]++;
+            return true;
+        }
+        if (objectPresentation.isEmpty())
+        {
+            return true;
+        }
+
+        String presentationLower = objectPresentation.toLowerCase();
+        for (String fqnVariant : objects)
+        {
+            if (presentationLower.contains(fqnVariant))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * Resolves the symbolic check id (e.g. "bsl-legacy-check-expression-type") for a marker's
      * short UID (e.g. "SU23") exactly once. Returns {@code null} when it cannot be resolved.

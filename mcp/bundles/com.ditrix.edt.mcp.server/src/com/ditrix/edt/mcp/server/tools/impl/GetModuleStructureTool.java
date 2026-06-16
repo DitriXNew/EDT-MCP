@@ -285,6 +285,17 @@ public class GetModuleStructureTool implements IMcpTool
         }
         boolean showComments = detailed && hasComments;
 
+        appendMethodsTableHeader(sb, detailed, showComments);
+        appendMethodsTableRows(sb, methods, detailed, showComments);
+    }
+
+    /**
+     * Appends the {@code ### Methods} title and the markdown header/separator rows. The column
+     * set mirrors {@link #appendMethodsTableRows}: detailed adds the Parameters column, and
+     * detailed+comments additionally adds the Description column; concise drops both.
+     */
+    private void appendMethodsTableHeader(StringBuilder sb, boolean detailed, boolean showComments)
+    {
         sb.append("### Methods\n\n"); //$NON-NLS-1$
         if (detailed)
         {
@@ -304,7 +315,16 @@ public class GetModuleStructureTool implements IMcpTool
             sb.append("| # | Type | Name | Export | Context | Lines | Region |\n"); //$NON-NLS-1$
             sb.append("|---|------|------|--------|---------|-------|--------|\n"); //$NON-NLS-1$
         }
+    }
 
+    /**
+     * Appends one markdown table row per method, with the same column set the header advertises:
+     * the Parameters column only in {@code detailed} mode, the Description column only when
+     * {@code showComments} (detailed + collected doc-comments).
+     */
+    private void appendMethodsTableRows(StringBuilder sb, List<MethodInfo> methods,
+        boolean detailed, boolean showComments)
+    {
         int idx = 1;
         for (MethodInfo m : methods)
         {

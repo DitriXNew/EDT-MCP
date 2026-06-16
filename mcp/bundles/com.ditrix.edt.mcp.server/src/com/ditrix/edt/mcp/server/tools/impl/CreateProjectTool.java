@@ -492,173 +492,43 @@ public class CreateProjectTool implements IMcpTool
         String prefix, String synonym, String comment, String purposeStr, String compatModeStr,
         boolean standardChecks, boolean commonChecks)
     {
-        // baseProjectName required for extension
-        if (baseProjectName == null || baseProjectName.trim().isEmpty())
+        // Validate the base project and new project name (read-only)
+        BaseProjectResolution baseResolution = validateExtensionBaseProject(configName, projectName, baseProjectName);
+        if (baseResolution.error != null)
         {
-            return ToolResult.error(
-                "'baseProjectName' is required for projectKind=extension. " //$NON-NLS-1$
-                    + "Use list_projects to find the base configuration project name.").toJson(); //$NON-NLS-1$
+            return baseResolution.error;
         }
-        baseProjectName = baseProjectName.trim();
+        baseProjectName = baseResolution.baseProjectName;
+        String effectiveProjectName = baseResolution.effectiveProjectName;
+        IProject baseIProject = baseResolution.baseIProject;
 
-        // Derive default EDT project name: <baseProjectName>.<configName>
-        String effectiveProjectName = (projectName != null) ? projectName
-            : baseProjectName + "." + configName; //$NON-NLS-1$
-
-        // Check the new project name does not already exist
-        if (ProjectContext.of(effectiveProjectName).exists())
+        // Resolve services and base-configuration model handles (read-only)
+        ExtensionServices services = resolveExtensionServices(baseIProject, baseProjectName);
+        if (services.error != null)
         {
-            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
-                + ERR_PROJECT_EXISTS_SUFFIX).toJson();
+            return services.error;
         }
-
-        // Validate the base project
-        ProjectContext baseCtx = ProjectContext.of(baseProjectName);
-        if (!baseCtx.exists())
-        {
-            return ToolResult.error(ProjectContext.notFoundMessage(baseProjectName)).toJson();
-        }
-        if (!baseCtx.isOpen())
-        {
-            return ToolResult.error("Base project '" + baseProjectName //$NON-NLS-1$
-                + "' exists but is not open. Open it first.").toJson(); //$NON-NLS-1$
-        }
-        IProject baseIProject = baseCtx.project();
-
-        // Validate the base project has V8ConfigurationNature (not an extension itself)
-        try
-        {
-            if (!baseIProject.hasNature(NATURE_CONFIGURATION))
-            {
-                return ToolResult.error("'" + baseProjectName //$NON-NLS-1$
-                    + "' is not a configuration project (V8ConfigurationNature). " //$NON-NLS-1$
-                    + "Pass the BASE configuration's project name, not an extension.").toJson(); //$NON-NLS-1$
-            }
-        }
-        catch (Exception e)
-        {
-            Activator.logError(LOG_PREFIX + "error checking nature for " + baseProjectName, e); //$NON-NLS-1$
-            return ToolResult.error("Failed to inspect base project nature: " + e.getMessage()).toJson(); //$NON-NLS-1$
-        }
-
-        // Resolve services
-        IExtensionProjectManager extMgr = Activator.getDefault().getExtensionProjectManager();
-        if (extMgr == null)
-        {
-            return ToolResult.error(
-                "IExtensionProjectManager service not available. The EDT platform may not be ready.").toJson(); //$NON-NLS-1$
-        }
-
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        if (v8ProjectManager == null)
-        {
-            return ToolResult.error("IV8ProjectManager service not available.").toJson(); //$NON-NLS-1$
-        }
-
-        IV8Project baseV8Project = v8ProjectManager.getProject(baseIProject);
-        if (baseV8Project == null)
-        {
-            return ToolResult.error("Could not obtain IV8Project for base project '" //$NON-NLS-1$
-                + baseProjectName + "'. Ensure the project is fully loaded.").toJson(); //$NON-NLS-1$
-        }
-
-        Version version = baseV8Project.getVersion();
-
-        IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
-        if (factory == null)
-        {
-            return ToolResult.error("IModelObjectFactory (MD) not available. MdPlugin may not be ready.").toJson(); //$NON-NLS-1$
-        }
-
-        // Resolve the base configuration for ScriptVariant and synonym language
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        Configuration baseConfig = (configProvider != null)
-            ? configProvider.getConfiguration(baseIProject)
-            : null;
-
-        if (baseConfig == null)
-        {
-            return ToolResult.error("The configuration model of base project '" + baseProjectName //$NON-NLS-1$
-                + "' is not loaded yet (the project may still be indexing). " //$NON-NLS-1$
-                + "Wait until the project is ready and retry.").toJson(); //$NON-NLS-1$
-        }
-        ScriptVariant scriptVariant = baseConfig.getScriptVariant();
-        if (scriptVariant == null)
-        {
-            scriptVariant = ScriptVariant.RUSSIAN;
-        }
+        IExtensionProjectManager extMgr = services.extMgr;
+        IModelObjectFactory factory = services.factory;
+        Configuration baseConfig = services.baseConfig;
+        Version version = services.version;
+        ScriptVariant scriptVariant = services.scriptVariant;
 
         // Validate purpose
-        ConfigurationExtensionPurpose purpose = ConfigurationExtensionPurpose.CUSTOMIZATION;
-        if (purposeStr != null && !purposeStr.isEmpty())
+        PurposeResolution purposeResolution = resolveExtensionPurpose(purposeStr);
+        if (purposeResolution.error != null)
         {
-            switch (purposeStr)
-            {
-                case "Customization": //$NON-NLS-1$
-                    purpose = ConfigurationExtensionPurpose.CUSTOMIZATION;
-                    break;
-                case "AddOn": //$NON-NLS-1$
-                    purpose = ConfigurationExtensionPurpose.ADD_ON;
-                    break;
-                case "Patch": //$NON-NLS-1$
-                    purpose = ConfigurationExtensionPurpose.PATCH;
-                    break;
-                default:
-                    return ToolResult.error("Unknown purpose value: '" + purposeStr //$NON-NLS-1$
-                        + "'. Allowed values: Customization, AddOn, Patch.").toJson(); //$NON-NLS-1$
-            }
+            return purposeResolution.error;
         }
+        ConfigurationExtensionPurpose purpose = purposeResolution.purpose;
 
         // Validate CompatibilityMode if supplied
-        CompatibilityMode compatMode = null;
-        if (compatModeStr != null)
+        CompatModeResolution compatModeResolution = resolveCompatibilityMode(compatModeStr);
+        if (compatModeResolution.error != null)
         {
-            compatMode = CompatibilityMode.get(compatModeStr);
-            if (compatMode == null)
-            {
-                String normalizedInput = compatModeStr.replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
-                for (CompatibilityMode candidate : CompatibilityMode.VALUES)
-                {
-                    String normalizedCandidate = candidate.getLiteral()
-                        .replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
-                    if (normalizedInput.equals(normalizedCandidate))
-                    {
-                        compatMode = candidate;
-                        break;
-                    }
-                    String normalizedName = candidate.getName()
-                        .replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
-                    if (normalizedInput.equals(normalizedName))
-                    {
-                        compatMode = candidate;
-                        break;
-                    }
-                }
-            }
-            if (compatMode == null)
-            {
-                StringBuilder examples = new StringBuilder();
-                int shown = 0;
-                for (CompatibilityMode candidate : CompatibilityMode.VALUES)
-                {
-                    if (shown > 0)
-                    {
-                        examples.append(", "); //$NON-NLS-1$
-                    }
-                    examples.append("'").append(candidate.getLiteral()).append("'"); //$NON-NLS-1$ //$NON-NLS-2$
-                    shown++;
-                    if (shown >= 3)
-                    {
-                        break;
-                    }
-                }
-                int total = CompatibilityMode.VALUES.size();
-                return ToolResult.error("Unknown compatibilityMode value: '" + compatModeStr //$NON-NLS-1$
-                    + "'. Use a CompatibilityMode enum literal (e.g. " + examples //$NON-NLS-1$
-                    + (total > 3 ? " and " + (total - 3) + " more" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + "), or omit for the factory default.").toJson(); //$NON-NLS-1$
-            }
+            return compatModeResolution.error;
         }
+        CompatibilityMode compatMode = compatModeResolution.compatMode;
 
         // Build the extension Configuration model object
         Configuration config = (Configuration) factory.create(MdClassPackage.Literals.CONFIGURATION, version);
@@ -680,22 +550,7 @@ public class CreateProjectTool implements IMcpTool
         }
 
         // Set synonym via language-code-keyed EMap
-        String synonymValue = (synonym != null && !synonym.isEmpty()) ? synonym : configName;
-        String langCode = MetadataLanguageUtils.resolveLanguageCode(baseConfig, null);
-        if (langCode == null)
-        {
-            langCode = MetadataLanguageUtils.resolveLanguageCode(config, null);
-        }
-        boolean synonymApplied = false;
-        if (langCode != null)
-        {
-            EMap<String, String> synonymMap = config.getSynonym();
-            if (synonymMap != null)
-            {
-                synonymMap.put(langCode, synonymValue);
-                synonymApplied = true;
-            }
-        }
+        boolean synonymApplied = applyExtensionSynonym(config, baseConfig, configName, synonym);
 
         // Create the extension project in a background Job
         final IProject[] createdHolder = new IProject[1];
@@ -730,30 +585,8 @@ public class CreateProjectTool implements IMcpTool
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
             // Creation completed past the wait window — build the full extension response
-            ToolResult slowResult = ToolResult.success()
-                .put(McpKeys.ACTION, VAL_CREATED)
-                .put(McpKeys.PROJECT, finalEffectiveProjectName)
-                .put(KEY_PROJECT_KIND, KIND_EXTENSION)
-                .put("name", configName) //$NON-NLS-1$
-                .put(KEY_BASE_PROJECT, baseProjectName)
-                .put(KEY_PREFIX, prefix)
-                .put(KEY_PURPOSE, finalPurpose.getLiteral())
-                .put(KEY_SCRIPT_VARIANT, finalScriptVariant.getLiteral())
-                .put(KEY_VERSION, version.toString())
-                .put(KEY_STATE, VAL_CREATED)
-                .put(KEY_CODESTYLE, slowPathCodestyleMap())
-                .put(McpKeys.MESSAGE, "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$
-                    + "' created and bound to '" + baseProjectName //$NON-NLS-1$
-                    + "' (creation completed past the " //$NON-NLS-1$
-                    + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
-            // Mirror the normal success path: report when the synonym could not be applied.
-            if (!synonymApplied)
-            {
-                slowResult.put(KEY_SYNONYM_NOTE,
-                    "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
-                        + "the base configuration or the new extension configuration."); //$NON-NLS-1$
-            }
-            return slowResult.toJson();
+            return buildExtensionSlowResponse(finalEffectiveProjectName, configName, baseProjectName, prefix,
+                finalPurpose, finalScriptVariant, version, synonymApplied);
         }
         if (jobResult.errorJson != null)
         {
@@ -777,27 +610,8 @@ public class CreateProjectTool implements IMcpTool
         // Apply v8codestyle preferences
         Map<String, Object> codestyleMap = applyCodestylePrefs(finalEffectiveProjectName, standardChecks, commonChecks);
 
-        ToolResult result = ToolResult.success()
-            .put(McpKeys.ACTION, VAL_CREATED)
-            .put(McpKeys.PROJECT, finalEffectiveProjectName)
-            .put(KEY_PROJECT_KIND, KIND_EXTENSION)
-            .put("name", configName) //$NON-NLS-1$
-            .put(KEY_BASE_PROJECT, baseProjectName)
-            .put(KEY_PREFIX, prefix)
-            .put(KEY_PURPOSE, finalPurpose.getLiteral())
-            .put(KEY_SCRIPT_VARIANT, finalScriptVariant.getLiteral())
-            .put(KEY_VERSION, version.toString())
-            .put(KEY_STATE, projectState)
-            .put(KEY_CODESTYLE, codestyleMap)
-            .put(McpKeys.MESSAGE, "Extension project '" + finalEffectiveProjectName //$NON-NLS-1$
-                + "' created and bound to '" + baseProjectName + "'."); //$NON-NLS-1$ //$NON-NLS-2$
-        if (!synonymApplied)
-        {
-            result.put(KEY_SYNONYM_NOTE,
-                "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
-                    + "the base configuration or the new extension configuration."); //$NON-NLS-1$
-        }
-        return result.toJson();
+        return buildExtensionSuccessResponse(finalEffectiveProjectName, configName, baseProjectName, prefix,
+            finalPurpose, finalScriptVariant, version, projectState, codestyleMap, synonymApplied);
     }
 
     // ─────────────────────── CONFIGURATION path ──────────────────────────────
@@ -1263,6 +1077,452 @@ public class CreateProjectTool implements IMcpTool
             this.status = status;
             this.errorJson = errorJson;
         }
+    }
+
+    /**
+     * Outcome of {@link #validateExtensionBaseProject}: either a ready-to-return JSON
+     * {@code error}, or the validated base-project handles. Exactly one of {@code error}
+     * and {@code baseIProject} is non-null on success/failure respectively.
+     */
+    private static final class BaseProjectResolution
+    {
+        /** Ready-to-return JSON error, or {@code null} when validation passed. */
+        final String error;
+        /** Trimmed base project name (non-null when {@code error} is null). */
+        final String baseProjectName;
+        /** Derived EDT project name for the new extension (non-null when {@code error} is null). */
+        final String effectiveProjectName;
+        /** The validated, open base {@link IProject} (non-null when {@code error} is null). */
+        final IProject baseIProject;
+
+        private BaseProjectResolution(String error, String baseProjectName, String effectiveProjectName,
+            IProject baseIProject)
+        {
+            this.error = error;
+            this.baseProjectName = baseProjectName;
+            this.effectiveProjectName = effectiveProjectName;
+            this.baseIProject = baseIProject;
+        }
+
+        static BaseProjectResolution failure(String error)
+        {
+            return new BaseProjectResolution(error, null, null, null);
+        }
+
+        static BaseProjectResolution ok(String baseProjectName, String effectiveProjectName, IProject baseIProject)
+        {
+            return new BaseProjectResolution(null, baseProjectName, effectiveProjectName, baseIProject);
+        }
+    }
+
+    /**
+     * Outcome of {@link #resolveExtensionServices}: either a ready-to-return JSON {@code error},
+     * or the platform services/model handles needed to build the extension Configuration. All
+     * value fields are non-null exactly when {@code error} is null.
+     */
+    private static final class ExtensionServices
+    {
+        /** Ready-to-return JSON error, or {@code null} when resolution succeeded. */
+        final String error;
+        final IExtensionProjectManager extMgr;
+        final IModelObjectFactory factory;
+        final Configuration baseConfig;
+        final Version version;
+        final ScriptVariant scriptVariant;
+
+        private ExtensionServices(String error, IExtensionProjectManager extMgr, IModelObjectFactory factory,
+            Configuration baseConfig, Version version, ScriptVariant scriptVariant)
+        {
+            this.error = error;
+            this.extMgr = extMgr;
+            this.factory = factory;
+            this.baseConfig = baseConfig;
+            this.version = version;
+            this.scriptVariant = scriptVariant;
+        }
+
+        static ExtensionServices failure(String error)
+        {
+            return new ExtensionServices(error, null, null, null, null, null);
+        }
+
+        static ExtensionServices ok(IExtensionProjectManager extMgr, IModelObjectFactory factory,
+            Configuration baseConfig, Version version, ScriptVariant scriptVariant)
+        {
+            return new ExtensionServices(null, extMgr, factory, baseConfig, version, scriptVariant);
+        }
+    }
+
+    /**
+     * Outcome of {@link #resolveExtensionPurpose}: either a ready-to-return JSON {@code error},
+     * or the resolved {@link ConfigurationExtensionPurpose}. Exactly one field is non-null.
+     */
+    private static final class PurposeResolution
+    {
+        final String error;
+        final ConfigurationExtensionPurpose purpose;
+
+        private PurposeResolution(String error, ConfigurationExtensionPurpose purpose)
+        {
+            this.error = error;
+            this.purpose = purpose;
+        }
+    }
+
+    /**
+     * Outcome of {@link #resolveCompatibilityMode}: either a ready-to-return JSON {@code error},
+     * or the resolved {@link CompatibilityMode} (which may legitimately be {@code null} when no
+     * value was supplied). The {@code error} field disambiguates the two null cases.
+     */
+    private static final class CompatModeResolution
+    {
+        final String error;
+        final CompatibilityMode compatMode;
+
+        private CompatModeResolution(String error, CompatibilityMode compatMode)
+        {
+            this.error = error;
+            this.compatMode = compatMode;
+        }
+    }
+
+    /**
+     * Validates the extension's base project and the new project name (read-only). Trims
+     * {@code baseProjectName}, requires it to be non-blank, derives the EDT project name
+     * ({@code projectName} or {@code <baseProjectName>.<configName>}), and verifies that the
+     * new project does not already exist and that the base project exists, is open and carries
+     * {@code V8ConfigurationNature}.
+     *
+     * @return {@link BaseProjectResolution#ok} with the validated handles, or
+     *     {@link BaseProjectResolution#failure} carrying a ready-to-return JSON error
+     */
+    private BaseProjectResolution validateExtensionBaseProject(String configName, String projectName,
+        String baseProjectName)
+    {
+        // baseProjectName required for extension
+        if (baseProjectName == null || baseProjectName.trim().isEmpty())
+        {
+            return BaseProjectResolution.failure(ToolResult.error(
+                "'baseProjectName' is required for projectKind=extension. " //$NON-NLS-1$
+                    + "Use list_projects to find the base configuration project name.").toJson()); //$NON-NLS-1$
+        }
+        baseProjectName = baseProjectName.trim();
+
+        // Derive default EDT project name: <baseProjectName>.<configName>
+        String effectiveProjectName = (projectName != null) ? projectName
+            : baseProjectName + "." + configName; //$NON-NLS-1$
+
+        // Check the new project name does not already exist
+        if (ProjectContext.of(effectiveProjectName).exists())
+        {
+            return BaseProjectResolution.failure(ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
+                + ERR_PROJECT_EXISTS_SUFFIX).toJson());
+        }
+
+        // Validate the base project
+        ProjectContext baseCtx = ProjectContext.of(baseProjectName);
+        if (!baseCtx.exists())
+        {
+            return BaseProjectResolution.failure(ToolResult.error(ProjectContext.notFoundMessage(baseProjectName)).toJson());
+        }
+        if (!baseCtx.isOpen())
+        {
+            return BaseProjectResolution.failure(ToolResult.error("Base project '" + baseProjectName //$NON-NLS-1$
+                + "' exists but is not open. Open it first.").toJson()); //$NON-NLS-1$
+        }
+        IProject baseIProject = baseCtx.project();
+
+        // Validate the base project has V8ConfigurationNature (not an extension itself)
+        try
+        {
+            if (!baseIProject.hasNature(NATURE_CONFIGURATION))
+            {
+                return BaseProjectResolution.failure(ToolResult.error("'" + baseProjectName //$NON-NLS-1$
+                    + "' is not a configuration project (V8ConfigurationNature). " //$NON-NLS-1$
+                    + "Pass the BASE configuration's project name, not an extension.").toJson()); //$NON-NLS-1$
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logError(LOG_PREFIX + "error checking nature for " + baseProjectName, e); //$NON-NLS-1$
+            return BaseProjectResolution.failure(
+                ToolResult.error("Failed to inspect base project nature: " + e.getMessage()).toJson()); //$NON-NLS-1$
+        }
+
+        return BaseProjectResolution.ok(baseProjectName, effectiveProjectName, baseIProject);
+    }
+
+    /**
+     * Resolves the platform services and base-configuration model handles needed to build the
+     * extension Configuration (read-only lookups). Resolves {@link IExtensionProjectManager},
+     * {@link IV8ProjectManager} (to read the base {@link Version}), {@link IModelObjectFactory},
+     * the base {@link Configuration} and its {@link ScriptVariant} (defaulting to
+     * {@link ScriptVariant#RUSSIAN} when unset).
+     *
+     * @return {@link ExtensionServices#ok} with the resolved handles, or
+     *     {@link ExtensionServices#failure} carrying a ready-to-return JSON error
+     */
+    private ExtensionServices resolveExtensionServices(IProject baseIProject, String baseProjectName)
+    {
+        IExtensionProjectManager extMgr = Activator.getDefault().getExtensionProjectManager();
+        if (extMgr == null)
+        {
+            return ExtensionServices.failure(ToolResult.error(
+                "IExtensionProjectManager service not available. The EDT platform may not be ready.").toJson()); //$NON-NLS-1$
+        }
+
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        if (v8ProjectManager == null)
+        {
+            return ExtensionServices.failure(ToolResult.error("IV8ProjectManager service not available.").toJson()); //$NON-NLS-1$
+        }
+
+        IV8Project baseV8Project = v8ProjectManager.getProject(baseIProject);
+        if (baseV8Project == null)
+        {
+            return ExtensionServices.failure(ToolResult.error("Could not obtain IV8Project for base project '" //$NON-NLS-1$
+                + baseProjectName + "'. Ensure the project is fully loaded.").toJson()); //$NON-NLS-1$
+        }
+
+        Version version = baseV8Project.getVersion();
+
+        IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
+        if (factory == null)
+        {
+            return ExtensionServices.failure(
+                ToolResult.error("IModelObjectFactory (MD) not available. MdPlugin may not be ready.").toJson()); //$NON-NLS-1$
+        }
+
+        // Resolve the base configuration for ScriptVariant and synonym language
+        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
+        Configuration baseConfig = (configProvider != null)
+            ? configProvider.getConfiguration(baseIProject)
+            : null;
+
+        if (baseConfig == null)
+        {
+            return ExtensionServices.failure(ToolResult.error("The configuration model of base project '" + baseProjectName //$NON-NLS-1$
+                + "' is not loaded yet (the project may still be indexing). " //$NON-NLS-1$
+                + "Wait until the project is ready and retry.").toJson()); //$NON-NLS-1$
+        }
+        ScriptVariant scriptVariant = baseConfig.getScriptVariant();
+        if (scriptVariant == null)
+        {
+            scriptVariant = ScriptVariant.RUSSIAN;
+        }
+
+        return ExtensionServices.ok(extMgr, factory, baseConfig, version, scriptVariant);
+    }
+
+    /**
+     * Maps the {@code purpose} parameter string to a {@link ConfigurationExtensionPurpose}
+     * (read-only). Defaults to {@link ConfigurationExtensionPurpose#CUSTOMIZATION} when blank.
+     *
+     * @return a {@link PurposeResolution} carrying the resolved purpose, or a ready-to-return
+     *     JSON error for an unknown value
+     */
+    private static PurposeResolution resolveExtensionPurpose(String purposeStr)
+    {
+        ConfigurationExtensionPurpose purpose = ConfigurationExtensionPurpose.CUSTOMIZATION;
+        if (purposeStr != null && !purposeStr.isEmpty())
+        {
+            switch (purposeStr)
+            {
+                case "Customization": //$NON-NLS-1$
+                    purpose = ConfigurationExtensionPurpose.CUSTOMIZATION;
+                    break;
+                case "AddOn": //$NON-NLS-1$
+                    purpose = ConfigurationExtensionPurpose.ADD_ON;
+                    break;
+                case "Patch": //$NON-NLS-1$
+                    purpose = ConfigurationExtensionPurpose.PATCH;
+                    break;
+                default:
+                    return new PurposeResolution(ToolResult.error("Unknown purpose value: '" + purposeStr //$NON-NLS-1$
+                        + "'. Allowed values: Customization, AddOn, Patch.").toJson(), null); //$NON-NLS-1$
+            }
+        }
+        return new PurposeResolution(null, purpose);
+    }
+
+    /**
+     * Resolves the optional {@code compatibilityMode} string to a {@link CompatibilityMode}
+     * (read-only). Tries an exact {@link CompatibilityMode#get} first, then a normalized
+     * (alphanumeric, lower-cased) match against each candidate's literal and name. A {@code null}
+     * {@code compatModeStr} yields a {@code null} mode with no error.
+     *
+     * @return a {@link CompatModeResolution} carrying the resolved mode (possibly {@code null}),
+     *     or a ready-to-return JSON error for an unknown value
+     */
+    private static CompatModeResolution resolveCompatibilityMode(String compatModeStr)
+    {
+        CompatibilityMode compatMode = null;
+        if (compatModeStr != null)
+        {
+            compatMode = CompatibilityMode.get(compatModeStr);
+            if (compatMode == null)
+            {
+                compatMode = matchCompatibilityModeByNormalizedName(compatModeStr);
+            }
+            if (compatMode == null)
+            {
+                return new CompatModeResolution(buildUnknownCompatModeError(compatModeStr), null);
+            }
+        }
+        return new CompatModeResolution(null, compatMode);
+    }
+
+    /**
+     * Finds the {@link CompatibilityMode} whose literal or name matches {@code compatModeStr}
+     * after stripping non-alphanumerics and lower-casing both sides (read-only).
+     *
+     * @return the matching mode, or {@code null} when none matches
+     */
+    private static CompatibilityMode matchCompatibilityModeByNormalizedName(String compatModeStr)
+    {
+        String normalizedInput = compatModeStr.replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
+        for (CompatibilityMode candidate : CompatibilityMode.VALUES)
+        {
+            String normalizedCandidate = candidate.getLiteral()
+                .replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
+            if (normalizedInput.equals(normalizedCandidate))
+            {
+                return candidate;
+            }
+            String normalizedName = candidate.getName()
+                .replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
+            if (normalizedInput.equals(normalizedName))
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Builds the ready-to-return JSON error for an unrecognized {@code compatibilityMode} value,
+     * listing up to the first three known literals as examples (read-only).
+     */
+    private static String buildUnknownCompatModeError(String compatModeStr)
+    {
+        StringBuilder examples = new StringBuilder();
+        int shown = 0;
+        for (CompatibilityMode candidate : CompatibilityMode.VALUES)
+        {
+            if (shown > 0)
+            {
+                examples.append(", "); //$NON-NLS-1$
+            }
+            examples.append("'").append(candidate.getLiteral()).append("'"); //$NON-NLS-1$ //$NON-NLS-2$
+            shown++;
+            if (shown >= 3)
+            {
+                break;
+            }
+        }
+        int total = CompatibilityMode.VALUES.size();
+        return ToolResult.error("Unknown compatibilityMode value: '" + compatModeStr //$NON-NLS-1$
+            + "'. Use a CompatibilityMode enum literal (e.g. " + examples //$NON-NLS-1$
+            + (total > 3 ? " and " + (total - 3) + " more" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "), or omit for the factory default.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Applies the synonym to the in-memory extension {@link Configuration} via its
+     * language-code-keyed {@code synonym} EMap (in-memory model mutation only — no workspace
+     * side effects). The synonym value defaults to {@code configName} when {@code synonym} is
+     * blank; the language code is resolved from the base configuration, falling back to the new
+     * configuration.
+     *
+     * @return {@code true} when the synonym was applied; {@code false} when no language code or
+     *     synonym map was available
+     */
+    private static boolean applyExtensionSynonym(Configuration config, Configuration baseConfig,
+        String configName, String synonym)
+    {
+        String synonymValue = (synonym != null && !synonym.isEmpty()) ? synonym : configName;
+        String langCode = MetadataLanguageUtils.resolveLanguageCode(baseConfig, null);
+        if (langCode == null)
+        {
+            langCode = MetadataLanguageUtils.resolveLanguageCode(config, null);
+        }
+        if (langCode != null)
+        {
+            EMap<String, String> synonymMap = config.getSynonym();
+            if (synonymMap != null)
+            {
+                synonymMap.put(langCode, synonymValue);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Builds the slow-path JSON response for a created extension project (read-only): creation
+     * completed past the wait window, so {@code state="created"} and {@code codestyle.applied=false}.
+     * Mirrors the normal success response, adding {@code synonymNote} when the synonym could not
+     * be applied.
+     */
+    private static String buildExtensionSlowResponse(String effectiveProjectName, String configName,
+        String baseProjectName, String prefix, ConfigurationExtensionPurpose purpose, ScriptVariant scriptVariant,
+        Version version, boolean synonymApplied)
+    {
+        ToolResult slowResult = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put(McpKeys.PROJECT, effectiveProjectName)
+            .put(KEY_PROJECT_KIND, KIND_EXTENSION)
+            .put("name", configName) //$NON-NLS-1$
+            .put(KEY_BASE_PROJECT, baseProjectName)
+            .put(KEY_PREFIX, prefix)
+            .put(KEY_PURPOSE, purpose.getLiteral())
+            .put(KEY_SCRIPT_VARIANT, scriptVariant.getLiteral())
+            .put(KEY_VERSION, version.toString())
+            .put(KEY_STATE, VAL_CREATED)
+            .put(KEY_CODESTYLE, slowPathCodestyleMap())
+            .put(McpKeys.MESSAGE, "Extension project '" + effectiveProjectName //$NON-NLS-1$
+                + "' created and bound to '" + baseProjectName //$NON-NLS-1$
+                + "' (creation completed past the " //$NON-NLS-1$
+                + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
+        // Mirror the normal success path: report when the synonym could not be applied.
+        if (!synonymApplied)
+        {
+            slowResult.put(KEY_SYNONYM_NOTE,
+                "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
+                    + "the base configuration or the new extension configuration."); //$NON-NLS-1$
+        }
+        return slowResult.toJson();
+    }
+
+    /**
+     * Builds the normal success JSON response for a created extension project (read-only),
+     * adding {@code synonymNote} when the synonym could not be applied.
+     */
+    private static String buildExtensionSuccessResponse(String effectiveProjectName, String configName,
+        String baseProjectName, String prefix, ConfigurationExtensionPurpose purpose, ScriptVariant scriptVariant,
+        Version version, String projectState, Map<String, Object> codestyleMap, boolean synonymApplied)
+    {
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put(McpKeys.PROJECT, effectiveProjectName)
+            .put(KEY_PROJECT_KIND, KIND_EXTENSION)
+            .put("name", configName) //$NON-NLS-1$
+            .put(KEY_BASE_PROJECT, baseProjectName)
+            .put(KEY_PREFIX, prefix)
+            .put(KEY_PURPOSE, purpose.getLiteral())
+            .put(KEY_SCRIPT_VARIANT, scriptVariant.getLiteral())
+            .put(KEY_VERSION, version.toString())
+            .put(KEY_STATE, projectState)
+            .put(KEY_CODESTYLE, codestyleMap)
+            .put(McpKeys.MESSAGE, "Extension project '" + effectiveProjectName //$NON-NLS-1$
+                + "' created and bound to '" + baseProjectName + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!synonymApplied)
+        {
+            result.put(KEY_SYNONYM_NOTE,
+                "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
+                    + "the base configuration or the new extension configuration."); //$NON-NLS-1$
+        }
+        return result.toJson();
     }
 
     /**

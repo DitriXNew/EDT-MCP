@@ -221,137 +221,53 @@ public class EdtServices
      */
     public void dispose()
     {
-        // Close service trackers
-        if (v8ProjectManagerTracker != null)
+        // Close service trackers (each closeTracker() closes when non-null and returns null,
+        // exactly reproducing the former "if (t != null) { t.close(); t = null; }" per-field block).
+        v8ProjectManagerTracker = closeTracker(v8ProjectManagerTracker);
+        dtProjectManagerTracker = closeTracker(dtProjectManagerTracker);
+        configurationProviderTracker = closeTracker(configurationProviderTracker);
+        markerManagerTracker = closeTracker(markerManagerTracker);
+        checkSchedulerTracker = closeTracker(checkSchedulerTracker);
+        checkRepositoryTracker = closeTracker(checkRepositoryTracker);
+        bmModelManagerTracker = closeTracker(bmModelManagerTracker);
+        derivedDataManagerProviderTracker = closeTracker(derivedDataManagerProviderTracker);
+        servicesOrchestratorTracker = closeTracker(servicesOrchestratorTracker);
+        resourceSetProviderTracker = closeTracker(resourceSetProviderTracker);
+        applicationManagerTracker = closeTracker(applicationManagerTracker);
+        infobaseManagerTracker = closeTracker(infobaseManagerTracker);
+        infobaseAssociationManagerTracker = closeTracker(infobaseAssociationManagerTracker);
+        navigatorStateProviderTracker = closeTracker(navigatorStateProviderTracker);
+        mdRefactoringServiceTracker = closeTracker(mdRefactoringServiceTracker);
+        topObjectFqnGeneratorTracker = closeTracker(topObjectFqnGeneratorTracker);
+        extensionProjectManagerTracker = closeTracker(extensionProjectManagerTracker);
+        configurationProjectManagerTracker = closeTracker(configurationProjectManagerTracker);
+        externalObjectProjectManagerTracker = closeTracker(externalObjectProjectManagerTracker);
+        formModelObjectFactoryTracker = closeTracker(formModelObjectFactoryTracker);
+        exportConfigurationFilesApiTracker = closeTracker(exportConfigurationFilesApiTracker);
+        importConfigurationFilesApiTracker = closeTracker(importConfigurationFilesApiTracker);
+        generateTranslationStringsApiTracker = closeTracker(generateTranslationStringsApiTracker);
+        synchronizeProjectApiTracker = closeTracker(synchronizeProjectApiTracker);
+        projectInformationApiTracker = closeTracker(projectInformationApiTracker);
+        runtimeDebugClientTargetManagerTracker = closeTracker(runtimeDebugClientTargetManagerTracker);
+    }
+
+    /**
+     * Closes the given service tracker when it is non-{@code null} and returns {@code null} so the
+     * caller can clear its field. Behaviour-identical to the former inline
+     * {@code if (tracker != null) { tracker.close(); tracker = null; }} block.
+     *
+     * @param <S> the tracker's tracked-service type
+     * @param <T> the tracker's tracked-object type
+     * @param tracker the tracker to close, may be {@code null}
+     * @return {@code null} always
+     */
+    private static <S, T> ServiceTracker<S, T> closeTracker(ServiceTracker<S, T> tracker)
+    {
+        if (tracker != null)
         {
-            v8ProjectManagerTracker.close();
-            v8ProjectManagerTracker = null;
+            tracker.close();
         }
-        if (dtProjectManagerTracker != null)
-        {
-            dtProjectManagerTracker.close();
-            dtProjectManagerTracker = null;
-        }
-        if (configurationProviderTracker != null)
-        {
-            configurationProviderTracker.close();
-            configurationProviderTracker = null;
-        }
-        if (markerManagerTracker != null)
-        {
-            markerManagerTracker.close();
-            markerManagerTracker = null;
-        }
-        if (checkSchedulerTracker != null)
-        {
-            checkSchedulerTracker.close();
-            checkSchedulerTracker = null;
-        }
-        if (checkRepositoryTracker != null)
-        {
-            checkRepositoryTracker.close();
-            checkRepositoryTracker = null;
-        }
-        if (bmModelManagerTracker != null)
-        {
-            bmModelManagerTracker.close();
-            bmModelManagerTracker = null;
-        }
-        if (derivedDataManagerProviderTracker != null)
-        {
-            derivedDataManagerProviderTracker.close();
-            derivedDataManagerProviderTracker = null;
-        }
-        if (servicesOrchestratorTracker != null)
-        {
-            servicesOrchestratorTracker.close();
-            servicesOrchestratorTracker = null;
-        }
-        if (resourceSetProviderTracker != null)
-        {
-            resourceSetProviderTracker.close();
-            resourceSetProviderTracker = null;
-        }
-        if (applicationManagerTracker != null)
-        {
-            applicationManagerTracker.close();
-            applicationManagerTracker = null;
-        }
-        if (infobaseManagerTracker != null)
-        {
-            infobaseManagerTracker.close();
-            infobaseManagerTracker = null;
-        }
-        if (infobaseAssociationManagerTracker != null)
-        {
-            infobaseAssociationManagerTracker.close();
-            infobaseAssociationManagerTracker = null;
-        }
-        if (navigatorStateProviderTracker != null)
-        {
-            navigatorStateProviderTracker.close();
-            navigatorStateProviderTracker = null;
-        }
-        if (mdRefactoringServiceTracker != null)
-        {
-            mdRefactoringServiceTracker.close();
-            mdRefactoringServiceTracker = null;
-        }
-        if (topObjectFqnGeneratorTracker != null)
-        {
-            topObjectFqnGeneratorTracker.close();
-            topObjectFqnGeneratorTracker = null;
-        }
-        if (extensionProjectManagerTracker != null)
-        {
-            extensionProjectManagerTracker.close();
-            extensionProjectManagerTracker = null;
-        }
-        if (configurationProjectManagerTracker != null)
-        {
-            configurationProjectManagerTracker.close();
-            configurationProjectManagerTracker = null;
-        }
-        if (externalObjectProjectManagerTracker != null)
-        {
-            externalObjectProjectManagerTracker.close();
-            externalObjectProjectManagerTracker = null;
-        }
-        if (formModelObjectFactoryTracker != null)
-        {
-            formModelObjectFactoryTracker.close();
-            formModelObjectFactoryTracker = null;
-        }
-        if (exportConfigurationFilesApiTracker != null)
-        {
-            exportConfigurationFilesApiTracker.close();
-            exportConfigurationFilesApiTracker = null;
-        }
-        if (importConfigurationFilesApiTracker != null)
-        {
-            importConfigurationFilesApiTracker.close();
-            importConfigurationFilesApiTracker = null;
-        }
-        if (generateTranslationStringsApiTracker != null)
-        {
-            generateTranslationStringsApiTracker.close();
-            generateTranslationStringsApiTracker = null;
-        }
-        if (synchronizeProjectApiTracker != null)
-        {
-            synchronizeProjectApiTracker.close();
-            synchronizeProjectApiTracker = null;
-        }
-        if (projectInformationApiTracker != null)
-        {
-            projectInformationApiTracker.close();
-            projectInformationApiTracker = null;
-        }
-        if (runtimeDebugClientTargetManagerTracker != null)
-        {
-            runtimeDebugClientTargetManagerTracker.close();
-            runtimeDebugClientTargetManagerTracker = null;
-        }
+        return null;
     }
 
     /**

@@ -151,87 +151,108 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     {
         for (EStructuralFeature feature : mdObject.eClass().getEAllStructuralFeatures())
         {
-            if (!(feature instanceof EReference))
+            Collection<?> collection = eligibleContainmentCollection(feature, mdObject);
+            if (collection == null || collection.isEmpty())
             {
                 continue;
             }
-            
-            EReference ref = (EReference) feature;
-            
-            // Only process containment many-valued references
-            if (!ref.isContainment() || !ref.isMany())
-            {
-                continue;
-            }
-            
-            // Skip derived, transient, volatile
-            if (ref.isDerived() || ref.isTransient() || ref.isVolatile())
-            {
-                continue;
-            }
-            
-            if (!mdObject.eIsSet(ref))
-            {
-                continue;
-            }
-            
-            Object value = mdObject.eGet(ref);
-            if (!(value instanceof Collection))
-            {
-                continue;
-            }
-            
-            Collection<?> collection = (Collection<?>) value;
-            if (collection.isEmpty())
-            {
-                continue;
-            }
-            
-            String collectionName = formatFeatureName(ref.getName());
-            
+
+            String collectionName = formatFeatureName(((EReference) feature).getName());
+
             // Special handling for known collection types
             Object firstItem = collection.iterator().next();
-            
-            if (firstItem instanceof BasicForm)
-            {
-                formatFormsCollection(sb, collectionName, collection, language);
-            }
-            else if (firstItem instanceof BasicCommand)
-            {
-                formatCommandsCollection(sb, collectionName, collection, language);
-            }
-            else if (firstItem instanceof StandardAttribute)
-            {
-                // StandardAttributes are now formatted via formatStandardAttributes() method
-                // Skip them here to avoid duplication
-            }
-            else if (firstItem instanceof CharacteristicsDescription)
-            {
-                formatCharacteristicsCollection(sb, collectionName, collection);
-            }
-            else if (firstItem instanceof BasicTabularSection)
-            {
-                // Tabular Sections - format with extended details
-                formatTabularSectionsExtended(sb, collectionName, collection, full, language);
-            }
-            else if (firstItem instanceof BasicFeature)
-            {
-                // Attributes - format with extended properties
-                formatAttributesCollection(sb, collectionName, collection, full, language);
-            }
-            else if (firstItem instanceof java.util.Map.Entry)
-            {
-                // Handle EMap collections like Synonym, ObjectPresentation
-                formatMapEntryCollection(sb, collectionName, collection);
-            }
-            else if (firstItem instanceof MdObject)
-            {
-                formatMdObjectCollection(sb, collectionName, collection, full, language);
-            }
-            else if (firstItem instanceof EObject)
-            {
-                formatEObjectCollection(sb, collectionName, collection);
-            }
+
+            dispatchContainmentCollection(sb, collectionName, collection, firstItem, full, language);
+        }
+    }
+
+    /**
+     * Returns the containment-collection value of {@code feature} on {@code mdObject} when the
+     * feature is a non-derived, non-transient, non-volatile, set, many-valued containment
+     * {@link EReference} whose value is a {@link Collection}; otherwise returns {@code null}.
+     * Mirrors the original skip guards (each {@code null} return matches a {@code continue}).
+     */
+    private static Collection<?> eligibleContainmentCollection(EStructuralFeature feature, MdObject mdObject)
+    {
+        if (!(feature instanceof EReference))
+        {
+            return null;
+        }
+
+        EReference ref = (EReference) feature;
+
+        // Only process containment many-valued references
+        if (!ref.isContainment() || !ref.isMany())
+        {
+            return null;
+        }
+
+        // Skip derived, transient, volatile
+        if (ref.isDerived() || ref.isTransient() || ref.isVolatile())
+        {
+            return null;
+        }
+
+        if (!mdObject.eIsSet(ref))
+        {
+            return null;
+        }
+
+        Object value = mdObject.eGet(ref);
+        if (!(value instanceof Collection))
+        {
+            return null;
+        }
+
+        return (Collection<?>) value;
+    }
+
+    /**
+     * Dispatches a non-empty containment collection to the matching type-specific formatter, based on
+     * the runtime type of its first element ({@code firstItem}). Preserves the original if/else-if order.
+     */
+    private void dispatchContainmentCollection(StringBuilder sb, String collectionName, Collection<?> collection,
+        Object firstItem, boolean full, String language)
+    {
+        if (firstItem instanceof BasicForm)
+        {
+            formatFormsCollection(sb, collectionName, collection, language);
+        }
+        else if (firstItem instanceof BasicCommand)
+        {
+            formatCommandsCollection(sb, collectionName, collection, language);
+        }
+        else if (firstItem instanceof StandardAttribute)
+        {
+            // StandardAttributes are now formatted via formatStandardAttributes() method
+            // Skip them here to avoid duplication
+        }
+        else if (firstItem instanceof CharacteristicsDescription)
+        {
+            formatCharacteristicsCollection(sb, collectionName, collection);
+        }
+        else if (firstItem instanceof BasicTabularSection)
+        {
+            // Tabular Sections - format with extended details
+            formatTabularSectionsExtended(sb, collectionName, collection, full, language);
+        }
+        else if (firstItem instanceof BasicFeature)
+        {
+            // Attributes - format with extended properties
+            formatAttributesCollection(sb, collectionName, collection, full, language);
+        }
+        else if (firstItem instanceof java.util.Map.Entry)
+        {
+            // Handle EMap collections like Synonym, ObjectPresentation
+            formatMapEntryCollection(sb, collectionName, collection);
+        }
+        else if (firstItem instanceof MdObject)
+        {
+            formatMdObjectCollection(sb, collectionName, collection, full, language);
+        }
+        else if (firstItem instanceof EObject)
+        {
+            formatEObjectCollection(sb, collectionName, collection);
         }
     }
     
@@ -340,7 +361,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         {
             addSectionHeader(sb, name);
         }
-        
+
         // An Origin column is added only when at least one attribute is ADOPTED (an extension's
         // adopted object whose attribute(s) override the base) - marking which attribute is
         // overridden (core (adopted)) vs the extension's own (extension). A base configuration
@@ -348,112 +369,127 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         boolean showOrigin = anyAdopted(items);
         if (full)
         {
-            // Extended format with 10 columns (+ Origin when adopted attributes are present)
-            java.util.List<String> headers = new java.util.ArrayList<>(java.util.Arrays.asList(
-                "Name", SYNONYM_TOKEN, "Type", "Indexing", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
-            if (showOrigin)
-            {
-                headers.add(ORIGIN_TOKEN);
-            }
-            startTable(sb, headers.toArray(new String[0]));
-
-            for (Object item : items)
-            {
-                if (item instanceof BasicFeature)
-                {
-                    BasicFeature attr = (BasicFeature) item;
-
-                    // Get indexing if it's DbObjectAttribute
-                    String indexing = DASH;
-                    if (attr instanceof DbObjectAttribute)
-                    {
-                        indexing = formatEnum(((DbObjectAttribute) attr).getIndexing());
-                    }
-
-                    // Get password mode using EMF reflection (it's in BasicFeature but not in interface)
-                    String passwordMode = NO;
-                    try
-                    {
-                        java.lang.reflect.Method method = attr.getClass().getMethod("isPasswordMode"); //$NON-NLS-1$
-                        Boolean pwdMode = (Boolean) method.invoke(attr);
-                        passwordMode = formatBoolean(pwdMode != null ? pwdMode : false);
-                    }
-                    catch (Exception e)
-                    {
-                        // Method doesn't exist or error - use default
-                    }
-
-                    // Get multiLine using EMF reflection
-                    String multiLine = NO;
-                    try
-                    {
-                        java.lang.reflect.Method method = attr.getClass().getMethod("isMultiLine"); //$NON-NLS-1$
-                        Boolean mlMode = (Boolean) method.invoke(attr);
-                        multiLine = formatBoolean(mlMode != null ? mlMode : false);
-                    }
-                    catch (Exception e)
-                    {
-                        // Method doesn't exist or error - use default
-                    }
-
-                    // Get fullTextSearch if it's DbObjectAttribute
-                    String fullTextSearch = DASH;
-                    if (attr instanceof DbObjectAttribute)
-                    {
-                        fullTextSearch = formatEnum(((DbObjectAttribute) attr).getFullTextSearch());
-                    }
-
-                    java.util.List<String> cells = new java.util.ArrayList<>(java.util.Arrays.asList(
-                        attr.getName(),
-                        getSynonym(attr.getSynonym(), language),
-                        formatType(attr.getType()),
-                        indexing,
-                        formatEnum(attr.getFillChecking()),
-                        fullTextSearch,
-                        passwordMode,
-                        multiLine,
-                        formatEnum(attr.getQuickChoice()),
-                        formatEnum(attr.getCreateOnInput())));
-                    if (showOrigin)
-                    {
-                        cells.add(originCell(attr));
-                    }
-                    addTableRow(sb, cells.toArray(new String[0]));
-                }
-            }
+            formatAttributesExtended(sb, items, showOrigin, language);
         }
         else
         {
-            // Compact format - Name, Synonym, Type (+ Origin when adopted attributes are present)
-            if (showOrigin)
-            {
-                startTable(sb, "Name", SYNONYM_TOKEN, "Type", ORIGIN_TOKEN); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else
-            {
-                startTable(sb, "Name", SYNONYM_TOKEN, "Type"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            formatAttributesCompact(sb, items, showOrigin, language);
+        }
+    }
 
-            for (Object item : items)
+    /**
+     * Renders the extended (full=true) attribute table: a 10-column layout (plus an Origin column
+     * when {@code showOrigin}). Header and per-row rendering match the original inline code exactly.
+     */
+    private void formatAttributesExtended(StringBuilder sb, Collection<?> items, boolean showOrigin, String language)
+    {
+        // Extended format with 10 columns (+ Origin when adopted attributes are present)
+        java.util.List<String> headers = new java.util.ArrayList<>(java.util.Arrays.asList(
+            "Name", SYNONYM_TOKEN, "Type", "Indexing", "Fill Checking", "Full Text Search", "Password Mode", "Multi Line", "Quick Choice", "Create On Input")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
+        if (showOrigin)
+        {
+            headers.add(ORIGIN_TOKEN);
+        }
+        startTable(sb, headers.toArray(new String[0]));
+
+        for (Object item : items)
+        {
+            if (item instanceof BasicFeature)
             {
-                if (item instanceof BasicFeature)
+                BasicFeature attr = (BasicFeature) item;
+
+                // Get indexing if it's DbObjectAttribute
+                String indexing = DASH;
+                if (attr instanceof DbObjectAttribute)
                 {
-                    BasicFeature attr = (BasicFeature) item;
-                    if (showOrigin)
-                    {
-                        addTableRow(sb,
-                            attr.getName(),
-                            getSynonym(attr.getSynonym(), language),
-                            formatType(attr.getType()),
-                            originCell(attr));
-                    }
-                    else
-                    {
-                        addTableRow(sb,
-                            attr.getName(),
-                            getSynonym(attr.getSynonym(), language),
-                            formatType(attr.getType()));
-                    }
+                    indexing = formatEnum(((DbObjectAttribute) attr).getIndexing());
+                }
+
+                String passwordMode = formatReflectiveBoolean(attr, "isPasswordMode"); //$NON-NLS-1$
+                String multiLine = formatReflectiveBoolean(attr, "isMultiLine"); //$NON-NLS-1$
+
+                // Get fullTextSearch if it's DbObjectAttribute
+                String fullTextSearch = DASH;
+                if (attr instanceof DbObjectAttribute)
+                {
+                    fullTextSearch = formatEnum(((DbObjectAttribute) attr).getFullTextSearch());
+                }
+
+                java.util.List<String> cells = new java.util.ArrayList<>(java.util.Arrays.asList(
+                    attr.getName(),
+                    getSynonym(attr.getSynonym(), language),
+                    formatType(attr.getType()),
+                    indexing,
+                    formatEnum(attr.getFillChecking()),
+                    fullTextSearch,
+                    passwordMode,
+                    multiLine,
+                    formatEnum(attr.getQuickChoice()),
+                    formatEnum(attr.getCreateOnInput())));
+                if (showOrigin)
+                {
+                    cells.add(originCell(attr));
+                }
+                addTableRow(sb, cells.toArray(new String[0]));
+            }
+        }
+    }
+
+    /**
+     * Reads a boolean-returning method (e.g. {@code isPasswordMode} / {@code isMultiLine}) that lives
+     * in BasicFeature but not in the API interface, via reflection. Returns {@link #NO} when the
+     * method is absent or any error occurs, matching the original default. Never throws.
+     */
+    private String formatReflectiveBoolean(BasicFeature attr, String methodName)
+    {
+        try
+        {
+            java.lang.reflect.Method method = attr.getClass().getMethod(methodName);
+            Boolean flag = (Boolean) method.invoke(attr);
+            return formatBoolean(flag != null ? flag : false);
+        }
+        catch (Exception e)
+        {
+            // Method doesn't exist or error - use default
+            return NO;
+        }
+    }
+
+    /**
+     * Renders the compact (full=false) attribute table: Name, Synonym, Type (plus an Origin column
+     * when {@code showOrigin}). Output matches the original inline code exactly.
+     */
+    private void formatAttributesCompact(StringBuilder sb, Collection<?> items, boolean showOrigin, String language)
+    {
+        // Compact format - Name, Synonym, Type (+ Origin when adopted attributes are present)
+        if (showOrigin)
+        {
+            startTable(sb, "Name", SYNONYM_TOKEN, "Type", ORIGIN_TOKEN); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            startTable(sb, "Name", SYNONYM_TOKEN, "Type"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        for (Object item : items)
+        {
+            if (item instanceof BasicFeature)
+            {
+                BasicFeature attr = (BasicFeature) item;
+                if (showOrigin)
+                {
+                    addTableRow(sb,
+                        attr.getName(),
+                        getSynonym(attr.getSynonym(), language),
+                        formatType(attr.getType()),
+                        originCell(attr));
+                }
+                else
+                {
+                    addTableRow(sb,
+                        attr.getName(),
+                        getSynonym(attr.getSynonym(), language),
+                        formatType(attr.getType()));
                 }
             }
         }
@@ -474,23 +510,20 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         {
             if (item instanceof BasicTabularSection)
             {
-                BasicTabularSection ts = (BasicTabularSection) item;
-
-                // Sub-header for this tabular section
-                sb.append("\n#### ").append(ts.getName()).append("\n\n");
-
-                formatTabularSectionProperties(sb, ts, language);
-                formatTabularSectionAttributes(sb, ts, full, language);
+                formatTabularSection(sb, (BasicTabularSection) item, full, language);
             }
         }
     }
 
     /**
-     * Renders the properties table of a single tabular section (Name, Synonym, optional Comment /
-     * Tool Tip, Fill Checking, and the reflective Use / Line Number Length rows).
+     * Renders a single tabular section: its sub-header, the properties table (Name, Synonym, Comment,
+     * Tool Tip, Fill Checking, and the reflective Use / Line Number Length rows) and its attributes.
      */
-    private void formatTabularSectionProperties(StringBuilder sb, BasicTabularSection ts, String language)
+    private void formatTabularSection(StringBuilder sb, BasicTabularSection ts, boolean full, String language)
     {
+        // Sub-header for this tabular section
+        sb.append("\n#### ").append(ts.getName()).append("\n\n");
+
         // Properties table for the TS itself
         startTable(sb, "Property", VALUE_TOKEN);
         addPropertyRow(sb, "Name", ts.getName());
@@ -512,6 +545,17 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         // Fill Checking
         addPropertyRow(sb, "Fill Checking", formatEnum(ts.getFillChecking()));
 
+        formatTabularSectionUse(sb, ts);
+        formatTabularSectionLineNumberLength(sb, ts);
+        formatTabularSectionAttributes(sb, ts, full, language);
+    }
+
+    /**
+     * Adds the "Use" row of a tabular section, read reflectively (available in
+     * HierarchicalDbObjectTabularSection). No-op when the getter is absent or returns {@code null}.
+     */
+    private void formatTabularSectionUse(StringBuilder sb, BasicTabularSection ts)
+    {
         // Use (via reflection, available in HierarchicalDbObjectTabularSection)
         try
         {
@@ -526,7 +570,14 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         {
             // Method doesn't exist - skip
         }
+    }
 
+    /**
+     * Adds the "Line Number Length" row of a tabular section, read reflectively. No-op when the getter
+     * is absent or returns {@code null}.
+     */
+    private void formatTabularSectionLineNumberLength(StringBuilder sb, BasicTabularSection ts)
+    {
         // LineNumberLength (via reflection)
         try
         {
@@ -544,8 +595,8 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
     }
 
     /**
-     * Renders the attributes sub-table of a single tabular section, resolving the attributes
-     * collection via EMF reflection. No output is produced when the section has no attributes.
+     * Renders the attributes of a tabular section, obtained via EMF reflection on the
+     * {@code attributes} feature. No-op when the feature is absent or its collection is empty.
      */
     private void formatTabularSectionAttributes(StringBuilder sb, BasicTabularSection ts, boolean full, String language)
     {
