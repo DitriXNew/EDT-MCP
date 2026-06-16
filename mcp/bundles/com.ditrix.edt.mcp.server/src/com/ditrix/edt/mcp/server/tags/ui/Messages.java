@@ -11,24 +11,25 @@ import org.eclipse.osgi.util.NLS;
 /**
  * Messages for tag UI components.
  */
+@SuppressWarnings({"java:S1444", "java:S3008"})
 public class Messages extends NLS {
     
     private static final String BUNDLE_NAME = "com.ditrix.edt.mcp.server.tags.ui.messages"; //$NON-NLS-1$
     
     // FilterByTagDialog
-    public static String FilterByTagDialog_Title; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_Description; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_SetButton; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_TurnOffButton; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_SelectAll; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_DeselectAll; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_SearchPlaceholder; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_EditTag; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_ShowUntaggedOnly; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
-    public static String FilterByTagDialog_ShowUntaggedOnlyTooltip; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
+    public static String FilterByTagDialog_Title;
+    public static String FilterByTagDialog_Description;
+    public static String FilterByTagDialog_SetButton;
+    public static String FilterByTagDialog_TurnOffButton;
+    public static String FilterByTagDialog_SelectAll;
+    public static String FilterByTagDialog_DeselectAll;
+    public static String FilterByTagDialog_SearchPlaceholder;
+    public static String FilterByTagDialog_EditTag;
+    public static String FilterByTagDialog_ShowUntaggedOnly;
+    public static String FilterByTagDialog_ShowUntaggedOnlyTooltip;
     
     // FilterByTagManager
-    public static String FilterByTagManager_FilterName; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
+    public static String FilterByTagManager_FilterName;
     
     static {
         NLS.initializeMessages(BUNDLE_NAME, Messages.class);

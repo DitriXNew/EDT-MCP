@@ -194,6 +194,7 @@ public class PlatformDocumentationService
      * @param availableTypes out-param populated with up to 30 candidate names, in iteration order
      * @return the resolved (non-proxy) {@link Type}, or {@code null} when not found
      */
+    @SuppressWarnings("java:S125")
     private Type findType(IEObjectProvider typeProvider, String typeName, List<String> availableTypes)
     {
         Iterable<IEObjectDescription> descriptions = typeProvider.getEObjectDescriptions(null);
@@ -213,7 +214,7 @@ public class PlatformDocumentationService
                 availableTypes.add(lastSegment != null ? lastSegment : fullName);
             }
 
-            // Check if this is the type we're looking for (case-insensitive, check both full and last segment) // NOSONAR explanatory comment, not commented-out code
+            // Check if this is the type we're looking for (case-insensitive, check both full and last segment)
             if (fullName.equalsIgnoreCase(typeName) ||
                 (lastSegment != null && lastSegment.equalsIgnoreCase(typeName)))
             {
@@ -958,6 +959,7 @@ public class PlatformDocumentationService
      * @param availableMethods out-param populated with up to 30 candidate names, in iteration order
      * @return the resolved (non-proxy) {@link Method}, or {@code null} when not found
      */
+    @SuppressWarnings("java:S125")
     private Method findBuiltinMethod(IEObjectProvider methodProvider, String functionName,
                                      ResourceSet resourceSet, List<String> availableMethods)
     {
@@ -980,7 +982,7 @@ public class PlatformDocumentationService
                 availableMethods.add(methodName);
             }
 
-            // Check if this is the function we're looking for (case-insensitive) // NOSONAR explanatory comment, not commented-out code
+            // Check if this is the function we're looking for (case-insensitive)
             if (methodName.equalsIgnoreCase(functionName))
             {
                 Method resolvedMethod = resolveDescriptionAsMethod(desc, resourceSet);

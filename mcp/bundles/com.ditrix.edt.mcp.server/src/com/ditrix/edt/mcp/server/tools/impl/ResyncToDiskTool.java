@@ -216,6 +216,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     }
 
     @Override
+    @SuppressWarnings("java:S125")
     protected String executeOnUiThread(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
@@ -228,7 +229,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // Configuration.mdo, so the destructive step must be an explicit opt-in, never
         // a side effect of a diagnostic run.
         boolean cleanDangling = JsonUtils.extractBooleanArgument(params, KEY_CLEAN_DANGLING_REFERENCES, false);
-        // Default FALSE: only the objects whose .mdo is actually missing are exported; // NOSONAR explanatory comment, not commented-out code
+        // Default FALSE: only the objects whose .mdo is actually missing are exported;
         // true re-exports everything (a full disk refresh, slow on the UI thread).
         boolean fullExport = JsonUtils.extractBooleanArgument(params, KEY_FULL_EXPORT, false);
 
@@ -515,6 +516,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      *            only report them
      * @return the {@link DanglingResult} (never {@code null})
      */
+    @SuppressWarnings("java:S125")
     private static DanglingResult cleanDanglingReferences(Configuration config, IBmModel bmModel,
         IProject project, boolean remove)
     {
@@ -528,7 +530,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
 
         // Detection (and, when remove=true, mutation) run inside one BM write task so
         // the same transaction that observes the proxies also removes them atomically.
-        // The task body only reports whether it removed anything IN the transaction; // NOSONAR explanatory comment, not commented-out code
+        // The task body only reports whether it removed anything IN the transaction;
         // the removedFromModel claim is made by runRemovalWriteTask AFTER
         // BmTransactions.write returned, i.e. only once the transaction actually
         // committed - a failed commit must not be reported as "Removed N".

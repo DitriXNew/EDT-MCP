@@ -73,6 +73,7 @@ public class ExportConfigurationToXmlTool implements IMcpTool
     }
 
     @Override
+    @SuppressWarnings("java:S125")
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
@@ -100,7 +101,7 @@ public class ExportConfigurationToXmlTool implements IMcpTool
             Files.createDirectories(outputPath);
 
             // Defense-in-depth: export can write to ANY absolute path. With the
-            // server bound to loopback + optional token this is trusted-caller-only; // NOSONAR explanatory comment, not commented-out code
+            // server bound to loopback + optional token this is trusted-caller-only;
             // still flag writes outside the workspace so an injected/erroneous call
             // is visible. Non-breaking: warn, do not reject (local export to an
             // external dir is a legitimate action).

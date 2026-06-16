@@ -133,6 +133,7 @@ public class WriteModuleSourceTool implements IMcpTool
     }
 
     @Override
+    @SuppressWarnings("java:S125")
     public String execute(Map<String, String> params)
     {
         // 1. Extract parameters
@@ -212,7 +213,7 @@ public class WriteModuleSourceTool implements IMcpTool
             // expectedHash from its last read, reject if the module changed since —
             // a cheap lost-update check that complements searchReplace's oldSource
             // match and replace's expectedSource. Read the canonical text the same way
-            // those guards do (readFileText, \n-normalized) so the hashes always agree; // NOSONAR explanatory comment, not commented-out code
+            // those guards do (readFileText, \n-normalized) so the hashes always agree;
             // skipped entirely when no expectedHash is given.
             String currentTextForHash = (expectedHash != null && !expectedHash.isEmpty() && fileExists)
                 ? BslModuleUtils.readFileText(file).replace("\r\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$

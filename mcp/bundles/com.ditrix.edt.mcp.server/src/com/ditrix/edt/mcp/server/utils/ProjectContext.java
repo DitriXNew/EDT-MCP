@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  * @see ProjectStateChecker for the complementary readiness (building / derived
  *      data) check.
  */
+@SuppressWarnings("java:S1135")
 public final class ProjectContext
 {
     private final String projectName;

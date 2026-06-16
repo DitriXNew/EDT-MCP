@@ -219,10 +219,11 @@ public class EdtServices
      * activator used to close them. Behaviour-preserving extraction of the
      * tracker close block from {@code Activator.stop(BundleContext)}.
      */
+    @SuppressWarnings("java:S125")
     public void dispose()
     {
         // Close service trackers (each closeTracker() closes when non-null and returns null,
-        // exactly reproducing the former "if (t != null) { t.close(); t = null; }" per-field block). // NOSONAR explanatory comment, not commented-out code
+        // exactly reproducing the former "if (t != null) { t.close(); t = null; }" per-field block).
         v8ProjectManagerTracker = closeTracker(v8ProjectManagerTracker);
         dtProjectManagerTracker = closeTracker(dtProjectManagerTracker);
         configurationProviderTracker = closeTracker(configurationProviderTracker);
@@ -577,6 +578,7 @@ public class EdtServices
      *
      * @return the form-model object factory, or {@code null} if unavailable
      */
+    @SuppressWarnings("java:S125")
     public IModelObjectFactory getFormModelObjectFactory()
     {
         if (formModelObjectFactoryTracker == null)
@@ -586,7 +588,7 @@ public class EdtServices
         IModelObjectFactory factory = formModelObjectFactoryTracker.getService();
         if (factory == null)
         {
-            // The form bundle is lazily activated and registers its services in start(); // NOSONAR explanatory comment, not commented-out code
+            // The form bundle is lazily activated and registers its services in start();
             // trip the activation, then re-read the tracker.
             Bundle formBundle = Platform.getBundle(FORM_BUNDLE_ID);
             if (formBundle == null)

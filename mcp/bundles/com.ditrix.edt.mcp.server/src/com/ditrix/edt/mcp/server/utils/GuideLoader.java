@@ -121,6 +121,7 @@ public final class GuideLoader
      * @return the file content, LF-normalized and trailing-trimmed
      * @throws IOException on a read error
      */
+    @SuppressWarnings("java:S125")
     private static String read(InputStream in) throws IOException
     {
         StringBuilder sb = new StringBuilder();
@@ -133,7 +134,7 @@ public final class GuideLoader
                 sb.append(buf, 0, n);
             }
         }
-        // Trim trailing whitespace/newlines so the rendered "## Guide\n<body>" is tidy; // NOSONAR explanatory comment, not commented-out code
+        // Trim trailing whitespace/newlines so the rendered "## Guide\n<body>" is tidy;
         // keep leading content intact.
         int end = sb.length();
         while (end > 0 && Character.isWhitespace(sb.charAt(end - 1)))

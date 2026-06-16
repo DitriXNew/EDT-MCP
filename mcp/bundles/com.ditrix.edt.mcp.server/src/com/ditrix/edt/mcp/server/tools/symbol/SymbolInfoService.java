@@ -349,6 +349,7 @@ public class SymbolInfoService
      * Gets the ITextHover from the source viewer via reflection.
      * The TextViewer class stores hovers internally and provides a protected getTextHover method.
      */
+    @SuppressWarnings("java:S3011")
     private ITextHover getTextHoverViaReflection(ISourceViewer sourceViewer, int offset)
     {
         try
@@ -359,7 +360,7 @@ public class SymbolInfoService
                     "getTextHover", int.class, int.class); //$NON-NLS-1$
             if (getTextHoverMethod != null)
             {
-                getTextHoverMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+                getTextHoverMethod.setAccessible(true);
                 Object result = getTextHoverMethod.invoke(sourceViewer, offset, 0);
                 if (result instanceof ITextHover)
                 {

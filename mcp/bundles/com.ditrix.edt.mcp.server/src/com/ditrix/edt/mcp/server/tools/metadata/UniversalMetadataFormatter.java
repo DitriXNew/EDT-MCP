@@ -172,11 +172,12 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
      * {@link EReference} whose value is a {@link Collection}; otherwise returns {@code null}.
      * Mirrors the original skip guards (each {@code null} return matches a {@code continue}).
      */
+    @SuppressWarnings("java:S1168")
     private static Collection<?> eligibleContainmentCollection(EStructuralFeature feature, MdObject mdObject)
     {
         if (!(feature instanceof EReference))
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         EReference ref = (EReference) feature;
@@ -184,24 +185,24 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         // Only process containment many-valued references
         if (!ref.isContainment() || !ref.isMany())
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         // Skip derived, transient, volatile
         if (ref.isDerived() || ref.isTransient() || ref.isVolatile())
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         if (!mdObject.eIsSet(ref))
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         Object value = mdObject.eGet(ref);
         if (!(value instanceof Collection))
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         return (Collection<?>) value;

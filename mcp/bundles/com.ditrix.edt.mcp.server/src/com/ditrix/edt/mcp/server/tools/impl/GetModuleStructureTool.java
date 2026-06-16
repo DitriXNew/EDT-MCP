@@ -466,6 +466,7 @@ public class GetModuleStructureTool implements IMcpTool
     }
 
     /** Loads all source lines of a module's .bsl file, or {@code null} if unavailable. */
+    @SuppressWarnings("java:S1168")
     private List<String> loadSourceLines(Module module)
     {
         try
@@ -489,7 +490,7 @@ public class GetModuleStructureTool implements IMcpTool
         {
             Activator.logWarning("Failed to load source lines: " + e.getMessage()); //$NON-NLS-1$
         }
-        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        return null;
     }
     private List<MethodInfo> collectMethods(Module module, List<RegionInfo> regions,
         boolean includeComments, List<String> sourceLines)

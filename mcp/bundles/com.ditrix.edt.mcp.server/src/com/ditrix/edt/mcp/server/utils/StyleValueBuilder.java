@@ -344,16 +344,17 @@ public final class StyleValueBuilder
         return (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
     }
 
+    @SuppressWarnings("java:S2447")
     private static Boolean boolMember(JsonObject obj, String name)
     {
         if (obj == null || !obj.has(name))
         {
-            return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
+            return null;
         }
         JsonElement el = obj.get(name);
         if (el == null || !el.isJsonPrimitive())
         {
-            return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
+            return null;
         }
         JsonPrimitive p = el.getAsJsonPrimitive();
         if (p.isBoolean())
@@ -369,7 +370,7 @@ public final class StyleValueBuilder
         {
             return Boolean.FALSE;
         }
-        return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
+        return null;
     }
 
     private static String summarizeFont(String faceName, Integer height, boolean bold, boolean italic,

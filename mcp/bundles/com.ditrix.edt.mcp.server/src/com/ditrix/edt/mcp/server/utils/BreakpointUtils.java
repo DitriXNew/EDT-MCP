@@ -93,6 +93,7 @@ public final class BreakpointUtils
      *                    {@code "C:/full/path/to/Module.bsl"}
      * @return resolved IFile (may not exist; caller should check)
      */
+    @SuppressWarnings("java:S125")
     public static IFile resolveModuleFile(String projectName, String module)
     {
         if (module == null || module.isEmpty())
@@ -101,7 +102,7 @@ public final class BreakpointUtils
         }
         // Single shared module resolver (BslModuleUtils.resolveModuleFile) handles
         // BOTH an absolute filesystem path and a src/-relative path. For the
-        // absolute case the project is not needed (resolution is by location); // NOSONAR explanatory comment, not commented-out code
+        // absolute case the project is not needed (resolution is by location);
         // for the src/-relative case resolve the project and pass it through.
         IProject project = null;
         if (!BslModuleUtils.looksLikeAbsolutePath(module))

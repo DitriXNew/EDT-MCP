@@ -232,6 +232,7 @@ public class NavigatorToolbarCustomizer {
     /**
      * Dispose the customizer and remove all listeners.
      */
+    @SuppressWarnings("java:S2696")
     public void dispose() {
         // Remove window listener
         if (windowListener != null) {
@@ -267,6 +268,6 @@ public class NavigatorToolbarCustomizer {
 
         partListener = null;
         initialized = false;
-        instance = null; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
+        instance = null;
     }
 }

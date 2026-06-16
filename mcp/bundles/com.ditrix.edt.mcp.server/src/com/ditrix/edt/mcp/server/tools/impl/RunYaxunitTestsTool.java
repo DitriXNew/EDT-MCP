@@ -288,6 +288,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * The temp directory is NEVER deleted in finally — a Pending re-call can fetch the result. Old
      * runs are cleaned up automatically before starting a new launch.
      */
+    @SuppressWarnings("java:S125")
     private String runTests(String configName, String projectName, String applicationId,
             String extensions, String modules, String tests, int timeout, boolean updateBeforeLaunch,
             String updateScope, boolean debug)
@@ -342,7 +343,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
 
             // No active launch. Deliver a previously reported Pending result EXACTLY ONCE: a re-call
-            // fetching the result of a run that finished after a Pending response gets the report; // NOSONAR explanatory comment, not commented-out code
+            // fetching the result of a run that finished after a Pending response gets the report;
             // any later call with the same key falls through to a fresh run. There is NO time-based
             // cache, so a genuine re-run always re-executes the tests.
             String pendingResult = tryDeliverPendingResult(runKey, reportDir, projectName, applicationId);
@@ -994,6 +995,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             Job prepJob = new Job(jobName)
             {
                 @Override
+                @SuppressWarnings("java:S1181")
                 protected IStatus run(IProgressMonitor monitor)
                 {
                     try
@@ -1011,7 +1013,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                             jobEntry.error = result.getError();
                         }
                     }
-                    catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+                    catch (Throwable e)
                     {
                         // Throwable, not Exception: an Error escaping the prep must still
                         // surface as a prep failure — otherwise the retry call would see
@@ -1530,13 +1532,14 @@ public class RunYaxunitTestsTool implements IMcpTool
     /**
      * Recursively deletes a temp directory if it exists. Silent if missing.
      */
+    @SuppressWarnings("java:S125")
     private void cleanupTempDir(Path tempDir)
     {
         if (tempDir == null || !Files.exists(tempDir))
         {
             return;
         }
-        // try-with-resources releases the file-system handle held by Files.walk's stream; // NOSONAR explanatory comment, not commented-out code
+        // try-with-resources releases the file-system handle held by Files.walk's stream;
         // on Windows, leaving it open can prevent subsequent deletions of the same path.
         try (java.util.stream.Stream<Path> stream = Files.walk(tempDir))
         {

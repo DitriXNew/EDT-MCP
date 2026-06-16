@@ -226,6 +226,7 @@ public final class UpdateChecker
      * Fetches release info from the GitHub Releases API.
      * @return String[3]: [0]=tag_name, [1]=body (release notes), [2]=html_url; or null on error.
      */
+    @SuppressWarnings("java:S1168")
     private String[] fetchReleaseInfo() throws Exception
     {
         URL url = new URL(RELEASES_API_URL);
@@ -242,7 +243,7 @@ public final class UpdateChecker
         if (responseCode != HttpURLConnection.HTTP_OK)
         {
             Activator.logInfo("EDT MCP Server update check: GitHub API returned HTTP " + responseCode); //$NON-NLS-1$
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         StringBuilder sb = new StringBuilder();
@@ -283,7 +284,7 @@ public final class UpdateChecker
                 return new String[] { tagName, body, htmlUrl };
             }
         }
-        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        return null;
     }
 
     /**

@@ -162,13 +162,14 @@ public final class EditorScreenshotHelper
      * @param serviceClass the native render service class declaring the flag
      * @param bufferedFlagField the name of the static boolean flag field
      */
+    @SuppressWarnings("java:S3011")
     private static void forceBufferedRenderFlag(Class<?> serviceClass, String bufferedFlagField)
     {
         try
         {
             Field bufferedField = serviceClass.getDeclaredField(bufferedFlagField);
-            bufferedField.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
-            bufferedField.setBoolean(null, true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            bufferedField.setAccessible(true);
+            bufferedField.setBoolean(null, true);
         }
         catch (Exception e)
         {
@@ -440,6 +441,7 @@ public final class EditorScreenshotHelper
      * @param editorPart the form editor part
      * @return the main {@code FormEditorPage}, or {@code null}
      */
+    @SuppressWarnings("java:S3011")
     private static Object findFormMainPage(IEditorPart editorPart) throws Exception
     {
         Class<?> editorClass = Class.forName(FORM_EDITOR_CLASS);
@@ -452,7 +454,7 @@ public final class EditorScreenshotHelper
         {
             return null;
         }
-        findPageMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+        findPageMethod.setAccessible(true);
         return findPageMethod.invoke(editorPart, FORM_MAIN_PAGE_ID);
     }
 
@@ -487,7 +489,8 @@ public final class EditorScreenshotHelper
     /**
      * Gets the active form editor page via the static FormEditor API.
      */
-    public static Object getActiveFormEditorPage() throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    @SuppressWarnings("java:S112")
+    public static Object getActiveFormEditorPage() throws Exception
     {
         Class<?> editorClass = Class.forName(FORM_EDITOR_CLASS);
         Method method = editorClass.getMethod("getActiveFormEditorPage"); //$NON-NLS-1$
@@ -545,6 +548,7 @@ public final class EditorScreenshotHelper
      * @param model the metadata model object
      * @return the FQN string, or {@code null}
      */
+    @SuppressWarnings("java:S3011")
     private static String bmGetFqn(Object model)
     {
         if (model == null)
@@ -558,7 +562,7 @@ public final class EditorScreenshotHelper
             {
                 return null;
             }
-            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            method.setAccessible(true);
             Object fqn = method.invoke(model);
             return fqn != null ? fqn.toString() : null;
         }
@@ -889,6 +893,7 @@ public final class EditorScreenshotHelper
      * @param forceRefresh {@code true} to require evidence of a re-render performed during this call
      * @return {@code true} if a (fresh, when forced) non-empty image is available within the timeout
      */
+    @SuppressWarnings("java:S125")
     static boolean ensureRenderedFormImage(Object representation, int timeoutMs, boolean forceRefresh)
     {
         if (representation == null)
@@ -955,7 +960,7 @@ public final class EditorScreenshotHelper
         }
         if (syncPathReachable)
         {
-            // The synchronous hooks are present but did not produce a (fresh) image within the budget; // NOSONAR explanatory comment, not commented-out code
+            // The synchronous hooks are present but did not produce a (fresh) image within the budget;
             // one last check (the render task may have settled while pumping events).
             return hasFreshImage(representation, baseline, requireNewInstance);
         }
@@ -1013,6 +1018,7 @@ public final class EditorScreenshotHelper
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @return {@code true} when the field was found and cleared
      */
+    @SuppressWarnings("java:S3011")
     private static boolean clearFormImageData(Object representation)
     {
         try
@@ -1023,8 +1029,8 @@ public final class EditorScreenshotHelper
                 try
                 {
                     Field field = type.getDeclaredField(FORM_IMAGE_DATA_FIELD);
-                    field.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
-                    field.set(representation, null); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+                    field.setAccessible(true);
+                    field.set(representation, null);
                     return true;
                 }
                 catch (NoSuchFieldException e)
@@ -1083,6 +1089,7 @@ public final class EditorScreenshotHelper
      *         available (retry), or {@link RenderOutcome#UNREACHABLE} if the hooks do not exist on this
      *         EDT (use the async fallback)
      */
+    @SuppressWarnings("java:S3011")
     private static RenderOutcome renderRequestedFormSynchronously(Object representation)
     {
         try
@@ -1121,7 +1128,7 @@ public final class EditorScreenshotHelper
 
             // Synchronous sibling of getMappingRootAsync: compute the CommandInterfaceMapping root on
             // THIS thread instead of the background thread whose syncExec callback gets dropped.
-            getMappingRoot.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            getMappingRoot.setAccessible(true);
             Object cmiMapping = getMappingRoot.invoke(controller, cmiMappingClass);
             if (cmiMapping == null)
             {
@@ -1135,7 +1142,7 @@ public final class EditorScreenshotHelper
 
             // Invoke the private rebuildInternal(Form, CommandInterfaceMapping, NativeRenderEvent,
             // boolean) directly: this is the synchronous body the async handler would have run.
-            rebuildInternal.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            rebuildInternal.setAccessible(true);
             // updateOnly=false → force a full layout/render pass for this form.
             rebuildInternal.invoke(representation, form, cmiMapping, event, Boolean.FALSE);
 
@@ -1250,6 +1257,7 @@ public final class EditorScreenshotHelper
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @return image data, or {@code null} if not available
      */
+    @SuppressWarnings("java:S3011")
     public static ImageData readFormImageData(Object representation)
     {
         if (representation == null)
@@ -1259,7 +1267,7 @@ public final class EditorScreenshotHelper
         try
         {
             Method method = representation.getClass().getDeclaredMethod(FORM_IMAGE_METHOD);
-            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            method.setAccessible(true);
             ImageData data = (ImageData)method.invoke(representation);
             if (data != null && data.width > 0 && data.height > 0)
             {
@@ -1405,6 +1413,7 @@ public final class EditorScreenshotHelper
      *
      * @param representation the {@code FormWysiwygRepresentation} instance
      */
+    @SuppressWarnings("java:S3011")
     public static void rebuildRepresentation(Object representation)
     {
         if (representation == null)
@@ -1414,7 +1423,7 @@ public final class EditorScreenshotHelper
         try
         {
             Method rebuildMethod = representation.getClass().getDeclaredMethod(REBUILD_METHOD, boolean.class);
-            rebuildMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            rebuildMethod.setAccessible(true);
             rebuildMethod.invoke(representation, true);
 
             Display display = Display.getCurrent();
@@ -1531,6 +1540,7 @@ public final class EditorScreenshotHelper
     /**
      * Activates the main (WYSIWYG) page of the form editor via reflection.
      */
+    @SuppressWarnings("java:S3011")
     private static void activateFormMainPage(IEditorPart editorPart)
     {
         try
@@ -1545,7 +1555,7 @@ public final class EditorScreenshotHelper
                 ReflectionUtils.findMethod(editorPart.getClass(), "setActivePage", String.class); //$NON-NLS-1$
             if (setActivePageMethod != null)
             {
-                setActivePageMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+                setActivePageMethod.setAccessible(true);
                 setActivePageMethod.invoke(editorPart, FORM_MAIN_PAGE_ID);
             }
         }

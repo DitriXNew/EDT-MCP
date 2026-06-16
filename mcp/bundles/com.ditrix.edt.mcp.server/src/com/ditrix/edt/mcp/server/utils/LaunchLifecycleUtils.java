@@ -983,6 +983,7 @@ public final class LaunchLifecycleUtils
      * (headless tests, early startup) the list degrades gracefully to just the
      * launch project, so the build wait is still performed for it.
      */
+    @SuppressWarnings("java:S125")
     static List<IProject> collectLaunchAndExtensionProjects(IProject launchProject)
     {
         Set<IProject> projects = new LinkedHashSet<>();
@@ -1013,7 +1014,7 @@ public final class LaunchLifecycleUtils
         catch (RuntimeException e)
         {
             // Discovery is best-effort: a failure here must not abort the launch.
-            // The workspace-wide build join already drained the extension build; // NOSONAR explanatory comment, not commented-out code
+            // The workspace-wide build join already drained the extension build;
             // we just skip the per-extension derived-data wait.
             Activator.logError("Error collecting extension projects for " //$NON-NLS-1$
                 + launchProject.getName(), e);

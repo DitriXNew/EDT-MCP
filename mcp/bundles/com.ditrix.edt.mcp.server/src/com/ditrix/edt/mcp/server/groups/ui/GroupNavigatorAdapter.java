@@ -78,13 +78,14 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
     }
     
     @Override
+    @SuppressWarnings("java:S2696")
     public ImageDescriptor getImageDescriptor(Object object) {
         if (folderIcon == null) {
             try {
                 Bundle bundle = Activator.getDefault().getBundle();
                 URL url = bundle.getEntry("icons/group.png");
                 if (url != null) {
-                    folderIcon = ImageDescriptor.createFromURL(url); // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
+                    folderIcon = ImageDescriptor.createFromURL(url);
                 }
             } catch (Exception e) {
                 Activator.logError("Failed to load folder icon", e);

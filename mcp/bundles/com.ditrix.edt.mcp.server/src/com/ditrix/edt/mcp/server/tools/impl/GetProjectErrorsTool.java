@@ -96,13 +96,14 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     @Override
+    @SuppressWarnings("java:S125")
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String severity = JsonUtils.extractStringArgument(params, "severity"); //$NON-NLS-1$
         String checkId = JsonUtils.extractStringArgument(params, "checkId"); //$NON-NLS-1$
 
-        // Output verbosity: concise (default) trims the secondary 'Has docs' column; // NOSONAR explanatory comment, not commented-out code
+        // Output verbosity: concise (default) trims the secondary 'Has docs' column;
         // detailed renders the full historical table. Any absent/blank/unrecognized value
         // falls back to concise (the lean default), never an error.
         String responseFormat = JsonUtils.extractStringArgument(params, "responseFormat"); //$NON-NLS-1$
@@ -180,6 +181,7 @@ public class GetProjectErrorsTool implements IMcpTool
         return null;
     }
 
+    @SuppressWarnings("java:S125")
     public static String getProjectErrors(String projectName, String severity, String checkId, List<String> objects, int limit, boolean detailed)
     {
         try
@@ -212,7 +214,7 @@ public class GetProjectErrorsTool implements IMcpTool
             // Markers whose presentation could not be resolved even inside a transaction.
             // They are NOT dropped, but they are surfaced differently depending on context,
             // so we track the two cases separately to keep the warning text honest:
-            //  - unresolvedShown: reported in the table with a "<unresolved: ...>" placeholder; // NOSONAR explanatory comment, not commented-out code
+            //  - unresolvedShown: reported in the table with a "<unresolved: ...>" placeholder;
             //  - unresolvedFilteredOut: excluded from the result because an explicit objects
             //    filter is active and the location could not be resolved to test membership.
             final int[] unresolvedShown = {0};

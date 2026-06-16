@@ -471,7 +471,7 @@ public final class FormElementWriter
     // Every form-editing tool repeats the same ~40-line pipeline: resolve the MD-form from a form
     // path, null-check the BM services, capture the bmId, re-fetch the MD-form inside a BM
     // transaction, hop to the editable content form, run the work, then force-export the content
-    // form's own FQN (it serializes to Form.form). The scaffold below owns that pipeline ONCE; // NOSONAR explanatory comment, not commented-out code
+    // form's own FQN (it serializes to Form.form). The scaffold below owns that pipeline ONCE;
     // tools supply only the per-call work and their user-visible "form not found" message. Every
     // scaffold-level failure that carries an actionable message is thrown as a
     // FormValidationException with the READY error JSON, so callers surface it verbatim
@@ -479,6 +479,7 @@ public final class FormElementWriter
 
     /** Work executed on the re-fetched editable content form inside a BM WRITE transaction. */
     @FunctionalInterface
+    @SuppressWarnings("java:S125")
     public interface FormWork
     {
         /**
@@ -1534,7 +1535,7 @@ public final class FormElementWriter
     }
 
     /** A FormField bound to a form attribute via its dataPath (a generic InputField the user can refine). */
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "java:S125"})
     private static String createField(EObject formModel, String name, String parentName,
         String attrName, String titleLanguage, String title, boolean russianAutoNames,
         String[] createdKind)
@@ -1583,7 +1584,7 @@ public final class FormElementWriter
         // own factory does before the value type is known.
         setEnumFeature(item, FEATURE_TYPE, "InputField"); //$NON-NLS-1$
         setExtInfoClassifier(formModel, item, "InputFieldExtInfo"); //$NON-NLS-1$
-        // The designer's new-field defaults (FormObjectFactory.newFormField / newInputFieldExtInfo); // NOSONAR explanatory comment, not commented-out code
+        // The designer's new-field defaults (FormObjectFactory.newFormField / newInputFieldExtInfo);
         // the booleans default to false in the model, so without them a created field renders with
         // no table header/footer, no wrap and a read-only text box. 'Auto'-valued enums are the
         // model defaults (literal 0) and stay unset, like the XMI omits them.
@@ -1994,6 +1995,7 @@ public final class FormElementWriter
      *
      * @return {@code null} on success, or a human-readable error message
      */
+    @SuppressWarnings("java:S125")
     static String bindEventHandler(EObject container, EStructuralFeature handlersFeat, EObject matched,
         String eventName, String procName, String callType, String[] createdKind)
     {
@@ -2025,7 +2027,7 @@ public final class FormElementWriter
             }
         }
         // Duplicate guard. Base path keeps the original "one handler per event" rule. Extension path lets
-        // the extension handler COEXIST with the base handler and with other-call-type extension handlers; // NOSONAR explanatory comment, not commented-out code
+        // the extension handler COEXIST with the base handler and with other-call-type extension handlers;
         // only a same-(event, callType) EventHandlerExtension is a real duplicate.
         EStructuralFeature evFeat = handlerEventFeature(handlersFeat);
         for (EObject existing : referenceList(container, KEY_HANDLERS))

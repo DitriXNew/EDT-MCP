@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * marker families to scan (bookmark, task, or both); {@code priority} sub-filters
  * the task family only (a bookmark has no priority).</p>
  */
+@SuppressWarnings({"java:S1135", "java:S1134"})
 public class GetMarkersTool implements IMcpTool
 {
     public static final String NAME = "get_markers"; //$NON-NLS-1$
@@ -160,7 +161,7 @@ public class GetMarkersTool implements IMcpTool
         try
         {
             List<MarkerRow> rows = new ArrayList<>();
-            // Dedup set shared across the two task marker types: a BSL TODO/FIXME // NOSONAR tracking FIXME, intentionally retained; tracking TODO, intentionally retained
+            // Dedup set shared across the two task marker types: a BSL TODO/FIXME
             // surfaces under both the base task marker and the Xtext task marker
             // subtype and must be counted once.
             Set<String> seenTasks = new HashSet<>();
@@ -456,7 +457,7 @@ public class GetMarkersTool implements IMcpTool
         }
     }
 
-    /** Extracts the task type (TODO, FIXME, XXX, HACK) from the marker message. */ // NOSONAR tracking FIXME, intentionally retained; tracking TODO, intentionally retained
+    /** Extracts the task type (TODO, FIXME, XXX, HACK) from the marker message. */
     private static String getTaskType(String message)
     {
         if (message == null || message.isEmpty())

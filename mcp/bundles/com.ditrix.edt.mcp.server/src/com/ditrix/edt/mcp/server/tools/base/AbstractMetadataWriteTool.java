@@ -85,7 +85,8 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      * @return the JSON result string
      * @throws Exception on unexpected failure
      */
-    protected abstract String executeOnUiThread(Map<String, String> params) throws Exception; // NOSONAR propagates checked exceptions across the reflective boundary by design
+    @SuppressWarnings("java:S112")
+    protected abstract String executeOnUiThread(Map<String, String> params) throws Exception;
 
     /**
      * Holds the resolved project and configuration, or a ready-to-return JSON

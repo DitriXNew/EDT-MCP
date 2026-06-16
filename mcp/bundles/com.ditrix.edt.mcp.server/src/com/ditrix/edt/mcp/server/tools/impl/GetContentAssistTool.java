@@ -657,11 +657,12 @@ public class GetContentAssistTool implements IMcpTool
      * @param containsFilter the raw comma-separated filter, possibly null/empty
      * @return the lowercased trimmed parts, or null when no filter was supplied
      */
+    @SuppressWarnings("java:S1168")
     private static String[] parseContainsFilter(String containsFilter)
     {
         if (containsFilter == null || containsFilter.isEmpty())
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
         String[] filterParts = containsFilter.toLowerCase().split(","); //$NON-NLS-1$
         for (int i = 0; i < filterParts.length; i++)

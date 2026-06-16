@@ -297,6 +297,7 @@ public class FormLayoutSnapshotService
         return result;
     }
 
+    @SuppressWarnings("java:S1168")
     private Map<String, Object> createElementItem(EObject element, Object hippoSession, Object modelProjection,
         Object layoutProjection, Object viewProjection, boolean fullMode)
     {
@@ -305,7 +306,7 @@ public class FormLayoutSnapshotService
         Map<String, Object> bounds = getBounds(presentation, layoutProjection, viewProjection);
         if (!fullMode && !hasPositiveBounds(bounds))
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         Map<String, Object> item = new LinkedHashMap<>();
@@ -353,6 +354,7 @@ public class FormLayoutSnapshotService
         return invokeOneArg(projection, "getModel", domain); //$NON-NLS-1$
     }
 
+    @SuppressWarnings("java:S1168")
     private Map<String, Object> getBounds(Object presentation, Object layoutProjection, Object viewProjection)
     {
         Object layout = getProjectedModel(layoutProjection, presentation);
@@ -370,7 +372,7 @@ public class FormLayoutSnapshotService
             return boundsMap(rectangle.x, rectangle.y, rectangle.width, rectangle.height);
         }
 
-        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        return null;
     }
 
     private String getBoundsSource(Object presentation, Object layoutProjection, Object viewProjection)
@@ -403,11 +405,12 @@ public class FormLayoutSnapshotService
             && ((Number)width).intValue() > 0 && ((Number)height).intValue() > 0;
     }
 
+    @SuppressWarnings("java:S1168")
     private Map<String, Object> getLayoutBounds(Object layout)
     {
         if (layout == null)
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         Object left = invokeNoArg(layout, "getLeft"); //$NON-NLS-1$
@@ -420,7 +423,7 @@ public class FormLayoutSnapshotService
                 ((Number)width).intValue(), ((Number)height).intValue());
         }
 
-        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        return null;
     }
 
     private Map<String, Object> boundsMap(int left, int top, int width, int height)
@@ -777,11 +780,12 @@ public class FormLayoutSnapshotService
         }
     }
 
+    @SuppressWarnings("java:S1168")
     private Map<String, Object> describeEObject(Object value)
     {
         if (!(value instanceof EObject))
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         EObject object = (EObject)value;
@@ -856,6 +860,7 @@ public class FormLayoutSnapshotService
         }
     }
 
+    @SuppressWarnings("java:S3011")
     private Object invokeOneArg(Object target, String methodName, Object argument)
     {
         if (target == null || argument == null)
@@ -869,7 +874,7 @@ public class FormLayoutSnapshotService
             {
                 method = target.getClass().getMethod(methodName, Object.class);
             }
-            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            method.setAccessible(true);
             return method.invoke(target, argument);
         }
         catch (Exception e)
@@ -878,6 +883,7 @@ public class FormLayoutSnapshotService
         }
     }
 
+    @SuppressWarnings("java:S1168")
     private Map<String, Object> getFormSize(Object wysiwygViewer, boolean refresh) throws Exception
     {
         if (refresh)
@@ -895,7 +901,7 @@ public class FormLayoutSnapshotService
             return boundsMap(0, 0, controlImageData.width, controlImageData.height);
         }
 
-        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        return null;
     }
 
     private int countElementsWithBounds(List<Map<String, Object>> elements)

@@ -214,8 +214,8 @@ public class GetProfilingResultsTool implements IMcpTool
      * — only the last measurement is meaningful. Falls back to the last element if no
      * session dates are present. Caller has already verified {@code results} is non-empty.
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static List<?> latestOnly(List<?> results, Method getDateOfSession) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    @SuppressWarnings({"unchecked", "rawtypes", "java:S112"})
+    private static List<?> latestOnly(List<?> results, Method getDateOfSession) throws Exception
     {
         Object latest = null;
         Comparable latestDate = null;

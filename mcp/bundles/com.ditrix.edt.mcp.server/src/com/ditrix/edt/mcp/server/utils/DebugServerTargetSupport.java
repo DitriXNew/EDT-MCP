@@ -202,6 +202,7 @@ public final class DebugServerTargetSupport
      *
      * @return all manager-tracked targets (possibly empty)
      */
+    @SuppressWarnings("java:S3011")
     private static List<ServerTarget> listManagedTargets()
     {
         List<ServerTarget> out = new ArrayList<>();
@@ -215,7 +216,7 @@ public final class DebugServerTargetSupport
         try
         {
             Method listMethod = manager.getClass().getMethod("listDebugTargets"); //$NON-NLS-1$
-            listMethod.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            listMethod.setAccessible(true);
             Object targets = listMethod.invoke(manager);
             if (!(targets instanceof Iterable<?>))
             {
@@ -974,16 +975,17 @@ public final class DebugServerTargetSupport
     }
 
     /** Reflectively invokes a no-arg getter and returns its {@code toString()}; null on any failure. */
+    @SuppressWarnings({"java:S3011", "java:S1181"})
     private static String reflectString(Object target, String getter)
     {
         try
         {
             Method m = target.getClass().getMethod(getter);
-            m.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            m.setAccessible(true);
             Object v = m.invoke(target);
             return v != null ? v.toString() : null;
         }
-        catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+        catch (Throwable e)
         {
             return null;
         }
@@ -1006,12 +1008,13 @@ public final class DebugServerTargetSupport
      * ({@code getApplication()}, unwrapping an {@link java.util.Optional}); null on
      * any failure or when no application is bound.
      */
+    @SuppressWarnings({"java:S3011", "java:S1181"})
     private static Object reflectApplication(Object target)
     {
         try
         {
             Method m = target.getClass().getMethod("getApplication"); //$NON-NLS-1$
-            m.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            m.setAccessible(true);
             Object app = m.invoke(target);
             if (app instanceof java.util.Optional<?>)
             {
@@ -1019,7 +1022,7 @@ public final class DebugServerTargetSupport
             }
             return app;
         }
-        catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+        catch (Throwable e)
         {
             return null;
         }
@@ -1031,12 +1034,13 @@ public final class DebugServerTargetSupport
      * {@code com.e1c.g5.dt.applications.IApplication} interface is in a different
      * bundle, so this stays reflective like the rest of this support class.
      */
+    @SuppressWarnings({"java:S3011", "java:S1181"})
     private static String reflectApplicationProjectName(Object application)
     {
         try
         {
             Method m = application.getClass().getMethod("getProject"); //$NON-NLS-1$
-            m.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            m.setAccessible(true);
             Object project = m.invoke(application);
             if (project == null)
             {
@@ -1044,7 +1048,7 @@ public final class DebugServerTargetSupport
             }
             return reflectString(project, "getName"); //$NON-NLS-1$
         }
-        catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+        catch (Throwable e)
         {
             return null;
         }

@@ -1236,6 +1236,7 @@ public class MetadataRenameService
         return value instanceof String text ? text : null;
     }
 
+    @SuppressWarnings("java:S3011")
     private static Object getFieldValue(Object target, String fieldName)
     {
         if (target == null)
@@ -1248,7 +1249,7 @@ public class MetadataRenameService
             try
             {
                 java.lang.reflect.Field field = type.getDeclaredField(fieldName);
-                field.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+                field.setAccessible(true);
                 return field.get(target);
             }
             catch (Exception e)
@@ -1259,13 +1260,14 @@ public class MetadataRenameService
         return null;
     }
 
+    @SuppressWarnings({"java:S112", "java:S3011"})
     private static Object invokeMethod(Object target, String methodName, Class<?>[] parameterTypes, Object... args)
-        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+        throws Exception
     {
         java.lang.reflect.Method method = findMethod(target.getClass(), methodName, parameterTypes);
         if (!method.canAccess(target))
         {
-            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+            method.setAccessible(true);
         }
         return method.invoke(target, args);
     }
@@ -1352,7 +1354,8 @@ public class MetadataRenameService
         }
     }
 
-    private static Object getBslInjector() throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    @SuppressWarnings("java:S112")
+    private static Object getBslInjector() throws Exception
     {
         Class<?> activatorClass = getClassOrThrow("com._1c.g5.v8.dt.bsl.ui.internal.BslActivator"); //$NON-NLS-1$
         Object activator = activatorClass.getMethod(GET_INSTANCE).invoke(null);
@@ -1360,13 +1363,15 @@ public class MetadataRenameService
             "com._1c.g5.v8.dt.bsl.Bsl"); //$NON-NLS-1$
     }
 
-    private static Object getSearchCoreInjector() throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    @SuppressWarnings("java:S112")
+    private static Object getSearchCoreInjector() throws Exception
     {
         Class<?> pluginClass = getClassOrThrow("com._1c.g5.v8.dt.internal.search.core.SearchCorePlugin"); //$NON-NLS-1$
         Object plugin = pluginClass.getMethod("getDefault").invoke(null); //$NON-NLS-1$
         return pluginClass.getMethod("getInjector").invoke(plugin); //$NON-NLS-1$
     }
 
+    @SuppressWarnings("java:S3011")
     private static Object createRenameElementContext(MdObject targetObject) throws Exception
     {
         Class<?> contextClass = getClassOrThrow(
@@ -1375,7 +1380,7 @@ public class MetadataRenameService
             getClassOrThrow("org.eclipse.emf.common.util.URI"), //$NON-NLS-1$
             getClassOrThrow("org.eclipse.emf.ecore.EClass"), //$NON-NLS-1$
             getClassOrThrow("com._1c.g5.v8.bm.core.IBmObject")); //$NON-NLS-1$
-        constructor.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+        constructor.setAccessible(true);
         return constructor.newInstance(EcoreUtil.getURI(targetObject), targetObject.eClass(), targetObject);
     }
 
@@ -1412,6 +1417,7 @@ public class MetadataRenameService
         return edit instanceof TextEdit textEdit ? textEdit : null;
     }
 
+    @SuppressWarnings("java:S3011")
     private static Object invokeNoArg(Object target, String methodName)
     {
         try
@@ -1419,7 +1425,7 @@ public class MetadataRenameService
             java.lang.reflect.Method method = findMethod(target.getClass(), methodName, new Class<?>[0]);
             if (!method.canAccess(target))
             {
-                method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+                method.setAccessible(true);
             }
             return method.invoke(target);
         }

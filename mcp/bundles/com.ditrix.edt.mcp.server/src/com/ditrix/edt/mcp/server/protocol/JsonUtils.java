@@ -249,17 +249,18 @@ public final class JsonUtils
      * @param argumentName the argument name to extract
      * @return list of strings or null if not found
      */
+    @SuppressWarnings("java:S1168")
     public static List<String> extractArrayArgument(Map<String, String> params, String argumentName)
     {
         if (params == null || argumentName == null)
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
-        
+
         String value = params.get(argumentName);
         if (value == null || value.isEmpty())
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
         
         value = value.trim();
@@ -294,6 +295,7 @@ public final class JsonUtils
      * JSON array, or {@code null} when it is not an array or cannot be parsed — the {@code null} signals
      * {@link #extractArrayArgument} to fall through to comma-separated parsing.
      */
+    @SuppressWarnings("java:S1168")
     private static List<String> parseJsonStringArray(String value)
     {
         try
@@ -317,7 +319,7 @@ public final class JsonUtils
         {
             // Fall through to comma-separated parsing
         }
-        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        return null;
     }
 
     /**

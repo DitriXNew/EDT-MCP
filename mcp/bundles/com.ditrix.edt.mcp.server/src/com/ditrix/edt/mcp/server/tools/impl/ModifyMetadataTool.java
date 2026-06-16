@@ -1423,11 +1423,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
     }
 
+    @SuppressWarnings("java:S2447")
     private static Boolean parseBoolean(String value)
     {
         if (value == null)
         {
-            return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
+            return null;
         }
         String v = value.trim().toLowerCase();
         if ("true".equals(v) || "1".equals(v) || "yes".equals(v)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -1438,7 +1439,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return Boolean.FALSE;
         }
-        return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
+        return null;
     }
 
     private static Integer parseInteger(String value)

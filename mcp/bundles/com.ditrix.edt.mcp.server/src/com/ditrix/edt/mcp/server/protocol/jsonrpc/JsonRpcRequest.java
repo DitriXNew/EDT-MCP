@@ -74,19 +74,19 @@ public class JsonRpcRequest
     /**
      * Gets the nested "arguments" map from params (for tools/call).
      */
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "java:S1168"})
     public Map<String, Object> getArguments()
     {
         if (params == null)
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
         Object args = params.get("arguments"); //$NON-NLS-1$
         if (args instanceof Map)
         {
             return (Map<String, Object>) args;
         }
-        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        return null;
     }
     
     /**

@@ -93,21 +93,22 @@ public final class SubsystemUtils
      *   <li>"Subsystem" → null (missing name)</li>
      * </ul>
      */
+    @SuppressWarnings("java:S1168")
     public static String[] parseSubsystemPath(String fqn)
     {
         if (fqn == null)
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
         String trimmed = fqn.trim();
         if (trimmed.isEmpty())
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
         String[] parts = trimmed.split("\\."); //$NON-NLS-1$
         if (parts.length < 2 || (parts.length % 2) != 0)
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return null;
         }
 
         String[] names = new String[parts.length / 2];
@@ -115,12 +116,12 @@ public final class SubsystemUtils
         {
             if (!isSubsystemTypeToken(parts[i]))
             {
-                return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+                return null;
             }
             String name = parts[i + 1] != null ? parts[i + 1].trim() : ""; //$NON-NLS-1$
             if (name.isEmpty())
             {
-                return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+                return null;
             }
             names[i / 2] = name;
         }

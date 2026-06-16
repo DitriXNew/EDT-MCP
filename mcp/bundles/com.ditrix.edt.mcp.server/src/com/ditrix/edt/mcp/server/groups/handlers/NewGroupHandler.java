@@ -228,7 +228,8 @@ public class NewGroupHandler extends AbstractHandler {
      * Returns the model object name (e.g. "CommonModule", "Catalog"), or
      * {@code null} when the method is absent or does not return a String.
      */
-    private String invokeGetModelObjectName(Object adapter) throws Exception { // NOSONAR propagates checked exceptions across the reflective boundary by design
+    @SuppressWarnings("java:S112")
+    private String invokeGetModelObjectName(Object adapter) throws Exception {
         try {
             Method getModelObjectNameMethod = adapter.getClass().getMethod("getModelObjectName");
             Object result = getModelObjectNameMethod.invoke(adapter);
@@ -247,7 +248,8 @@ public class NewGroupHandler extends AbstractHandler {
      * reflective {@code getParent(Object)} method is absent this is treated as a
      * top-level collection (returns {@code false}).
      */
-    private boolean isNestedCollection(Object adapter) throws Exception { // NOSONAR propagates checked exceptions across the reflective boundary by design
+    @SuppressWarnings("java:S112")
+    private boolean isNestedCollection(Object adapter) throws Exception {
         try {
             Method getParentMethod = adapter.getClass().getMethod("getParent", Object.class);
             Object parent = getParentMethod.invoke(adapter, adapter);

@@ -401,6 +401,7 @@ public final class BslModuleUtils
      * @return list of lines
      * @throws Exception if reading fails
      */
+    @SuppressWarnings("java:S125")
     public static List<String> readFileLines(IFile file) throws Exception
     {
         // Try IFile.getContents() first (workspace API); fall back to filesystem
@@ -423,7 +424,7 @@ public final class BslModuleUtils
         }
 
         List<String> lines = new ArrayList<>();
-        // Wrap in BufferedInputStream to support mark/reset for BOM detection; // NOSONAR explanatory comment, not commented-out code
+        // Wrap in BufferedInputStream to support mark/reset for BOM detection;
         // rawIs is closed by try-with-resources since BufferedInputStream wraps it
         try (InputStream input = new BufferedInputStream(rawIs))
         {
