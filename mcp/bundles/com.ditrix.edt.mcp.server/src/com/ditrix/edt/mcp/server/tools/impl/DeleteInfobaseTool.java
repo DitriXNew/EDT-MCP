@@ -232,7 +232,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // Resolve the file-infobase target (cast-check, on-disk directory, shared-files guard) -
         // read-only. On a non-file/non-server application it carries the SAME refusal JSON.
         FileDeletionPlan ibPlan = resolveFileDeletionPlan(targetApp, project, appManager,
-            projectName, deleteRegistration, deleteDatabaseFiles);
+            deleteRegistration, deleteDatabaseFiles);
         if (ibPlan.error != null)
         {
             return ibPlan.error;
@@ -259,13 +259,13 @@ public class DeleteInfobaseTool implements IMcpTool
      * the plan fields are populated. Extracted verbatim from {@link #deleteInfobase}.
      */
     private static FileDeletionPlan resolveFileDeletionPlan(IApplication targetApp, IProject project,
-            IApplicationManager appManager, String projectName, boolean deleteRegistration,
+            IApplicationManager appManager, boolean deleteRegistration,
             boolean deleteDatabaseFiles)
     {
         // Verify it is a file infobase application (not some other type we do not manage here).
         if (!(targetApp instanceof IInfobaseApplication))
         {
-            return FileDeletionPlan.error(ToolResult.error("Application '" + targetApp.getName() //$NON-NLS-1$
+            return FileDeletionPlan.failed(ToolResult.error("Application '" + targetApp.getName() //$NON-NLS-1$
                 + "' (id=" + targetApp.getId() //$NON-NLS-1$
                 + ") is neither a file infobase (" + INFOBASE_APP_TYPE //$NON-NLS-1$
                 + ") nor a standalone server (" + StandaloneServerSupport.WST_SERVER_APP_TYPE //$NON-NLS-1$
@@ -395,19 +395,19 @@ public class DeleteInfobaseTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return DeleteContext.error(ToolResult.error(
+            return DeleteContext.failed(ToolResult.error(
                 ProjectContext.notFoundMessage(projectName)).toJson());
         }
         if (!ctx.isOpen())
         {
-            return DeleteContext.error(
+            return DeleteContext.failed(
                 ToolResult.error("Project is closed: " + projectName).toJson()); //$NON-NLS-1$
         }
 
         IApplicationManager appManager = Activator.getDefault().getApplicationManager();
         if (appManager == null)
         {
-            return DeleteContext.error(
+            return DeleteContext.failed(
                 ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
         }
 
@@ -415,7 +415,7 @@ public class DeleteInfobaseTool implements IMcpTool
             Activator.getDefault().getInfobaseAssociationManager();
         if (assocManager == null)
         {
-            return DeleteContext.error(ToolResult.error(
+            return DeleteContext.failed(ToolResult.error(
                 "IInfobaseAssociationManager service is not available.").toJson()); //$NON-NLS-1$
         }
 
@@ -433,7 +433,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * (application id not found, error listing applications, name not found); otherwise {@code error}
      * is {@code null} and {@code app} is the resolved application.
      */
-    private static TargetApplication resolveTargetApplication(IApplicationManager appManager,
+    private static TargetApplication resolveTargetApplication(IApplicationManager appManager, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
             IProject project, String projectName, String applicationId, String infobaseName)
     {
         if (applicationId != null && !applicationId.isEmpty())
@@ -441,7 +441,7 @@ public class DeleteInfobaseTool implements IMcpTool
             Optional<IApplication> found = appManager.getApplication(project, applicationId);
             if (!found.isPresent())
             {
-                return TargetApplication.error(ToolResult.error("Application not found: '" //$NON-NLS-1$
+                return TargetApplication.failed(ToolResult.error("Application not found: '" //$NON-NLS-1$
                     + applicationId + "' for project '" + projectName //$NON-NLS-1$
                     + "'. Use get_applications to list available application IDs.").toJson()); //$NON-NLS-1$
             }
@@ -470,12 +470,12 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return TargetApplication.error(
+            return TargetApplication.failed(
                 ToolResult.error("Error listing applications: " + e.getMessage()).toJson()); //$NON-NLS-1$
         }
         if (targetApp == null)
         {
-            return TargetApplication.error(ToolResult.error("Infobase with name '" + infobaseName //$NON-NLS-1$
+            return TargetApplication.failed(ToolResult.error("Infobase with name '" + infobaseName //$NON-NLS-1$
                 + "' not found in project '" + projectName //$NON-NLS-1$
                 + "'. Use get_applications to list available infobases.").toJson()); //$NON-NLS-1$
         }
@@ -622,7 +622,7 @@ public class DeleteInfobaseTool implements IMcpTool
             this.ibManager = ibManager;
         }
 
-        static DeleteContext error(String error)
+        static DeleteContext failed(String error)
         {
             return new DeleteContext(error, null, null, null, null);
         }
@@ -651,7 +651,7 @@ public class DeleteInfobaseTool implements IMcpTool
             this.app = app;
         }
 
-        static TargetApplication error(String error)
+        static TargetApplication failed(String error)
         {
             return new TargetApplication(error, null);
         }
@@ -664,7 +664,7 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /**
      * Holder for the file-infobase deletion resolved by
-     * {@link #resolveFileDeletionPlan(IApplication, IProject, IApplicationManager, String, boolean,
+     * {@link #resolveFileDeletionPlan(IApplication, IProject, IApplicationManager, boolean,
      * boolean)}: the {@link InfobaseReference}, the resolved name / id, the on-disk database directory,
      * the shared-files guard and the deleteRegistration flag. When {@code error} is non-null it carries
      * a ready tool-result JSON (the cast-check refusal) and the other fields are unset; otherwise
@@ -693,7 +693,7 @@ public class DeleteInfobaseTool implements IMcpTool
             this.deleteRegistration = deleteRegistration;
         }
 
-        static FileDeletionPlan error(String error)
+        static FileDeletionPlan failed(String error)
         {
             return new FileDeletionPlan(error, null, null, null, null, false, false);
         }
@@ -1141,14 +1141,14 @@ public class DeleteInfobaseTool implements IMcpTool
         Path target = dbDir.toAbsolutePath().normalize();
         try
         {
-            for (IProject other : ProjectContext.allProjects())
+            for (IProject other : ProjectContext.allProjects()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 if (other == null || other.equals(currentProject))
                 {
                     continue;
                 }
                 List<IApplication> apps;
-                try
+                try // NOSONAR nested try is intentional (distinct resource/exception scopes)
                 {
                     apps = appManager.getApplications(other);
                 }

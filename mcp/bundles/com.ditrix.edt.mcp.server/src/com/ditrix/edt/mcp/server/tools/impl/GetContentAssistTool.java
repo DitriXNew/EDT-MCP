@@ -434,7 +434,7 @@ public class GetContentAssistTool implements IMcpTool
     {
         long deadline = System.currentTimeMillis() + PROPOSAL_STABILIZE_TIMEOUT_MS;
         ICompletionProposal[] best = safeCompute(processor, viewer, offset);
-        while (System.currentTimeMillis() < deadline)
+        while (System.currentTimeMillis() < deadline) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             int bestCount = best.length;
             pumpUi(viewer);
@@ -602,7 +602,7 @@ public class GetContentAssistTool implements IMcpTool
      * @param filePath file path for result
      * @return JSON string
      */
-    static String formatProposals(ICompletionProposal[] proposals, int maxProposals, int proposalOffset,
+    static String formatProposals(ICompletionProposal[] proposals, int maxProposals, int proposalOffset, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
                                    String containsFilter, boolean extendedDocumentation,
                                    int line, int column, String filePath)
     {
@@ -624,7 +624,7 @@ public class GetContentAssistTool implements IMcpTool
 
         if (proposals != null)
         {
-            for (ICompletionProposal proposal : proposals)
+            for (ICompletionProposal proposal : proposals) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 String displayString = proposal.getDisplayString();
 

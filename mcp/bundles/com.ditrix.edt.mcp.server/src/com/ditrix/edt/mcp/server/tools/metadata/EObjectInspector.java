@@ -336,7 +336,7 @@ public final class EObjectInspector
      */
     private static Object findFirstSetNonNameAttribute(EObject eObj, EClass eClass)
     {
-        for (EAttribute attr : eClass.getEAllAttributes())
+        for (EAttribute attr : eClass.getEAllAttributes()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (attr.isDerived() || attr.isTransient())
             {

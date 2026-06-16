@@ -216,7 +216,7 @@ public class MetadataRenameService
             {
                 allChanges.add(new ChangePoint(
                     indexCounter[0]++, "rename", //$NON-NLS-1$
-                    item.getName(), item.isOptional(), item.isChecked(), title,
+                    item.getName(), item.isOptional(), item.isChecked(),
                     CodeLocation.of(null, null)));
             }
         }
@@ -474,7 +474,7 @@ public class MetadataRenameService
         final String methodName;
 
         ChangePoint(int index, String type, String description,
-            boolean optional, boolean enabled, String ignored, CodeLocation location)
+            boolean optional, boolean enabled, CodeLocation location)
         {
             this.index = index;
             this.type = type;
@@ -650,7 +650,7 @@ public class MetadataRenameService
 
         ctx.result.add(new ChangePoint(
             ctx.indexCounter[0]++, BSL_REF,
-            change.getName(), ctx.optional, change.isEnabled(), ctx.refactoringTitle,
+            change.getName(), ctx.optional, change.isEnabled(),
             CodeLocation.of(scan.fqn, scan.project)));
     }
 
@@ -664,7 +664,7 @@ public class MetadataRenameService
             String exactProject = exactMatch.project != null ? exactMatch.project : scan.project;
             ctx.result.add(new ChangePoint(
                 leafIndex, BSL_REF,
-                change.getName(), ctx.optional, change.isEnabled(), ctx.refactoringTitle,
+                change.getName(), ctx.optional, change.isEnabled(),
                 new CodeLocation(exactFqn, exactProject, exactMatch.lineNumber, exactMatch.columnNumber,
                     exactMatch.codeContext, exactMatch.methodName)));
         }
@@ -758,7 +758,7 @@ public class MetadataRenameService
             String matchedMethodName = resolveContainingMethod(module, content, matchedLineNumber);
             ctx.result.add(new ChangePoint(
                 leafIndex, BSL_REF,
-                change.getName(), ctx.optional, change.isEnabled(), ctx.refactoringTitle,
+                change.getName(), ctx.optional, change.isEnabled(),
                 new CodeLocation(scan.fqn, scan.project, matchedLineNumber, matchedColumnNumber,
                     matchedCodeContext, matchedMethodName)));
         }
@@ -837,7 +837,7 @@ public class MetadataRenameService
             Object dcs = getEnumConstant(SEARCH_IN_CLASS, "DCS"); //$NON-NLS-1$
             Object dynamicListQuery = getEnumConstant(SEARCH_IN_CLASS, "DYNAMIC_LIST_QUERY"); //$NON-NLS-1$
             invokeMethod(searchScopeSettings, "addSearchIn", new Class<?>[] {modules.getClass().arrayType()}, //$NON-NLS-1$
-                (Object) arrayOf(modules.getClass(), modules, dcs, dynamicListQuery));
+                arrayOf(modules.getClass(), modules, dcs, dynamicListQuery));
             @SuppressWarnings("unchecked")
             Collection<IProject> projects = (Collection<IProject>) invokeMethod(participant, "getProjects", //$NON-NLS-1$
                 new Class<?>[] {IProject.class}, project);
@@ -970,7 +970,6 @@ public class MetadataRenameService
                 original.description,
                 original.optional,
                 original.enabled,
-                null,
                 new CodeLocation(
                     edt.fqn != null ? edt.fqn : original.fqn,
                     edt.project != null ? edt.project : original.project,
@@ -1151,7 +1150,7 @@ public class MetadataRenameService
     {
         String projectName = bmChange.getProjectName();
         String objectFqn = bmObject.bmGetFqn();
-        for (ExactMatchInfo info : exactMatches.values())
+        for (ExactMatchInfo info : exactMatches.values()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (info == null || info.filePath == null)
             {
@@ -1624,8 +1623,8 @@ public class MetadataRenameService
         for (int i = startIdx; i <= endIdx; i++)
         {
             String prefix = (i == lineIdx) ? ">>>" : "   "; //$NON-NLS-1$ //$NON-NLS-2$
-            sb.append(String.format("%4d: %s %s\n", i + 1, prefix, //$NON-NLS-1$
-                lines[i].replace("\r", ""))); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(String.format("%4d: %s %s", i + 1, prefix, //$NON-NLS-1$
+                lines[i].replace("\r", ""))).append('\n'); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return sb.toString();
     }

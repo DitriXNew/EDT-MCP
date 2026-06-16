@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
@@ -360,7 +361,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 .map(marker -> buildIfMatches(marker, context.severityFilter, context.checkId,
                     context.objects, context.checkRepository, context.unresolvedShown,
                     context.unresolvedFilteredOut))
-                .filter(error -> error != null)
+                .filter(Objects::nonNull)
                 .limit(remaining)
                 .forEach(errors::add);
 

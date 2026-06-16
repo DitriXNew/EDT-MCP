@@ -25,6 +25,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 
@@ -35,7 +36,7 @@ import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
  * This replaces all individual type-specific formatters (CatalogFormatter,
  * DocumentFormatter, etc.) with a single universal implementation.
  */
-public class UniversalMetadataFormatter extends AbstractMetadataFormatter
+public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
     private static final UniversalMetadataFormatter INSTANCE = new UniversalMetadataFormatter();
 
@@ -446,7 +447,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         {
             java.lang.reflect.Method method = attr.getClass().getMethod(methodName);
             Boolean flag = (Boolean) method.invoke(attr);
-            return formatBoolean(flag != null ? flag : false);
+            return formatBoolean(flag != null && flag);
         }
         catch (Exception e)
         {
@@ -621,7 +622,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         catch (Exception e)
         {
             // Error getting attributes - skip
-            System.err.println("Error formatting tabular section attributes: " + e.getMessage());
+            Activator.logError("Error formatting tabular section attributes", e); //$NON-NLS-1$
         }
     }
     

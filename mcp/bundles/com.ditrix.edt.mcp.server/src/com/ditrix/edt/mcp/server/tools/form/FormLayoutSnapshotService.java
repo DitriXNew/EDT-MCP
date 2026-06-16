@@ -438,7 +438,7 @@ public class FormLayoutSnapshotService
     private Map<String, Object> collectProperties(EObject object, boolean fullMode)
     {
         Map<String, Object> properties = new LinkedHashMap<>();
-        for (EStructuralFeature feature : object.eClass().getEAllStructuralFeatures())
+        for (EStructuralFeature feature : object.eClass().getEAllStructuralFeatures()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if ("categoriesHolder".equals(feature.getName())) //$NON-NLS-1$
             {

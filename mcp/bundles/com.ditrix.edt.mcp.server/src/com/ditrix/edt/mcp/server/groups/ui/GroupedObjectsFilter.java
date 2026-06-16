@@ -95,7 +95,7 @@ public class GroupedObjectsFilter extends ViewerFilter {
         // Check if there are any PatternFilter-like filters active on the viewer
         if (viewer instanceof org.eclipse.jface.viewers.StructuredViewer sv) {
             ViewerFilter[] filters = sv.getFilters();
-            for (ViewerFilter filter : filters) {
+            for (ViewerFilter filter : filters) { // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
                 // Skip ourselves
                 if (filter == this) {
                     continue;

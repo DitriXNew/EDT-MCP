@@ -225,7 +225,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         // Loop-invariant identity of the target method (same across every candidate).
         CallerSearch search = new CallerSearch(methodUri, methodName, targetModuleName, limit);
 
-        for (IFile candidate : candidates)
+        for (IFile candidate : candidates) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             String relToSrc = candidate.getProjectRelativePath().removeFirstSegments(1).toString();
             Module candidateModule;
@@ -273,7 +273,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         boolean candidateIsTarget, String relToSrc, List<CallerInfo> callers)
     {
         int matched = 0;
-        for (Iterator<EObject> iter = candidateModule.eAllContents(); iter.hasNext();)
+        for (Iterator<EObject> iter = candidateModule.eAllContents(); iter.hasNext();) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             EObject obj = iter.next();
             if (!(obj instanceof Invocation))

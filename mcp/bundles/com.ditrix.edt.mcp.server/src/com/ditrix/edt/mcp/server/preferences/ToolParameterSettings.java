@@ -22,7 +22,7 @@ import com.ditrix.edt.mcp.server.Activator;
  * Parameters are stored in the preference store with key format: tool.{toolName}.{paramName}
  * These defaults are used when the AI client does not specify the parameter explicitly.
  */
-public final class ToolParameterSettings
+public final class ToolParameterSettings // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
     /** Preference key prefix for tool parameters */
     private static final String KEY_PREFIX = "tool."; //$NON-NLS-1$

@@ -22,6 +22,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
@@ -276,8 +277,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         catch (Exception e)
         {
             // Log error but don't fail the entire formatting
-            System.err.println("Error formatting StandardAttributes: " + e.getMessage()); //$NON-NLS-1$
-            e.printStackTrace();
+            Activator.logError("Error formatting StandardAttributes", e); //$NON-NLS-1$
         }
     }
     
@@ -304,7 +304,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         // how many properties were omitted. Below the cap this is a pure no-op.
         int rendered = 0;
         int omitted = 0;
-        for (EStructuralFeature feature : features)
+        for (EStructuralFeature feature : features) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (isSkippableFeature(feature))
             {

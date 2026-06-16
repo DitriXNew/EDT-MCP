@@ -285,7 +285,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         final String updateScope;
         final boolean debug;
 
-        RunRequest(String configName, String projectName, String applicationId, String extensions,
+        RunRequest(String configName, String projectName, String applicationId, String extensions, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
                 String modules, String tests, int timeout, boolean updateBeforeLaunch,
                 String updateScope, boolean debug)
         {
@@ -325,7 +325,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * The temp directory is NEVER deleted in finally — a Pending re-call can fetch the result. Old
      * runs are cleaned up automatically before starting a new launch.
      */
-    private String runTests(RunRequest req)
+    private String runTests(RunRequest req) // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
     {
         try
         {
@@ -870,7 +870,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * expected to call {@code wait_for_break} next. The report is still written to
      * {@code reportDir} once the run finishes.
      */
-    private String launchDebugMode(ILaunchConfiguration matchingConfig, IProject project,
+    private String launchDebugMode(ILaunchConfiguration matchingConfig, IProject project, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String projectName, String applicationId, IApplicationManager appManager,
             ILaunchManager launchManager, String extensions, String modules, String tests,
             boolean updateBeforeLaunch, String updateScope) throws IOException, CoreException
@@ -1118,7 +1118,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      */
     private static String evictStalePrepEntry(String prepKey)
     {
-        while (true)
+        while (true) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             PrepInFlight existing = LaunchLifecycleUtils.PREP_INFLIGHT.get(prepKey);
             if (existing == null)

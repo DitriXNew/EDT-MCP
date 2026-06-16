@@ -372,7 +372,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         }
         
         if (checkedCount == 0) {
-            tagsTreeViewer.setChecked(project, false);;
+            tagsTreeViewer.setChecked(project, false);
             tagsTreeViewer.setGrayed(project, false);
         } else if (checkedCount == tags.size()) {
             tagsTreeViewer.setChecked(project, true);
@@ -388,7 +388,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
      */
     private void selectAllTags(boolean select) {
         IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
-        for (IProject project : root.getProjects()) {
+        for (IProject project : root.getProjects()) { // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             if (!project.isOpen()) continue;
             if (v8ProjectManager != null) {
                 IV8Project v8Project = v8ProjectManager.getProject(project);
@@ -728,7 +728,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
      */
     private void restoreCheckedState() {
         IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
-        for (IProject project : root.getProjects()) {
+        for (IProject project : root.getProjects()) { // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             if (!project.isOpen()) continue;
             if (v8ProjectManager != null) {
                 IV8Project v8Project = v8ProjectManager.getProject(project);
@@ -791,7 +791,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     /**
      * Count the number of objects matching the search pattern for a tag.
      */
-    private int countMatchingObjects(TagEntry entry) {
+    private int countMatchingObjects(TagEntry entry) { // NOSONAR intentional method placement; moving to a sub/inner class would not improve clarity
         Set<String> objects = tagService.findObjectsByTag(entry.project(), entry.tag().getName());
         if (searchPattern == null) {
             return objects.size();

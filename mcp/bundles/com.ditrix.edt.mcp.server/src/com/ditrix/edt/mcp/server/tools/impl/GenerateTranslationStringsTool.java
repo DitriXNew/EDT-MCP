@@ -121,7 +121,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
         boolean collectModel = JsonUtils.extractBooleanArgument(params, COLLECT_MODEL, true);
 
         // Parse + default + validate the scalar/string arguments (no side effects).
-        Options opts = parseOptions(params, projectName, targetLanguages);
+        Options opts = parseOptions(params, targetLanguages);
         if (opts.error != null)
         {
             return opts.error;
@@ -188,11 +188,11 @@ public class GenerateTranslationStringsTool implements IMcpTool
      * Extracts, defaults and validates the scalar/string options (no side
      * effects). Returns a holder carrying either the populated {@link Options} or
      * the exact error JSON the inline guards produced (same value, same case); the
-     * caller re-checks {@code error}. {@code projectName}/{@code targetLanguages}
-     * are passed in already-extracted and validated here for the required-argument
-     * and non-empty-languages checks.
+     * caller re-checks {@code error}. {@code targetLanguages} is passed in
+     * already-extracted and validated here for the required-argument and
+     * non-empty-languages checks.
      */
-    private static Options parseOptions(Map<String, String> params, String projectName, List<String> targetLanguages)
+    private static Options parseOptions(Map<String, String> params, List<String> targetLanguages)
     {
         String storageId = JsonUtils.extractStringArgument(params, STORAGE_ID);
         String collectModelType = JsonUtils.extractStringArgument(params, COLLECT_MODEL_TYPE);
@@ -202,11 +202,11 @@ public class GenerateTranslationStringsTool implements IMcpTool
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
         {
-            return Options.error(err);
+            return Options.failed(err);
         }
         if (targetLanguages == null || targetLanguages.isEmpty())
         {
-            return Options.error(
+            return Options.failed(
                 ToolResult.error("targetLanguages is required (e.g. [\"en\"])").toJson()); //$NON-NLS-1$
         }
 
@@ -218,7 +218,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
 
         if (FILL_UP_FROM_PROVIDER.equals(fillUpType) && providerId.isEmpty())
         {
-            return Options.error(ToolResult.error(
+            return Options.failed(ToolResult.error(
                 "providerId is required when fillUpType=FROM_PROVIDER. " //$NON-NLS-1$
               + "Use get_translation_project_info to list available providers.").toJson()); //$NON-NLS-1$
         }
@@ -246,11 +246,11 @@ public class GenerateTranslationStringsTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return Resolved.error(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
+            return Resolved.failed(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
         }
         if (!ctx.isOpen())
         {
-            return Resolved.error(ToolResult.error("Project is closed: " + projectName).toJson()); //$NON-NLS-1$
+            return Resolved.failed(ToolResult.error("Project is closed: " + projectName).toJson()); //$NON-NLS-1$
         }
         IProject project = ctx.project();
 
@@ -259,7 +259,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
         String building = ProjectStateChecker.buildingErrorOrNull(projectName);
         if (building != null)
         {
-            return Resolved.error(ToolResult.error(building).toJson());
+            return Resolved.failed(ToolResult.error(building).toJson());
         }
 
         // Reject dictionary storage projects, extensions and any
@@ -268,7 +268,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
         // confusing error, or simply do nothing useful.
         if (!project.hasNature(V8_CONFIGURATION_NATURE))
         {
-            return Resolved.error(ToolResult.error(
+            return Resolved.failed(ToolResult.error(
                 "Not a V8 configuration project: " + projectName //$NON-NLS-1$
               + ". This action must be run on the configuration project (V8ConfigurationNature), " //$NON-NLS-1$
               + "not on a dictionary storage project or extension.").toJson()); //$NON-NLS-1$
@@ -278,7 +278,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
         IDtProject dtProject = dtProjectManager != null ? dtProjectManager.getDtProject(project) : null;
         if (dtProject == null)
         {
-            return Resolved.error(ToolResult.error(
+            return Resolved.failed(ToolResult.error(
                 "EDT has not yet resolved an IDtProject for: " + projectName //$NON-NLS-1$
               + ". The project may still be indexing — please retry.").toJson()); //$NON-NLS-1$
         }
@@ -286,7 +286,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
         Object api = Activator.getDefault().getGenerateTranslationStringsApi();
         if (api == null)
         {
-            return Resolved.error(ToolResult.error(
+            return Resolved.failed(ToolResult.error(
                 "LanguageTool IGenerateTranslationStringsApi is not available. " //$NON-NLS-1$
               + "Install LanguageTool in EDT.").toJson()); //$NON-NLS-1$
         }
@@ -322,7 +322,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
             return new Options(storageId, collectModelType, fillUpType, providerId, null);
         }
 
-        static Options error(String error)
+        static Options failed(String error)
         {
             return new Options(null, null, null, null, error);
         }
@@ -367,7 +367,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
             return new Resolved(project, dtProject, api, null);
         }
 
-        static Resolved error(String error)
+        static Resolved failed(String error)
         {
             return new Resolved(null, null, null, error);
         }

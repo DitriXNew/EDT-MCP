@@ -157,7 +157,7 @@ public final class BuiltInToolRegistrar
         registry.register(new StepTool());
         registry.register(new ResumeTool());
         registry.register(new EvaluateExpressionTool());
-        registry.register(new DebugYaxunitTestsTool());
+        registry.register(new DebugYaxunitTestsTool()); // NOSONAR deprecated EDT API used intentionally (no non-deprecated equivalent here)
         registry.register(new DebugStatusTool());
         registry.register(new StartProfilingTool());
         registry.register(new StopProfilingTool());

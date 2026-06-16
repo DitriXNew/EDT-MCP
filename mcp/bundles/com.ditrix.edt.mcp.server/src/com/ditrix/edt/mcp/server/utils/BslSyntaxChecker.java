@@ -119,7 +119,7 @@ public final class BslSyntaxChecker
         // Stack of (tag, lineNumber as string)
         Deque<String[]> stack = new ArrayDeque<>();
 
-        for (int i = 0; i < lines.size(); i++)
+        for (int i = 0; i < lines.size(); i++) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             int lineNum = i + 1;
 

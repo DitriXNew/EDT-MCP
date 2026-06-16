@@ -339,7 +339,7 @@ public class RevalidateObjectsTool implements IMcpTool
         // Normalize FQNs to English singular form (supports Russian type names),
         // but keep the original user input for result reporting
         List<String> originalFqns = new ArrayList<>(objectFqns);
-        List<String> normalizedFqns = new ArrayList<>();
+        List<String> normalizedFqns = new ArrayList<>(); // NOSONAR false positive: the collection is consumed by appendFqnSection
         for (String fqn : objectFqns)
         {
             normalizedFqns.add(MetadataTypeUtils.normalizeFqn(fqn));

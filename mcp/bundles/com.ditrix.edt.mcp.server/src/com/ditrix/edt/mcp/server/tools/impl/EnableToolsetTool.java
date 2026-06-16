@@ -163,7 +163,7 @@ public class EnableToolsetTool implements IMcpTool
     private static void categorizeToolsets(List<String> requested, boolean disable, ToolsetState state,
         List<String> applied, List<String> invalid, List<String> ignored)
     {
-        for (String raw : requested)
+        for (String raw : requested) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             String id = raw == null ? null : raw.trim();
             if (id == null || id.isEmpty())

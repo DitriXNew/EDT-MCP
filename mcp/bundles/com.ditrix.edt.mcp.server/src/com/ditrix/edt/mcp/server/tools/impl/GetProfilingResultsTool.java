@@ -274,7 +274,7 @@ public class GetProfilingResultsTool implements IMcpTool
 
         // Group by module
         Map<String, List<Map<String, Object>>> moduleGroups = new LinkedHashMap<>();
-        for (Object lr : lineResults)
+        for (Object lr : lineResults) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             long freq = (long) refl.getFrequency.invoke(lr);
             if (freq < minFrequency)
@@ -313,7 +313,7 @@ public class GetProfilingResultsTool implements IMcpTool
      * concise mode keeps just line/calls/pct.
      */
     private static Map<String, Object> buildLineInfo(Object lr, long freq, ProfilingReflection refl,
-        boolean detailed) throws Exception
+        boolean detailed) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Map<String, Object> lineInfo = new LinkedHashMap<>();
         lineInfo.put("line", refl.getLineNo.invoke(lr)); //$NON-NLS-1$

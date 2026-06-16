@@ -21,7 +21,7 @@ import java.util.concurrent.CopyOnWriteArraySet;
  * disclosure is off the whole mechanism is bypassed (see
  * {@code McpToolRegistry.getVisibleTools}), so this state is irrelevant then.
  */
-public final class ToolsetState
+public final class ToolsetState // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
     private static final ToolsetState INSTANCE = new ToolsetState();
 

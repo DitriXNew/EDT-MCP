@@ -1352,7 +1352,7 @@ public class CreateProjectTool implements IMcpTool
         final String comment;
         final String scriptVariantStr;
 
-        private KindConstraintInputs(String projectKind, boolean isExtension, boolean isExternalObjects,
+        private KindConstraintInputs(String projectKind, boolean isExtension, boolean isExternalObjects, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String versionStr, String baseProjectName, String prefix, String purposeStr, String compatModeStr,
             String synonym, String comment, String scriptVariantStr)
         {
@@ -1390,7 +1390,7 @@ public class CreateProjectTool implements IMcpTool
         final boolean standardChecks;
         final boolean commonChecks;
 
-        private CreateRequest(String configName, String projectName, String versionStr, String baseProjectName,
+        private CreateRequest(String configName, String projectName, String versionStr, String baseProjectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String prefix, String synonym, String comment, String purposeStr, String compatModeStr,
             String scriptVariantStr, boolean standardChecks, boolean commonChecks)
         {
@@ -1424,7 +1424,7 @@ public class CreateProjectTool implements IMcpTool
         final Version version;
         final boolean synonymApplied;
 
-        private ExtensionResponseData(String effectiveProjectName, String configName, String baseProjectName,
+        private ExtensionResponseData(String effectiveProjectName, String configName, String baseProjectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String prefix, ConfigurationExtensionPurpose purpose, ScriptVariant scriptVariant, Version version,
             boolean synonymApplied)
         {
@@ -1518,7 +1518,7 @@ public class CreateProjectTool implements IMcpTool
         final String scriptVariantStr;
         final Map<String, Object> codestyleMap;
 
-        private ExternalObjectsSuccessInputs(IExternalObjectProjectManager extObjMgr, String effectiveProjectName,
+        private ExternalObjectsSuccessInputs(IExternalObjectProjectManager extObjMgr, String effectiveProjectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String configName, Version version, IProject createdProject, String projectState,
             String scriptVariantStr, Map<String, Object> codestyleMap)
         {

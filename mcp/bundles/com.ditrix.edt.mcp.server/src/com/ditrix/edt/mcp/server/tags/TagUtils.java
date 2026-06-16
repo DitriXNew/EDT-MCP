@@ -382,10 +382,8 @@ public final class TagUtils {
                         return nested;
                     }
                 }
-            } catch (NoSuchMethodException e) {
-                // Method not found, try next
             } catch (Exception e) {
-                // Invocation failed, try next
+                // Method not found or invocation failed, try next
             }
         }
         

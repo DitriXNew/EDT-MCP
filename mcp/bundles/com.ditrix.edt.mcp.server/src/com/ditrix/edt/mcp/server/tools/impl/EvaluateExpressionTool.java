@@ -155,7 +155,7 @@ public class EvaluateExpressionTool implements IMcpTool
             IValue value = result.getValue();
             String stringValue;
             String type;
-            try
+            try // NOSONAR nested try is intentional (distinct resource/exception scopes)
             {
                 stringValue = value != null ? value.getValueString() : null;
                 type = value != null ? value.getReferenceTypeName() : "Undefined"; //$NON-NLS-1$

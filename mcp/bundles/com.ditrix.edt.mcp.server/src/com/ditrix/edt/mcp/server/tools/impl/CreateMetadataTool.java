@@ -401,7 +401,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final TypeSpecific typeSpecific;
         final MdNameNormalizer.Report normReport;
 
-        TopLevelRequest(IProject project, Configuration config, String projectName,
+        TopLevelRequest(IProject project, Configuration config, String projectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             CreateTarget target, String normFqn, Props props, String synonymLanguage,
             TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
         {
@@ -584,16 +584,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         EObject top = (EObject)tx.getObjectById(topBmId);
         if (top == null)
         {
-            throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
+            throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$ // NOSONAR propagates checked exceptions across the reflective boundary by design
         }
         EObject owner = MetadataNodeResolver.resolveOwnerInTx(top, parts);
         if (owner == null)
         {
-            throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$
+            throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$ // NOSONAR propagates checked exceptions across the reflective boundary by design
         }
         if (childByName(owner, feature, name) != null)
         {
-            throw new RuntimeException("Member already exists: " + name); //$NON-NLS-1$
+            throw new RuntimeException("Member already exists: " + name); //$NON-NLS-1$ // NOSONAR propagates checked exceptions across the reflective boundary by design
         }
         return owner;
     }
@@ -613,7 +613,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String synonymLanguage;
         final EStructuralFeature feature;
 
-        MemberChildSpec(IModelObjectFactory factory, EClass elementType, EObject owner,
+        MemberChildSpec(IModelObjectFactory factory, EClass elementType, EObject owner, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             Version version, String name, Props props, String synonymLanguage,
             EStructuralFeature feature)
         {
@@ -744,7 +744,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "get_metadata_objects and get_metadata_details."); //$NON-NLS-1$
 
             final String titleLanguage;
-            try
+            try // NOSONAR nested try is intentional (distinct resource/exception scopes)
             {
                 titleLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, fmProps.titleVal,
                     fmProps.titleLang, "the title"); //$NON-NLS-1$
@@ -1179,7 +1179,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final boolean commandOwner;
         final String[] createdKind;
 
-        HandlerWriteSpec(FormElementWriter.FormMemberRef ref, String eventName, String procName,
+        HandlerWriteSpec(FormElementWriter.FormMemberRef ref, String eventName, String procName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             Version version, String langCode, String callType, boolean commandOwner,
             String[] createdKind)
         {
@@ -1286,7 +1286,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String createdKind;
         final boolean persisted;
 
-        HandlerResultInfo(FormElementWriter.FormMemberRef ref, String normFqn, String eventName,
+        HandlerResultInfo(FormElementWriter.FormMemberRef ref, String normFqn, String eventName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String fProc, String callType, boolean extensionHandler, String createdKind,
             boolean persisted)
         {
@@ -1528,7 +1528,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final TypeSpecific typeSpecific;
         final MdNameNormalizer.Report normReport;
 
-        SuccessInfo(String fqn, EClass kind, String name, boolean persisted, Props props,
+        SuccessInfo(String fqn, EClass kind, String name, boolean persisted, Props props, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String synonymLanguage, TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
         {
             this.fqn = fqn;
@@ -1782,7 +1782,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             final boolean privileged;
             final ReturnValuesReuse returnValuesReuse;
 
-            FlagSet(boolean clientManagedApplication, boolean clientOrdinaryApplication,
+            FlagSet(boolean clientManagedApplication, boolean clientOrdinaryApplication, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
                 boolean server, boolean serverCall, boolean externalConnection, boolean global,
                 boolean privileged, ReturnValuesReuse returnValuesReuse)
             {

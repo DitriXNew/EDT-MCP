@@ -413,7 +413,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         BmTransactions.<Void>read(bmModel, "CollectTopObjectsForResync", (tx, pm) -> //$NON-NLS-1$
         {
             Iterator<IBmObject> it = tx.getTopObjectIterator();
-            while (it.hasNext())
+            while (it.hasNext()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 IBmObject obj = it.next();
                 if (obj == null)
@@ -618,7 +618,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         DanglingResult result)
     {
         boolean removedAny = false;
-        for (EReference ref : cfg.eClass().getEAllReferences())
+        for (EReference ref : cfg.eClass().getEAllReferences()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (!isCandidateReference(ref))
             {

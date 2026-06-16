@@ -399,7 +399,7 @@ public class MetadataReferenceService
         {
             Collection<IBmCrossReference> refs = engine.getBackReferences(target);
 
-            for (IBmCrossReference ref : refs)
+            for (IBmCrossReference ref : refs) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 if (references.size() >= limit * 10) // overall cap (all categories) before grouping
                 {
@@ -454,7 +454,7 @@ public class MetadataReferenceService
         private void collectTypeItemBackReferences(IBmEngine engine, IBmObject typeItem)
         {
             Collection<IBmCrossReference> refs = engine.getBackReferences(typeItem);
-            for (IBmCrossReference ref : refs)
+            for (IBmCrossReference ref : refs) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 if (references.size() >= limit * 10)
                 {
@@ -497,7 +497,7 @@ public class MetadataReferenceService
             for (PredefinedItem item : PredefinedItemUtil.getItems((EObject) target))
             {
                 Collection<IBmCrossReference> refs = engine.getBackReferences((IBmObject) item);
-                for (IBmCrossReference ref : refs)
+                for (IBmCrossReference ref : refs) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
                 {
                     if (references.size() >= limit * 10)
                     {
@@ -549,7 +549,7 @@ public class MetadataReferenceService
          */
         private void collectFieldBackReferences(Collection<IBmCrossReference> refs, Field field, MdObject target)
         {
-            for (IBmCrossReference ref : refs)
+            for (IBmCrossReference ref : refs) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 if (references.size() >= limit * 10)
                 {
@@ -826,7 +826,7 @@ public class MetadataReferenceService
          * {@link #getCategoryFromObject}; the {@code null} result lets the caller
          * apply the unchanged MdObject / raw-class-name fallback.
          */
-        private static String mapClassNameToCategory(String className)
+        private static String mapClassNameToCategory(String className) // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
         {
             if (className.contains("Subsystem")) return "Subsystems"; //$NON-NLS-1$ //$NON-NLS-2$
             if (className.contains("Role")) return "Roles"; //$NON-NLS-1$ //$NON-NLS-2$

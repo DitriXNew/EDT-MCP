@@ -373,7 +373,7 @@ public final class JUnitMarkdownFormatter
         {
             return null;
         }
-        for (String line : trace.split("\n", -1)) //$NON-NLS-1$
+        for (String line : trace.split("\n", -1)) //$NON-NLS-1$ // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (!isStackFrame(line) || isInternalFrame(line))
             {

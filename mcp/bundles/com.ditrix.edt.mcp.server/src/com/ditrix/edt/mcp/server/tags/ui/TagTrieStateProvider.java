@@ -37,7 +37,7 @@ import org.eclipse.xtext.naming.QualifiedName;
  * This provider is used when the search pattern starts with #.
  * It builds a Trie containing all metadata objects that have matching tags.
  */
-public class TagTrieStateProvider implements INavigatorContentProviderStateProvider {
+public class TagTrieStateProvider implements INavigatorContentProviderStateProvider { // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
     
     private static TagTrieStateProvider instance;
     
@@ -98,7 +98,7 @@ public class TagTrieStateProvider implements INavigatorContentProviderStateProvi
             return;
         }
         
-        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
+        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) { // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             if (!project.isOpen()) {
                 continue;
             }

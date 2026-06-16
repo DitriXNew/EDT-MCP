@@ -441,7 +441,7 @@ public class TerminateLaunchTool implements IMcpTool
      *                        (never modified here)
      * @return matching already-terminated launches (possibly empty)
      */
-    static List<ILaunch> selectStaleTerminated(ILaunch[] launches, List<ILaunch> alreadySelected,
+    static List<ILaunch> selectStaleTerminated(ILaunch[] launches, List<ILaunch> alreadySelected, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String configName, String projectName, String applicationId, boolean all,
             boolean hasName, boolean hasProject, boolean hasAppId)
     {
@@ -777,7 +777,7 @@ public class TerminateLaunchTool implements IMcpTool
             // are terminated; with zero targets we already know the launch state.
             return false;
         }
-        for (IDebugTarget target : targets)
+        for (IDebugTarget target : targets) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (target == null)
             {

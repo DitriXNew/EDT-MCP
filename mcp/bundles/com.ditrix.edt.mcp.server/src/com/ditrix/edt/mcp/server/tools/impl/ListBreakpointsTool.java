@@ -79,7 +79,7 @@ public class ListBreakpointsTool implements IMcpTool
         IBreakpointManager bpManager = debugPlugin.getBreakpointManager();
         List<Map<String, Object>> out = new ArrayList<>();
 
-        for (IBreakpoint bp : bpManager.getBreakpoints())
+        for (IBreakpoint bp : bpManager.getBreakpoints()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             IMarker m = bp.getMarker();
             if (m == null || m.getResource() == null)

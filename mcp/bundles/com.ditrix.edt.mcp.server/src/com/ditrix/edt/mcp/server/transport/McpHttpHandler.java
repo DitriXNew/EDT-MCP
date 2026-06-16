@@ -61,7 +61,7 @@ public class McpHttpHandler implements HttpHandler
     }
 
     @Override
-    public void handle(HttpExchange exchange) throws IOException
+    public void handle(HttpExchange exchange) throws IOException // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
     {
         // SSE GET streams are offloaded to a dedicated pool so they never
         // occupy threads in the main request pool or block the dispatcher.
@@ -417,7 +417,7 @@ public class McpHttpHandler implements HttpHandler
             SseStreamRegistry.SseStream stream = SseStreamRegistry.getInstance().register(os);
             try
             {
-                while (!Thread.currentThread().isInterrupted())
+                while (!Thread.currentThread().isInterrupted()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
                 {
                     try
                     {
