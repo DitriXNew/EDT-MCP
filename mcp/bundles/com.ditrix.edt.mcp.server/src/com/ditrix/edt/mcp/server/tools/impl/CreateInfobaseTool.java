@@ -586,26 +586,26 @@ public class CreateInfobaseTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return CreateContext.error(
+            return CreateContext.failed(
                 ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
         }
         if (!ctx.isOpen())
         {
-            return CreateContext.error(ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+            return CreateContext.failed(ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
                 + ". Open the project in EDT first.").toJson()); //$NON-NLS-1$
         }
 
         IApplicationManager appManager = Activator.getDefault().getApplicationManager();
         if (appManager == null)
         {
-            return CreateContext.error(
+            return CreateContext.failed(
                 ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
         }
 
         IInfobaseManager ibManager = Activator.getDefault().getInfobaseManager();
         if (ibManager == null)
         {
-            return CreateContext.error(ToolResult.error("IInfobaseManager service is not available. " //$NON-NLS-1$
+            return CreateContext.failed(ToolResult.error("IInfobaseManager service is not available. " //$NON-NLS-1$
                 + "Ensure EDT platform-services are running.").toJson()); //$NON-NLS-1$
         }
 
@@ -613,7 +613,7 @@ public class CreateInfobaseTool implements IMcpTool
             Activator.getDefault().getInfobaseAssociationManager();
         if (assocManager == null)
         {
-            return CreateContext.error(ToolResult.error(
+            return CreateContext.failed(ToolResult.error(
                 "IInfobaseAssociationManager service is not available. " //$NON-NLS-1$
                 + "Ensure EDT platform-services are running.").toJson()); //$NON-NLS-1$
         }
@@ -712,7 +712,7 @@ public class CreateInfobaseTool implements IMcpTool
             this.assocManager = assocManager;
         }
 
-        static CreateContext error(String error)
+        static CreateContext failed(String error)
         {
             return new CreateContext(error, null, null, null, null);
         }
@@ -886,26 +886,26 @@ public class CreateInfobaseTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return StandaloneContext.error(
+            return StandaloneContext.failed(
                 ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
         }
         if (!ctx.isOpen())
         {
-            return StandaloneContext.error(ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+            return StandaloneContext.failed(ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
                 + ". Open the project in EDT first.").toJson()); //$NON-NLS-1$
         }
 
         IApplicationManager appManager = Activator.getDefault().getApplicationManager();
         if (appManager == null)
         {
-            return StandaloneContext.error(
+            return StandaloneContext.failed(
                 ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
         }
 
         Object serverService = acquireStandaloneServerService();
         if (serverService == null)
         {
-            return StandaloneContext.error(ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
+            return StandaloneContext.failed(ToolResult.error("Standalone-server service is not available; the EDT " //$NON-NLS-1$
                 + "standalone-server feature is missing. Install a 1C platform >= 8.3.23 with the " //$NON-NLS-1$
                 + "standalone server and ensure the EDT standalone-server plugins are present.") //$NON-NLS-1$
                 .toJson());
@@ -967,7 +967,7 @@ public class CreateInfobaseTool implements IMcpTool
             this.serverService = serverService;
         }
 
-        static StandaloneContext error(String error)
+        static StandaloneContext failed(String error)
         {
             return new StandaloneContext(error, null, null, null);
         }
@@ -1479,7 +1479,7 @@ public class CreateInfobaseTool implements IMcpTool
         JsonArray appsArray = new JsonArray();
         IApplication[] newAppHolder = new IApplication[1];
 
-        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
+        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             appsArray = new JsonArray();
             newAppHolder[0] = null;
@@ -1755,7 +1755,7 @@ public class CreateInfobaseTool implements IMcpTool
 
         // Short bounded re-poll: the provision-delegate listener fires asynchronously after
         // associate(), so the new IInfobaseApplication may not be visible on the first read.
-        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
+        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             appsArray = new JsonArray();
             newAppId = null;

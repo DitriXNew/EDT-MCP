@@ -205,7 +205,7 @@ public class ReadModuleSourceTool implements IMcpTool
      *     write_module_source's expectedHash; omitted from the frontmatter when null
      * @return formatted result string
      */
-    static String formatOutput(String projectName, String modulePath, List<String> allLines,
+    static String formatOutput(String projectName, String modulePath, List<String> allLines, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         int from, int to, int totalLines, boolean truncated, String contentHash)
     {
         FrontMatter fm = FrontMatter.create()

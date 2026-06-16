@@ -37,7 +37,7 @@ import com.ditrix.edt.mcp.server.Activator;
  * {@code attach:<configName>} id for attach launches); resume/terminate events
  * purge the cached snapshot and any associated IDs.
  */
-public final class DebugSessionRegistry
+public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
     private static final DebugSessionRegistry INSTANCE = new DebugSessionRegistry();
 
@@ -482,7 +482,7 @@ public final class DebugSessionRegistry
             return null;
         }
         ILaunchManager mgr = debugPlugin.getLaunchManager();
-        for (ILaunch launch : mgr.getLaunches())
+        for (ILaunch launch : mgr.getLaunches()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (launch.isTerminated())
             {

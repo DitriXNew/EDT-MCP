@@ -716,7 +716,7 @@ public class GetModuleStructureTool implements IMcpTool
             INode current = methodNode.getPreviousSibling();
             List<String> commentLines = new ArrayList<>();
 
-            while (current != null)
+            while (current != null) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 // Skip composite nodes (entire methods, regions, etc.) — only process leaf nodes
                 if (!(current instanceof ILeafNode))

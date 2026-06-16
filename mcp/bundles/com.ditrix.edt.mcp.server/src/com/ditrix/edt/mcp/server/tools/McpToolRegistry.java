@@ -20,7 +20,7 @@ import com.ditrix.edt.mcp.server.preferences.ToolSettingsService;
  * Registry for MCP tools.
  * Manages registration and lookup of tools by name.
  */
-public class McpToolRegistry
+public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
     private static final McpToolRegistry INSTANCE = new McpToolRegistry();
     

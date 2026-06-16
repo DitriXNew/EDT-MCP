@@ -103,7 +103,7 @@ public class DebugStatusTool implements IMcpTool
             ILaunchManager mgr = debugPlugin.getLaunchManager();
 
             List<Map<String, Object>> launches = new ArrayList<>();
-            for (ILaunch launch : mgr.getLaunches())
+            for (ILaunch launch : mgr.getLaunches()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 if (launch.isTerminated())
                 {

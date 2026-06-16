@@ -1020,7 +1020,7 @@ public final class EditorScreenshotHelper
             Class<?> type = representation.getClass();
             while (type != null)
             {
-                try
+                try // NOSONAR nested try is intentional (distinct resource/exception scopes)
                 {
                     Field field = type.getDeclaredField(FORM_IMAGE_DATA_FIELD);
                     field.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)

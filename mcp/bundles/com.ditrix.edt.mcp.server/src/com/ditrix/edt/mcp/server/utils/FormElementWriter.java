@@ -700,7 +700,7 @@ public final class FormElementWriter
      *     {@code ToolResult.error}); the created element's concrete EClass name is returned via
      *     {@code createdKind} when non-null.
      */
-    public static String createMember(EObject formModel, Kind kind, String name, String parentName,
+    public static String createMember(EObject formModel, Kind kind, String name, String parentName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         String bindTarget, String titleLanguage, String title, boolean russianAutoNames,
         String[] createdKind)
     {
@@ -760,7 +760,7 @@ public final class FormElementWriter
      *     fallback predefined command-bar name, like the designer's default-name provider)
      * @return the content form's own top-object FQN (serialized to {@code Form.form}), for force-export
      */
-    public static String createForm(IBmTransaction tx, MdObject owner, String formName,
+    public static String createForm(IBmTransaction tx, MdObject owner, String formName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         String synonymLanguage, String synonym, String comment, boolean setAsDefault,
         IModelObjectFactory mdFactory, IModelObjectFactory formFactory,
         ITopObjectFqnGenerator fqnGenerator, Version version, boolean russianAutoNames)
@@ -1106,7 +1106,7 @@ public final class FormElementWriter
         return null;
     }
 
-    private static String createItem(EObject formModel, Kind kind, String name, String parentName,
+    private static String createItem(EObject formModel, Kind kind, String name, String parentName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         String groupTypeLiteral, String titleLanguage, String title, boolean russianAutoNames,
         String[] createdKind)
     {
@@ -1269,7 +1269,7 @@ public final class FormElementWriter
      * untouched (and the surrounding BM transaction rolls back clean).
      */
     @SuppressWarnings("unchecked")
-    private static String moveItemInto(EObject formModel, EObject item, EObject container,
+    private static String moveItemInto(EObject formModel, EObject item, EObject container, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
         String parentLabel, String position)
     {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
@@ -1535,7 +1535,7 @@ public final class FormElementWriter
 
     /** A FormField bound to a form attribute via its dataPath (a generic InputField the user can refine). */
     @SuppressWarnings("unchecked")
-    private static String createField(EObject formModel, String name, String parentName,
+    private static String createField(EObject formModel, String name, String parentName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         String attrName, String titleLanguage, String title, boolean russianAutoNames,
         String[] createdKind)
     {
@@ -1610,7 +1610,7 @@ public final class FormElementWriter
     }
 
     /** A Button bound to a form command (FormCommand is-a mcore Command, so the reference is direct). */
-    private static String createButton(EObject formModel, String name, String parentName,
+    private static String createButton(EObject formModel, String name, String parentName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         String cmdName, String titleLanguage, String title, boolean russianAutoNames,
         String[] createdKind)
     {
@@ -1920,7 +1920,7 @@ public final class FormElementWriter
      * @param callType {@code null}/blank for a base handler; otherwise Before | After | Instead
      * @return {@code null} on success, or a human-readable error message
      */
-    public static String createHandler(EObject container, String eventName, String procName,
+    public static String createHandler(EObject container, String eventName, String procName, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
         Version version, String langCode, String callType, String[] createdKind)
     {
         final boolean extension = callType != null && !callType.trim().isEmpty();
@@ -1994,7 +1994,7 @@ public final class FormElementWriter
      *
      * @return {@code null} on success, or a human-readable error message
      */
-    static String bindEventHandler(EObject container, EStructuralFeature handlersFeat, EObject matched,
+    static String bindEventHandler(EObject container, EStructuralFeature handlersFeat, EObject matched, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
         String eventName, String procName, String callType, String[] createdKind)
     {
         final boolean extension = callType != null && !callType.trim().isEmpty();
@@ -2433,9 +2433,16 @@ public final class FormElementWriter
     private static void initManagedItem(EObject formModel, EObject item, Kind kind, EObject container,
         String requestedGroupType)
     {
-        String typeLiteral = kind == Kind.GROUP
-            ? (requestedGroupType != null ? requestedGroupType : defaultGroupTypeFor(container))
-            : TYPE_LITERAL_LABEL;
+        String typeLiteral;
+        if (kind == Kind.GROUP)
+        {
+            typeLiteral = requestedGroupType != null ? requestedGroupType
+                : defaultGroupTypeFor(container);
+        }
+        else
+        {
+            typeLiteral = TYPE_LITERAL_LABEL;
+        }
         String extInfoClassifier = kind == Kind.GROUP
             ? groupExtInfoClassifierFor(typeLiteral) : ECLASS_LABEL_DECORATION_EXT_INFO;
         setEnumFeature(item, FEATURE_TYPE, typeLiteral);

@@ -26,7 +26,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
  * @deprecated prefer {@code run_yaxunit_tests} with {@code debug=true}.
  */
 @Deprecated
-public class DebugYaxunitTestsTool implements IMcpTool
+public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional retained backward-compatible deprecated alias
 {
     public static final String NAME = "debug_yaxunit_tests"; //$NON-NLS-1$
 

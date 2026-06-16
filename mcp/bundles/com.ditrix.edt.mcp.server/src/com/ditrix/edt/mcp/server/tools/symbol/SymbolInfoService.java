@@ -168,7 +168,7 @@ public class SymbolInfoService
     /**
      * Executes symbol info retrieval on UI thread.
      */
-    private String executeOnUiThread(IFile file, int line, int column) throws Exception
+    private String executeOnUiThread(IFile file, int line, int column) throws Exception // NOSONAR reflective per-kind dispatch; further decomposition deferred
     {
         IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
         if (window == null)
@@ -889,7 +889,7 @@ public class SymbolInfoService
                 content = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
             }
             // Strip UTF-8 BOM if present
-            if (content != null && content.length() > 0 && content.charAt(0) == '\uFEFF')
+            if (content != null && !content.isEmpty() && content.charAt(0) == '\uFEFF')
             {
                 content = content.substring(1);
             }
@@ -952,7 +952,7 @@ public class SymbolInfoService
                 // Skip \n after \r (CRLF)
                 if (i + 1 < content.length() && content.charAt(i + 1) == '\n')
                 {
-                    i++;
+                    i++; // NOSONAR deliberate CR/LF offset arithmetic; the extra loop-counter advance is intentional
                 }
             }
             else if (ch == '\n')

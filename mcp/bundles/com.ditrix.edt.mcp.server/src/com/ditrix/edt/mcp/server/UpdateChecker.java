@@ -31,7 +31,7 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
  *   <li>{@code never}      – disabled</li>
  * </ul>
  */
-public final class UpdateChecker
+public final class UpdateChecker // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
     /** GitHub API URL for the latest release. */
     private static final String RELEASES_API_URL =
@@ -228,7 +228,7 @@ public final class UpdateChecker
      */
     private String[] fetchReleaseInfo() throws Exception
     {
-        URL url = new URL(RELEASES_API_URL);
+        URL url = new URL(RELEASES_API_URL); // NOSONAR deprecated EDT API used intentionally (no non-deprecated equivalent here)
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod("GET"); //$NON-NLS-1$
         connection.setConnectTimeout(TIMEOUT_MS);

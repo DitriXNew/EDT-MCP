@@ -134,10 +134,10 @@ public class GetVariablesTool implements IMcpTool
         IStackFrame frame = registry.getFrame(frameRef);
         if (frame == null)
         {
-            return FrameResolution.error(
+            return FrameResolution.failed(
                 ToolResult.error("stale frameRef — call wait_for_break again").toJson()); //$NON-NLS-1$
         }
-        return FrameResolution.frame(frame);
+        return FrameResolution.of(frame);
     }
 
     /** Resolves the {@code frameIndex}-th frame of the live thread {@code threadId}. */
@@ -147,16 +147,16 @@ public class GetVariablesTool implements IMcpTool
         IThread thread = registry.getThread(threadId);
         if (thread == null)
         {
-            return FrameResolution.error(
+            return FrameResolution.failed(
                 ToolResult.error("stale threadId — call wait_for_break again").toJson()); //$NON-NLS-1$
         }
         IStackFrame[] frames = thread.getStackFrames();
         if (frameIndex < 0 || frameIndex >= frames.length)
         {
-            return FrameResolution.error(ToolResult.error("frameIndex out of range (0.." //$NON-NLS-1$
+            return FrameResolution.failed(ToolResult.error("frameIndex out of range (0.." //$NON-NLS-1$
                 + (frames.length - 1) + ")").toJson()); //$NON-NLS-1$
         }
-        return FrameResolution.frame(frames[frameIndex]);
+        return FrameResolution.of(frames[frameIndex]);
     }
 
     /**
@@ -174,17 +174,17 @@ public class GetVariablesTool implements IMcpTool
             res != null ? registry.getSnapshot(res.canonicalId) : null;
         if (snap == null)
         {
-            return FrameResolution.error(
+            return FrameResolution.failed(
                 ToolResult.error("Provide frameRef or threadId — no single suspended debug " //$NON-NLS-1$
                     + "session available for auto-resolution. Call wait_for_break first.").toJson()); //$NON-NLS-1$
         }
         IStackFrame[] frames = snap.thread.getStackFrames();
         if (frames.length == 0)
         {
-            return FrameResolution.error(
+            return FrameResolution.failed(
                 ToolResult.error("suspended thread has no stack frames").toJson()); //$NON-NLS-1$
         }
-        return FrameResolution.frame(frames[Math.min(Math.max(frameIndex, 0), frames.length - 1)]);
+        return FrameResolution.of(frames[Math.min(Math.max(frameIndex, 0), frames.length - 1)]);
     }
 
     /**
@@ -231,12 +231,12 @@ public class GetVariablesTool implements IMcpTool
             this.error = error;
         }
 
-        static FrameResolution frame(IStackFrame frame)
+        static FrameResolution of(IStackFrame frame)
         {
             return new FrameResolution(frame, null);
         }
 
-        static FrameResolution error(String error)
+        static FrameResolution failed(String error)
         {
             return new FrameResolution(null, error);
         }

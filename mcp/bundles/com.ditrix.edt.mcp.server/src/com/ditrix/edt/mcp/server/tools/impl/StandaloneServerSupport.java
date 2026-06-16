@@ -271,7 +271,7 @@ final class StandaloneServerSupport
             // by the class name: the type is platform-internal and intentionally not imported (no
             // Require-Bundle), so instanceof is impossible, and a name match would be fragile.
             Object dir;
-            try
+            try // NOSONAR nested try is intentional (distinct resource/exception scopes)
             {
                 dir = db.getClass().getMethod("getConfigDirectory").invoke(db); //$NON-NLS-1$
             }

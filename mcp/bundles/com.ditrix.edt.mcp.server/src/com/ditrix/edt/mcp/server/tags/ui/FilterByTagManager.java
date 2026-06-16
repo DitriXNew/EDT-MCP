@@ -34,7 +34,7 @@ import com.ditrix.edt.mcp.server.tags.model.Tag;
  * Handles activating/deactivating the tag filter on the navigator
  * and stores the selected tags.
  */
-public class FilterByTagManager {
+public class FilterByTagManager { // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
     
     private static FilterByTagManager instance;
     

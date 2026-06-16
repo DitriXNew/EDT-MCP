@@ -214,7 +214,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
         StringBuilder out = new StringBuilder();
         boolean inTypeInfo = false;
         boolean lastBlank = false;
-        for (String line : full.split("\n", -1)) //$NON-NLS-1$
+        for (String line : full.split("\n", -1)) //$NON-NLS-1$ // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             String trimmed = line.trim();
 

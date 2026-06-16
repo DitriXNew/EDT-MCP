@@ -114,7 +114,7 @@ public final class MetadataPropertyIntrospector
         {
             return result;
         }
-        for (EStructuralFeature feature : obj.eClass().getEAllStructuralFeatures())
+        for (EStructuralFeature feature : obj.eClass().getEAllStructuralFeatures()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (!isAssignable(feature))
             {
@@ -174,7 +174,7 @@ public final class MetadataPropertyIntrospector
         {
             return null;
         }
-        for (EStructuralFeature feature : obj.eClass().getEAllStructuralFeatures())
+        for (EStructuralFeature feature : obj.eClass().getEAllStructuralFeatures()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (!feature.getName().equalsIgnoreCase(name) || !isAssignable(feature))
             {

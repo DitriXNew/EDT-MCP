@@ -776,7 +776,7 @@ public final class BslModuleUtils
         }
 
         /** Target reached: {@code regionName} (possibly null) is the final answer. */
-        static RegionScanResult resolved(String regionName)
+        static RegionScanResult ofResolved(String regionName)
         {
             return new RegionScanResult(true, regionName);
         }
@@ -812,7 +812,7 @@ public final class BslModuleUtils
         // Plain line: resolve once the target is reached, otherwise keep scanning.
         if (lineNum >= targetLine)
         {
-            return RegionScanResult.resolved(topRegion(regionStack));
+            return RegionScanResult.ofResolved(topRegion(regionStack));
         }
         return RegionScanResult.keepScanning();
     }
@@ -838,7 +838,7 @@ public final class BslModuleUtils
         regionStack.add(startMatcher.group(1));
         if (lineNum >= targetLine)
         {
-            return RegionScanResult.resolved(topRegion(regionStack));
+            return RegionScanResult.ofResolved(topRegion(regionStack));
         }
         return RegionScanResult.keepScanning();
     }
@@ -862,7 +862,7 @@ public final class BslModuleUtils
         }
         if (lineNum >= targetLine && !regionStack.isEmpty())
         {
-            return RegionScanResult.resolved(topRegion(regionStack));
+            return RegionScanResult.ofResolved(topRegion(regionStack));
         }
         if (!regionStack.isEmpty())
         {

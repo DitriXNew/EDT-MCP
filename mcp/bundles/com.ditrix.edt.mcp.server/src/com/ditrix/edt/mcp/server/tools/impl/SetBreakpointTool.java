@@ -135,17 +135,17 @@ public class SetBreakpointTool implements IMcpTool
     {
         if (module == null || module.isEmpty())
         {
-            return ResolvedTarget.error(ToolResult.error("modulePath is required").toJson()); //$NON-NLS-1$
+            return ResolvedTarget.failed(ToolResult.error("modulePath is required").toJson()); //$NON-NLS-1$
         }
         if (lineNumber < 1)
         {
-            return ResolvedTarget.error(ToolResult.error("lineNumber must be >= 1").toJson()); //$NON-NLS-1$
+            return ResolvedTarget.failed(ToolResult.error("lineNumber must be >= 1").toJson()); //$NON-NLS-1$
         }
 
         boolean modulePathStyle = !BreakpointUtils.looksLikeAbsolutePath(module);
         if (modulePathStyle && (projectName == null || projectName.isEmpty()))
         {
-            return ResolvedTarget.error(ToolResult.error(
+            return ResolvedTarget.failed(ToolResult.error(
                 "projectName is required when modulePath is given as an EDT module path").toJson()); //$NON-NLS-1$
         }
 
@@ -156,17 +156,17 @@ public class SetBreakpointTool implements IMcpTool
             String building = ProjectStateChecker.buildingErrorOrNull(projectName);
             if (building != null)
             {
-                return ResolvedTarget.error(ToolResult.error(building).toJson());
+                return ResolvedTarget.failed(ToolResult.error(building).toJson());
             }
         }
 
         IFile file = BreakpointUtils.resolveModuleFile(projectName, module);
         if (file == null || !file.exists())
         {
-            return ResolvedTarget.error(ToolResult.error("Module file not found: " + module //$NON-NLS-1$
+            return ResolvedTarget.failed(ToolResult.error("Module file not found: " + module //$NON-NLS-1$
                 + (modulePathStyle ? " in project " + projectName : "")).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return ResolvedTarget.file(file);
+        return ResolvedTarget.of(file);
     }
 
     /**
@@ -186,12 +186,12 @@ public class SetBreakpointTool implements IMcpTool
             this.error = error;
         }
 
-        static ResolvedTarget file(IFile file)
+        static ResolvedTarget of(IFile file)
         {
             return new ResolvedTarget(file, null);
         }
 
-        static ResolvedTarget error(String error)
+        static ResolvedTarget failed(String error)
         {
             return new ResolvedTarget(null, error);
         }

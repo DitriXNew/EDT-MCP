@@ -312,7 +312,7 @@ public class TagsMenuContribution extends CompoundContributionItem {
      * @param hotkeyIndex the tag index (1-10, where 10 is displayed as 0)
      * @return the formatted key sequence (e.g., "Ctrl+Alt+1"), or null if no binding
      */
-    private String getHotkeyString(int hotkeyIndex) {
+    private String getHotkeyString(int hotkeyIndex) { // NOSONAR intentional method placement; moving to a sub/inner class would not improve clarity
         try {
             IBindingService bindingService = PlatformUI.getWorkbench().getService(IBindingService.class);
             if (bindingService == null) {

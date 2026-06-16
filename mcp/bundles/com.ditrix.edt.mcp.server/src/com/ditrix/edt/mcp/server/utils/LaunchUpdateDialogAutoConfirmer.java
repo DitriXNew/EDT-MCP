@@ -724,7 +724,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             return null;
         }
-        // This control's own label-like text: a 1003-prefix match short-circuits;
+        // This control's own label-like text: a 1003-prefix match short-circuits; // NOSONAR explanatory comment, not commented-out code
         // otherwise it is the running best-effort fallback.
         String firstSeen = ownLabelMatch(control);
         if (firstSeen != null && isDebugSessionExistsBody(firstSeen))

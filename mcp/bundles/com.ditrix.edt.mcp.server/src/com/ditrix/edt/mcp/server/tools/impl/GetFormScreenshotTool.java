@@ -236,7 +236,7 @@ public class GetFormScreenshotTool implements IMcpTool
                 EditorScreenshotHelper.openForm(projectName, formPath);
             if (!openResult.isSuccess())
             {
-                return EditorPageResult.error(CaptureResult.error(openResult.getError()));
+                return EditorPageResult.failed(CaptureResult.error(openResult.getError()));
             }
 
             IEditorPart editorPart = openResult.getEditorPart();
@@ -254,7 +254,7 @@ public class GetFormScreenshotTool implements IMcpTool
             Object editorPage = EditorScreenshotHelper.waitForFormEditorPageOf(editorPart);
             if (editorPage == null)
             {
-                return EditorPageResult.error(CaptureResult.error(ToolResult.error(
+                return EditorPageResult.failed(CaptureResult.error(ToolResult.error(
                     "Form editor opened but WYSIWYG page is not available. " + //$NON-NLS-1$
                     "The form may still be loading.").toJson())); //$NON-NLS-1$
             }
@@ -265,7 +265,7 @@ public class GetFormScreenshotTool implements IMcpTool
             String actualFqn = EditorScreenshotHelper.getFormEditorFqn(editorPart);
             if (actualFqn != null && !EditorScreenshotHelper.fqnMatchesFormPath(actualFqn, formPath))
             {
-                return EditorPageResult.error(CaptureResult.error(ToolResult.error(
+                return EditorPageResult.failed(CaptureResult.error(ToolResult.error(
                     "Captured form editor does not match the requested form. Requested '" //$NON-NLS-1$
                     + formPath + "' but the active editor is '" + actualFqn //$NON-NLS-1$
                     + "'. No screenshot was taken to avoid returning the wrong form's image; " //$NON-NLS-1$
@@ -278,7 +278,7 @@ public class GetFormScreenshotTool implements IMcpTool
         Object editorPage = EditorScreenshotHelper.getActiveFormEditorPage();
         if (editorPage == null)
         {
-            return EditorPageResult.error(CaptureResult.error(ToolResult.error(
+            return EditorPageResult.failed(CaptureResult.error(ToolResult.error(
                 "No active form editor page found. " + //$NON-NLS-1$
                 "Specify formPath parameter to open a form automatically.").toJson())); //$NON-NLS-1$
         }
@@ -346,13 +346,13 @@ public class GetFormScreenshotTool implements IMcpTool
             {
                 // Same contiguous-sentinel rule as above: lead with the documented
                 // "Form image data is not available" phrase, then the wait-budget context.
-                return ImageDataResult.error(CaptureResult.error(ToolResult.error(
+                return ImageDataResult.failed(CaptureResult.error(ToolResult.error(
                     "Form image data is not available: the form did not finish rendering " + //$NON-NLS-1$
                     "in time, so no image could be captured. " + //$NON-NLS-1$
                     "Ensure EDT runs with buffered native render " + //$NON-NLS-1$
                     "(VM option -DnativeFormBufferedLayoutRender=true) and try again.").toJson())); //$NON-NLS-1$
             }
-            return ImageDataResult.error(
+            return ImageDataResult.failed(
                 CaptureResult.error(ToolResult.error("Form image data is not available").toJson())); //$NON-NLS-1$
         }
 
@@ -379,7 +379,7 @@ public class GetFormScreenshotTool implements IMcpTool
             return new EditorPageResult(editorPage, null);
         }
 
-        static EditorPageResult error(CaptureResult error)
+        static EditorPageResult failed(CaptureResult error)
         {
             return new EditorPageResult(null, error);
         }
@@ -405,7 +405,7 @@ public class GetFormScreenshotTool implements IMcpTool
             return new ImageDataResult(imageData, null);
         }
 
-        static ImageDataResult error(CaptureResult error)
+        static ImageDataResult failed(CaptureResult error)
         {
             return new ImageDataResult(null, error);
         }

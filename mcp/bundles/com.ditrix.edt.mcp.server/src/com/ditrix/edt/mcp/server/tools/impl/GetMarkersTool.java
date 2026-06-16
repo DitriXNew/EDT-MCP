@@ -121,7 +121,7 @@ public class GetMarkersTool implements IMcpTool
         // priority sub-filters the task family only; combining it with
         // markerKind=bookmark selects no rows it could apply to, so reject the
         // contradiction with an actionable message instead of silently emptying.
-        if (hasPriority && hasKind && KEY_BOOKMARK.equals(markerKind.toLowerCase()))
+        if (hasPriority && hasKind && KEY_BOOKMARK.equalsIgnoreCase(markerKind))
         {
             return ToolResult.error("priority filter applies to task markers only; " //$NON-NLS-1$
                 + "markerKind=bookmark selects none. Remove priority, or use markerKind=task " //$NON-NLS-1$
@@ -210,7 +210,7 @@ public class GetMarkersTool implements IMcpTool
     private static void collectMarkerRows(IProject[] projects, MarkerScan scan,
         List<MarkerRow> rows, Set<String> seenTasks)
     {
-        for (IProject project : projects)
+        for (IProject project : projects) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (!project.isOpen())
             {
@@ -314,7 +314,7 @@ public class GetMarkersTool implements IMcpTool
         {
             IMarker[] markers = project.findMarkers(BOOKMARK_MARKER_TYPE, true, IResource.DEPTH_INFINITE);
 
-            for (IMarker marker : markers)
+            for (IMarker marker : markers) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 if (rows.size() >= limit)
                 {
@@ -359,7 +359,7 @@ public class GetMarkersTool implements IMcpTool
         {
             IMarker[] markers = project.findMarkers(markerType, true, IResource.DEPTH_INFINITE);
 
-            for (IMarker marker : markers)
+            for (IMarker marker : markers) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 if (rows.size() >= limit)
                 {

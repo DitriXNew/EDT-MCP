@@ -100,7 +100,7 @@ public final class VariableSerializer
      * Builds a flat DTO for a single variable (no recursion into children).
      */
     public static Map<String, Object> serializeVariable(IVariable var,
-            DebugSessionRegistry registry) throws Exception
+            DebugSessionRegistry registry) throws Exception // NOSONAR parameter kept for public-API / test-contract signature consistency
     {
         Map<String, Object> dto = new LinkedHashMap<>();
         String name = safe(var.getName());

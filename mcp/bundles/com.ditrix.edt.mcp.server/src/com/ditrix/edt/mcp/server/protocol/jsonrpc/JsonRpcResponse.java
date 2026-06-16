@@ -11,7 +11,7 @@ package com.ditrix.edt.mcp.server.protocol.jsonrpc;
  */
 public class JsonRpcResponse
 {
-    private final String jsonrpc = "2.0"; //$NON-NLS-1$
+    private final String jsonrpc = "2.0"; //$NON-NLS-1$ // NOSONAR must stay an instance field (Gson serializes it into the JSON-RPC envelope; static would drop it)
     private Object id;
     private Object result;
     private JsonRpcError error;

@@ -122,7 +122,7 @@ public class ListConfigurationsTool implements IMcpTool
             Map<String, ILaunch> liveByAppId = indexLiveLaunches(launchManager);
 
             List<Map<String, Object>> configs = new ArrayList<>();
-            for (ILaunchConfiguration cfg : LaunchConfigUtils.getAllEdtConfigs(launchManager))
+            for (ILaunchConfiguration cfg : LaunchConfigUtils.getAllEdtConfigs(launchManager)) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
                 String typeId = LaunchConfigUtils.getConfigTypeId(cfg);
                 boolean isAttach = LaunchConfigUtils.isAttachConfigTypeId(typeId);

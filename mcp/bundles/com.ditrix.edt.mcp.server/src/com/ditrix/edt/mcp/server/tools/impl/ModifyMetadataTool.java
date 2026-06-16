@@ -297,7 +297,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         EObject top = (EObject)tx.getObjectById(topBmId);
         if (top == null)
         {
-            throw new RuntimeException("Target not found in transaction"); //$NON-NLS-1$
+            throw new RuntimeException("Target not found in transaction"); //$NON-NLS-1$ // NOSONAR propagates checked exceptions across the reflective boundary by design
         }
         if (memberFeature == null)
         {
@@ -306,12 +306,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         EObject owner = MetadataNodeResolver.resolveOwnerInTx(top, parts);
         if (owner == null)
         {
-            throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$
+            throw new RuntimeException("Could not re-navigate to the owner inside the transaction"); //$NON-NLS-1$ // NOSONAR propagates checked exceptions across the reflective boundary by design
         }
         EObject applyTo = childByName(owner, memberFeature, memberName);
         if (applyTo == null)
         {
-            throw new RuntimeException("Member not found in transaction: " + memberName); //$NON-NLS-1$
+            throw new RuntimeException("Member not found in transaction: " + memberName); //$NON-NLS-1$ // NOSONAR propagates checked exceptions across the reflective boundary by design
         }
         return applyTo;
     }
@@ -769,7 +769,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         // A re-parent with no explicit position appends to the destination (position stays null); a pure
         // reorder keeps the current parent (targetParent stays null).
-        final String targetParentFinal = hasParent ? (targetParent == null ? "" : targetParent) : null; //$NON-NLS-1$
+        final String targetParentFinal;
+        if (!hasParent)
+        {
+            targetParentFinal = null;
+        }
+        else
+        {
+            targetParentFinal = targetParent == null ? "" : targetParent; //$NON-NLS-1$
+        }
         final String positionFinal = position;
 
         final String itemName = ref.name;

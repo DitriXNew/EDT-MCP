@@ -16,7 +16,7 @@ import com.ditrix.edt.mcp.server.tags.TagConstants;
 /**
  * Keeps the Navigator group visibility toggle state.
  */
-public final class GroupVisibilityManager {
+public final class GroupVisibilityManager { // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 
     public static final String HIDE_GROUPS_COMMAND_ID = "com.ditrix.edt.mcp.server.groups.hideGroups"; //$NON-NLS-1$
 

@@ -464,7 +464,7 @@ public final class DebugServerTargetSupport
     static IDebugTarget findRuntimeClientDebugTarget(List<ServerTarget> candidates, String projectName,
         String resolvedAppId)
     {
-        for (ServerTarget st : candidates)
+        for (ServerTarget st : candidates) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             IDebugTarget target = st.target;
             if (target == null || target.isTerminated())

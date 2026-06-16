@@ -21,7 +21,7 @@ import com.ditrix.edt.mcp.server.Activator;
  * Reads and writes disabled tool names to the preference store.
  * Thread-safe: the disabled set is parsed on each access from the volatile preference store.
  */
-public final class ToolSettingsService
+public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
     private static final ToolSettingsService INSTANCE = new ToolSettingsService();
 

@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * writes (heartbeat from its own SSE thread, broadcasts from a request thread) are
  * serialized by the per-stream lock in {@link SseStream}.
  */
-public final class SseStreamRegistry
+public final class SseStreamRegistry // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
     private static final SseStreamRegistry INSTANCE = new SseStreamRegistry();
 

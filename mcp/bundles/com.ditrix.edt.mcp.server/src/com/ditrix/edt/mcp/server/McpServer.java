@@ -51,9 +51,6 @@ public class McpServer
 
     /** Currently active tool call that can be interrupted */
     private final AtomicReference<ActiveToolCall> activeToolCall = new AtomicReference<>();
-    
-    /** Protocol handler */
-    private McpProtocolHandler protocolHandler;
 
     /** Main thread pool for POST/OPTIONS/DELETE requests */
     private ThreadPoolExecutor mainExecutor;
@@ -78,7 +75,7 @@ public class McpServer
         registerTools();
         
         // Create protocol handler
-        protocolHandler = new McpProtocolHandler();
+        McpProtocolHandler protocolHandler = new McpProtocolHandler();
 
         this.port = port;
 

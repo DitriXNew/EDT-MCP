@@ -168,7 +168,7 @@ public final class LaunchLifecycleUtils
      * <p>Public solely for access from the background Job lambda inside
      * {@code RunYaxunitTestsTool} — not part of the general API.
      */
-    public static final ConcurrentMap<String, PrepInFlight> PREP_INFLIGHT = new ConcurrentHashMap<>();
+    public static final ConcurrentMap<String, PrepInFlight> PREP_INFLIGHT = new ConcurrentHashMap<>(); // NOSONAR intentional process-wide mutable static (cache/registry)
 
     /**
      * Returns (or creates) a preparation lock key identical in format to
@@ -872,7 +872,7 @@ public final class LaunchLifecycleUtils
         {
             return requested;
         }
-        for (String token : scope.split(",")) //$NON-NLS-1$
+        for (String token : scope.split(",")) //$NON-NLS-1$ // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             String trimmed = token.trim();
             if (trimmed.isEmpty())
@@ -1794,7 +1794,7 @@ public final class LaunchLifecycleUtils
     private static void sweepStaleAttachLaunches(ILaunchManager launchManager, IProject project,
             int terminateTimeoutSeconds, TerminationOutcome outcome)
     {
-        for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager,
+        for (ILaunch live : LaunchConfigUtils.getAllLiveLaunches(launchManager, // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             project.getName()))
         {
             if (!LaunchConfigUtils.isAttachConfig(live.getLaunchConfiguration()))
@@ -2247,7 +2247,7 @@ public final class LaunchLifecycleUtils
     {
         boolean terminated = false;
         long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline)
+        while (System.currentTimeMillis() < deadline) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             try
             {

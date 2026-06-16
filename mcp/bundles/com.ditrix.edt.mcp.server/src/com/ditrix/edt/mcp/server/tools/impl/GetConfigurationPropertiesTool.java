@@ -216,7 +216,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
         IWorkspace workspace = ResourcesPlugin.getWorkspace();
         IProject[] projects = workspace.getRoot().getProjects();
 
-        for (IProject project : projects)
+        for (IProject project : projects) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (!project.isOpen())
             {

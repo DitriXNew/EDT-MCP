@@ -222,7 +222,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
      * Runs the file watcher loop in a background thread.
      */
     private void runFileWatcher() {
-        while (!shutdown.get() && !Thread.currentThread().isInterrupted()) {
+        while (!shutdown.get() && !Thread.currentThread().isInterrupted()) { // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             WatchService service = watchService.get();
             if (service == null) {
                 break;

@@ -495,7 +495,7 @@ public final class LaunchConfigUtils
         {
             return result;
         }
-        for (ILaunch launch : launchManager.getLaunches())
+        for (ILaunch launch : launchManager.getLaunches()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (launch == null || launch.isTerminated())
             {
