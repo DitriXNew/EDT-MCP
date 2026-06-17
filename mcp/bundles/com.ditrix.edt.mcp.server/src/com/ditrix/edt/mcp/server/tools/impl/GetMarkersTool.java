@@ -41,6 +41,8 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * marker families to scan (bookmark, task, or both); {@code priority} sub-filters
  * the task family only (a bookmark has no priority).</p>
  */
+// Task-marker tool: its Javadoc legitimately names the TODO/FIXME/XXX/HACK tags it detects.
+@SuppressWarnings({"java:S1135", "java:S1134"})
 public class GetMarkersTool implements IMcpTool
 {
     public static final String NAME = "get_markers"; //$NON-NLS-1$

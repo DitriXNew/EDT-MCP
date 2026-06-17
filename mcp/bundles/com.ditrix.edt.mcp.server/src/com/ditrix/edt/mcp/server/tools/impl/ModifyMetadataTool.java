@@ -724,7 +724,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * property-modify branch uses. Position semantics match the dedicated move primitive exactly (the
      * integer index is the desired FINAL 0-based position).
      */
-    private String moveFormItem(ProjectContext ctx, String normFqn,
+    private String moveFormItem(ProjectContext ctx, String normFqn, // NOSONAR form-move orchestration: structural validation + move dispatch; the mutating write stays inline, further extraction deferred
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
     {
         // A move addresses a form ITEM only - never an attribute / command (which are not in the items

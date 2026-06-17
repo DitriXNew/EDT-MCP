@@ -33,7 +33,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  * {@link Configuration} via {@link #resolveConfiguration()} /
  * {@link #resolveConfiguration(String)} — the read tools' shared
  * {@code IConfigurationProvider.getConfiguration(project)} block, with the same
- * actionable errors. TODO (card {@code introduce-project-context-resolver}):
+ * actionable errors. Follow-up (card {@code introduce-project-context-resolver}):
  * extend with cached {@code IV8Project} + BM model-manager resolution so tools
  * stop repeating that chain too. That part works against the live BM model and
  * must be introduced incrementally with end-to-end validation.
@@ -76,7 +76,7 @@ public final class ProjectContext
      * one named project. The caller applies its own {@link IProject#isOpen()} /
      * existence filtering, exactly as the inlined form required.
      * <p>
-     * TODO (card {@code introduce-project-context-resolver}): the remaining
+     * Follow-up (card {@code introduce-project-context-resolver}): the remaining
      * {@code tools/impl} tools that still inline the workspace-root enumeration
      * (see {@code ProjectContextAdoptionRatchetTest}) can migrate onto this.
      *
