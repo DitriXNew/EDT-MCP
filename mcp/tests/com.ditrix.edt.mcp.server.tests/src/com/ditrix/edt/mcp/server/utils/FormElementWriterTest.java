@@ -1007,6 +1007,71 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testCreateCommandAssignsUniqueIdsInCommandNamespace()
+    {
+        EObject form = newForm();
+
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Run", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Stop", null, null, //$NON-NLS-1$
+            null, null, false, null));
+
+        EObject run = FormElementWriter.findFormCommand(form, "Run"); //$NON-NLS-1$
+        EObject stop = FormElementWriter.findFormCommand(form, "Stop"); //$NON-NLS-1$
+        assertNotNull(run);
+        assertNotNull(stop);
+        assertEquals(Integer.valueOf(1), run.eGet(feature(run, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(2), stop.eGet(feature(stop, "id"))); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createMember(form, Kind.ATTRIBUTE, "Customer", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Main", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject customer = FormElementWriter.findFormAttribute(form, "Customer"); //$NON-NLS-1$
+        EObject group = FormElementWriter.findFormItem(form, "Main"); //$NON-NLS-1$
+        assertNotNull(customer);
+        assertNotNull(group);
+        assertEquals("command ids must not advance the form-attribute namespace", Integer.valueOf(1), //$NON-NLS-1$
+            customer.eGet(feature(customer, "id"))); //$NON-NLS-1$
+        assertEquals("command ids must not advance the form-item namespace", Integer.valueOf(1), //$NON-NLS-1$
+            group.eGet(feature(group, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeFormCommandIdsRepairsDuplicatesWithoutChangingOtherIds()
+    {
+        EObject form = newForm();
+        EObject first = newObject(MODEL.formCommand);
+        first.eSet(feature(first, "name"), "First"); //$NON-NLS-1$ //$NON-NLS-2$
+        first.eSet(feature(first, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "formCommands", first); //$NON-NLS-1$
+        EObject second = newObject(MODEL.formCommand);
+        second.eSet(feature(second, "name"), "Second"); //$NON-NLS-1$ //$NON-NLS-2$
+        second.eSet(feature(second, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "formCommands", second); //$NON-NLS-1$
+
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "Customer"); //$NON-NLS-1$ //$NON-NLS-2$
+        attribute.eSet(feature(attribute, "id"), Integer.valueOf(7)); //$NON-NLS-1$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "id"), Integer.valueOf(9)); //$NON-NLS-1$
+        addTo(form, "items", group); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormCommandIds(form);
+
+        Set<Integer> ids = new HashSet<>();
+        assertTrue(((Integer)first.eGet(feature(first, "id"))).intValue() > 0); //$NON-NLS-1$
+        assertTrue(ids.add((Integer)first.eGet(feature(first, "id")))); //$NON-NLS-1$
+        assertTrue(((Integer)second.eGet(feature(second, "id"))).intValue() > 0); //$NON-NLS-1$
+        assertTrue(ids.add((Integer)second.eGet(feature(second, "id")))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(7), attribute.eGet(feature(attribute, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(9), group.eGet(feature(group, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAutoChildrenRussianSuffixes()
     {
         EObject form = newForm();
@@ -1543,6 +1608,7 @@ public class FormElementWriterTest
         final EClass table;
         final EClass decoration;
         final EClass formAttribute;
+        final EClass formCommand;
 
         FormLikeModel()
         {
@@ -1625,9 +1691,10 @@ public class FormElementWriterTest
             formCommandHandlerContainer.getEStructuralFeatures().add(
                 containment(f, "handler", commandHandler, false)); //$NON-NLS-1$
 
-            EClass formCommand = f.createEClass();
+            formCommand = f.createEClass();
             formCommand.setName("FormCommand"); //$NON-NLS-1$
             addString(f, formCommand, "name"); //$NON-NLS-1$
+            addInt(f, formCommand, "id"); //$NON-NLS-1$
             formCommand.getEStructuralFeatures().add(
                 containment(f, "action", handlerContainer, false)); //$NON-NLS-1$
             formCommand.getEStructuralFeatures().add(

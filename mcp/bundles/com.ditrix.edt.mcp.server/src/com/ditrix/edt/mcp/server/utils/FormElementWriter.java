@@ -624,6 +624,7 @@ public final class FormElementWriter
             work.run(formModel, tx);
             normalizeFormAttributeIds(formModel);
             normalizeFormItemIds(formModel);
+            normalizeFormCommandIds(formModel);
             // The content Form is a separate top object serialized to Form.form - export ITS fqn.
             return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
         });
@@ -886,6 +887,7 @@ public final class FormElementWriter
         applyFormDefaults(content, version);
         normalizeFormAttributeIds(content);
         normalizeFormItemIds(content);
+        normalizeFormCommandIds(content);
         return content;
     }
 
@@ -1131,6 +1133,7 @@ public final class FormElementWriter
             return "Cannot create a form command for this form model."; //$NON-NLS-1$
         }
         setStringFeature(cmd, FEATURE_NAME, name);
+        setIntFeature(cmd, FEATURE_ID, nextCommandId(formModel));
         // The platform factory's defaults: use=AdjustableBoolean(common) and currentRowUse=Auto -
         // without them the exported command is unusable.
         setAdjustableBooleanFeature(cmd, FEATURE_USE);
@@ -2577,6 +2580,51 @@ public final class FormElementWriter
         return max;
     }
 
+    /**
+     * The next free form-command id = max existing {@code FormCommand} id across the whole form + 1.
+     * This is a separate EDT id space from both {@code FormItem.id} and
+     * {@code AbstractFormAttribute.id}.
+     */
+    private static int nextCommandId(EObject formModel)
+    {
+        EClass commandClass = formEClass(formModel, ECLASS_FORM_COMMAND);
+        if (commandClass == null)
+        {
+            return 1;
+        }
+        int max = maxCommandIdForAllocation(formModel, commandClass);
+        EObject extensionForm = liveReference(formModel, FEATURE_EXTENSION_FORM);
+        if (extensionForm != null)
+        {
+            max = Math.max(max, maxCommandIdForAllocation(extensionForm, commandClass));
+        }
+        return max + 1;
+    }
+
+    private static int maxCommandIdForAllocation(EObject formModel, EClass commandClass)
+    {
+        int max = maxCommandId(formModel, commandClass);
+        if (hasExtensionPeer(formModel) && max < DEFAULT_EXT_FORM_OBJECT_ID)
+        {
+            return DEFAULT_EXT_FORM_OBJECT_ID;
+        }
+        return max;
+    }
+
+    private static int maxCommandId(EObject formModel, EClass commandClass)
+    {
+        int max = 0;
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject obj = it.next();
+            if (commandClass.isInstance(obj))
+            {
+                max = Math.max(max, intFeature(obj, FEATURE_ID));
+            }
+        }
+        return max;
+    }
+
     private static int maxAttributeId(EObject formModel, EClass attributeClass)
     {
         int max = 0;
@@ -2671,6 +2719,55 @@ public final class FormElementWriter
             }
             while (max <= 0 || seen.contains(Integer.valueOf(max)));
             setIntFeature(attribute, FEATURE_ID, max);
+            seen.add(Integer.valueOf(max));
+        }
+    }
+
+    /**
+     * Repairs the form-wide {@code FormCommand.id} invariant before validation/export sees the model.
+     * The designer allocates these ids through {@code getNextCommandId}; commands have their own id
+     * space, independent from form items and form attributes.
+     * Package-visible for the headless unit test.
+     */
+    static void normalizeFormCommandIds(EObject formModel)
+    {
+        EClass commandClass = formEClass(formModel, ECLASS_FORM_COMMAND);
+        if (commandClass == null)
+        {
+            return;
+        }
+
+        List<EObject> commands = new ArrayList<>();
+        int max = maxCommandIdForAllocation(formModel, commandClass);
+        EObject extensionForm = liveReference(formModel, FEATURE_EXTENSION_FORM);
+        if (extensionForm != null)
+        {
+            max = Math.max(max, maxCommandIdForAllocation(extensionForm, commandClass));
+        }
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject obj = it.next();
+            if (!commandClass.isInstance(obj))
+            {
+                continue;
+            }
+            commands.add(obj);
+        }
+
+        Set<Integer> seen = new HashSet<>();
+        for (EObject command : commands)
+        {
+            int id = intFeature(command, FEATURE_ID);
+            if (id > 0 && seen.add(Integer.valueOf(id)))
+            {
+                continue;
+            }
+            do
+            {
+                max++;
+            }
+            while (max <= 0 || seen.contains(Integer.valueOf(max)));
+            setIntFeature(command, FEATURE_ID, max);
             seen.add(Integer.valueOf(max));
         }
     }

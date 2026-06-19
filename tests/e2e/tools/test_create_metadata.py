@@ -491,9 +491,9 @@ def test_create_form_object_then_add_member():
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_data_processor_form_members_allocate_form_ids_issue_189():
-    # Issue #189 end-to-end repro: a managed form and ALL its attributes/items are created by
+    # Issue #189 end-to-end repro: a managed form and ALL its attributes/items/commands are created by
     # MCP writes. The validator used to see duplicate id=0 for field context menus, the command
-    # bar serialized without <id>, and form attributes had no ids at all.
+    # bar serialized without <id>, and form attributes/commands had no ids at all.
     obj, form = "E2EIdCheck", "Form"
     base = "DataProcessor.%s" % obj
     form_fqn = "%s.Form.%s" % (base, form)
@@ -532,8 +532,9 @@ def test_create_data_processor_form_members_allocate_form_ids_issue_189():
                   [{"name": "dataPath", "value": attr}],
                   ctx="create field %s bound to %s" % (field, attr))
 
-    cmd, proc, btn = "RunCheck", "RunCheckAction", "RunCheckBtn"
+    cmd, second_cmd, proc, btn = "RunCheck", "ResetCheck", "RunCheckAction", "RunCheckBtn"
     create_ok("%s.Command.%s" % (form_fqn, cmd), ctx="create form command")
+    create_ok("%s.Command.%s" % (form_fqn, second_cmd), ctx="create second form command")
     create_ok("%s.Command.%s.Handler.Action" % (form_fqn, cmd),
               [{"name": "procedure", "value": proc}],
               ctx="bind the command Action handler")
@@ -546,7 +547,7 @@ def test_create_data_processor_form_members_allocate_form_ids_issue_189():
 
     details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form_fqn]})
     assert_ok(details, "read the fully MCP-created form structure")
-    for name in attrs + fields + [cmd, proc, btn, "AutoCommandBar"]:
+    for name in attrs + fields + [cmd, second_cmd, proc, btn, "AutoCommandBar"]:
         assert_contains(details.text, name, "get_metadata_details must surface " + name)
 
     reval = call("revalidate_objects", {"projectName": PROJECT, "objects": [form_fqn]})
@@ -577,6 +578,19 @@ def test_create_data_processor_form_members_allocate_form_ids_issue_189():
         if attr not in attr_ids:
             _fail("created form attribute %s was not serialized: %r" % (attr, sorted(attr_ids)))
     _assert_unique_nonzero(attr_ids, "form attribute")
+
+    command_ids = {}
+    for node in root.iter():
+        if _xml_local(node.tag) == "formCommands":
+            name = _direct_child_text(node, "name") or "<unnamed>"
+            command_ids[name] = _direct_child_int(node, "id")
+    created_command_ids = {}
+    for command in (cmd, second_cmd):
+        if command not in command_ids:
+            _fail("created form command %s was not serialized: %r"
+                  % (command, sorted(command_ids)))
+        created_command_ids[command] = command_ids[command]
+    _assert_unique_nonzero(created_command_ids, "form command")
 
     item_tags = ("items", "childItems", "extendedTooltip", "contextMenu", "autoCommandBar")
     item_ids = {}
