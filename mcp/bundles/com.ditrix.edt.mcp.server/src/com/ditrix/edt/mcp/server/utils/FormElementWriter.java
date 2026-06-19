@@ -819,6 +819,13 @@ public final class FormElementWriter
         // (6) Fill default references / usePurposes as the wizard does.
         mdFactory.fillDefaultReferences(mdForm);
 
+        // (6a) Re-assert the autoCommandBar's id=-1 sentinel as the LAST writer. createContentForm
+        // already set it, but the BM integration above (attachTopObject + fillDefaultReferences)
+        // resets the bar's id back to the model default (0). A 0-id predefined command bar serializes
+        // WITHOUT an <id> element and EDT flags the form with form-invalid-item-id; re-applying it here
+        // makes the bar match a designer-built form (<id>-1</id>). See issue #189.
+        enforceAutoCommandBarIdSentinel(content);
+
         // (7) Optionally set as the owner's default object form.
         if (setAsDefault)
         {
@@ -864,12 +871,29 @@ public final class FormElementWriter
         // The FormObjectFactory-built bar does NOT carry the id=-1 sentinel a form's own predefined
         // command bar requires, so EDT validation flags it (form-invalid-item-id). Enforce id=-1 on
         // the bar regardless of who created it (the fallback bar already set it; this is idempotent).
-        if (autoCommandBar != null)
-        {
-            setIntFeature(autoCommandBar, FEATURE_ID, -1);
-        }
+        // NOTE: when this runs as part of createForm, the later BM integration (attachTopObject +
+        // fillDefaultReferences) RESETS this id back to 0, so createForm re-applies it as its last
+        // step (6a). This set here still matters for the direct (headless / no-BM) callers. Issue #189.
+        enforceAutoCommandBarIdSentinel(content);
         applyFormDefaults(content, version);
         return content;
+    }
+
+    /**
+     * Forces the form's predefined {@code autoCommandBar} to carry the {@code id == -1} sentinel - the
+     * value a designer-built form persists for its own command bar, keeping it out of the regular
+     * element id space. A {@code 0}-id bar serializes WITHOUT an {@code <id>} element and EDT then
+     * flags the form with {@code form-invalid-item-id}. Called by {@link #createContentForm} and again
+     * by {@link #createForm} after the BM integration (which resets the id to the model default). A
+     * no-op when the form has no command bar. Package-visible for the headless test. Issue #189.
+     */
+    static void enforceAutoCommandBarIdSentinel(EObject content)
+    {
+        EObject bar = singleReference(content, FEATURE_AUTO_COMMAND_BAR);
+        if (bar != null)
+        {
+            setIntFeature(bar, FEATURE_ID, -1);
+        }
     }
 
     /** The form model EPackage nsURI ({@code com._1c.g5.v8.dt.form.model.FormPackage.eNS_URI}). */

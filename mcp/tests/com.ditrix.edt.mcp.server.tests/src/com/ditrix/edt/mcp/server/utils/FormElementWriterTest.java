@@ -457,6 +457,29 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testEnforceAutoCommandBarIdSentinelRestoresMinusOne()
+    {
+        EObject form = newForm();
+        EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        // Simulate the BM integration (attachTopObject + fillDefaultReferences) resetting the
+        // predefined bar's id back to the model default (0) - the regression behind issue #189.
+        bar.eSet(feature(bar, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        FormElementWriter.enforceAutoCommandBarIdSentinel(form);
+        // The bar carries the -1 sentinel again, matching a designer-built form (<id>-1</id>), which
+        // serializes as <id>-1</id> instead of being dropped (a dropped id resolves to 0 -> invalid).
+        assertEquals(Integer.valueOf(-1), bar.eGet(feature(bar, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEnforceAutoCommandBarIdSentinelToleratesMissingBar()
+    {
+        // A form with no command bar (an ordinary/legacy form) must not fail.
+        EObject form = newObject(MODEL.form);
+        FormElementWriter.enforceAutoCommandBarIdSentinel(form);
+        assertNull(form.eGet(feature(form, "autoCommandBar"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testCreateButtonParentToleratesDottedPathAndChildItems()
     {
         EObject form = newForm();
