@@ -77,6 +77,17 @@ MODEL_SETTLE_TIMEOUT = int(os.environ.get(
     "E2E_MODEL_SETTLE_TIMEOUT",
     str(max(int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180")), 300))))
 
+# Transient "Project is building ... Please wait and retry" refusal: when a call arrives
+# while EDT is still recomputing derived data (heaviest right after a big write-metadata
+# test, and slow to drain on an under-powered CI runner), the server REFUSES it UPFRONT
+# with this message and NO side effect. That message is never an assertion target, so
+# call() transparently re-issues the SAME call until it clears (or this budget elapses) —
+# stabilizing the slower matrix legs without masking real results (a genuine success/error
+# returns unchanged on the next attempt). Override with E2E_BUILDING_RETRY_TIMEOUT.
+BUILDING_RETRY_TIMEOUT = int(os.environ.get("E2E_BUILDING_RETRY_TIMEOUT", "120"))
+# The server's derived-data "still building, retry" refusal, in any response channel.
+_BUILDING_REFUSAL_RE = re.compile(r"Project is building|Please wait and retry", re.IGNORECASE)
+
 # MCP protocol version this client speaks (sent as the MCP-Protocol-Version header,
 # per the 2025-11-25 Streamable HTTP transport spec).
 PROTOCOL_VERSION = os.environ.get("MCP_PROTOCOL_VERSION", "2025-11-25")
@@ -207,9 +218,35 @@ def _post(method, params):
     return _parse_response(text)
 
 
+def _is_transient_building(result):
+    """Whether a Result is the transient derived-data "Project is building ... please wait
+    and retry" refusal — surfaced in any channel (an isError text, or a structured
+    success=false envelope). The call was refused with NO side effect, so re-issuing it is
+    safe and correct (it is never an assertion target)."""
+    try:
+        blob = json.dumps(result.raw, ensure_ascii=False)
+    except (TypeError, ValueError):
+        blob = str(result.raw)
+    return bool(_BUILDING_REFUSAL_RE.search(blob))
+
+
 def call(tool, arguments):
-    """Send tools/call and return a Result."""
-    return Result(_post("tools/call", {"name": tool, "arguments": arguments}))
+    """Send tools/call and return a Result.
+
+    Transparently retries the transient "Project is building ... please wait and retry"
+    refusal (derived data still recomputing — the call was refused with no side effect, so
+    re-issuing the SAME call is safe). That message is never asserted on, so retrying it
+    until it clears stabilizes the slower matrix legs without masking a real success/error
+    (which returns unchanged on the next attempt). Bounded by BUILDING_RETRY_TIMEOUT; on
+    expiry the building refusal is returned so the test fails loudly rather than hanging."""
+    deadline = time.time() + BUILDING_RETRY_TIMEOUT
+    attempt = 0
+    while True:
+        result = Result(_post("tools/call", {"name": tool, "arguments": arguments}))
+        if not _is_transient_building(result) or time.time() >= deadline:
+            return result
+        attempt += 1
+        time.sleep(min(2 * attempt, 10))
 
 
 def _notify(method, params):
