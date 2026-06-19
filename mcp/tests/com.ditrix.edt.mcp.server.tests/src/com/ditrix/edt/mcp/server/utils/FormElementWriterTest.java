@@ -16,9 +16,12 @@ import static org.junit.Assert.fail;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.eclipse.emf.common.util.Enumerator;
+import org.eclipse.emf.common.util.TreeIterator;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EEnum;
@@ -890,6 +893,97 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testNormalizeFormItemIdsRepairsAutoChildrenAndRootBar()
+    {
+        EObject form = newForm();
+        EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        bar.eSet(feature(bar, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+
+        for (int i = 0; i < 7; i++)
+        {
+            String attrName = "Attr" + i; //$NON-NLS-1$
+            EObject attribute = newObject(MODEL.formAttribute);
+            attribute.eSet(feature(attribute, "name"), attrName); //$NON-NLS-1$
+            addTo(form, "attributes", attribute); //$NON-NLS-1$
+
+            String fieldName = "Field" + i; //$NON-NLS-1$
+            assertNull(FormElementWriter.createMember(form, Kind.FIELD, fieldName, null, attrName,
+                null, null, false, null));
+            EObject field = FormElementWriter.findFormItem(form, fieldName);
+            EObject menu = (EObject)field.eGet(feature(field, "contextMenu")); //$NON-NLS-1$
+            EObject tooltip = (EObject)field.eGet(feature(field, "extendedTooltip")); //$NON-NLS-1$
+            menu.eSet(feature(menu, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+            tooltip.eSet(feature(tooltip, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        }
+
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "PrintButton", //$NON-NLS-1$
+            "AutoCommandBar", "Print", null, null, false, null)); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject button = FormElementWriter.findFormItem(form, "PrintButton"); //$NON-NLS-1$
+        EObject buttonTooltip = (EObject)button.eGet(feature(button, "extendedTooltip")); //$NON-NLS-1$
+        buttonTooltip.eSet(feature(buttonTooltip, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals(Integer.valueOf(-1), bar.eGet(feature(bar, "id"))); //$NON-NLS-1$
+        assertUniqueNonZeroFormItemIds(form);
+    }
+
+    @Test
+    public void testCreateAttributeAssignsUniqueIdsInAttributeNamespace()
+    {
+        EObject form = newForm();
+
+        assertNull(FormElementWriter.createMember(form, Kind.ATTRIBUTE, "Customer", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.ATTRIBUTE, "Total", null, null, //$NON-NLS-1$
+            null, null, false, null));
+
+        EObject customer = FormElementWriter.findFormAttribute(form, "Customer"); //$NON-NLS-1$
+        EObject total = FormElementWriter.findFormAttribute(form, "Total"); //$NON-NLS-1$
+        assertNotNull(customer);
+        assertNotNull(total);
+        assertEquals(Integer.valueOf(1), customer.eGet(feature(customer, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(2), total.eGet(feature(total, "id"))); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Main", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject group = FormElementWriter.findFormItem(form, "Main"); //$NON-NLS-1$
+        assertNotNull(group);
+        assertEquals("attribute ids must not advance the form-item namespace", Integer.valueOf(1), //$NON-NLS-1$
+            group.eGet(feature(group, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeFormAttributeIdsRepairsDuplicatesWithoutChangingItemIds()
+    {
+        EObject form = newForm();
+        EObject first = newObject(MODEL.formAttribute);
+        first.eSet(feature(first, "name"), "First"); //$NON-NLS-1$ //$NON-NLS-2$
+        first.eSet(feature(first, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "attributes", first); //$NON-NLS-1$
+        EObject second = newObject(MODEL.formAttribute);
+        second.eSet(feature(second, "name"), "Second"); //$NON-NLS-1$ //$NON-NLS-2$
+        second.eSet(feature(second, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "attributes", second); //$NON-NLS-1$
+
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "id"), Integer.valueOf(9)); //$NON-NLS-1$
+        addTo(form, "items", group); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        Set<Integer> ids = new HashSet<>();
+        assertTrue(((Integer)first.eGet(feature(first, "id"))).intValue() > 0); //$NON-NLS-1$
+        assertTrue(ids.add((Integer)first.eGet(feature(first, "id")))); //$NON-NLS-1$
+        assertTrue(((Integer)second.eGet(feature(second, "id"))).intValue() > 0); //$NON-NLS-1$
+        assertTrue(ids.add((Integer)second.eGet(feature(second, "id")))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(9), group.eGet(feature(group, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAutoChildrenRussianSuffixes()
     {
         EObject form = newForm();
@@ -1384,6 +1478,31 @@ public class FormElementWriterTest
         ((List<EObject>)owner.eGet(feature(owner, featureName))).add(child);
     }
 
+    private static void assertUniqueNonZeroFormItemIds(EObject form)
+    {
+        Set<Integer> ids = new HashSet<>();
+        int count = 0;
+        for (TreeIterator<EObject> it = form.eAllContents(); it.hasNext();)
+        {
+            EObject object = it.next();
+            if (!MODEL.formItem.isInstance(object))
+            {
+                continue;
+            }
+            EStructuralFeature idFeature = object.eClass().getEStructuralFeature("id"); //$NON-NLS-1$
+            if (idFeature == null)
+            {
+                continue;
+            }
+            int id = ((Integer)object.eGet(idFeature)).intValue();
+            assertTrue("form-item id must not be 0 on " + object.eClass().getName(), id != 0); //$NON-NLS-1$
+            assertTrue("duplicate form-item id " + id, ids.add(Integer.valueOf(id))); //$NON-NLS-1$
+            count++;
+        }
+        assertEquals("root bar + 7 fields + 14 field auto-children + button + button tooltip", //$NON-NLS-1$
+            24, count);
+    }
+
     /**
      * A dynamic EMF metamodel reproducing the form-model features the writer touches reflectively:
      * the Form (items / attributes / formCommands / autoCommandBar), FormItem subtypes (Button with
@@ -1395,6 +1514,7 @@ public class FormElementWriterTest
     private static final class FormLikeModel
     {
         final EClass form;
+        final EClass formItem;
         final EClass formGroup;
         final EClass autoCommandBar;
         final EClass table;
@@ -1448,7 +1568,7 @@ public class FormElementWriterTest
             addBoolean(f, inputFieldExtInfo, "typeDomainEnabled"); //$NON-NLS-1$
             addBoolean(f, inputFieldExtInfo, "textEdit"); //$NON-NLS-1$
 
-            EClass formItem = f.createEClass();
+            formItem = f.createEClass();
             formItem.setName("FormItem"); //$NON-NLS-1$
             formItem.setAbstract(true);
             addString(f, formItem, "name"); //$NON-NLS-1$
@@ -1564,9 +1684,15 @@ public class FormElementWriterTest
             formField.getEStructuralFeatures().add(
                 containment(f, "extendedTooltip", extendedTooltip, false)); //$NON-NLS-1$
 
+            EClass abstractFormAttribute = f.createEClass();
+            abstractFormAttribute.setName("AbstractFormAttribute"); //$NON-NLS-1$
+            abstractFormAttribute.setAbstract(true);
+            addInt(f, abstractFormAttribute, "id"); //$NON-NLS-1$
+            addString(f, abstractFormAttribute, "name"); //$NON-NLS-1$
+
             formAttribute = f.createEClass();
             formAttribute.setName("FormAttribute"); //$NON-NLS-1$
-            addString(f, formAttribute, "name"); //$NON-NLS-1$
+            formAttribute.getESuperTypes().add(abstractFormAttribute);
 
             autoCommandBar = f.createEClass();
             autoCommandBar.setName("AutoCommandBar"); //$NON-NLS-1$
@@ -1622,6 +1748,7 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(decoration);
             pkg.getEClassifiers().add(dataPath);
             pkg.getEClassifiers().add(formField);
+            pkg.getEClassifiers().add(abstractFormAttribute);
             pkg.getEClassifiers().add(formAttribute);
             pkg.getEClassifiers().add(autoCommandBar);
         }

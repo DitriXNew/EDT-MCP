@@ -31,6 +31,8 @@ Fixture inventory (TestConfiguration, English Names):
   need one create it first.)
 """
 
+import xml.etree.ElementTree as ET
+
 from harness import (
     call,
     assert_ok,
@@ -40,11 +42,15 @@ from harness import (
     assert_not_contains,
     assert_diff_contains,
     assert_no_diff,
+    assert_tree_unchanged,
     diff,
     poll_diff_contains,
+    read_disk,
+    tree_snapshot,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
+    _fail,
 )
 
 
@@ -53,6 +59,38 @@ def _objects_text(metadata_type):
     r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": metadata_type})
     assert_ok(r, "get_metadata_objects read-back (%s)" % metadata_type)
     return r.text
+
+
+def _xml_local(tag):
+    return tag.rsplit("}", 1)[-1]
+
+
+def _direct_child_text(node, child_name):
+    for child in list(node):
+        if _xml_local(child.tag) == child_name:
+            return child.text or ""
+    return None
+
+
+def _direct_child_int(node, child_name):
+    text = _direct_child_text(node, child_name)
+    if text is None or not text.strip():
+        return 0
+    try:
+        return int(text.strip())
+    except ValueError:
+        _fail("expected <%s> to be an integer, got %r" % (child_name, text))
+
+
+def _assert_unique_nonzero(ids_by_name, ctx):
+    seen = {}
+    for name, value in ids_by_name.items():
+        if value == 0:
+            _fail("%s %s must have a nonzero id: %r" % (ctx, name, ids_by_name))
+        if value in seen:
+            _fail("%s ids must be unique, but %s and %s both use %s: %r"
+                  % (ctx, seen[value], name, value, ids_by_name))
+        seen[value] = name
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -449,6 +487,135 @@ def test_create_form_object_then_add_member():
     assert_ok(r2, "add an attribute to the just-created form")
     assert r2.structured.get("action") == "created", "must report created: %r" % (r2.structured,)
     poll_diff_contains(attr, ctx="the member added to the new form must land in its Form.form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_data_processor_form_members_allocate_form_ids_issue_189():
+    # Issue #189 end-to-end repro: a managed form and ALL its attributes/items are created by
+    # MCP writes. The validator used to see duplicate id=0 for field context menus, the command
+    # bar serialized without <id>, and form attributes had no ids at all.
+    obj, form = "E2EIdCheck", "Form"
+    base = "DataProcessor.%s" % obj
+    form_fqn = "%s.Form.%s" % (base, form)
+    form_rel = "src/DataProcessors/%s/Forms/%s/Form.form" % (obj, form)
+
+    def create_ok(fqn, properties=None, ctx=None):
+        payload = {"projectName": PROJECT, "fqn": fqn}
+        if properties is not None:
+            payload["properties"] = properties
+        r = call("create_metadata", payload)
+        assert_ok(r, ctx or ("create " + fqn))
+        wait_for_project_ready()
+        return r
+
+    create_ok(base, ctx="create the DataProcessor owner")
+    # DataProcessor managed forms reject setAsDefault=true, so the repro creates the form without it.
+    create_ok(form_fqn, ctx="create the DataProcessor managed form")
+
+    attrs = ["FAttr%d" % i for i in range(1, 8)]
+    for i, attr in enumerate(attrs, start=1):
+        create_ok("%s.Attribute.%s" % (form_fqn, attr), ctx="create form attribute " + attr)
+        r = call("modify_metadata", {
+            "projectName": PROJECT,
+            "fqn": "%s.Attribute.%s" % (form_fqn, attr),
+            "properties": [{"name": "type",
+                            "value": {"types": [{"kind": "Number", "precision": 8 + i, "scale": 0}]}}],
+        })
+        assert_ok(r, "set form attribute type " + attr)
+        assert "valueType" in (r.structured.get("applied") or []), \
+            "type alias must apply to valueType for %s: %r" % (attr, r.structured)
+        wait_for_project_ready()
+
+    fields = ["FField%d" % i for i in range(1, 8)]
+    for attr, field in zip(attrs, fields):
+        create_ok("%s.Field.%s" % (form_fqn, field),
+                  [{"name": "dataPath", "value": attr}],
+                  ctx="create field %s bound to %s" % (field, attr))
+
+    cmd, proc, btn = "RunCheck", "RunCheckAction", "RunCheckBtn"
+    create_ok("%s.Command.%s" % (form_fqn, cmd), ctx="create form command")
+    create_ok("%s.Command.%s.Handler.Action" % (form_fqn, cmd),
+              [{"name": "procedure", "value": proc}],
+              ctx="bind the command Action handler")
+    create_ok("%s.Button.%s" % (form_fqn, btn),
+              [{"name": "command", "value": cmd}, {"name": "parent", "value": "AutoCommandBar"}],
+              ctx="create command-bar button bound to the command")
+
+    poll_diff_contains("<name>%s</name>" % btn,
+                       ctx="the fully MCP-created DataProcessor form must be exported to disk")
+
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form_fqn]})
+    assert_ok(details, "read the fully MCP-created form structure")
+    for name in attrs + fields + [cmd, proc, btn, "AutoCommandBar"]:
+        assert_contains(details.text, name, "get_metadata_details must surface " + name)
+
+    reval = call("revalidate_objects", {"projectName": PROJECT, "objects": [form_fqn]})
+    assert_ok(reval, "revalidate the MCP-created form")
+    assert_contains(reval.text, "status: success", "revalidation must report success")
+    assert_contains(reval.text, form_fqn, "revalidation must name the requested form")
+
+    problems = call("get_project_errors", {
+        "projectName": PROJECT,
+        "objects": [form_fqn],
+        "responseFormat": "detailed",
+    })
+    assert_ok(problems, "read form validation markers")
+    assert_not_contains(problems.text, "form-legacy-emf-check",
+                        "legacy EMF twin must not report duplicate id=0")
+    assert_not_contains(problems.text, "form-invalid-item-id",
+                        "autoCommandBar must not report an invalid form item id")
+    assert_not_contains(problems.text, "Duplicate id '0'",
+                        "duplicate zero-id diagnostics must be gone")
+
+    root = ET.fromstring(read_disk(form_rel))
+    attr_ids = {}
+    for node in root.iter():
+        if _xml_local(node.tag) == "attributes":
+            name = _direct_child_text(node, "name") or "<unnamed>"
+            attr_ids[name] = _direct_child_int(node, "id")
+    for attr in attrs:
+        if attr not in attr_ids:
+            _fail("created form attribute %s was not serialized: %r" % (attr, sorted(attr_ids)))
+    _assert_unique_nonzero(attr_ids, "form attribute")
+
+    item_tags = ("items", "childItems", "extendedTooltip", "contextMenu", "autoCommandBar")
+    item_ids = {}
+    for node in root.iter():
+        if _xml_local(node.tag) in item_tags:
+            name = _direct_child_text(node, "name") or _xml_local(node.tag)
+            item_ids[name] = _direct_child_int(node, "id")
+
+    bar_id = item_ids.get("FormCommandBar")
+    if bar_id != -1:
+        _fail("autoCommandBar must serialize the designer sentinel id -1, got %r in %r"
+              % (bar_id, item_ids))
+
+    positive_item_ids = {name: value for name, value in item_ids.items()
+                         if name != "FormCommandBar"}
+    expected_items = set(fields)
+    expected_items.update(field + "ExtendedTooltip" for field in fields)
+    expected_items.update(field + "ContextMenu" for field in fields)
+    expected_items.add(btn)
+    expected_items.add(btn + "ExtendedTooltip")
+    missing = expected_items - set(positive_item_ids)
+    if missing:
+        _fail("expected item/auto-child ids for %r, got %r"
+              % (sorted(missing), sorted(positive_item_ids)))
+    _assert_unique_nonzero(positive_item_ids, "form item")
+
+    # Namespace guard: attributes and FormItems are independent id spaces. The test fails
+    # on zero/duplicates inside either namespace, but it intentionally does not compare
+    # attribute ids against item ids.
+
+    before = tree_snapshot()
+    dup = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "%s.Command.%s.Handler.Action" % (form_fqn, cmd),
+    })
+    err = assert_error(dup, "duplicate command Action handler")
+    assert_error_quality(err, suggests=["already exists"],
+                         ctx="duplicate Action handler must be a clean rejected call")
+    assert_tree_unchanged(before, "duplicate Action handler rejection must not mutate the dirty setup")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

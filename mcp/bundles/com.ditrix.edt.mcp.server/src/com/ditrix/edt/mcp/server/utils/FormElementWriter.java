@@ -10,8 +10,10 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
@@ -92,6 +94,9 @@ public final class FormElementWriter
     private static final String FEATURE_COMMAND_INTERFACE = "commandInterface"; //$NON-NLS-1$
     private static final String FEATURE_NAVIGATION_PANEL = "navigationPanel"; //$NON-NLS-1$
     private static final String FEATURE_COMMAND_BAR = "commandBar"; //$NON-NLS-1$
+    private static final String FEATURE_BASE_FORM = "baseForm"; //$NON-NLS-1$
+    private static final String FEATURE_EXTENSION_FORM = "extensionForm"; //$NON-NLS-1$
+    private static final int DEFAULT_EXT_FORM_OBJECT_ID = 1_000_000;
     /** {@code FormChildrenGroup.VERTICAL} - the designer default children grouping before 8.5.1. */
     private static final String LITERAL_VERTICAL = "Vertical"; //$NON-NLS-1$
     /** The {@code Auto} enum literal/name ({@code FormChildrenGroup.AUTO}, {@code ShowTitle851.AUTO}). */
@@ -100,6 +105,7 @@ public final class FormElementWriter
     // Concrete form-model classifier names (resolved on the form EPackage).
     private static final String ECLASS_FORM_GROUP = "FormGroup"; //$NON-NLS-1$
     private static final String ECLASS_DECORATION = "Decoration"; //$NON-NLS-1$
+    private static final String ECLASS_ABSTRACT_FORM_ATTRIBUTE = "AbstractFormAttribute"; //$NON-NLS-1$
     private static final String ECLASS_FORM_ITEM = "FormItem"; //$NON-NLS-1$
     private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
     private static final String ECLASS_USUAL_GROUP_EXT_INFO = "UsualGroupExtInfo"; //$NON-NLS-1$
@@ -616,6 +622,8 @@ public final class FormElementWriter
         {
             EObject formModel = editableFormInTx(ctx, tx);
             work.run(formModel, tx);
+            normalizeFormAttributeIds(formModel);
+            normalizeFormItemIds(formModel);
             // The content Form is a separate top object serialized to Form.form - export ITS fqn.
             return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
         });
@@ -869,6 +877,8 @@ public final class FormElementWriter
             setIntFeature(autoCommandBar, FEATURE_ID, -1);
         }
         applyFormDefaults(content, version);
+        normalizeFormAttributeIds(content);
+        normalizeFormItemIds(content);
         return content;
     }
 
@@ -1076,6 +1086,7 @@ public final class FormElementWriter
             return "Cannot create a form attribute for this form model."; //$NON-NLS-1$
         }
         setStringFeature(attr, FEATURE_NAME, name);
+        setIntFeature(attr, FEATURE_ID, nextAttributeId(formModel));
         setDefaultValueType(attr);
         applyTitle(attr, titleLanguage, title);
         addToList(formModel, FEATURE_ATTRIBUTES, attr);
@@ -2512,6 +2523,62 @@ public final class FormElementWriter
 
     // ---- the form-wide id allocation ------------------------------------------------------------
 
+    /**
+     * The next free form-attribute id = max existing {@code AbstractFormAttribute} id across the whole
+     * form + 1. This is a separate EDT id space from {@code FormItem.id}.
+     */
+    private static int nextAttributeId(EObject formModel)
+    {
+        EClass attributeClass = formEClass(formModel, ECLASS_ABSTRACT_FORM_ATTRIBUTE);
+        if (attributeClass == null)
+        {
+            return 1;
+        }
+        int max = maxAttributeIdForAllocation(formModel, attributeClass);
+        EObject extensionForm = liveReference(formModel, FEATURE_EXTENSION_FORM);
+        if (extensionForm != null)
+        {
+            max = Math.max(max, maxAttributeIdForAllocation(extensionForm, attributeClass));
+        }
+        return max + 1;
+    }
+
+    private static int maxAttributeIdForAllocation(EObject formModel, EClass attributeClass)
+    {
+        int max = maxAttributeId(formModel, attributeClass);
+        if (hasExtensionPeer(formModel) && max < DEFAULT_EXT_FORM_OBJECT_ID)
+        {
+            return DEFAULT_EXT_FORM_OBJECT_ID;
+        }
+        return max;
+    }
+
+    private static int maxAttributeId(EObject formModel, EClass attributeClass)
+    {
+        int max = 0;
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject obj = it.next();
+            if (attributeClass.isInstance(obj))
+            {
+                max = Math.max(max, intFeature(obj, FEATURE_ID));
+            }
+        }
+        return max;
+    }
+
+    private static boolean hasExtensionPeer(EObject formModel)
+    {
+        return liveReference(formModel, FEATURE_BASE_FORM) != null
+            || liveReference(formModel, FEATURE_EXTENSION_FORM) != null;
+    }
+
+    private static EObject liveReference(EObject owner, String featureName)
+    {
+        EObject reference = singleReference(owner, featureName);
+        return reference != null && !reference.eIsProxy() ? reference : null;
+    }
+
     /** The next free form-item id = max existing {@code FormItem} id across the whole form + 1. */
     private static int nextItemId(EObject formModel)
     {
@@ -2532,6 +2599,118 @@ public final class FormElementWriter
             }
         }
         return max + 1;
+    }
+
+    /**
+     * Repairs the form-wide {@code AbstractFormAttribute.id} invariant before validation/export sees
+     * the model. The designer allocates these ids through {@code getNextAttributeId}; attributes and
+     * attribute columns share this attribute id space, but it is intentionally independent from
+     * {@code FormItem.id}.
+     * Package-visible for the headless unit test.
+     */
+    static void normalizeFormAttributeIds(EObject formModel)
+    {
+        EClass attributeClass = formEClass(formModel, ECLASS_ABSTRACT_FORM_ATTRIBUTE);
+        if (attributeClass == null)
+        {
+            return;
+        }
+
+        List<EObject> attributes = new ArrayList<>();
+        int max = maxAttributeIdForAllocation(formModel, attributeClass);
+        EObject extensionForm = liveReference(formModel, FEATURE_EXTENSION_FORM);
+        if (extensionForm != null)
+        {
+            max = Math.max(max, maxAttributeIdForAllocation(extensionForm, attributeClass));
+        }
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject obj = it.next();
+            if (!attributeClass.isInstance(obj))
+            {
+                continue;
+            }
+            attributes.add(obj);
+        }
+
+        Set<Integer> seen = new HashSet<>();
+        for (EObject attribute : attributes)
+        {
+            int id = intFeature(attribute, FEATURE_ID);
+            if (id > 0 && seen.add(Integer.valueOf(id)))
+            {
+                continue;
+            }
+            do
+            {
+                max++;
+            }
+            while (max <= 0 || seen.contains(Integer.valueOf(max)));
+            setIntFeature(attribute, FEATURE_ID, max);
+            seen.add(Integer.valueOf(max));
+        }
+    }
+
+    /**
+     * Repairs the form-wide {@code FormItem.id} invariant before validation/export sees the model.
+     * The form root's predefined {@code autoCommandBar} has the platform sentinel {@code -1}; every
+     * other form item, including designer auto-children such as {@code contextMenu} and
+     * {@code extendedTooltip}, gets a positive id unique in the same form-wide space.
+     * Package-visible for the headless unit test.
+     */
+    static void normalizeFormItemIds(EObject formModel)
+    {
+        EPackage pkg = formModel.eClass().getEPackage();
+        EClassifier formItem = pkg != null ? pkg.getEClassifier(ECLASS_FORM_ITEM) : null;
+        if (!(formItem instanceof EClass))
+        {
+            return;
+        }
+
+        EClass formItemClass = (EClass)formItem;
+        EObject rootAutoCommandBar = singleReference(formModel, FEATURE_AUTO_COMMAND_BAR);
+        List<EObject> items = new ArrayList<>();
+        int max = 0;
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject obj = it.next();
+            if (!formItemClass.isInstance(obj))
+            {
+                continue;
+            }
+            items.add(obj);
+            if (obj != rootAutoCommandBar)
+            {
+                max = Math.max(max, intFeature(obj, FEATURE_ID));
+            }
+        }
+
+        Set<Integer> seen = new HashSet<>();
+        if (rootAutoCommandBar != null && formItemClass.isInstance(rootAutoCommandBar))
+        {
+            setIntFeature(rootAutoCommandBar, FEATURE_ID, -1);
+            seen.add(Integer.valueOf(-1));
+        }
+
+        for (EObject item : items)
+        {
+            if (item == rootAutoCommandBar)
+            {
+                continue;
+            }
+            int id = intFeature(item, FEATURE_ID);
+            if (id > 0 && seen.add(Integer.valueOf(id)))
+            {
+                continue;
+            }
+            do
+            {
+                max++;
+            }
+            while (max <= 0 || seen.contains(Integer.valueOf(max)));
+            setIntFeature(item, FEATURE_ID, max);
+            seen.add(Integer.valueOf(max));
+        }
     }
 
     // ---- reflective helpers ---------------------------------------------------------------------
@@ -2901,6 +3080,13 @@ public final class FormElementWriter
         EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
         Object value = feature != null ? object.eGet(feature) : null;
         return value instanceof String ? (String)value : null;
+    }
+
+    private static int intFeature(EObject object, String featureName)
+    {
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
+        Object value = feature != null ? object.eGet(feature) : null;
+        return value instanceof Integer ? ((Integer)value).intValue() : 0;
     }
 
     private static void setStringFeature(EObject object, String featureName, String value)
