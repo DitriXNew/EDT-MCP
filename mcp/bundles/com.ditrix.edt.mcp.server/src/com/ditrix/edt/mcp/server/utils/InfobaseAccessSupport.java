@@ -12,7 +12,6 @@ import org.eclipse.core.runtime.Platform;
 import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager;
-import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
@@ -68,6 +67,27 @@ public final class InfobaseAccessSupport
     public static InfobaseAccess parseAccess(String access)
     {
         return "OS".equalsIgnoreCase(access) ? InfobaseAccess.OS : InfobaseAccess.INFOBASE; //$NON-NLS-1$
+    }
+
+    /**
+     * Validates an {@code access} argument against the closed {@code INFOBASE | OS} enum the schema
+     * declares. {@code null}/empty is accepted (it defaults to {@link InfobaseAccess#INFOBASE} in
+     * {@link #parseAccess(String)}); a non-empty value outside the enum is rejected so a typo (e.g.
+     * {@code access=OOPS}) cannot silently store a different authentication mode — MCP clients are
+     * not required to validate against the schema before sending.
+     *
+     * @param access the raw access argument (may be {@code null})
+     * @return an actionable error message when {@code access} is a non-empty out-of-enum value, else
+     *         {@code null}
+     */
+    public static String accessError(String access)
+    {
+        if (access == null || access.isEmpty()
+            || "INFOBASE".equalsIgnoreCase(access) || "OS".equalsIgnoreCase(access)) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return null;
+        }
+        return "Invalid access: '" + access + "'. Allowed values: 'INFOBASE', 'OS'."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -142,36 +162,6 @@ public final class InfobaseAccessSupport
         {
             Activator.logError("set credentials: updateSettings failed", e); //$NON-NLS-1$
             return "Failed to store infobase access settings: " + e.getMessage(); //$NON-NLS-1$
-        }
-    }
-
-    /**
-     * Reads back the currently stored credentials for an application's infobase, best-effort.
-     *
-     * @param application the target application
-     * @return the resolved settings, or {@code null} when unavailable (not an infobase app,
-     *         infobase unresolved, manager unavailable, or the read failed)
-     */
-    public static IInfobaseAccessSettings readCredentials(IApplication application)
-    {
-        if (!(application instanceof IInfobaseApplication))
-        {
-            return null;
-        }
-        IInfobaseAccessManager manager = resolveAccessManager();
-        if (manager == null)
-        {
-            return null;
-        }
-        try
-        {
-            InfobaseReference ref = ((IInfobaseApplication)application).getInfobase();
-            return ref == null ? null : manager.resolveSettings(ref);
-        }
-        catch (Exception e) // NOSONAR best-effort read
-        {
-            Activator.logError("read credentials failed for " + application.getId(), e); //$NON-NLS-1$
-            return null;
         }
     }
 

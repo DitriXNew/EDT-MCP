@@ -1,6 +1,6 @@
 # set_infobase_credentials
 
-Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications).
+Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). Full parameters and examples: call get_tool_guide('set_infobase_credentials').
 
 ## Parameters
 | Parameter | Required | Type | Description |

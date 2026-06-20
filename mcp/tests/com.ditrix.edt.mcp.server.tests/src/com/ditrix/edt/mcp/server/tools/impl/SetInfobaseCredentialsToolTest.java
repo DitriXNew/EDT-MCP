@@ -53,6 +53,25 @@ public class SetInfobaseCredentialsToolTest
         assertTrue(desc.length() > 0);
         assertTrue("description must mention the credentials purpose", //$NON-NLS-1$
             desc.toLowerCase().contains("credential")); //$NON-NLS-1$
+        assertTrue("description must steer to the on-demand guide", //$NON-NLS-1$
+            desc.contains("get_tool_guide('set_infobase_credentials')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInvalidAccessIsError()
+    {
+        // An out-of-enum access value is rejected before any service lookup (headless-safe),
+        // naming the bad value and the allowed kinds — the schema enum is advisory for clients.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationId", "someApp"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("access", "OOPS"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetInfobaseCredentialsTool().execute(params);
+        assertNotNull(result);
+        assertTrue("invalid access must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the bad value", result.contains("OOPS")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must list allowed kinds", //$NON-NLS-1$
+            result.contains("INFOBASE") && result.contains("OS")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

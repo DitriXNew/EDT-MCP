@@ -206,7 +206,9 @@ public class CreateInfobaseTool implements IMcpTool
                 "Password for 'user'. Optional; default empty (demo bases use an empty password).") //$NON-NLS-1$
             .enumProperty(KEY_ACCESS,
                 "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) " //$NON-NLS-1$
-                + "or 'OS'. Only applied when 'user' (or 'password') is provided.", //$NON-NLS-1$
+                + "or 'OS'. Credentials are stored when ANY of user/password/access is given; " //$NON-NLS-1$
+                + "access='OS' on its own stores OS-authentication settings (no 1C user/password). " //$NON-NLS-1$
+                + "Applies only to applicationKind='infobase' (a file infobase).", //$NON-NLS-1$
                 "INFOBASE", "OS") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -269,6 +271,13 @@ public class CreateInfobaseTool implements IMcpTool
         String credPassword = JsonUtils.extractStringArgument(params, "password"); //$NON-NLS-1$
         String credAccess = JsonUtils.extractStringArgument(params, KEY_ACCESS);
 
+        // Reject an out-of-enum access value before doing any work (the schema enum is advisory).
+        String credAccessError = InfobaseAccessSupport.accessError(credAccess);
+        if (credAccessError != null)
+        {
+            return ToolResult.error(credAccessError).toJson();
+        }
+
         // Validate applicationKind (default 'infobase'). When absent or 'infobase' the behaviour is
         // byte-identical to the original file-infobase tool.
         boolean standaloneServer;
@@ -285,6 +294,16 @@ public class CreateInfobaseTool implements IMcpTool
             return ToolResult.error("Invalid applicationKind: '" + applicationKind //$NON-NLS-1$
                 + "'. Allowed values: '" + KIND_INFOBASE + "', '" + KIND_STANDALONE_SERVER //$NON-NLS-1$ //$NON-NLS-2$
                 + "'.").toJson(); //$NON-NLS-1$
+        }
+
+        // Credentials (#194) target a FILE infobase's access settings; the standalone-server path
+        // manages its own infobase/auth and would silently drop them. Reject up front (before any
+        // workspace/service access) rather than no-op so the caller is not misled.
+        if (standaloneServer && hasCredentialArgs(credUser, credPassword, credAccess))
+        {
+            return ToolResult.error("user/password/access are supported only with " //$NON-NLS-1$
+                + "applicationKind='infobase' (a file infobase). A standalone server manages its " //$NON-NLS-1$
+                + "own infobase and authentication — omit these parameters.").toJson(); //$NON-NLS-1$
         }
 
         // Validate mode (default 'create').
@@ -415,13 +434,18 @@ public class CreateInfobaseTool implements IMcpTool
      *            {@code false} for mode='create' (a brand-new empty base with no users yet)
      * @return a message note, or {@code null} when no credentials were requested
      */
+    /** Whether the caller supplied any connection-credential argument (user / password / access). */
+    private static boolean hasCredentialArgs(String user, String password, String access)
+    {
+        return (user != null && !user.isEmpty())
+            || (password != null && !password.isEmpty())
+            || (access != null && !access.isEmpty());
+    }
+
     private static String storeCredentialsIfRequested(InfobaseReference ibRef, String user,
             String password, String access, boolean register)
     {
-        boolean requested = (user != null && !user.isEmpty())
-            || (password != null && !password.isEmpty())
-            || (access != null && !access.isEmpty());
-        if (!requested)
+        if (!hasCredentialArgs(user, password, access))
         {
             return null;
         }

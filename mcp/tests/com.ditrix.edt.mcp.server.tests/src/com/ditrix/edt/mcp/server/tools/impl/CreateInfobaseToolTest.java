@@ -256,4 +256,39 @@ public class CreateInfobaseToolTest
         assertTrue("error must list allowed modes", //$NON-NLS-1$
             result.contains("create") && result.contains("register")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    @Test
+    public void testInvalidAccessIsError()
+    {
+        // An out-of-enum credential access value is rejected early (headless-safe), naming the
+        // bad value and the allowed kinds.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/Any"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("access", "OOPS"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("invalid access must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the bad value", result.contains("OOPS")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must list allowed kinds", //$NON-NLS-1$
+            result.contains("INFOBASE") && result.contains("OS")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStandaloneServerWithCredentialsIsError()
+    {
+        // Credentials apply only to a file infobase; pairing them with standaloneServer is rejected
+        // (not silently dropped). Validated before any platform/service lookup (headless-safe).
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/Any"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("user", "Admin"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("credentials with standaloneServer must be an error", //$NON-NLS-1$
+            result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("error must steer to applicationKind='infobase'", //$NON-NLS-1$
+            result.contains("infobase")); //$NON-NLS-1$
+    }
 }

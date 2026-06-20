@@ -116,6 +116,14 @@
     "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase').",
     "inputSchema": {
       "properties": {
+        "access": {
+          "description": "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Credentials are stored when ANY of user/password/access is given; access='OS' on its own stores OS-authentication settings (no 1C user/password). Applies only to applicationKind='infobase' (a file infobase).",
+          "enum": [
+            "INFOBASE",
+            "OS"
+          ],
+          "type": "string"
+        },
         "applicationKind": {
           "description": "'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by EDT and reported back as 'port'/'webUrl' in the result.",
           "enum": [
@@ -140,6 +148,10 @@
           ],
           "type": "string"
         },
+        "password": {
+          "description": "Password for 'user'. Optional; default empty (demo bases use an empty password).",
+          "type": "string"
+        },
         "platform": {
           "description": "1C platform version mask to use for creation (e.g. '8.3.25'). If omitted, EDT resolves the best available installed version automatically.",
           "type": "string"
@@ -151,6 +163,10 @@
         "setDefault": {
           "description": "Set the new infobase as the default application for the project after creation (default false).",
           "type": "boolean"
+        },
+        "user": {
+          "description": "Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials.",
+          "type": "string"
         }
       },
       "required": [
@@ -3318,6 +3334,89 @@
         },
         "warning": {
           "description": "Warning text when the breakpoint is degraded/marker-only",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
+    "inputSchema": {
+      "properties": {
+        "access": {
+          "description": "Authentication kind: 'INFOBASE' (default, 1C user auth) or 'OS' (OS authentication).",
+          "enum": [
+            "INFOBASE",
+            "OS"
+          ],
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "Application ID from get_applications; required if launchConfigurationName is omitted.",
+          "type": "string"
+        },
+        "launchConfigurationName": {
+          "description": "Exact runtime-client config name from list_configurations (preferred target).",
+          "type": "string"
+        },
+        "password": {
+          "description": "Infobase user password. Optional; default empty (demo bases use an empty password).",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name; required if launchConfigurationName is omitted.",
+          "type": "string"
+        },
+        "user": {
+          "description": "Infobase user name to authenticate as (an EXISTING user). Optional: empty stores no-user credentials (OS-authenticated or userless base / reset).",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "set_infobase_credentials",
+    "outputSchema": {
+      "properties": {
+        "access": {
+          "description": "Stored access kind (INFOBASE or OS).",
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "Target application ID.",
+          "type": "string"
+        },
+        "applicationName": {
+          "description": "Display name of the target application.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable status message.",
+          "type": "string"
+        },
+        "passwordSet": {
+          "description": "True when a non-empty password was stored.",
+          "type": "boolean"
+        },
+        "project": {
+          "description": "Target EDT project name.",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the credentials were stored",
+          "type": "boolean"
+        },
+        "user": {
+          "description": "Stored infobase user name.",
           "type": "string"
         }
       },

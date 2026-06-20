@@ -68,7 +68,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             + "debug_launch can authenticate the update agent on an infobase that has a user list " //$NON-NLS-1$
             + "(issue #194). Selects an EXISTING infobase user (does not create users); an empty " //$NON-NLS-1$
             + "password is valid (demo bases). Target by launchConfigurationName (preferred) or " //$NON-NLS-1$
-            + "projectName + applicationId (from get_applications)."; //$NON-NLS-1$
+            + "projectName + applicationId (from get_applications). " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
     }
 
     @Override
@@ -123,6 +124,14 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         String password = JsonUtils.extractStringArgument(params, "password"); //$NON-NLS-1$
         String access = JsonUtils.extractStringArgument(params, KEY_ACCESS);
 
+        // Reject an out-of-enum access value (the schema declares a closed enum, but a client need
+        // not validate against it before sending) — a typo must not silently store a different mode.
+        String accessError = InfobaseAccessSupport.accessError(access);
+        if (accessError != null)
+        {
+            return ToolResult.error(accessError).toJson();
+        }
+
         boolean hasName = configName != null && !configName.isEmpty();
         if (!hasName)
         {
@@ -151,6 +160,14 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             {
                 return ToolResult.error("Launch configuration not found: '" + configName //$NON-NLS-1$
                     + "'. Use list_configurations to see what's available.").toJson(); //$NON-NLS-1$
+            }
+            // findLaunchConfigByName also matches Attach/debug configs (ALL_DEBUG_CONFIG_TYPE_IDS);
+            // credentials target a runtime-client config (same guard as update_database) — an attach
+            // config has no project/applicationId to derive from.
+            if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(cfg)))
+            {
+                return ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                    + "' is not a runtime-client config — set_infobase_credentials requires one.").toJson(); //$NON-NLS-1$
             }
             String cfgProject = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
             String cfgAppId = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
