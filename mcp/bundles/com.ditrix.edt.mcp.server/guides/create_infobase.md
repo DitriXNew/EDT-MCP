@@ -48,6 +48,7 @@ The standalone-server path **always creates** a new infobase (`mode='register'` 
 - **infobaseName** (optional): display name for the infobase in the EDT Infobases view. If omitted, a name is auto-generated.
 - **platform** (optional, `create` only): 1C platform version mask (e.g. `8.3.25`). If omitted, EDT resolves the best available installed version automatically.
 - **setDefault** (boolean, default false): set the infobase as the default application for the project afterwards.
+- **user** / **password** / **access** (optional, #194): store **infobase connection credentials** so a later `update_database` / `debug_launch` can authenticate the update agent against a base with a user list. `access` is `INFOBASE` (default, 1C user auth) or `OS`. Most useful with `mode='register'` (the existing base already has users); for a `mode='create'` base there are no users yet, so the credentials authenticate only once a matching user is added. Use `set_infobase_credentials` to change them later.
 - **applicationKind** (optional, `infobase` | `standaloneServer`, default `infobase`): see "Application kind" above. The standalone-server path takes no port/publication input — EDT auto-allocates the web port and reports it back as `port`/`webUrl`.
 
 ## Result

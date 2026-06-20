@@ -10,6 +10,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateInfobaseTool;
+import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateLaunchConfigTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool;
@@ -139,6 +140,7 @@ public final class BuiltInToolRegistrar
         // Application tools
         registry.register(new GetApplicationsTool());
         registry.register(new CreateInfobaseTool());
+        registry.register(new SetInfobaseCredentialsTool());
         registry.register(new DeleteInfobaseTool());
         registry.register(new UpdateDatabaseTool());
         registry.register(new DebugLaunchTool());

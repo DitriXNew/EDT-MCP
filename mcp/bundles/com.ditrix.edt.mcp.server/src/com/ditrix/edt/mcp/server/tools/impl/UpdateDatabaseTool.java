@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -424,7 +425,7 @@ public class UpdateDatabaseTool implements IMcpTool
             String applicationId, boolean terminatedClient)
     {
         ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
-            + e.getMessage() + describeInfobaseHolder(applicationId));
+            + e.getMessage() + describeInfobaseHolder(applicationId) + describeAuthHint(e));
         errorResult.put(McpKeys.APPLICATION_ID, applicationId);
         errorResult.put(McpKeys.PROJECT, projectName);
         if (terminatedClient)
@@ -468,5 +469,34 @@ public class UpdateDatabaseTool implements IMcpTool
             // best-effort hint only — never let it mask the real error
         }
         return ""; //$NON-NLS-1$
+    }
+
+    /**
+     * Hint appended to the update-failure message when the failure looks like an infobase
+     * connection / authentication problem (#194): the cause is a synchronization / connection /
+     * authentication exception, or the message mentions a connection/auth failure. Names the
+     * {@code set_infobase_credentials} tool so the caller can fix it. Detection keys off the cause
+     * TYPE name (language-independent) plus English message keywords. Empty when the failure is
+     * unrelated (e.g. an exclusive lock, already covered by {@link #describeInfobaseHolder}).
+     *
+     * @param e the application exception
+     * @return the credentials hint, or an empty string
+     */
+    private static String describeAuthHint(ApplicationException e)
+    {
+        Throwable cause = e.getCause();
+        String causeType = cause != null ? cause.getClass().getSimpleName() : ""; //$NON-NLS-1$
+        String message = String.valueOf(e.getMessage()).toLowerCase(Locale.ROOT);
+        boolean likelyAuth = causeType.contains("Synchronization") //$NON-NLS-1$
+            || causeType.contains("Authentication") //$NON-NLS-1$
+            || causeType.contains("Connection") //$NON-NLS-1$
+            || message.contains("authenticat") //$NON-NLS-1$
+            || message.contains("connect"); //$NON-NLS-1$
+        if (!likelyAuth)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return " If the infobase requires user authentication, set the connection credentials with " //$NON-NLS-1$
+            + "set_infobase_credentials (user/password) and retry."; //$NON-NLS-1$
     }
 }

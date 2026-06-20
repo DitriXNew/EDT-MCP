@@ -109,6 +109,31 @@ public class CreateInfobaseToolTest
     }
 
     @Test
+    public void testInputSchemaDeclaresCredentialParameters()
+    {
+        // #194: optional connection credentials so a registered infobase with a user list can
+        // authenticate the update agent. All optional (back-compat: a bare create stores none).
+        String schema = new CreateInfobaseTool().getInputSchema();
+        assertNotNull(schema);
+        assertTrue("schema must declare user", schema.contains("\"user\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("schema must declare password", schema.contains("\"password\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("schema must declare access", schema.contains("\"access\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        if (requiredIdx >= 0)
+        {
+            int open = schema.indexOf('[', requiredIdx);
+            int close = schema.indexOf(']', open);
+            if (open >= 0 && close > open)
+            {
+                String requiredBlock = schema.substring(open, close + 1);
+                assertTrue("user must NOT be required", !requiredBlock.contains("\"user\"")); //$NON-NLS-1$ //$NON-NLS-2$
+                assertTrue("password must NOT be required", //$NON-NLS-1$
+                    !requiredBlock.contains("\"password\"")); //$NON-NLS-1$
+            }
+        }
+    }
+
+    @Test
     public void testInvalidApplicationKindIsError()
     {
         // An unknown applicationKind value is rejected before any service lookup (headless-safe),

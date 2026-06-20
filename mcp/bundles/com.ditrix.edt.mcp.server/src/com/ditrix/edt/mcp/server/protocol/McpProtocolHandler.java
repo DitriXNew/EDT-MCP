@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolsListResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.GuideRenderer;
+import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
 import com.google.gson.JsonArray;
@@ -302,6 +303,14 @@ public class McpProtocolHandler
         String result = null;
         long startNanos = System.nanoTime();
         boolean threw = true;
+        // Ensure EDT's blocking "Configure Infobase access Settings" credentials dialog is
+        // auto-cancelled (#194). Installed once (lazily, when the workbench display is ready) and
+        // kept for the server's lifetime, so it also catches the dialog raised by EDT's BACKGROUND
+        // update-state jobs (get_applications / create_infobase read-back), not just a synchronous
+        // connect — a per-call arm would miss those. Idempotent + cheap after first install; no-op
+        // headless. set_infobase_credentials provides the credentials so the dialog never needs to
+        // appear on a correctly configured base.
+        InfobaseAuthDialogSuppressor.ensureInstalled();
         try
         {
             result = tool.execute(params);

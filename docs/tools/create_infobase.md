@@ -12,6 +12,9 @@ Create a new FILE infobase (1C database) OR register an existing one, and bind i
 | platform | — | string | 1C platform version mask to use for creation (e.g. '8.3.25'). If omitted, EDT resolves the best available installed version automatically. |
 | setDefault | — | boolean | Set the new infobase as the default application for the project after creation (default false). |
 | applicationKind | — | string (one of: infobase, standaloneServer) | 'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by EDT and reported back as 'port'/'webUrl' in the result. |
+| user | — | string | Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials. |
+| password | — | string | Password for 'user'. Optional; default empty (demo bases use an empty password). |
+| access | — | string (one of: INFOBASE, OS) | Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Only applied when 'user' (or 'password') is provided. |
 
 ## Guide
 Creates a new FILE infobase (1C:Enterprise database) OR registers an existing one, and binds it to a configuration project so it appears in `get_applications` as an application of type `com.e1c.g5.dt.applications.type.infobase`. This mirrors the two choices of the EDT "new infobase" dialog: make a new database, or use a database that already exists on disk.
@@ -64,6 +67,7 @@ The standalone-server path **always creates** a new infobase (`mode='register'` 
 - **infobaseName** (optional): display name for the infobase in the EDT Infobases view. If omitted, a name is auto-generated.
 - **platform** (optional, `create` only): 1C platform version mask (e.g. `8.3.25`). If omitted, EDT resolves the best available installed version automatically.
 - **setDefault** (boolean, default false): set the infobase as the default application for the project afterwards.
+- **user** / **password** / **access** (optional, #194): store **infobase connection credentials** so a later `update_database` / `debug_launch` can authenticate the update agent against a base with a user list. `access` is `INFOBASE` (default, 1C user auth) or `OS`. Most useful with `mode='register'` (the existing base already has users); for a `mode='create'` base there are no users yet, so the credentials authenticate only once a matching user is added. Use `set_infobase_credentials` to change them later.
 - **applicationKind** (optional, `infobase` | `standaloneServer`, default `infobase`): see "Application kind" above. The standalone-server path takes no port/publication input — EDT auto-allocates the web port and reports it back as `port`/`webUrl`.
 
 ## Result

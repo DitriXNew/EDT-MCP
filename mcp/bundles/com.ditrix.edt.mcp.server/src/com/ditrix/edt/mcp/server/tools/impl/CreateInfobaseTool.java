@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -104,6 +105,12 @@ public class CreateInfobaseTool implements IMcpTool
 
     /** Input/output key: display name of the infobase. */
     private static final String KEY_INFOBASE_NAME = "infobaseName"; //$NON-NLS-1$
+
+    /** Input key: infobase connection user to store as access credentials (#194). */
+    private static final String KEY_USER = "user"; //$NON-NLS-1$
+
+    /** Input key: authentication kind (INFOBASE / OS) for the stored credentials (#194). */
+    private static final String KEY_ACCESS = "access"; //$NON-NLS-1$
 
     /**
      * Port HINT passed to {@code createServerWithInfobase} for a standalone server. For a FILE-backed
@@ -191,6 +198,16 @@ public class CreateInfobaseTool implements IMcpTool
                 + "standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by " //$NON-NLS-1$
                 + "EDT and reported back as 'port'/'webUrl' in the result.", //$NON-NLS-1$
                 KIND_INFOBASE, KIND_STANDALONE_SERVER)
+            .stringProperty(KEY_USER,
+                "Infobase connection user to store so update_database / debug_launch can authenticate " //$NON-NLS-1$
+                + "the update agent (issue #194). Selects an EXISTING user; most useful with " //$NON-NLS-1$
+                + "mode='register' (the existing base already has users). Omit to store no credentials.") //$NON-NLS-1$
+            .stringProperty("password", //$NON-NLS-1$
+                "Password for 'user'. Optional; default empty (demo bases use an empty password).") //$NON-NLS-1$
+            .enumProperty(KEY_ACCESS,
+                "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) " //$NON-NLS-1$
+                + "or 'OS'. Only applied when 'user' (or 'password') is provided.", //$NON-NLS-1$
+                "INFOBASE", "OS") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -248,6 +265,9 @@ public class CreateInfobaseTool implements IMcpTool
         boolean setDefault = JsonUtils.extractBooleanArgument(params, "setDefault", false); //$NON-NLS-1$
         String modeStr = JsonUtils.extractStringArgument(params, "mode"); //$NON-NLS-1$
         String applicationKind = JsonUtils.extractStringArgument(params, KEY_APPLICATION_KIND);
+        String credUser = JsonUtils.extractStringArgument(params, KEY_USER);
+        String credPassword = JsonUtils.extractStringArgument(params, "password"); //$NON-NLS-1$
+        String credAccess = JsonUtils.extractStringArgument(params, KEY_ACCESS);
 
         // Validate applicationKind (default 'infobase'). When absent or 'infobase' the behaviour is
         // byte-identical to the original file-infobase tool.
@@ -316,11 +336,13 @@ public class CreateInfobaseTool implements IMcpTool
                 setDefault);
         }
 
-        return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register);
+        return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register,
+            credUser, credPassword, credAccess);
     }
 
     private String createInfobase(String projectName, Path infobaseDir,
-            String infobaseName, String platform, boolean setDefault, boolean register)
+            String infobaseName, String platform, boolean setDefault, boolean register,
+            String credUser, String credPassword, String credAccess)
     {
         // --- 1-2. Resolve project + services ---
         CreateContext context = resolveCreateContext(projectName);
@@ -368,9 +390,57 @@ public class CreateInfobaseTool implements IMcpTool
         // --- 8. Optionally set as default ---
         String setDefaultNote = setDefault ? applySetDefault(appManager, project, ibRef) : null;
 
+        // --- 8.5 Optionally store infobase connection credentials (#194) ---
+        String credNote = storeCredentialsIfRequested(ibRef, credUser, credPassword, credAccess, register);
+
         // --- 9. Read back and return ---
         ResultContext rc = new ResultContext(projectName, infobaseDir, infobaseName, appManager, project);
-        return buildSuccessResult(rc, ibRef, setDefaultNote, register);
+        String note = (setDefaultNote != null ? setDefaultNote : "") //$NON-NLS-1$
+            + (credNote != null ? credNote : ""); //$NON-NLS-1$
+        return buildSuccessResult(rc, ibRef, note.isEmpty() ? null : note, register);
+    }
+
+    /**
+     * Stores infobase connection credentials on the freshly-built {@code ibRef} when the caller
+     * supplied any of {@code user}/{@code password}/{@code access} (#194), returning a note to append
+     * to the result message — a success note, a non-fatal WARNING when the store failed, or
+     * {@code null} when no credentials were requested. Credential storage never fails the
+     * infobase creation itself (the base is already created and bound).
+     *
+     * @param ibRef the new infobase reference (the access-settings key)
+     * @param user the requested connection user (may be {@code null}/empty)
+     * @param password the requested password (may be {@code null}/empty)
+     * @param access the requested access kind (may be {@code null})
+     * @param register {@code true} for mode='register' (an existing base that already has users),
+     *            {@code false} for mode='create' (a brand-new empty base with no users yet)
+     * @return a message note, or {@code null} when no credentials were requested
+     */
+    private static String storeCredentialsIfRequested(InfobaseReference ibRef, String user,
+            String password, String access, boolean register)
+    {
+        boolean requested = (user != null && !user.isEmpty())
+            || (password != null && !password.isEmpty())
+            || (access != null && !access.isEmpty());
+        if (!requested)
+        {
+            return null;
+        }
+        String error = InfobaseAccessSupport.storeCredentials(ibRef, user, password,
+            InfobaseAccessSupport.parseAccess(access));
+        if (error != null)
+        {
+            return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
+        }
+        // mode='create' makes a brand-new EMPTY infobase with NO users, so credentials for a named
+        // user authenticate only once a MATCHING user is added (via the configurator / БСЛ
+        // ПользователиИнформационнойБазы). Surface that so the caller is not surprised when a later
+        // update prompts for credentials (which the MCP server now auto-cancels).
+        String userNote = register
+            ? "" //$NON-NLS-1$
+            : " NOTE: a newly created infobase has no users yet — these credentials authenticate " //$NON-NLS-1$
+                + "only after a matching infobase user is added."; //$NON-NLS-1$
+        return " Stored connection credentials for user '" + (user == null ? "" : user) //$NON-NLS-1$ //$NON-NLS-2$
+            + "' (change them later with set_infobase_credentials)." + userNote; //$NON-NLS-1$
     }
 
     /**
