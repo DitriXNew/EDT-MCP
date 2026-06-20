@@ -117,6 +117,35 @@ public final class BmTransactions
     }
 
     /**
+     * Runs {@code operation} inside a <b>write-capable but auto-rolled-back</b> BM transaction
+     * ({@link IBmModel#executeAndRollback}): every model modification the operation makes is
+     * <b>discarded</b> when it returns. Use this for a render/computation that must MUTATE the model
+     * transiently but must NOT persist anything - e.g. rasterizing a spreadsheet template, where the
+     * platform's print pipeline lazily initializes derived features (headers/footers, print settings)
+     * as a side effect of painting. This is the same sandbox EDT's form render uses
+     * ({@code HippoLayoutService} inside {@code executeAndRollback}); it renders the real model without
+     * dirtying it. The operation must not have non-model side effects it expects to keep beyond what it
+     * returns (the returned value - e.g. an SWT image - survives; model edits do not).
+     *
+     * @param model the BM model (must be non-null; resolved by the caller)
+     * @param taskName a short task name for diagnostics
+     * @param operation the transient work whose model edits are rolled back
+     * @param <T> the result type
+     * @return the operation result
+     */
+    public static <T> T executeAndRollback(IBmModel model, String taskName, BmOperation<T> operation)
+    {
+        return model.executeAndRollback(new AbstractBmTask<T>(taskName)
+        {
+            @Override
+            public T execute(IBmTransaction tx, IProgressMonitor monitor)
+            {
+                return operation.execute(tx, monitor);
+            }
+        });
+    }
+
+    /**
      * Forces the BM model's pending serialization of a top object to its {@code .mdo}
      * file on disk, AFTER the {@link #write} transaction that mutated it has committed.
      * <p>

@@ -46,6 +46,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetServerStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetSubsystemContentTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetSymbolInfoTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTagsTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetTemplateScreenshotTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetToolGuideTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetTranslationProjectInfoTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetVariablesTool;
@@ -175,6 +176,7 @@ public final class BuiltInToolRegistrar
         registry.register(new GetSymbolInfoTool());
         registry.register(new GetFormLayoutSnapshotTool());
         registry.register(new GetFormScreenshotTool());
+        registry.register(new GetTemplateScreenshotTool());
         registry.register(new ValidateQueryTool());
 
         // Metadata refactoring tools (form members are created/edited/removed by their FQNs via

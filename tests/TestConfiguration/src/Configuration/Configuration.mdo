@@ -46,6 +46,7 @@
   <commonModules>CommonModule.OK</commonModules>
   <commonModules>CommonModule.Вычисление</commonModules>
   <commonAttributes>CommonAttribute.CommonAttribute</commonAttributes>
+  <commonTemplates>CommonTemplate.PrintForm</commonTemplates>
   <commonForms>CommonForm.Form</commonForms>
   <catalogs>Catalog.Catalog</catalogs>
 </mdclass:Configuration>

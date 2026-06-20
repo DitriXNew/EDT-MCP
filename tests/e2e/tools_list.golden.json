@@ -2261,6 +2261,33 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Capture a PNG screenshot of a 1C template (a SpreadsheetDocument print form) as EDT renders it, so its layout and text are visible to an AI. Pass a common-template FQN 'CommonTemplate.<Name>'. Renders off-screen (no JVM flag needed). Full parameters and examples: call get_tool_guide('get_template_screenshot').",
+    "inputSchema": {
+      "properties": {
+        "projectName": {
+          "description": "EDT project name.",
+          "type": "string"
+        },
+        "templatePath": {
+          "description": "Common-template FQN 'CommonTemplate.<Name>', e.g. 'CommonTemplate.PrintForm'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "templatePath"
+      ],
+      "type": "object"
+    },
+    "name": "get_template_screenshot",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Get the full on-demand how-to for a tool: its description, every parameter (type, required, allowed values) and extended examples/preconditions kept OUT of the always-loaded tool list to save context. Pass the exact tool name from tools/list. Also available as the resource guide://<toolName>.",
     "inputSchema": {
       "properties": {
