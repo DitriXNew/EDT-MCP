@@ -152,6 +152,38 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testCreateTableAdditionsRussianAutoNames()
+    {
+        // In a Russian script variant the three table additions must get LOCALIZED name suffixes, just
+        // like the command bar (КоманднаяПанель) and LineNumber (НомерСтроки). Verified against EDT's
+        // ru report_variant.form template: СтрокаПоиска / СостояниеПросмотра / УправлениеПоиском. An
+        // English suffix here (e.g. "TSearchString") would break byte-identity with the designer.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createTable(form, "T", null, "Object.Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            java.util.Collections.emptyList(), null, null, true, new String[1]));
+        EObject table = FormElementWriter.findFormItem(form, "T"); //$NON-NLS-1$
+        assertNotNull(table);
+        // СтрокаПоиска / СостояниеПросмотра / УправлениеПоиском, built independently from code points.
+        String searchString = fromCp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a, 0x0430, 0x041f, 0x043e,
+            0x0438, 0x0441, 0x043a, 0x0430);
+        String viewStatus = fromCp(0x0421, 0x043e, 0x0441, 0x0442, 0x043e, 0x044f, 0x043d, 0x0438, 0x0435,
+            0x041f, 0x0440, 0x043e, 0x0441, 0x043c, 0x043e, 0x0442, 0x0440, 0x0430);
+        String searchControl = fromCp(0x0423, 0x043f, 0x0440, 0x0430, 0x0432, 0x043b, 0x0435, 0x043d,
+            0x0438, 0x0435, 0x041f, 0x043e, 0x0438, 0x0441, 0x043a, 0x043e, 0x043c);
+        assertAdditionName(table, "searchStringAddition", "T" + searchString); //$NON-NLS-1$ //$NON-NLS-2$
+        assertAdditionName(table, "viewStatusAddition", "T" + viewStatus); //$NON-NLS-1$ //$NON-NLS-2$
+        assertAdditionName(table, "searchControlAddition", "T" + searchControl); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void assertAdditionName(EObject table, String additionFeature, String expectedName)
+    {
+        EObject addition = (EObject)table.eGet(feature(table, additionFeature));
+        assertNotNull(additionFeature + " was not created", addition); //$NON-NLS-1$
+        assertEquals(additionFeature + " must use the localized suffix", //$NON-NLS-1$
+            expectedName, addition.eGet(feature(addition, "name"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testCreateTableRequiresDataPath()
     {
         EObject form = newForm();

@@ -401,6 +401,22 @@ public final class FormElementWriter
     private static final String RU_SUFFIX_COMMAND_BAR = cp(0x041a, 0x043e, 0x043c, 0x0430, 0x043d,
         0x0434, 0x043d, 0x0430, 0x044f, 0x041f, 0x0430, 0x043d, 0x0435, 0x043b, 0x044c);
     private static final String SUFFIX_COMMAND_BAR = "CommandBar"; //$NON-NLS-1$
+    // The three table additions: like the command bar and LineNumber, their auto-name suffix is
+    // localized per script variant by the designer (verified against EDT's ru report_variant.form
+    // template: СтрокаПоиска / СостояниеПросмотра / УправлениеПоиском).
+    private static final String SUFFIX_SEARCH_STRING = "SearchString"; //$NON-NLS-1$
+    private static final String SUFFIX_VIEW_STATUS = "ViewStatus"; //$NON-NLS-1$
+    private static final String SUFFIX_SEARCH_CONTROL = "SearchControl"; //$NON-NLS-1$
+    /** ru "СтрокаПоиска" - the script-variant suffix for a table's search-string addition name. */
+    private static final String RU_SUFFIX_SEARCH_STRING = cp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a,
+        0x0430, 0x041f, 0x043e, 0x0438, 0x0441, 0x043a, 0x0430);
+    /** ru "СостояниеПросмотра" - the script-variant suffix for a table's view-status addition name. */
+    private static final String RU_SUFFIX_VIEW_STATUS = cp(0x0421, 0x043e, 0x0441, 0x0442, 0x043e,
+        0x044f, 0x043d, 0x0438, 0x0435, 0x041f, 0x0440, 0x043e, 0x0441, 0x043c, 0x043e, 0x0442, 0x0440,
+        0x0430);
+    /** ru "УправлениеПоиском" - the script-variant suffix for a table's search-control addition name. */
+    private static final String RU_SUFFIX_SEARCH_CONTROL = cp(0x0423, 0x043f, 0x0440, 0x0430, 0x0432,
+        0x043b, 0x0435, 0x043d, 0x0438, 0x0435, 0x041f, 0x043e, 0x0438, 0x0441, 0x043a, 0x043e, 0x043c);
     /** The standard tabular-section row-number attribute name, English / Russian script variant. */
     private static final String EN_LINE_NUMBER = "LineNumber"; //$NON-NLS-1$
     private static final String RU_LINE_NUMBER = cp(0x041d, 0x043e, 0x043c, 0x0435, 0x0440, 0x0421,
@@ -1737,11 +1753,14 @@ public final class FormElementWriter
         addAutoChildren(formModel, table, true, russianAutoNames);
         // The three table "additions" the designer adds: a search string, a view status and a search
         // control (each with its own auto-children + extInfo, sourced from the table).
-        addTableAddition(formModel, table, FEATURE_SEARCH_STRING_ADDITION, "SearchString", null, //$NON-NLS-1$
+        addTableAddition(formModel, table, FEATURE_SEARCH_STRING_ADDITION,
+            russianAutoNames ? RU_SUFFIX_SEARCH_STRING : SUFFIX_SEARCH_STRING, null,
             "SearchStringAdditionExtInfo", russianAutoNames); //$NON-NLS-1$
-        addTableAddition(formModel, table, FEATURE_VIEW_STATUS_ADDITION, "ViewStatus", //$NON-NLS-1$
+        addTableAddition(formModel, table, FEATURE_VIEW_STATUS_ADDITION,
+            russianAutoNames ? RU_SUFFIX_VIEW_STATUS : SUFFIX_VIEW_STATUS,
             "ViewStatusAddition", "ViewStatusAdditionExtInfo", russianAutoNames); //$NON-NLS-1$ //$NON-NLS-2$
-        addTableAddition(formModel, table, FEATURE_SEARCH_CONTROL_ADDITION, "SearchControl", //$NON-NLS-1$
+        addTableAddition(formModel, table, FEATURE_SEARCH_CONTROL_ADDITION,
+            russianAutoNames ? RU_SUFFIX_SEARCH_CONTROL : SUFFIX_SEARCH_CONTROL,
             "SearchControlAddition", "SearchControlAdditionExtInfo", russianAutoNames); //$NON-NLS-1$ //$NON-NLS-2$
         // Auto-columns: the standard LineNumber column, then one column per TS attribute (all input
         // fields, like the designer's table output).
