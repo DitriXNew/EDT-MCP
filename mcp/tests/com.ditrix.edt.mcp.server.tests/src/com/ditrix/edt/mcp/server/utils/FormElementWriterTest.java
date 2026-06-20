@@ -13,7 +13,6 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
-import static org.junit.Assume.assumeTrue;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -137,17 +136,18 @@ public class FormElementWriterTest
             java.util.Arrays.asList("Product", "Quantity"), null, null, false, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
         EObject table = FormElementWriter.findFormItem(form, "Goods"); //$NON-NLS-1$
         assertNotNull(table);
-        // The table additions are only modeled when the full EDT form metamodel is registered; in the
-        // headless in-memory EMF model the Table EClass may not expose them, so skip there.
-        assumeTrue("Table additions not modeled in this form metamodel", //$NON-NLS-1$
-            feature(table, "searchStringAddition") != null); //$NON-NLS-1$
         for (String additionFeature : new String[] {"searchStringAddition", "viewStatusAddition", //$NON-NLS-1$ //$NON-NLS-2$
             "searchControlAddition"}) //$NON-NLS-1$
         {
             EObject addition = (EObject)table.eGet(feature(table, additionFeature));
             assertNotNull(additionFeature + " was not created", addition); //$NON-NLS-1$
+            // The fix: additions must be created enabled, else the open editor renders them grey.
             assertEquals(additionFeature + " must be enabled", //$NON-NLS-1$
                 Boolean.TRUE, addition.eGet(feature(addition, "enabled"))); //$NON-NLS-1$
+            // ...but ONLY enabled - the designer keeps additions at visible=false; setting it (e.g. via
+            // applyVisibleDefaults) would diverge from a designer-built table.
+            assertEquals(additionFeature + " must stay visible=false", //$NON-NLS-1$
+                Boolean.FALSE, addition.eGet(feature(addition, "visible"))); //$NON-NLS-1$
         }
     }
 
@@ -1870,12 +1870,29 @@ public class FormElementWriterTest
             autoCommandBar.getESuperTypes().add(formItem);
             autoCommandBar.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
 
+            // The table additions (search string / view status / search control) are one concrete
+            // Addition EClass (a Visible FormItem: name/id/enabled/visible), differentiated at runtime by
+            // 'type'. Modeling it here lets the grey-fix invariant (additions must be created enabled) be
+            // asserted headlessly instead of skipped.
+            EClass addition = f.createEClass();
+            addition.setName("Addition"); //$NON-NLS-1$
+            addition.getESuperTypes().add(formItem);
+            addBoolean(f, addition, "enabled"); //$NON-NLS-1$
+            addBoolean(f, addition, "visible"); //$NON-NLS-1$
+
             table = f.createEClass();
             table.setName("Table"); //$NON-NLS-1$
             table.getESuperTypes().add(formItem);
             table.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                containment(f, "searchStringAddition", addition, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                containment(f, "viewStatusAddition", addition, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                containment(f, "searchControlAddition", addition, false)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(addition);
 
             form = f.createEClass();
             form.setName("Form"); //$NON-NLS-1$
