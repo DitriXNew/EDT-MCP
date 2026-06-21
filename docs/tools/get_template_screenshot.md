@@ -17,7 +17,7 @@ Captures a **PNG screenshot** of a 1C **template** (макет) - a `Spreadsheet
 - For the declarative content as DATA, read the `Template.mxlx` model instead; this tool is only the rendered bitmap.
 
 ## How it renders (no JVM flag needed)
-A `SpreadsheetDocument` is the "moxel" model in EDT. This tool resolves the template object by FQN, opens it in the EDT template editor via the same path the navigator's "Open" uses (so common and object-owned templates open identically), reaches the embedded spreadsheet editor and rasterizes the document **off-screen** via EDT's own print/preview pipeline (`PrintHelper.makeImageToDisplay`), painting into an in-memory image on the UI thread. Unlike `get_form_screenshot` there is **no `-DnativeFormBufferedLayoutRender` dependency** - the render is a straight synchronous call, so a blank result is not expected from a missing flag.
+A `SpreadsheetDocument` is the "moxel" model in EDT. This tool resolves the template object by FQN, opens it in the EDT template editor via the same path the navigator's "Open" uses (so common and object-owned templates open identically), then paints the **whole used cell range as one continuous image** - the way the editor canvas shows it - into an off-screen image on the UI thread (`MoxelControl.paintViewPort`). It is **not** split into print pages, so a wide template's right-hand columns stay beside the header instead of spilling onto a separate page. Unlike `get_form_screenshot` there is **no `-DnativeFormBufferedLayoutRender` dependency** - the render is a straight synchronous call, so a blank result is not expected from a missing flag.
 
 ## Parameter details
 - `projectName` (required) - EDT project name. Omitting it returns "projectName is required".
@@ -35,8 +35,7 @@ Either a **common template** or an **object-owned template**. Type / kind tokens
 
 ## Result
 - SUCCESS - a PNG image (the rendered template) on the IMAGE resource channel. The saved file is named after the last FQN segment (e.g. `Printout.png`).
-- A multi-page template is stitched vertically into one PNG (one print page below the previous).
-- The image is a print page at 1:1 scale, so a small template renders top-left on a mostly-white page - the content is still fully legible.
+- The image is the whole template sized to its used cell range (the continuous editor canvas), so the layout matches what you see in the EDT editor.
 
 ## Notes & gotchas
 - Only `SpreadsheetDocument` templates render to an image. A non-spreadsheet template (BinaryData, DataCompositionSchema, etc.) returns a clear "is not a SpreadsheetDocument template" / "no spreadsheet editor page" error rather than a garbage image.

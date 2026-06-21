@@ -14,7 +14,6 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
-import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorPart;
@@ -22,19 +21,17 @@ import org.eclipse.ui.IWorkbenchPage;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.md.ui.presentation.IPresentationService;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
+import com._1c.g5.v8.dt.moxel.SpreadsheetRect;
 import com._1c.g5.v8.dt.moxel.sheet.SheetAccessor;
+import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
 import com._1c.g5.v8.dt.moxel.sheet.UnitsConverter;
 import com._1c.g5.v8.dt.moxel.ui.editor.MoxelControl;
 import com._1c.g5.v8.dt.moxel.ui.editor.MoxelEditor;
-import com._1c.g5.v8.dt.moxel.ui.editor.MoxelOutputDeviceInfo;
-import com._1c.g5.v8.dt.moxel.ui.editor.MoxelRepaginator;
 import com._1c.g5.v8.dt.moxel.ui.editor.PositionHolder;
-import com._1c.g5.v8.dt.moxel.ui.editor.PrintHelper;
-import com._1c.g5.v8.dt.moxel.ui.editor.dialogs.PrintInfoProvider;
+import com._1c.g5.v8.dt.moxel.ui.editor.ViewPort;
 import com._1c.g5.v8.dt.ui.util.OpenHelper;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -46,11 +43,11 @@ import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper.CaptureResult;
  * {@code SpreadsheetDocument} (табличный документ / print form) template - by opening its EDT
  * editor and rasterizing the spreadsheet off-screen.
  * <p>
- * In EDT a SpreadsheetDocument is the "moxel" model; it is rendered to an {@link Image} by the
- * print/preview pipeline ({@code PrintHelper.makeImageToDisplay}), which paints into a self-made
- * off-screen {@code new Image(Display.getCurrent(), w, h)} on the UI thread. Unlike the managed-form
- * render path there is no asynchronous render hop and no JVM flag dependency, so a straight
- * synchronous call on the UI thread produces the image.
+ * In EDT a SpreadsheetDocument is the "moxel" model; its WHOLE used cell range is painted as one
+ * continuous off-screen image - the editor-canvas look, not split into print pages - via
+ * {@code MoxelControl.paintViewPort} into a self-made {@code new Image(Display.getCurrent(), w, h)} on
+ * the UI thread. Unlike the managed-form render path there is no asynchronous render hop and no JVM
+ * flag dependency, so a straight synchronous call on the UI thread produces the image.
  * <p>
  * All methods here must run on the SWT UI thread (via {@code Display.syncExec}); the render needs a
  * non-null {@link Display#getCurrent()}.
@@ -62,8 +59,8 @@ public final class TemplateScreenshotHelper
     private static final String SET_ACTIVE_PAGE_METHOD = "setActivePage"; //$NON-NLS-1$
     private static final String GET_EMBEDDED_EDITOR_METHOD = "getEmbeddedEditor"; //$NON-NLS-1$
 
-    /** Print/preview render scale, in percent (100 = 1:1), matching the editor's {@code INITIAL_SCALE}. */
-    private static final int RENDER_SCALE = 100;
+    /** Upper bound on the rendered image area (pixels) - guards against an SWT image too large to allocate. */
+    private static final long MAX_IMAGE_PIXELS = 120_000_000L;
     private static final int MODEL_RESOLVE_RETRIES = 20;
     private static final int MODEL_RESOLVE_INTERVAL_MS = 250;
     private static final int CONTROL_WAIT_RETRIES = 40;
@@ -134,7 +131,7 @@ public final class TemplateScreenshotHelper
             // The empty-content extent check and the render are the only reads of the BM-managed
             // SpreadsheetDocument's features; both run inside the executeAndRollback boundary opened by
             // renderTemplate, so no model feature is touched outside a transaction (hard-don't #1).
-            RenderOutcome outcome = renderTemplate(control, document, bmModel);
+            RenderOutcome outcome = renderTemplate(control, bmModel);
             if (outcome.emptyContent)
             {
                 return CaptureResult.error(ToolResult.error(
@@ -439,178 +436,107 @@ public final class TemplateScreenshotHelper
 
     /**
      * Renders the SpreadsheetDocument to {@link ImageData} inside a BM <b>auto-rolled-back</b>
-     * transaction. The document is BM-managed and the platform's print pipeline lazily initializes
-     * derived features (print settings, page headers/footers) while painting - those are model writes,
-     * so a plain read boundary rejects them ("Modifications are not allowed in read-only transactions")
-     * and the model must not be persistently dirtied either. {@link BmTransactions#executeAndRollback}
-     * runs the render in a write-capable transaction and discards every change afterwards - the same
-     * sandbox EDT's form render uses. The returned image survives the rollback; the model edits do not.
-     * Must run on the UI thread.
-     *
-     * The empty-content extent check is done here too, inside the same boundary, so the only reads of
-     * the document's model features (its row extent and everything the paint touches) stay inside one
-     * transaction.
+     * transaction. The document is BM-managed and painting it lazily initializes derived features
+     * while reading the model - those are model writes, so a plain read boundary rejects them and the
+     * model must not be persistently dirtied either. {@link BmTransactions#executeAndRollback} runs the
+     * render in a write-capable transaction and discards every change afterwards - the same sandbox
+     * EDT's form render uses. The returned image survives the rollback; the model edits do not. The
+     * empty-content extent check runs inside the same boundary, so every model-feature read stays in
+     * one transaction. Must run on the UI thread.
      *
      * @param control the realized moxel control
-     * @param document the spreadsheet document model
      * @param bmModel the BM model owning the document, for the rollback transaction
      * @return a {@link RenderOutcome}: the rendered image, or the empty-content marker
      */
-    private static RenderOutcome renderTemplate(MoxelControl control, SpreadsheetDocument document,
-        IBmModel bmModel)
+    private static RenderOutcome renderTemplate(MoxelControl control, IBmModel bmModel)
     {
         return BmTransactions.executeAndRollback(bmModel, "renderTemplateScreenshot", //$NON-NLS-1$
             (tx, monitor) -> {
                 SheetAccessor sheet = control.getSheet();
-                if (sheet == null || sheet.getVerticalSize() <= 0)
+                if (sheet == null || sheet.getVerticalSize() <= 0 || sheet.getHorizontalSize() <= 0)
                 {
                     return RenderOutcome.empty();
                 }
-                return RenderOutcome.image(renderSpreadsheet(control, document));
+                return RenderOutcome.image(renderSpreadsheet(control));
             });
     }
 
     /**
-     * Renders the SpreadsheetDocument to {@link ImageData}, replicating EDT's own print/preview
-     * wiring (the {@code PrintHandlerBase} recipe): build a fresh {@code PositionHolder}/
-     * {@code MoxelRepaginator} at display DPI, then {@code PrintHelper.makeImageToDisplay(page, 100)}
-     * per print page. {@code makeImageToDisplay} renders into an off-screen
-     * {@code new Image(Display.getCurrent(), w, h)} - no on-screen visibility is required. Multi-page
-     * templates are stitched vertically. Must run on the UI thread inside the read boundary opened by
-     * {@link #renderTemplate}.
+     * Renders the WHOLE used range of the SpreadsheetDocument to a single continuous {@link ImageData},
+     * the way the EDT editor canvas shows it - <b>not</b> split into print pages. It paints the full
+     * cell range into one off-screen {@link Image} via {@code MoxelControl.paintViewPort} (the same
+     * primitive the editor and the print preview draw cells with), sized to the used range's pixel
+     * extent. This is why a wide template's right-hand columns stay beside the header instead of
+     * spilling onto a separate print page (the old print-pipeline render paginated by paper width and
+     * stacked the pages, which mis-laid-out wide forms). Row/column header strips and print-page chrome
+     * are not drawn (paintViewPort draws cell content only). Must run on the UI thread inside the
+     * boundary opened by {@link #renderTemplate}.
      *
-     * @param control the realized moxel control (source of sheet + display metrics + presentation
-     *            service)
-     * @param document the spreadsheet document model
+     * @param control the realized moxel control (source of sheet + display metrics)
      * @return the rendered image data, or {@code null} if nothing could be produced
      */
-    private static ImageData renderSpreadsheet(MoxelControl control, SpreadsheetDocument document)
+    private static ImageData renderSpreadsheet(MoxelControl control)
     {
         Display display = control.getDisplay();
         SheetAccessor sheet = control.getSheet();
+        PositionHolder positionHolder = control.getDisplayPositionHolder();
+        UnitsConverter unitsConverter = positionHolder.getUnitsConverter();
 
-        // PrintInfoProvider is a process-wide singleton; seed it with this document's print settings
-        // (it derives scale/orientation/paper/pagesPerSheet internally). This and the later paint
-        // transiently mutate the document (e.g. fill missing print settings / lazy-init headers); those
-        // writes are allowed and discarded by the surrounding executeAndRollback sandbox. Mutating the
-        // shared singleton is safe here: the render is synchronous on the UI thread and unattended (the
-        // only perturbable peer would be a human driving the moxel Print dialog in the same instance).
-        PrintInfoProvider printInfo = PrintInfoProvider.getInstance();
-        printInfo.setPrintSettings(document.getPrintSettings());
-
-        // Build a fresh PositionHolder + repaginator at the display DPI (the editor's display holder
-        // supplies the character cell size), exactly as the print handler does.
-        Point charSize = control.getDisplayPositionHolder().getUnitsConverter().getCharSize();
-        UnitsConverter unitsConverter =
-            new UnitsConverter(display.getDPI(), new Point(charSize.x, charSize.y));
-        MoxelOutputDeviceInfo deviceInfo = new MoxelOutputDeviceInfo(unitsConverter, control);
-        PositionHolder positionHolder = new PositionHolder(sheet, deviceInfo);
-        MoxelRepaginator repaginator = new MoxelRepaginator(sheet, positionHolder);
-
-        int pagesPerSheet = printInfo.getPagesPerSheet();
-        if (pagesPerSheet == 0)
-        {
-            // Auto mode: probe whether the content needs two pages per sheet (matches the editor).
-            pagesPerSheet = 1;
-            repaginator.setPagesPerSheet(1);
-            repaginator.repaginateInternal(false);
-            if (repaginator.getBreaksRow().size() > 1)
-            {
-                pagesPerSheet = 2;
-            }
-        }
-        repaginator.setPagesPerSheet(pagesPerSheet);
-        repaginator.repaginateInternal(false);
-        int pageCount = repaginator.getPagesCount();
-        if (pageCount < 1)
-        {
-            pageCount = 1;
-        }
-
-        IPresentationService presentation = control.getPresentationService();
-        PrintHelper printHelper = new PrintHelper(printInfo, document, repaginator, presentation);
-
-        List<Image> pages = new ArrayList<>();
-        try
-        {
-            for (int pageNumber = 1; pageNumber <= pageCount; pageNumber++)
-            {
-                // makeImageToDisplay's page argument is 1-based: page 1 is the first page.
-                Image pageImage = printHelper.makeImageToDisplay(pageNumber, RENDER_SCALE);
-                if (pageImage != null)
-                {
-                    pages.add(pageImage);
-                }
-            }
-            return combinePagesVertically(pages, display);
-        }
-        finally
-        {
-            for (Image pageImage : pages)
-            {
-                if (!pageImage.isDisposed())
-                {
-                    pageImage.dispose();
-                }
-            }
-        }
-    }
-
-    /**
-     * Combines page images into a single {@link ImageData} stacked vertically (one print page below
-     * the previous), on a white background. A single page is returned as-is. Runs on the UI thread.
-     */
-    private static ImageData combinePagesVertically(List<Image> pages, Display display)
-    {
-        if (pages.isEmpty())
+        int columnCount = sheet.getHorizontalSize(); // used column count (last col index + 1)
+        int rowCount = sheet.getVerticalSize();       // used row count (last row index + 1)
+        if (columnCount <= 0 || rowCount <= 0)
         {
             return null;
         }
-        if (pages.size() == 1)
+
+        // Pixel extent of the whole used range. The extent rect ends ONE PAST the last used cell, so
+        // getPositionForRectUnit returns {0,0,totalWidthUnits,totalHeightUnits} (the cumulative left/top
+        // edge of the column/row just past the last used one); convert units to device pixels.
+        SpreadsheetRect extent = SheetFactory.createSpreadsheetRect();
+        extent.getBegin().getCell().setX(0);
+        extent.getBegin().getCell().setY(0);
+        extent.getEnd().getCell().setX(columnCount);
+        extent.getEnd().getCell().setY(rowCount);
+        Rectangle unitRect = positionHolder.getPositionForRectUnit(extent);
+        int widthPx = unitsConverter.XUnitToPixel(unitRect.width);
+        int heightPx = unitsConverter.YUnitToPixel(unitRect.height);
+        if (widthPx <= 0 || heightPx <= 0 || (long)widthPx * heightPx > MAX_IMAGE_PIXELS)
         {
-            return pages.get(0).getImageData();
+            // Nothing to draw, or pathologically large for a single SWT image (avoid a native failure).
+            return null;
         }
 
-        int width = 0;
-        int height = 0;
-        for (Image page : pages)
-        {
-            Rectangle bounds = page.getBounds();
-            width = Math.max(width, bounds.width);
-            height += bounds.height;
-        }
-        if (width <= 0 || height <= 0)
-        {
-            return pages.get(0).getImageData();
-        }
+        // ViewPort over the whole INCLUSIVE used range (begin (0,0) .. end (lastCol, lastRow)).
+        SpreadsheetRect range = SheetFactory.createSpreadsheetRect();
+        range.getBegin().getCell().setX(0);
+        range.getBegin().getCell().setY(0);
+        range.getEnd().getCell().setX(columnCount - 1);
+        range.getEnd().getCell().setY(rowCount - 1);
+        ViewPort viewPort = new ViewPort(sheet, positionHolder);
+        viewPort.setSheetPosition(range);
+        viewPort.setDevicePosition(new Rectangle(0, 0, widthPx, heightPx));
 
-        Image combined = new Image(display, width, height);
-        // Dispose `combined` on EVERY path: the GC ops or getImageData() below could throw (a native
-        // SWT raster failure on a very large stitched image), and the caller's finally only disposes
-        // the page images, not this one.
+        Image image = new Image(display, widthPx, heightPx);
         try
         {
-            GC gc = new GC(combined);
+            GC gc = new GC(image);
             try
             {
                 gc.setBackground(display.getSystemColor(SWT.COLOR_WHITE));
-                gc.fillRectangle(0, 0, width, height);
-                int y = 0;
-                for (Image page : pages)
-                {
-                    gc.drawImage(page, 0, y);
-                    y += page.getBounds().height;
-                }
+                gc.fillRectangle(0, 0, widthPx, heightPx);
+                // paintViewPort(viewPort, gc, clip, drawSelection=false): paint the whole sheet content
+                // into the off-screen image, using the editor's current view settings (grid, etc.).
+                control.paintViewPort(viewPort, gc, new Rectangle(0, 0, widthPx, heightPx), false);
             }
             finally
             {
                 gc.dispose();
             }
-            return combined.getImageData();
+            return image.getImageData();
         }
         finally
         {
-            combined.dispose();
+            image.dispose();
         }
     }
 

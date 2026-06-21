@@ -18,12 +18,13 @@ WIRE SHAPE (why this file reads r.raw, not r.text/r.structured)
                  the "error" string -> consumable by assert_error / assert_error_quality.
 
 RENDER (no JVM flag - unlike forms)
-  A SpreadsheetDocument renders off-screen on the UI thread inside an executeAndRollback
-  BM sandbox (the print pipeline lazily mutates the doc while painting; the sandbox
-  discards those edits). There is NO -DnativeFormBufferedLayoutRender dependency, so a
-  healthy stand renders a real, non-empty PNG. The happy paths decode the blob and
-  assert a valid PNG whose IHDR width AND height are > 0; the only tolerated error is the
-  cold-editor sentinel (a headless/cold workbench where the editor never realizes).
+  The whole used cell range is painted as ONE continuous off-screen image (the editor
+  canvas, not print pages) via MoxelControl.paintViewPort, on the UI thread inside an
+  executeAndRollback BM sandbox (painting lazily touches the model; the sandbox discards
+  those edits). There is NO -DnativeFormBufferedLayoutRender dependency, so a healthy
+  stand renders a real, non-empty PNG. The happy paths decode the blob and assert a valid
+  PNG whose IHDR width AND height are > 0; the only tolerated error is the cold-editor
+  sentinel (a headless/cold workbench where the editor never realizes).
 
   Read-only w.r.t. model + disk (the render's transient model writes are rolled back),
   so every test ends with assert_no_diff().
@@ -40,8 +41,6 @@ FIXTURE TRUTH (TestConfiguration, English Names)
 KNOWN UNTESTED BRANCHES (live-only; no fixture exercises them)
   - Non-SpreadsheetDocument template rejection ("is not a SpreadsheetDocument template"):
     needs a template of a different TemplateType.
-  - Multi-page vertical stitching (combinePagesVertically): both fixtures are one small
-    page. The single-page path IS covered by both happy paths.
 """
 
 import base64
