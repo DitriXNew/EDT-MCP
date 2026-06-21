@@ -86,6 +86,8 @@ public final class FormElementWriter
     private static final String FEATURE_QUERY_TEXT = "queryText"; //$NON-NLS-1$
     private static final String FEATURE_CUSTOM_QUERY = "customQuery"; //$NON-NLS-1$
     private static final String FEATURE_AUTO_FILL_AVAILABLE_FIELDS = "autoFillAvailableFields"; //$NON-NLS-1$
+    /** The dynamic list's main table - a DbViewDef reference (resolved from an object FQN). */
+    private static final String FEATURE_MAIN_TABLE = "mainTable"; //$NON-NLS-1$
     private static final String FEATURE_VISIBLE = "visible"; //$NON-NLS-1$
     private static final String FEATURE_ENABLED = "enabled"; //$NON-NLS-1$
     private static final String FEATURE_USER_VISIBLE = "userVisible"; //$NON-NLS-1$
@@ -1194,18 +1196,17 @@ public final class FormElementWriter
      * @return the feature names actually set (for the success payload), in apply order
      */
     public static List<String> configureDynamicListQuery(EObject formModel, EObject attribute,
-        String queryText, Boolean customQuery, Version version)
+        String queryText, Boolean customQuery, String mainTableFqn, Configuration config, Version version)
     {
         List<String> applied = new ArrayList<>();
 
         EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
-        boolean alreadyDynamicList = extInfo != null
-            && ECLASS_DYNAMIC_LIST_EXT_INFO.equals(extInfo.eClass().getName());
-        if (!alreadyDynamicList && queryText == null)
+        boolean alreadyDynamicList = isDynamicListAttribute(attribute);
+        if (!alreadyDynamicList && queryText == null && mainTableFqn == null)
         {
-            // Converting a plain attribute to a dynamic list needs a query (we do not set a main table),
-            // so a bare 'customQuery' toggle on a not-yet-dynamic-list attribute would create an
-            // incomplete list. Require the query text up front. (Toggling 'customQuery' on an EXISTING
+            // Converting a plain attribute to a dynamic list needs a query or a main table, so a bare
+            // 'customQuery' toggle on a not-yet-dynamic-list attribute would create an incomplete list.
+            // Require the query text (or main table) up front. (Toggling 'customQuery' on an EXISTING
             // dynamic list keeps its stored query, so it is allowed.)
             throw new FormValidationException(ToolResult.error(
                 "To create a dynamic list, provide a 'queryText' (the custom query), e.g. " //$NON-NLS-1$
@@ -1256,7 +1257,65 @@ public final class FormElementWriter
                 setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
             }
         }
+        if (mainTableFqn != null)
+        {
+            EObject mainTable = resolveMainTableDbView(config, mainTableFqn);
+            if (mainTable == null)
+            {
+                throw new FormValidationException(ToolResult.error(
+                    "Cannot resolve the main table '" + mainTableFqn + "'. Pass the FQN of the object " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "the list reads from, e.g. 'Catalog.Products' or 'Document.Order'.").toJson()); //$NON-NLS-1$
+            }
+            EStructuralFeature mainTableFeature = extInfo.eClass().getEStructuralFeature(FEATURE_MAIN_TABLE);
+            if (mainTableFeature instanceof EReference)
+            {
+                extInfo.eSet(mainTableFeature, mainTable);
+                applied.add(FEATURE_MAIN_TABLE);
+            }
+        }
         return applied;
+    }
+
+    /** Whether a form attribute carries a {@code DynamicListExtInfo} (i.e. it is a dynamic list). */
+    private static boolean isDynamicListAttribute(EObject attribute)
+    {
+        EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
+        return extInfo != null && ECLASS_DYNAMIC_LIST_EXT_INFO.equals(extInfo.eClass().getName());
+    }
+
+    /**
+     * Resolves an object FQN (e.g. {@code "Document.Order"}) to the {@code DbViewDef} of its MAIN table -
+     * the value a dynamic list's {@code mainTable} reference holds. Reflective (no compile dependency on
+     * the dbview model): {@code MdObject.dbViewDefs} -> the typed {@code *DbViewDefs} container ->
+     * {@code mainView}. Returns {@code null} when the object, its db-view container, or the main view
+     * cannot be resolved (e.g. derived data not yet computed). Must run inside the BM transaction so the
+     * resolved DbViewDef is the project's canonical one.
+     */
+    private static EObject resolveMainTableDbView(Configuration config, String fqn)
+    {
+        if (config == null)
+        {
+            return null;
+        }
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, fqn);
+        if (node == null || node.object == null)
+        {
+            return null;
+        }
+        EObject md = node.object;
+        EStructuralFeature dbViewDefsFeature = md.eClass().getEStructuralFeature("dbViewDefs"); //$NON-NLS-1$
+        if (dbViewDefsFeature == null || !(md.eGet(dbViewDefsFeature) instanceof EObject))
+        {
+            return null;
+        }
+        EObject dbViewDefs = (EObject)md.eGet(dbViewDefsFeature);
+        EStructuralFeature mainViewFeature = dbViewDefs.eClass().getEStructuralFeature("mainView"); //$NON-NLS-1$
+        if (mainViewFeature == null)
+        {
+            return null;
+        }
+        Object mainView = dbViewDefs.eGet(mainViewFeature);
+        return mainView instanceof EObject ? (EObject)mainView : null;
     }
 
     /** Whether the form already has an attribute flagged as its main data source. */
@@ -1735,10 +1794,23 @@ public final class FormElementWriter
             return "A form field needs a 'dataPath' property naming the form attribute it shows " //$NON-NLS-1$
                 + "(e.g. {name:'dataPath', value:'Price'})."; //$NON-NLS-1$
         }
-        if (findByName(referenceList(formModel, FEATURE_ATTRIBUTES), attrName) == null)
+        // The field binds to a form attribute by name. A DOTTED path (e.g. "List.Number") binds to a
+        // dynamic-list COLUMN: the head segment is the dynamic-list attribute, the tail is one of its
+        // query fields (auto-filled by EDT - not a model attribute). Validate the head attribute, and
+        // require it to be a dynamic list when a dotted path is used.
+        int dot = attrName.indexOf('.');
+        String headAttr = dot > 0 ? attrName.substring(0, dot) : attrName;
+        EObject boundAttribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), headAttr);
+        if (boundAttribute == null)
         {
-            return "Form attribute '" + attrName + "' not found - create it first, then bind the field " //$NON-NLS-1$ //$NON-NLS-2$
+            return "Form attribute '" + headAttr + "' not found - create it first, then bind the field " //$NON-NLS-1$ //$NON-NLS-2$
                 + "to it (so the data path resolves)."; //$NON-NLS-1$
+        }
+        if (dot > 0 && !isDynamicListAttribute(boundAttribute))
+        {
+            return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is not a dynamic " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "list. A field binds to a form attribute by name (e.g. 'Price'); a dotted path is only " //$NON-NLS-1$
+                + "for a dynamic-list column (e.g. 'List.Number', where the list has a custom query)."; //$NON-NLS-1$
         }
         if (findItem(formModel, name) != null)
         {

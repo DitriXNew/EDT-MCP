@@ -110,6 +110,7 @@ public class ModifyMetadataToolTest
         assertNotNull(guide);
         assertTrue("guide should show the queryText property", guide.contains("queryText")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("guide should show the customQuery property", guide.contains("customQuery")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide should show the mainTable property", guide.contains("mainTable")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -131,6 +132,14 @@ public class ModifyMetadataToolTest
             ModifyMetadataTool.isQueryTextProp(ruQueryText));
         assertTrue("Russian customQuery name must be recognized", //$NON-NLS-1$
             ModifyMetadataTool.isCustomQueryProp(ruCustomQuery));
+
+        // mainTable - English + Russian OsnovnayaTablica (via codepoints, no raw Cyrillic).
+        assertTrue(ModifyMetadataTool.isMainTableProp("mainTable")); //$NON-NLS-1$
+        assertFalse(ModifyMetadataTool.isMainTableProp("queryText")); //$NON-NLS-1$
+        String ruMainTable = MetadataLanguageUtils.cp(0x041e, 0x0441, 0x043d, 0x043e, 0x0432, 0x043d,
+            0x0430, 0x044f, 0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430);
+        assertTrue("Russian mainTable name must be recognized", //$NON-NLS-1$
+            ModifyMetadataTool.isMainTableProp(ruMainTable));
     }
 
     @Test

@@ -101,8 +101,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "{value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font " //$NON-NLS-1$
             + "{value:{font:{faceName:'Arial',height:12,bold:true}}}. " //$NON-NLS-1$
             + "Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' " //$NON-NLS-1$
-            + "property (and 'customQuery' true/false): this turns the attribute into a DynamicList " //$NON-NLS-1$
-            + "and lets EDT auto-fill the available fields from the query (no manual XML). " //$NON-NLS-1$
+            + "property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this " //$NON-NLS-1$
+            + "turns the attribute into a DynamicList and lets EDT auto-fill the available fields from " //$NON-NLS-1$
+            + "the query (no manual XML; output a column with create_metadata Field dataPath " //$NON-NLS-1$
+            + "'List.<field>'). " //$NON-NLS-1$
             + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -579,6 +581,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static final String RU_PROP_CUSTOM_QUERY = MetadataLanguageUtils.cp(0x041f, 0x0440, 0x043e,
         0x0438, 0x0437, 0x0432, 0x043e, 0x043b, 0x044c, 0x043d, 0x044b, 0x0439, 0x0417, 0x0430, 0x043f,
         0x0440, 0x043e, 0x0441);
+    /** The dynamic-list main-table property: an object FQN whose main table the list reads from. */
+    private static final String PROP_MAIN_TABLE = "mainTable"; //$NON-NLS-1$
+    // ru OsnovnayaTablica (= mainTable) - pure-ASCII source (cp codepoints).
+    private static final String RU_PROP_MAIN_TABLE = MetadataLanguageUtils.cp(0x041e, 0x0441, 0x043d,
+        0x043e, 0x0432, 0x043d, 0x0430, 0x044f, 0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430);
 
     /** Whether a property NAME is the {@code queryText} dynamic-list property (English or Russian). */
     static boolean isQueryTextProp(String name)
@@ -590,6 +597,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static boolean isCustomQueryProp(String name)
     {
         return PROP_CUSTOM_QUERY.equalsIgnoreCase(name) || RU_PROP_CUSTOM_QUERY.equalsIgnoreCase(name);
+    }
+
+    /** Whether a property NAME is the {@code mainTable} dynamic-list property (English or Russian). */
+    static boolean isMainTableProp(String name)
+    {
+        return PROP_MAIN_TABLE.equalsIgnoreCase(name) || RU_PROP_MAIN_TABLE.equalsIgnoreCase(name);
     }
 
     /**
@@ -608,7 +621,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         for (JsonObject prop : properties)
         {
             String name = asString(prop.get("name")); //$NON-NLS-1$
-            if (isQueryTextProp(name) || isCustomQueryProp(name))
+            if (isQueryTextProp(name) || isCustomQueryProp(name) || isMainTableProp(name))
             {
                 return true;
             }
@@ -631,6 +644,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         String queryText = null;
         Boolean customQuery = null;
+        String mainTable = null;
         boolean queryTextGiven = false;
         for (JsonObject prop : properties)
         {
@@ -649,11 +663,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 customQuery = parsed;
             }
+            else if (isMainTableProp(name))
+            {
+                mainTable = asString(prop.get(KEY_VALUE));
+                if (mainTable == null || mainTable.trim().isEmpty())
+                {
+                    return ToolResult.error("'mainTable' must be an object FQN, e.g. " //$NON-NLS-1$
+                        + "'Catalog.Products' or 'Document.Order'.").toJson(); //$NON-NLS-1$
+                }
+            }
             else
             {
-                return ToolResult.error("Setting a dynamic-list query ('queryText' / 'customQuery') " //$NON-NLS-1$
-                    + "cannot be combined with other property changes ('" + name + "') in one call. " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Configure the query first, then make the other changes separately.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("Setting a dynamic-list query ('queryText' / 'customQuery' / " //$NON-NLS-1$
+                    + "'mainTable') cannot be combined with other property changes ('" + name //$NON-NLS-1$
+                    + "') in one call. Configure the query first, then make the other changes " //$NON-NLS-1$
+                    + "separately.").toJson(); //$NON-NLS-1$
             }
         }
         if (queryTextGiven && (queryText == null || queryText.trim().isEmpty()))
@@ -671,6 +695,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final List<String> applied = new ArrayList<>();
         final String qt = queryText;
         final Boolean cq = customQuery;
+        final String mt = mainTable;
         final boolean persisted;
         try
         {
@@ -688,8 +713,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             + ref.name + " on " + ref.formPath //$NON-NLS-1$
                             + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
                     }
-                    applied.addAll(
-                        FormElementWriter.configureDynamicListQuery(formModel, member, qt, cq, version));
+                    applied.addAll(FormElementWriter.configureDynamicListQuery(
+                        formModel, member, qt, cq, mt, ctx.config, version));
                 });
         }
         catch (Exception e)

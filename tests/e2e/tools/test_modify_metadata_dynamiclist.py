@@ -86,6 +86,51 @@ def test_set_custom_query_then_toggle_off():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Happy — set the main table, then output a column bound to a query field
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_main_table_and_output_column():
+    _seed_catalog_form_attribute()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": LIST_ATTR,
+        "properties": [
+            {"name": "queryText", "value": "SELECT Ref, Description AS Description FROM " + BASE},
+            {"name": "customQuery", "value": True},
+            {"name": "mainTable", "value": BASE},
+        ],
+    })
+    assert_ok(r, "set the custom query + main table")
+    applied = r.structured.get("applied") or []
+    assert "mainTable" in applied, "mainTable must be applied: %r" % (applied,)
+
+    # output a dynamic-list column: a Field with a dotted dataPath List.<query-field>.
+    col = call("create_metadata", {
+        "projectName": PROJECT, "fqn": LIST_FORM + ".Field.Description",
+        "properties": [{"name": "parent", "value": "List"},
+                       {"name": "dataPath", "value": "List.Description"}],
+    })
+    assert_ok(col, "output a dynamic-list column")
+    assert col.structured.get("action") == "created", \
+        "the column field must be created: %r" % (col.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_unresolvable_main_table_is_error():
+    _seed_catalog_form_attribute()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": LIST_ATTR,
+        "properties": [
+            {"name": "queryText", "value": "SELECT Ref FROM " + BASE},
+            {"name": "mainTable", "value": "Catalog.NoSuchObject_E2E"},
+        ],
+    })
+    e = assert_error(r, "unresolvable main table")
+    assert_error_quality(e, names=["Catalog.NoSuchObject_E2E"], suggests=["main table"],
+                         ctx="an unresolvable main table is a clean error")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Negative — the query targets an attribute that does not exist yet
 # ──────────────────────────────────────────────────────────────────────────────
 
