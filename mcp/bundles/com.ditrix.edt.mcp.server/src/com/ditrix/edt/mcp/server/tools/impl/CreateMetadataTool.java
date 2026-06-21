@@ -703,7 +703,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Unsupported form element kind '" + ref.kindToken + "' in '" //$NON-NLS-1$ //$NON-NLS-2$
                 + normFqn + "'. Supported form kinds: Attribute, Command, Group, Decoration, Field, " //$NON-NLS-1$
-                + "Button (and Handler for events).").toJson(); //$NON-NLS-1$
+                + "Button, Table (and Handler for events).").toJson(); //$NON-NLS-1$
         }
         if (!isValidIdentifier(ref.name))
         {
@@ -754,11 +754,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 return ToolResult.error(e.getMessage()).toJson();
             }
 
+            // A Table auto-generates one column per tabular-section attribute; the column names come
+            // from the metadata owner (the form model alone cannot enumerate them), resolved here.
+            final List<String> tableColumns = fKind == FormElementWriter.Kind.TABLE
+                ? resolveTabularSectionColumns(config, ref.formPath, bind) : null;
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormMember", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
-                    String err = FormElementWriter.createMember(formModel, fKind, ref.name, parent,
-                        bind, titleLanguage, titleText, russianAutoNames, createdKind);
+                    String err = fKind == FormElementWriter.Kind.TABLE
+                        ? FormElementWriter.createTable(formModel, ref.name, parent, bind, tableColumns,
+                            titleLanguage, titleText, russianAutoNames, createdKind)
+                        : FormElementWriter.createMember(formModel, fKind, ref.name, parent, bind,
+                            titleLanguage, titleText, russianAutoNames, createdKind);
                     if (err != null)
                     {
                         throw new IllegalStateException(err);
@@ -784,6 +791,66 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted);
         normReport.addTo(formResult);
         return formResult.put(McpKeys.MESSAGE, "Created " + normFqn).toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves the attribute names of the tabular section a table's {@code dataPath} addresses, so the
+     * table can auto-generate one column per attribute - the way the designer does on a TS drop. Reads
+     * the form owner (parsed from {@code formPath} = {@code Type.Object.forms.FormName}) and its tabular
+     * section named by the {@code dataPath} tail ({@code Object.<TS>}). Best-effort: returns an empty
+     * list when the owner / tabular section cannot be resolved (the table is still created, with just
+     * the standard LineNumber column).
+     */
+    private static List<String> resolveTabularSectionColumns(Configuration config, String formPath,
+        String dataPath)
+    {
+        List<String> columns = new java.util.ArrayList<>();
+        if (dataPath == null || dataPath.isEmpty() || formPath == null)
+        {
+            return columns;
+        }
+        String[] seg = formPath.split("\\."); //$NON-NLS-1$
+        if (seg.length < 2)
+        {
+            return columns;
+        }
+        MdObject owner = MetadataTypeUtils.findObject(config, seg[0], seg[1]);
+        if (!(owner instanceof EObject))
+        {
+            return columns;
+        }
+        int dot = dataPath.indexOf('.');
+        String tsName = dot >= 0 ? dataPath.substring(dot + 1) : dataPath;
+        EStructuralFeature tsFeat = ((EObject)owner).eClass().getEStructuralFeature("tabularSections"); //$NON-NLS-1$
+        if (tsFeat == null || !(((EObject)owner).eGet(tsFeat) instanceof List<?>))
+        {
+            return columns;
+        }
+        for (Object ts : (List<?>)((EObject)owner).eGet(tsFeat))
+        {
+            if (ts instanceof MdObject && tsName.equalsIgnoreCase(((MdObject)ts).getName()))
+            {
+                collectAttributeNames((EObject)ts, columns);
+                break;
+            }
+        }
+        return columns;
+    }
+
+    /** Appends the names of {@code ts}'s {@code attributes} to {@code out} (reflective, best-effort). */
+    private static void collectAttributeNames(EObject ts, List<String> out)
+    {
+        EStructuralFeature attrFeat = ts.eClass().getEStructuralFeature("attributes"); //$NON-NLS-1$
+        if (attrFeat != null && ts.eGet(attrFeat) instanceof List<?>)
+        {
+            for (Object attr : (List<?>)ts.eGet(attrFeat))
+            {
+                if (attr instanceof MdObject)
+                {
+                    out.add(((MdObject)attr).getName());
+                }
+            }
+        }
     }
 
     /**

@@ -83,6 +83,10 @@ public final class FormElementWriter
     private static final String FEATURE_ENABLED = "enabled"; //$NON-NLS-1$
     private static final String FEATURE_USER_VISIBLE = "userVisible"; //$NON-NLS-1$
     private static final String FEATURE_AUTO_COMMAND_BAR = "autoCommandBar"; //$NON-NLS-1$
+    private static final String FEATURE_SEARCH_STRING_ADDITION = "searchStringAddition"; //$NON-NLS-1$
+    private static final String FEATURE_VIEW_STATUS_ADDITION = "viewStatusAddition"; //$NON-NLS-1$
+    private static final String FEATURE_SEARCH_CONTROL_ADDITION = "searchControlAddition"; //$NON-NLS-1$
+    private static final String FEATURE_SOURCE = "source"; //$NON-NLS-1$
     private static final String FEATURE_ACTION = "action"; //$NON-NLS-1$
     private static final String FEATURE_HANDLER = "handler"; //$NON-NLS-1$
     private static final String FEATURE_USE = "use"; //$NON-NLS-1$
@@ -168,7 +172,7 @@ public final class FormElementWriter
     private static final String TYPE_MANAGED_FORM = "ManagedForm"; //$NON-NLS-1$
 
     /** A supported form-element kind, resolved from a (bilingual) FQN kind token. */
-    public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON }
+    public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON, TABLE }
 
     /** A parsed form-member FQN: the form path (for {@code resolveMdForm}) + the leaf kind/name. */
     public static final class FormMemberRef
@@ -379,6 +383,7 @@ public final class FormElementWriter
     private static final String RU_DECORATION = cp(0x0434, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f); // dekoraciya
     private static final String RU_FIELD = cp(0x043f, 0x043e, 0x043b, 0x0435); // pole
     private static final String RU_BUTTON = cp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430); // knopka
+    private static final String RU_TABLE = cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430); // tablica
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
@@ -392,6 +397,30 @@ public final class FormElementWriter
         0x043a, 0x0441, 0x0442, 0x043d, 0x043e, 0x0435, 0x041c, 0x0435, 0x043d, 0x044e);
     private static final String SUFFIX_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
     private static final String SUFFIX_CONTEXT_MENU = "ContextMenu"; //$NON-NLS-1$
+    /** ru "КоманднаяПанель" - the script-variant suffix for a table's own command bar name. */
+    private static final String RU_SUFFIX_COMMAND_BAR = cp(0x041a, 0x043e, 0x043c, 0x0430, 0x043d,
+        0x0434, 0x043d, 0x0430, 0x044f, 0x041f, 0x0430, 0x043d, 0x0435, 0x043b, 0x044c);
+    private static final String SUFFIX_COMMAND_BAR = "CommandBar"; //$NON-NLS-1$
+    // The three table additions: like the command bar and LineNumber, their auto-name suffix is
+    // localized per script variant by the designer (verified against EDT's ru report_variant.form
+    // template: СтрокаПоиска / СостояниеПросмотра / УправлениеПоиском).
+    private static final String SUFFIX_SEARCH_STRING = "SearchString"; //$NON-NLS-1$
+    private static final String SUFFIX_VIEW_STATUS = "ViewStatus"; //$NON-NLS-1$
+    private static final String SUFFIX_SEARCH_CONTROL = "SearchControl"; //$NON-NLS-1$
+    /** ru "СтрокаПоиска" - the script-variant suffix for a table's search-string addition name. */
+    private static final String RU_SUFFIX_SEARCH_STRING = cp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a,
+        0x0430, 0x041f, 0x043e, 0x0438, 0x0441, 0x043a, 0x0430);
+    /** ru "СостояниеПросмотра" - the script-variant suffix for a table's view-status addition name. */
+    private static final String RU_SUFFIX_VIEW_STATUS = cp(0x0421, 0x043e, 0x0441, 0x0442, 0x043e,
+        0x044f, 0x043d, 0x0438, 0x0435, 0x041f, 0x0440, 0x043e, 0x0441, 0x043c, 0x043e, 0x0442, 0x0440,
+        0x0430);
+    /** ru "УправлениеПоиском" - the script-variant suffix for a table's search-control addition name. */
+    private static final String RU_SUFFIX_SEARCH_CONTROL = cp(0x0423, 0x043f, 0x0440, 0x0430, 0x0432,
+        0x043b, 0x0435, 0x043d, 0x0438, 0x0435, 0x041f, 0x043e, 0x0438, 0x0441, 0x043a, 0x043e, 0x043c);
+    /** The standard tabular-section row-number attribute name, English / Russian script variant. */
+    private static final String EN_LINE_NUMBER = "LineNumber"; //$NON-NLS-1$
+    private static final String RU_LINE_NUMBER = cp(0x041d, 0x043e, 0x043c, 0x0435, 0x0440, 0x0421,
+        0x0442, 0x0440, 0x043e, 0x043a, 0x0438); // NomerStroki
 
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
@@ -434,6 +463,10 @@ public final class FormElementWriter
         if ("button".equals(t) || RU_BUTTON.equals(t)) //$NON-NLS-1$
         {
             return Kind.BUTTON;
+        }
+        if ("table".equals(t) || RU_TABLE.equals(t)) //$NON-NLS-1$
+        {
+            return Kind.TABLE;
         }
         return null;
     }
@@ -628,8 +661,15 @@ public final class FormElementWriter
             // The content Form is a separate top object serialized to Form.form - export ITS fqn.
             return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
         });
-        return contentFormFqn != null && !contentFormFqn.isEmpty()
+        boolean exported = contentFormFqn != null && !contentFormFqn.isEmpty()
             && BmTransactions.forceExportToDisk(ctx.project, contentFormFqn);
+        if (exported)
+        {
+            // The BM write + export does NOT refresh an already-open form editor (it keeps rendering its
+            // own stale, grey/read-only representation until a clean_project). Rebuild it, best-effort.
+            FormEditorRefreshUtils.refreshOpenFormEditorAsync(ctx.project, ctx.formPath);
+        }
+        return exported;
     }
 
     /**
@@ -725,6 +765,11 @@ public final class FormElementWriter
             case BUTTON:
                 return createButton(formModel, name, parentName, bindTarget, titleLanguage, title,
                     russianAutoNames, createdKind);
+            case TABLE:
+                // Bare table (the bind slot carries its dataPath). The metadata-aware caller adds the
+                // tabular-section columns via createTable(..., columnAttributeNames, ...).
+                return createTable(formModel, name, parentName, bindTarget, java.util.Collections.emptyList(),
+                    titleLanguage, title, russianAutoNames, createdKind);
             case GROUP:
             case DECORATION:
             default:
@@ -910,6 +955,8 @@ public final class FormElementWriter
 
     /** The form model EPackage nsURI ({@code com._1c.g5.v8.dt.form.model.FormPackage.eNS_URI}). */
     private static final String FORM_PACKAGE_NS_URI = "http://g5.1c.ru/v8/dt/form"; //$NON-NLS-1$
+    /** The mcore EPackage nsURI - holds {@code UndefinedValue} (the table's default rowFilter). */
+    private static final String MCORE_PACKAGE_NS_URI = "http://g5.1c.ru/v8/dt/mcore"; //$NON-NLS-1$
 
     /**
      * The CONCRETE content {@code Form} EClass, reached WITHOUT a form-model import: the form
@@ -1645,6 +1692,269 @@ public final class FormElementWriter
         addAutoChildren(formModel, item, true, russianAutoNames);
         recordKind(item, createdKind);
         return null;
+    }
+
+    /**
+     * Creates a {@code form:Table} bound to a tabular section, mirroring what the designer builds when
+     * a tabular section is dropped on a form: the Table (dataPath {@code Object.<TabularSection>}), its
+     * own command bar / context menu / extended tooltip, the table scalar defaults, and one column per
+     * given tabular-section attribute (plus the standard {@code LineNumber} column). The column names
+     * come from the metadata-aware caller (the form model alone cannot enumerate them); an empty list
+     * yields a column-less table the caller can fill later.
+     *
+     * @param dataPath the tabular-section data path, e.g. {@code Object.Goods}
+     * @param columnAttributeNames the tabular-section attribute names to materialize as input columns
+     * @return {@code null} on success, or a human-readable error message
+     */
+    public static String createTable(EObject formModel, String name, String parentName, String dataPath, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        List<String> columnAttributeNames, String titleLanguage, String title, boolean russianAutoNames,
+        String[] createdKind)
+    {
+        if (dataPath == null || dataPath.isEmpty())
+        {
+            return "A table needs a 'dataPath' property naming the tabular section it shows " //$NON-NLS-1$
+                + "(e.g. {name:'dataPath', value:'Object.Goods'})."; //$NON-NLS-1$
+        }
+        if (findItem(formModel, name) != null)
+        {
+            return ERR_ITEM_EXISTS + name;
+        }
+        EObject container = containerFor(formModel, parentName);
+        if (container == null)
+        {
+            return parentNotFound(parentName);
+        }
+        EObject table = createFromClassifier(formModel, ECLASS_TABLE);
+        if (table == null)
+        {
+            return "Cannot create a form table for this form model."; //$NON-NLS-1$
+        }
+        setStringFeature(table, FEATURE_NAME, name);
+        applyVisibleDefaults(table);
+        setIntFeature(table, FEATURE_ID, nextItemId(formModel));
+        buildDataPath(formModel, table, dataPath);
+        setEnumFeature(table, "titleLocation", "None"); //$NON-NLS-1$ //$NON-NLS-2$
+        applyTableDefaults(table);
+        setUndefinedRowFilter(table);
+        // The designer's table carries a title = its own name (hidden by titleLocation=None); use the
+        // caller's explicit title when given, otherwise default to the table name in the script variant.
+        if (title != null && !title.isEmpty())
+        {
+            applyTitle(table, titleLanguage, title);
+        }
+        else
+        {
+            applyTitle(table, russianAutoNames ? "ru" : "en", name); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        addToList(container, FEATURE_ITEMS, table);
+        // The table's own command bar carries a NORMAL id (only the form-root bar uses the -1 sentinel).
+        addTableAutoCommandBar(formModel, table, russianAutoNames);
+        // The designer auto-children every visual item carries: a context menu + an extended tooltip.
+        addAutoChildren(formModel, table, true, russianAutoNames);
+        // The three table "additions" the designer adds: a search string, a view status and a search
+        // control (each with its own auto-children + extInfo, sourced from the table).
+        addTableAddition(formModel, table, FEATURE_SEARCH_STRING_ADDITION,
+            russianAutoNames ? RU_SUFFIX_SEARCH_STRING : SUFFIX_SEARCH_STRING, null,
+            "SearchStringAdditionExtInfo", russianAutoNames); //$NON-NLS-1$
+        addTableAddition(formModel, table, FEATURE_VIEW_STATUS_ADDITION,
+            russianAutoNames ? RU_SUFFIX_VIEW_STATUS : SUFFIX_VIEW_STATUS,
+            "ViewStatusAddition", "ViewStatusAdditionExtInfo", russianAutoNames); //$NON-NLS-1$ //$NON-NLS-2$
+        addTableAddition(formModel, table, FEATURE_SEARCH_CONTROL_ADDITION,
+            russianAutoNames ? RU_SUFFIX_SEARCH_CONTROL : SUFFIX_SEARCH_CONTROL,
+            "SearchControlAddition", "SearchControlAdditionExtInfo", russianAutoNames); //$NON-NLS-1$ //$NON-NLS-2$
+        // Auto-columns: the standard LineNumber column, then one column per TS attribute (all input
+        // fields, like the designer's table output).
+        String lineNumber = russianAutoNames ? RU_LINE_NUMBER : EN_LINE_NUMBER;
+        buildColumnField(formModel, table, name + lineNumber, dataPath + "." + lineNumber, russianAutoNames); //$NON-NLS-1$
+        if (columnAttributeNames != null)
+        {
+            for (String attr : columnAttributeNames)
+            {
+                buildColumnField(formModel, table, name + attr, dataPath + "." + attr, russianAutoNames); //$NON-NLS-1$
+            }
+        }
+        recordKind(table, createdKind);
+        return null;
+    }
+
+    /**
+     * Sets a contained {@code DataPath} whose {@code segments} are the dot-split parts of
+     * {@code pathString} (e.g. {@code Object.Goods.Product} -> three segments). The validator resolves
+     * the path segment by segment (the {@code Object} attribute -> its type -> the {@code Goods}
+     * tabular section -> {@code Product}); a single dotted segment would be read as one object name and
+     * flagged {@code form-data-path}. The on-disk serializer re-joins the segments with dots, so this
+     * stays byte-identical to a designer-built path.
+     */
+    @SuppressWarnings("unchecked")
+    private static void buildDataPath(EObject formModel, EObject item, String pathString)
+    {
+        EStructuralFeature dpFeat = item.eClass().getEStructuralFeature("dataPath"); //$NON-NLS-1$
+        EObject dataPath = createFromClassifier(formModel, "DataPath"); //$NON-NLS-1$
+        if (dpFeat instanceof EReference && dataPath != null)
+        {
+            EStructuralFeature segFeat = dataPath.eClass().getEStructuralFeature("segments"); //$NON-NLS-1$
+            if (segFeat != null && dataPath.eGet(segFeat) instanceof EList<?>)
+            {
+                EList<String> segments = (EList<String>)dataPath.eGet(segFeat);
+                for (String part : pathString.split("\\.")) //$NON-NLS-1$
+                {
+                    if (!part.isEmpty())
+                    {
+                        segments.add(part);
+                    }
+                }
+            }
+            item.eSet(dpFeat, dataPath);
+        }
+    }
+
+    /**
+     * Builds one table column: an {@code InputField} {@code FormField} bound to {@code columnDataPath},
+     * with the designer column defaults ({@code InputFieldExtInfo} + flags) and the auto-children, added
+     * to the table. The designer makes every tabular-section column - including the row-number column -
+     * an input field.
+     */
+    private static void buildColumnField(EObject formModel, EObject table, String name,
+        String columnDataPath, boolean russianAutoNames)
+    {
+        EObject column = createFromClassifier(formModel, ECLASS_FORM_FIELD);
+        if (column == null)
+        {
+            return;
+        }
+        setStringFeature(column, FEATURE_NAME, uniqueChildName(formModel, name, "")); //$NON-NLS-1$
+        applyVisibleDefaults(column);
+        setIntFeature(column, FEATURE_ID, nextItemId(formModel));
+        buildDataPath(formModel, column, columnDataPath);
+        setEnumFeature(column, FEATURE_TYPE, "InputField"); //$NON-NLS-1$
+        setBooleanFeature(column, "showInHeader", true); //$NON-NLS-1$
+        setBooleanFeature(column, "showInFooter", true); //$NON-NLS-1$
+        setEnumFeature(column, "headerHorizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(column, "editMode", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$
+        setExtInfoClassifier(formModel, column, "InputFieldExtInfo"); //$NON-NLS-1$
+        EObject extInfo = singleReference(column, FEATURE_EXT_INFO);
+        if (extInfo != null)
+        {
+            setBooleanFeature(extInfo, KEY_AUTO_MAX_WIDTH, true);
+            setBooleanFeature(extInfo, KEY_AUTO_MAX_HEIGHT, true);
+            setBooleanFeature(extInfo, "wrap", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, "chooseType", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, "typeDomainEnabled", true); //$NON-NLS-1$
+            setBooleanFeature(extInfo, "textEdit", true); //$NON-NLS-1$
+        }
+        addToList(table, FEATURE_ITEMS, column);
+        addAutoChildren(formModel, column, true, russianAutoNames);
+    }
+
+    /** The table's own predefined command bar: a NORMAL id, autoFill, left align, script-variant named. */
+    private static void addTableAutoCommandBar(EObject formModel, EObject table, boolean russianAutoNames)
+    {
+        EStructuralFeature barFeat = table.eClass().getEStructuralFeature(FEATURE_AUTO_COMMAND_BAR);
+        EObject bar = createFromClassifier(formModel, ECLASS_AUTO_COMMAND_BAR);
+        if (bar == null || !(barFeat instanceof EReference) || barFeat.isMany())
+        {
+            return;
+        }
+        setStringFeature(bar, FEATURE_NAME, uniqueChildName(formModel, stringFeature(table, FEATURE_NAME),
+            russianAutoNames ? RU_SUFFIX_COMMAND_BAR : SUFFIX_COMMAND_BAR));
+        setBooleanFeature(bar, "autoFill", true); //$NON-NLS-1$
+        setEnumFeature(bar, KEY_HORIZONTAL_ALIGN, "Left"); //$NON-NLS-1$
+        table.eSet(barFeat, bar);
+        setIntFeature(bar, FEATURE_ID, nextItemId(formModel));
+    }
+
+    /**
+     * Adds one table "addition" (a {@code searchStringAddition} / {@code viewStatusAddition} /
+     * {@code searchControlAddition} - the search box, view-status line and search control the designer
+     * puts on a table). Named {@code <table><suffix>}, sourced from the table, carries its own extInfo
+     * and the auto-children (extended tooltip + context menu). A no-op when the feature is absent.
+     */
+    private static void addTableAddition(EObject formModel, EObject table, String featureName,
+        String suffix, String typeLiteral, String extInfoClassifier, boolean russianAutoNames)
+    {
+        EStructuralFeature feat = table.eClass().getEStructuralFeature(featureName);
+        if (!(feat instanceof EReference) || feat.isMany() || !(feat.getEType() instanceof EClass))
+        {
+            return;
+        }
+        EObject addition = createFromClassifier(formModel, feat.getEType().getName());
+        if (addition == null)
+        {
+            return;
+        }
+        // The table additions (search string / view status / search control) must be ENABLED to render
+        // active rather than grey/read-only. The designer keeps these additions at visible=false /
+        // userVisible=null (they are table chrome, shown regardless of 'visible') but enabled=true; the MCP
+        // build path otherwise leaves enabled at its un-set default (false), which is exactly the grey
+        // symptom. Set ONLY enabled here, so the rest of the addition matches the designer byte-for-byte.
+        setBooleanFeature(addition, FEATURE_ENABLED, true);
+        String tableName = stringFeature(table, FEATURE_NAME);
+        setStringFeature(addition, FEATURE_NAME, uniqueChildName(formModel, tableName, suffix));
+        if (typeLiteral != null)
+        {
+            setEnumFeature(addition, FEATURE_TYPE, typeLiteral);
+        }
+        // 'source' is an AdditionSource reference - the table the addition searches (serialized as the
+        // table name); the Table itself is the source.
+        EStructuralFeature srcFeat = addition.eClass().getEStructuralFeature(FEATURE_SOURCE);
+        if (srcFeat instanceof EReference)
+        {
+            addition.eSet(srcFeat, table);
+        }
+        setExtInfoClassifier(formModel, addition, extInfoClassifier);
+        EObject extInfo = singleReference(addition, FEATURE_EXT_INFO);
+        if (extInfo != null)
+        {
+            setBooleanFeature(extInfo, KEY_AUTO_MAX_WIDTH, true);
+        }
+        table.eSet(feat, addition);
+        setIntFeature(addition, FEATURE_ID, nextItemId(formModel));
+        addAutoChildren(formModel, addition, true, russianAutoNames);
+    }
+
+    /** The designer's table scalar defaults (FormObjectFactory.newTable): selection, lines, scrollbars. */
+    private static void applyTableDefaults(EObject table)
+    {
+        setBooleanFeature(table, "changeRowSet", true); //$NON-NLS-1$
+        setBooleanFeature(table, "changeRowOrder", true); //$NON-NLS-1$
+        setBooleanFeature(table, KEY_AUTO_MAX_WIDTH, true);
+        setBooleanFeature(table, KEY_AUTO_MAX_HEIGHT, true);
+        setBooleanFeature(table, "autoMaxRowsCount", true); //$NON-NLS-1$
+        setEnumFeature(table, "selectionMode", "MultiRow"); //$NON-NLS-1$ //$NON-NLS-2$
+        setBooleanFeature(table, "header", true); //$NON-NLS-1$
+        setIntFeature(table, "headerHeight", 1); //$NON-NLS-1$
+        setIntFeature(table, "footerHeight", 1); //$NON-NLS-1$
+        setEnumFeature(table, "horizontalScrollBar", "AutoUse"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(table, "verticalScrollBar", "AutoUse"); //$NON-NLS-1$ //$NON-NLS-2$
+        setBooleanFeature(table, "horizontalLines", true); //$NON-NLS-1$
+        setBooleanFeature(table, "verticalLines", true); //$NON-NLS-1$
+        setEnumFeature(table, "representation", "HierarchicalList"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(table, "searchOnInput", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(table, "initialListView", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$
+        setBooleanFeature(table, "horizontalStretch", true); //$NON-NLS-1$
+        setBooleanFeature(table, "verticalStretch", true); //$NON-NLS-1$
+        setEnumFeature(table, "fileDragMode", "AsFileRef"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Sets the table's {@code rowFilter} to an mcore {@code UndefinedValue} - the explicit "no filter"
+     * the designer serializes ({@code <rowFilter xsi:type="core:UndefinedValue"/>}). The classifier is
+     * resolved from the mcore package by nsURI (no compile-time mcore dependency). No-op when the
+     * feature or package is unavailable.
+     */
+    private static void setUndefinedRowFilter(EObject table)
+    {
+        EStructuralFeature feat = table.eClass().getEStructuralFeature("rowFilter"); //$NON-NLS-1$
+        if (!(feat instanceof EReference))
+        {
+            return;
+        }
+        EPackage mcore = EPackage.Registry.INSTANCE.getEPackage(MCORE_PACKAGE_NS_URI);
+        EClassifier undefined = mcore != null ? mcore.getEClassifier("UndefinedValue") : null; //$NON-NLS-1$
+        if (undefined instanceof EClass)
+        {
+            table.eSet(feat, mcore.getEFactoryInstance().create((EClass)undefined));
+        }
     }
 
     /** A Button bound to a form command (FormCommand is-a mcore Command, so the reference is direct). */

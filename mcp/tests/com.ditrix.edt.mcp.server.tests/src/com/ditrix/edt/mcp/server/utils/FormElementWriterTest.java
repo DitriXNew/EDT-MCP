@@ -67,6 +67,7 @@ public class FormElementWriterTest
         assertEquals(Kind.DECORATION, FormElementWriter.kindForToken("Decoration")); //$NON-NLS-1$
         assertEquals(Kind.FIELD, FormElementWriter.kindForToken("Field")); //$NON-NLS-1$
         assertEquals(Kind.BUTTON, FormElementWriter.kindForToken("Button")); //$NON-NLS-1$
+        assertEquals(Kind.TABLE, FormElementWriter.kindForToken("Table")); //$NON-NLS-1$
     }
 
     @Test
@@ -89,13 +90,125 @@ public class FormElementWriterTest
         // knopka -> BUTTON
         assertEquals(Kind.BUTTON, FormElementWriter.kindForToken(
             fromCp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430)));
+        // tablica -> TABLE
+        assertEquals(Kind.TABLE, FormElementWriter.kindForToken(
+            fromCp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430)));
+    }
+
+    @Test
+    public void testCreateTableWithColumns()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createTable(form, "Goods", null, "Object.Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            java.util.Arrays.asList("Product", "Quantity"), null, null, false, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject table = FormElementWriter.findFormItem(form, "Goods"); //$NON-NLS-1$
+        assertNotNull(table);
+        assertEquals("Table", table.eClass().getName()); //$NON-NLS-1$
+        // The table carries its OWN command bar (a normal item, not the form-root -1 sentinel).
+        EObject bar = (EObject)table.eGet(feature(table, "autoCommandBar")); //$NON-NLS-1$
+        assertNotNull(bar);
+        assertEquals("GoodsCommandBar", bar.eGet(feature(bar, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+        // Columns: the standard LineNumber label column FIRST, then one input column per attribute.
+        List<?> columns = (List<?>)table.eGet(feature(table, "items")); //$NON-NLS-1$
+        assertEquals(3, columns.size());
+        EObject lineNo = (EObject)columns.get(0);
+        assertEquals("GoodsLineNumber", lineNo.eGet(feature(lineNo, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("InputField", literalOf(lineNo, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject productCol = FormElementWriter.findFormItem(form, "GoodsProduct"); //$NON-NLS-1$
+        assertNotNull(productCol);
+        assertEquals("InputField", literalOf(productCol, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(FormElementWriter.findFormItem(form, "GoodsQuantity")); //$NON-NLS-1$
+        // Each column carries the designer auto-children with an allocated (nonzero) id.
+        EObject menu = (EObject)productCol.eGet(feature(productCol, "contextMenu")); //$NON-NLS-1$
+        assertNotNull(menu);
+        assertTrue(((Integer)menu.eGet(feature(menu, "id"))).intValue() > 0); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateTableAdditionsAreEnabled()
+    {
+        // The table's search-string / view-status / search-control additions are Visible items whose
+        // 'enabled' model default is FALSE (see testCreateButtonAtRootIsEnabledUsualButton). If they are
+        // left un-enabled the open form editor renders them grey/read-only - the exact symptom that a
+        // designer-created table never shows. They must be created enabled, like the table and its columns.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createTable(form, "Goods", null, "Object.Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            java.util.Arrays.asList("Product", "Quantity"), null, null, false, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject table = FormElementWriter.findFormItem(form, "Goods"); //$NON-NLS-1$
+        assertNotNull(table);
+        for (String additionFeature : new String[] {"searchStringAddition", "viewStatusAddition", //$NON-NLS-1$ //$NON-NLS-2$
+            "searchControlAddition"}) //$NON-NLS-1$
+        {
+            EObject addition = (EObject)table.eGet(feature(table, additionFeature));
+            assertNotNull(additionFeature + " was not created", addition); //$NON-NLS-1$
+            // The fix: additions must be created enabled, else the open editor renders them grey.
+            assertEquals(additionFeature + " must be enabled", //$NON-NLS-1$
+                Boolean.TRUE, addition.eGet(feature(addition, "enabled"))); //$NON-NLS-1$
+            // ...but ONLY enabled - the designer keeps additions at visible=false; setting it (e.g. via
+            // applyVisibleDefaults) would diverge from a designer-built table.
+            assertEquals(additionFeature + " must stay visible=false", //$NON-NLS-1$
+                Boolean.FALSE, addition.eGet(feature(addition, "visible"))); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testCreateTableAdditionsRussianAutoNames()
+    {
+        // In a Russian script variant the three table additions must get LOCALIZED name suffixes, just
+        // like the command bar (КоманднаяПанель) and LineNumber (НомерСтроки). Verified against EDT's
+        // ru report_variant.form template: СтрокаПоиска / СостояниеПросмотра / УправлениеПоиском. An
+        // English suffix here (e.g. "TSearchString") would break byte-identity with the designer.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createTable(form, "T", null, "Object.Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            java.util.Collections.emptyList(), null, null, true, new String[1]));
+        EObject table = FormElementWriter.findFormItem(form, "T"); //$NON-NLS-1$
+        assertNotNull(table);
+        // СтрокаПоиска / СостояниеПросмотра / УправлениеПоиском, built independently from code points.
+        String searchString = fromCp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a, 0x0430, 0x041f, 0x043e,
+            0x0438, 0x0441, 0x043a, 0x0430);
+        String viewStatus = fromCp(0x0421, 0x043e, 0x0441, 0x0442, 0x043e, 0x044f, 0x043d, 0x0438, 0x0435,
+            0x041f, 0x0440, 0x043e, 0x0441, 0x043c, 0x043e, 0x0442, 0x0440, 0x0430);
+        String searchControl = fromCp(0x0423, 0x043f, 0x0440, 0x0430, 0x0432, 0x043b, 0x0435, 0x043d,
+            0x0438, 0x0435, 0x041f, 0x043e, 0x0438, 0x0441, 0x043a, 0x043e, 0x043c);
+        assertAdditionName(table, "searchStringAddition", "T" + searchString); //$NON-NLS-1$ //$NON-NLS-2$
+        assertAdditionName(table, "viewStatusAddition", "T" + viewStatus); //$NON-NLS-1$ //$NON-NLS-2$
+        assertAdditionName(table, "searchControlAddition", "T" + searchControl); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void assertAdditionName(EObject table, String additionFeature, String expectedName)
+    {
+        EObject addition = (EObject)table.eGet(feature(table, additionFeature));
+        assertNotNull(additionFeature + " was not created", addition); //$NON-NLS-1$
+        assertEquals(additionFeature + " must use the localized suffix", //$NON-NLS-1$
+            expectedName, addition.eGet(feature(addition, "name"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateTableRequiresDataPath()
+    {
+        EObject form = newForm();
+        String err = FormElementWriter.createTable(form, "T", null, null, //$NON-NLS-1$
+            java.util.Collections.emptyList(), null, null, false, new String[1]);
+        assertNotNull(err);
+        assertTrue(err.contains("dataPath")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateTableViaCreateMemberIsColumnLess()
+    {
+        // Through createMember (no metadata) a table gets only the standard LineNumber column.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.TABLE, "Lines", null, //$NON-NLS-1$
+            "Object.Lines", null, null, false, new String[1])); //$NON-NLS-1$
+        EObject table = FormElementWriter.findFormItem(form, "Lines"); //$NON-NLS-1$
+        assertNotNull(table);
+        assertEquals(1, ((List<?>)table.eGet(feature(table, "items"))).size()); //$NON-NLS-1$
     }
 
     @Test
     public void testKindForUnknownAndNull()
     {
         assertNull(FormElementWriter.kindForToken("Nonsense")); //$NON-NLS-1$
-        assertNull(FormElementWriter.kindForToken("Table")); // not a supported form kind yet //$NON-NLS-1$
         assertNull(FormElementWriter.kindForToken(null));
     }
 
@@ -1789,12 +1902,29 @@ public class FormElementWriterTest
             autoCommandBar.getESuperTypes().add(formItem);
             autoCommandBar.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
 
+            // The table additions (search string / view status / search control) are one concrete
+            // Addition EClass (a Visible FormItem: name/id/enabled/visible), differentiated at runtime by
+            // 'type'. Modeling it here lets the grey-fix invariant (additions must be created enabled) be
+            // asserted headlessly instead of skipped.
+            EClass addition = f.createEClass();
+            addition.setName("Addition"); //$NON-NLS-1$
+            addition.getESuperTypes().add(formItem);
+            addBoolean(f, addition, "enabled"); //$NON-NLS-1$
+            addBoolean(f, addition, "visible"); //$NON-NLS-1$
+
             table = f.createEClass();
             table.setName("Table"); //$NON-NLS-1$
             table.getESuperTypes().add(formItem);
             table.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                containment(f, "searchStringAddition", addition, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                containment(f, "viewStatusAddition", addition, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                containment(f, "searchControlAddition", addition, false)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(addition);
 
             form = f.createEClass();
             form.setName("Form"); //$NON-NLS-1$

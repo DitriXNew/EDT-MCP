@@ -490,6 +490,53 @@ def test_create_form_object_then_add_member():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_table_with_columns_and_additions_issue_177():
+    # Issue #177: create a form:Table via create_metadata. The table must be built with its auto
+    # columns (a LineNumber column + one InputField per tabular-section attribute) AND the three table
+    # additions (search string / view status / search control), which are the chrome that renders
+    # grey/read-only when not created enabled. Here we assert that whole kit lands on disk and the form
+    # still resolves; the additions-enabled invariant itself is locked by the FormElementWriter unit test.
+    ts, attr, table = "McpTableTS", "Product", "McpTable"
+    form_fqn = "Catalog.Catalog.Form.ItemForm"
+    form_rel = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.TabularSection." + ts}),
+        "seed the tabular section the table binds to")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.TabularSection.%s.Attribute.%s" % (ts, attr)}),
+        "seed a tabular-section attribute so the table has a data column")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "%s.Table.%s" % (form_fqn, table),
+        "properties": [{"name": "dataPath", "value": "Object.%s" % ts}],
+    })
+    assert_ok(r, "create the form table %s" % table)
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    assert "Table" in (r.structured.get("kind") or ""), \
+        "kind must be a Table EClass: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # The table and its full kit must be written to the content Form.form on disk.
+    form_xml = read_disk(form_rel)
+    assert "<name>%s</name>" % table in form_xml, \
+        "the table must be written to Form.form: %s" % table
+    for addition in ("searchStringAddition", "viewStatusAddition", "searchControlAddition"):
+        assert "<%s>" % addition in form_xml, \
+            "the table must carry its <%s> (chrome that renders grey when not enabled)" % addition
+    assert "<name>%s%s</name>" % (table, attr) in form_xml, \
+        "the table must auto-generate an input column for the TS attribute %s" % attr
+
+    # The form must still resolve/render after the table write - a malformed table would fail to resolve.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form_fqn]})
+    assert_ok(d, "render the form structure after adding a table")
+    assert_contains(d.text, "Form Structure", "the form must still render its structure")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_data_processor_form_members_allocate_form_ids_issue_189():
     # Issue #189 end-to-end repro: a managed form and ALL its attributes/items/commands are created by
     # MCP writes. The validator used to see duplicate id=0 for field context menus, the command
