@@ -48,6 +48,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 
 /**
  * Sets one or more properties of a metadata node (a top-level object or a member) addressed by a 1C
@@ -99,6 +100,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "Set a StyleItem's value with a 'value' property: a Color " //$NON-NLS-1$
             + "{value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font " //$NON-NLS-1$
             + "{value:{font:{faceName:'Arial',height:12,bold:true}}}. " //$NON-NLS-1$
+            + "Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' " //$NON-NLS-1$
+            + "property (and 'customQuery' true/false): this turns the attribute into a DynamicList " //$NON-NLS-1$
+            + "and lets EDT auto-fill the available fields from the query (no manual XML). " //$NON-NLS-1$
             + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -472,6 +476,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return moveFormItem(ctx, normFqn, ref, properties);
         }
 
+        // A DynamicList custom query is set through 'queryText' / 'customQuery' on a form ATTRIBUTE.
+        // These live on the attribute's DynamicListExtInfo - a sub-object the generic introspector does
+        // not reach - so they route to their own branch that creates / configures the ext-info
+        // reflectively, turning a plain form attribute into a custom-query dynamic list.
+        if (isDynamicListQueryRequest(ref, properties))
+        {
+            return configureDynamicListQuery(ctx, normFqn, ref, properties, normReport);
+        }
+
         // Ordinary property modify: the remaining (non-handler, non-command, non-move) case.
         return modifyFormMemberProperties(ctx, normFqn, ref, properties, normReport);
     }
@@ -552,6 +565,182 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return result
             .put(McpKeys.MESSAGE, "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .toJson();
+    }
+
+    // --- DynamicList custom query (set on a form ATTRIBUTE) -----------------------------------------
+
+    /** The dynamic-list query property names. {@code queryText} sets the custom query, {@code customQuery}
+     * toggles whether the dynamic list uses it (vs the automatic main-table query). */
+    private static final String PROP_QUERY_TEXT = "queryText"; //$NON-NLS-1$
+    private static final String PROP_CUSTOM_QUERY = "customQuery"; //$NON-NLS-1$
+    // ru TekstZaprosa (= queryText) / ProizvolnyjZapros (= customQuery) - pure-ASCII source (cp codepoints).
+    private static final String RU_PROP_QUERY_TEXT = MetadataLanguageUtils.cp(0x0422, 0x0435, 0x043a,
+        0x0441, 0x0442, 0x0417, 0x0430, 0x043f, 0x0440, 0x043e, 0x0441, 0x0430);
+    private static final String RU_PROP_CUSTOM_QUERY = MetadataLanguageUtils.cp(0x041f, 0x0440, 0x043e,
+        0x0438, 0x0437, 0x0432, 0x043e, 0x043b, 0x044c, 0x043d, 0x044b, 0x0439, 0x0417, 0x0430, 0x043f,
+        0x0440, 0x043e, 0x0441);
+
+    /** Whether a property NAME is the {@code queryText} dynamic-list property (English or Russian). */
+    static boolean isQueryTextProp(String name)
+    {
+        return PROP_QUERY_TEXT.equalsIgnoreCase(name) || RU_PROP_QUERY_TEXT.equalsIgnoreCase(name);
+    }
+
+    /** Whether a property NAME is the {@code customQuery} dynamic-list property (English or Russian). */
+    static boolean isCustomQueryProp(String name)
+    {
+        return PROP_CUSTOM_QUERY.equalsIgnoreCase(name) || RU_PROP_CUSTOM_QUERY.equalsIgnoreCase(name);
+    }
+
+    /**
+     * Whether this modify is a DynamicList custom-query request: a form ATTRIBUTE FQN carrying a
+     * {@code queryText} and/or {@code customQuery} property. Those properties live on the attribute's
+     * {@code DynamicListExtInfo} (not on the attribute itself), so they are routed to their own branch
+     * instead of the generic introspector path. Reads only the property list (no model mutation).
+     */
+    private static boolean isDynamicListQueryRequest(FormElementWriter.FormMemberRef ref,
+        List<JsonObject> properties)
+    {
+        if (FormElementWriter.kindForToken(ref.kindToken) != FormElementWriter.Kind.ATTRIBUTE)
+        {
+            return false;
+        }
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (isQueryTextProp(name) || isCustomQueryProp(name))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Configures a form attribute as a custom-query dynamic list ({@code queryText} / {@code customQuery}).
+     * Mirrors {@link #modifyFormMemberProperties}: resolves the platform version, then applies the change
+     * inside ONE BM write transaction ({@link FormElementWriter#configureDynamicListQuery} creates /
+     * configures the {@code DynamicListExtInfo} reflectively) and force-exports the content form. The
+     * query properties are structural (they create the ext-info and the {@code DynamicList} value type),
+     * so they must not be mixed with ordinary property changes in one call - the same policy the move /
+     * handler / command branches enforce.
+     */
+    private String configureDynamicListQuery(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
+        MdNameNormalizer.Report normReport)
+    {
+        String queryText = null;
+        Boolean customQuery = null;
+        boolean queryTextGiven = false;
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (isQueryTextProp(name))
+            {
+                queryText = asString(prop.get(KEY_VALUE));
+                queryTextGiven = true;
+            }
+            else if (isCustomQueryProp(name))
+            {
+                Boolean parsed = parseBooleanFlag(prop.get(KEY_VALUE));
+                if (parsed == null)
+                {
+                    return ToolResult.error("'customQuery' must be a boolean (true / false).").toJson(); //$NON-NLS-1$
+                }
+                customQuery = parsed;
+            }
+            else
+            {
+                return ToolResult.error("Setting a dynamic-list query ('queryText' / 'customQuery') " //$NON-NLS-1$
+                    + "cannot be combined with other property changes ('" + name + "') in one call. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Configure the query first, then make the other changes separately.").toJson(); //$NON-NLS-1$
+            }
+        }
+        if (queryTextGiven && (queryText == null || queryText.trim().isEmpty()))
+        {
+            return ToolResult.error("'queryText' must be a non-empty 1C query, e.g. " //$NON-NLS-1$
+                + "\"SELECT Ref, Description AS Description FROM Catalog.Products\". To switch the " //$NON-NLS-1$
+                + "dynamic list back to its automatic query, pass 'customQuery' = false instead.") //$NON-NLS-1$
+                .toJson();
+        }
+
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
+        final Version version = v8Project != null ? v8Project.getVersion() : null;
+
+        final List<String> applied = new ArrayList<>();
+        final String qt = queryText;
+        final Boolean cq = customQuery;
+        final boolean persisted;
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
+                ctx.config, ref.formPath,
+                ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address the dynamic-list attribute as " //$NON-NLS-1$
+                    + "'Type.Object.Form.FormName.Attribute.Name'."); //$NON-NLS-1$
+            persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
+                (formModel, tx) ->
+                {
+                    EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                    if (member == null)
+                    {
+                        throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
+                            + ref.name + " on " + ref.formPath //$NON-NLS-1$
+                            + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
+                    }
+                    applied.addAll(
+                        FormElementWriter.configureDynamicListQuery(formModel, member, qt, cq, version));
+                });
+        }
+        catch (Exception e)
+        {
+            String validationJson = FormValidationException.jsonOf(e);
+            if (validationJson != null)
+            {
+                return validationJson;
+            }
+            Activator.logError("Error configuring dynamic-list query", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to set the dynamic-list query: " //$NON-NLS-1$
+                + unwrapCauseMessage(e)).toJson();
+        }
+
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_MODIFIED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put(KEY_APPLIED, applied)
+            .put(KEY_PERSISTED, persisted);
+        normReport.addTo(result);
+        return result
+            .put(McpKeys.MESSAGE, "Configured dynamic-list query on " + normFqn //$NON-NLS-1$
+                + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .toJson();
+    }
+
+    /**
+     * Parses a flag property value (a JSON boolean, or the string {@code "true"} / {@code "false"}),
+     * or {@code null} when the value is not a recognizable boolean.
+     */
+    static Boolean parseBooleanFlag(JsonElement value)
+    {
+        if (value == null || !value.isJsonPrimitive())
+        {
+            return null;
+        }
+        JsonPrimitive prim = value.getAsJsonPrimitive();
+        if (prim.isBoolean())
+        {
+            return Boolean.valueOf(prim.getAsBoolean());
+        }
+        String s = prim.getAsString().trim();
+        if ("true".equalsIgnoreCase(s)) //$NON-NLS-1$
+        {
+            return Boolean.TRUE;
+        }
+        if ("false".equalsIgnoreCase(s)) //$NON-NLS-1$
+        {
+            return Boolean.FALSE;
+        }
+        return null;
     }
 
     /**

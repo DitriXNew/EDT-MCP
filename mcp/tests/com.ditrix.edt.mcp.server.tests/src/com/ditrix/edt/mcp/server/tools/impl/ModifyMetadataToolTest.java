@@ -20,7 +20,9 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 
 /**
  * Lightweight contract tests for {@link ModifyMetadataTool}: tool metadata and JSON schema, without
@@ -92,6 +94,56 @@ public class ModifyMetadataToolTest
             guide.contains("StyleItem")); //$NON-NLS-1$
         assertTrue("guide should show the color value shape", guide.contains("color")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("guide should show the font value shape", guide.contains("font")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDescriptionAndGuideAdvertiseDynamicListQuery()
+    {
+        // Setting a dynamic-list custom query is part of the tool surface, so the description and the
+        // guide must advertise the queryText / customQuery properties on a list-form attribute.
+        String desc = new ModifyMetadataTool().getDescription();
+        assertTrue("description should advertise queryText", desc.contains("queryText")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should mention the dynamic list", //$NON-NLS-1$
+            desc.contains("DynamicList") || desc.contains("dynamic list")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String guide = new ModifyMetadataTool().getGuide();
+        assertNotNull(guide);
+        assertTrue("guide should show the queryText property", guide.contains("queryText")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide should show the customQuery property", guide.contains("customQuery")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDynamicListQueryPropertyRecognitionIsBilingual()
+    {
+        // English names, any case.
+        assertTrue(ModifyMetadataTool.isQueryTextProp("queryText")); //$NON-NLS-1$
+        assertTrue(ModifyMetadataTool.isQueryTextProp("QUERYTEXT")); //$NON-NLS-1$
+        assertTrue(ModifyMetadataTool.isCustomQueryProp("customQuery")); //$NON-NLS-1$
+        assertFalse(ModifyMetadataTool.isQueryTextProp("title")); //$NON-NLS-1$
+        assertFalse(ModifyMetadataTool.isCustomQueryProp("queryText")); //$NON-NLS-1$
+        // Russian names via codepoints (independent of the production constants): TekstZaprosa /
+        // ProizvolnyjZapros - proving the tool recognizes both script variants.
+        String ruQueryText = MetadataLanguageUtils.cp(0x0422, 0x0435, 0x043a, 0x0441, 0x0442, 0x0417,
+            0x0430, 0x043f, 0x0440, 0x043e, 0x0441, 0x0430);
+        String ruCustomQuery = MetadataLanguageUtils.cp(0x041f, 0x0440, 0x043e, 0x0438, 0x0437, 0x0432,
+            0x043e, 0x043b, 0x044c, 0x043d, 0x044b, 0x0439, 0x0417, 0x0430, 0x043f, 0x0440, 0x043e, 0x0441);
+        assertTrue("Russian queryText name must be recognized", //$NON-NLS-1$
+            ModifyMetadataTool.isQueryTextProp(ruQueryText));
+        assertTrue("Russian customQuery name must be recognized", //$NON-NLS-1$
+            ModifyMetadataTool.isCustomQueryProp(ruCustomQuery));
+    }
+
+    @Test
+    public void testParseBooleanFlag()
+    {
+        // A JSON boolean or the strings "true"/"false" (any case) parse; anything else is not a flag.
+        assertEquals(Boolean.TRUE, ModifyMetadataTool.parseBooleanFlag(new JsonPrimitive(true)));
+        assertEquals(Boolean.FALSE, ModifyMetadataTool.parseBooleanFlag(new JsonPrimitive(false)));
+        assertEquals(Boolean.TRUE, ModifyMetadataTool.parseBooleanFlag(new JsonPrimitive("true"))); //$NON-NLS-1$
+        assertEquals(Boolean.FALSE, ModifyMetadataTool.parseBooleanFlag(new JsonPrimitive("FALSE"))); //$NON-NLS-1$
+        assertNull("a non-boolean string is not a flag", //$NON-NLS-1$
+            ModifyMetadataTool.parseBooleanFlag(new JsonPrimitive("maybe"))); //$NON-NLS-1$
+        assertNull("null is not a flag", ModifyMetadataTool.parseBooleanFlag(null)); //$NON-NLS-1$
     }
 
     @Test

@@ -141,6 +141,43 @@ public final class MetadataTypeBuilder
         return new Result(td, null);
     }
 
+    /** The platform pseudo-type a form list attribute carries as its value type. */
+    private static final String DYNAMIC_LIST_TYPE = "DynamicList"; //$NON-NLS-1$
+
+    /**
+     * Builds a {@link TypeDescription} carrying ONLY the {@code DynamicList} platform pseudo-type - the
+     * value type a form list attribute uses ({@code <types>DynamicList</types>} on disk). Reuses the
+     * same platform type provider as {@link #build}. Returns {@code null} when the platform version is
+     * unknown, the provider is unavailable, or the platform does not expose a {@code DynamicList} type
+     * proxy; the caller then relies on the {@code DynamicListExtInfo} alone (which EDT also accepts as a
+     * dynamic list). The returned object is an mcore {@code TypeDescription} ready to {@code eSet} onto a
+     * form attribute's {@code valueType} feature.
+     *
+     * @param version the platform version (to create the type proxy)
+     * @return the dynamic-list type description, or {@code null} when it cannot be built
+     */
+    public static EObject dynamicListType(Version version)
+    {
+        if (version == null)
+        {
+            return null;
+        }
+        IEObjectProvider provider =
+            IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version);
+        if (provider == null)
+        {
+            return null;
+        }
+        EObject proxy = provider.createProxy(DYNAMIC_LIST_TYPE);
+        if (!(proxy instanceof TypeItem))
+        {
+            return null;
+        }
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        td.getTypes().add((TypeItem)proxy);
+        return td;
+    }
+
     private static String addType(TypeDescription td, JsonObject item, String kind,
         IEObjectProvider provider, Configuration config)
     {

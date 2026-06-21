@@ -79,6 +79,13 @@ public final class FormElementWriter
     private static final String FEATURE_EXT_INFO = "extInfo"; //$NON-NLS-1$
     private static final String FEATURE_ID = "id"; //$NON-NLS-1$
     private static final String FEATURE_NAME = "name"; //$NON-NLS-1$
+    /** The form attribute's "is the form's main data source" flag. */
+    private static final String FEATURE_MAIN = "main"; //$NON-NLS-1$
+    /** The dynamic-list ext-info EClass and its query-carrying features. */
+    private static final String ECLASS_DYNAMIC_LIST_EXT_INFO = "DynamicListExtInfo"; //$NON-NLS-1$
+    private static final String FEATURE_QUERY_TEXT = "queryText"; //$NON-NLS-1$
+    private static final String FEATURE_CUSTOM_QUERY = "customQuery"; //$NON-NLS-1$
+    private static final String FEATURE_AUTO_FILL_AVAILABLE_FIELDS = "autoFillAvailableFields"; //$NON-NLS-1$
     private static final String FEATURE_VISIBLE = "visible"; //$NON-NLS-1$
     private static final String FEATURE_ENABLED = "enabled"; //$NON-NLS-1$
     private static final String FEATURE_USER_VISIBLE = "userVisible"; //$NON-NLS-1$
@@ -1165,6 +1172,105 @@ public final class FormElementWriter
         addToList(formModel, FEATURE_ATTRIBUTES, attr);
         recordKind(attr, createdKind);
         return null;
+    }
+
+    /**
+     * Configures the form {@code attribute} as a <b>dynamic list with a custom query</b>, fully
+     * reflectively (no compile dependency on the form model). If the attribute is not already a dynamic
+     * list it is turned into one: a {@code DynamicListExtInfo} is created, the {@code DynamicList} value
+     * type is set, {@code autoFillAvailableFields} is turned on (so the platform derives the available
+     * fields from the query - no DCS {@code <fields>} block is authored), and the attribute is marked as
+     * the form's main attribute when the form has none yet. Then {@code queryText} and/or
+     * {@code customQuery} are applied to the ext-info. A non-null {@code queryText} implies
+     * {@code customQuery=true} unless {@code customQuery} is given explicitly. Runs inside the BM write
+     * transaction opened by the caller (the {@code attribute} is the tx-bound member).
+     *
+     * @param formModel the tx-bound content form
+     * @param attribute the form attribute to configure (must be a {@code FormAttribute})
+     * @param queryText the custom query text, or {@code null} to leave it unchanged
+     * @param customQuery the explicit custom-query flag, or {@code null} to default it from
+     *            {@code queryText}
+     * @param version the platform version (to build the {@code DynamicList} value type)
+     * @return the feature names actually set (for the success payload), in apply order
+     */
+    public static List<String> configureDynamicListQuery(EObject formModel, EObject attribute,
+        String queryText, Boolean customQuery, Version version)
+    {
+        List<String> applied = new ArrayList<>();
+
+        EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
+        boolean alreadyDynamicList = extInfo != null
+            && ECLASS_DYNAMIC_LIST_EXT_INFO.equals(extInfo.eClass().getName());
+        if (!alreadyDynamicList && queryText == null)
+        {
+            // Converting a plain attribute to a dynamic list needs a query (we do not set a main table),
+            // so a bare 'customQuery' toggle on a not-yet-dynamic-list attribute would create an
+            // incomplete list. Require the query text up front. (Toggling 'customQuery' on an EXISTING
+            // dynamic list keeps its stored query, so it is allowed.)
+            throw new FormValidationException(ToolResult.error(
+                "To create a dynamic list, provide a 'queryText' (the custom query), e.g. " //$NON-NLS-1$
+                + "{name:'queryText', value:'SELECT Ref, Description AS Description FROM " //$NON-NLS-1$
+                + "Catalog.Products'}. 'customQuery' alone only toggles an attribute that is already a " //$NON-NLS-1$
+                + "dynamic list.").toJson()); //$NON-NLS-1$
+        }
+        if (!alreadyDynamicList)
+        {
+            // Turn a plain form attribute into a dynamic list: create the ext-info, set the DynamicList
+            // value type, auto-fill available fields, and make it the form's main attribute if none yet.
+            setExtInfoClassifier(formModel, attribute, ECLASS_DYNAMIC_LIST_EXT_INFO);
+            extInfo = singleReference(attribute, FEATURE_EXT_INFO);
+            if (extInfo == null)
+            {
+                throw new IllegalStateException(
+                    "The form model does not expose a DynamicListExtInfo classifier."); //$NON-NLS-1$
+            }
+            EObject dynamicListType = MetadataTypeBuilder.dynamicListType(version);
+            EStructuralFeature valueTypeFeature =
+                attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+            if (dynamicListType != null && valueTypeFeature instanceof EReference)
+            {
+                attribute.eSet(valueTypeFeature, dynamicListType);
+            }
+            setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
+            if (!hasMainAttribute(formModel))
+            {
+                setBooleanFeature(attribute, FEATURE_MAIN, true);
+            }
+            applied.add("dynamicList"); //$NON-NLS-1$
+        }
+
+        boolean effectiveCustomQuery = customQuery != null ? customQuery.booleanValue() : queryText != null;
+        if (queryText != null)
+        {
+            setStringFeature(extInfo, FEATURE_QUERY_TEXT, queryText);
+            applied.add(FEATURE_QUERY_TEXT);
+        }
+        if (customQuery != null || queryText != null)
+        {
+            setBooleanFeature(extInfo, FEATURE_CUSTOM_QUERY, effectiveCustomQuery);
+            applied.add(FEATURE_CUSTOM_QUERY);
+            if (effectiveCustomQuery)
+            {
+                // A custom query without auto-filled fields trips the platform field-binding checks; keep
+                // auto-fill on whenever the query is custom so EDT derives the available fields.
+                setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
+            }
+        }
+        return applied;
+    }
+
+    /** Whether the form already has an attribute flagged as its main data source. */
+    private static boolean hasMainAttribute(EObject formModel)
+    {
+        for (EObject attr : referenceList(formModel, FEATURE_ATTRIBUTES))
+        {
+            EStructuralFeature mainFeature = attr.eClass().getEStructuralFeature(FEATURE_MAIN);
+            if (mainFeature != null && Boolean.TRUE.equals(attr.eGet(mainFeature)))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String createCommand(EObject formModel, String name, String titleLanguage,
