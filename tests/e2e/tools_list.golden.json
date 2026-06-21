@@ -2261,7 +2261,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Capture a PNG screenshot of a 1C template (a SpreadsheetDocument print form) as EDT renders it, so its layout and text are visible to an AI. Pass a common-template FQN 'CommonTemplate.<Name>'. Renders off-screen (no JVM flag needed). Full parameters and examples: call get_tool_guide('get_template_screenshot').",
+    "description": "Capture a PNG screenshot of a 1C template (a SpreadsheetDocument print form) as EDT renders it, so its layout and text are visible to an AI. Works for a common template 'CommonTemplate.<Name>' OR an object-owned template '<Type>.<Owner>.Template.<Name>' (e.g. 'DataProcessor.Invoices.Template.Printout'). Renders off-screen (no JVM flag needed). Full parameters and examples: call get_tool_guide('get_template_screenshot').",
     "inputSchema": {
       "properties": {
         "projectName": {
@@ -2269,7 +2269,7 @@
           "type": "string"
         },
         "templatePath": {
-          "description": "Common-template FQN 'CommonTemplate.<Name>', e.g. 'CommonTemplate.PrintForm'.",
+          "description": "Template FQN: a common template 'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>' (e.g. 'DataProcessor.Invoices.Template.Printout').",
           "type": "string"
         }
       },

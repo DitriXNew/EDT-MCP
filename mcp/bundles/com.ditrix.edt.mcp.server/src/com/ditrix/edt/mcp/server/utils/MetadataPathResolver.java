@@ -157,47 +157,6 @@ public final class MetadataPathResolver
     }
 
     /**
-     * Resolves a TEMPLATE FQN to its {@code .mdo} file path relative to the EDT project root.
-     *
-     * <p>Supported shape (a configuration-level common template - the print-form/макет case):
-     * <ul>
-     *   <li>{@code "CommonTemplate.PrintForm"} &rarr;
-     *       {@code "src/CommonTemplates/PrintForm/PrintForm.mdo"}</li>
-     *   <li>the Russian type token resolves identically:
-     *       {@code "ОбщийМакет.ПечатнаяФорма"} &rarr;
-     *       {@code "src/CommonTemplates/ПечатнаяФорма/ПечатнаяФорма.mdo"}</li>
-     * </ul>
-     *
-     * <p>The type token is bilingual via {@link MetadataTypeUtils} (it must resolve to the
-     * {@code CommonTemplates} directory); the template Name passes through verbatim. An FQN of any
-     * other shape - an owned object template ({@code Catalog.X.Template.Y}, which has no own
-     * {@code .mdo}, being serialized inline in the owner) or a non-template type - returns
-     * {@code null} so the caller can report a precise "expected CommonTemplate.&lt;Name&gt;" error.
-     *
-     * @param templatePath the template FQN (e.g. {@code "CommonTemplate.PrintForm"})
-     * @return the {@code .mdo} path relative to the project root, or {@code null} if not a common
-     *         template FQN
-     */
-    public static String resolveTemplateMdoPath(String templatePath)
-    {
-        if (templatePath == null || templatePath.isEmpty())
-        {
-            return null;
-        }
-        String[] parts = templatePath.split("\\."); //$NON-NLS-1$
-        // CommonTemplate.Name (2 parts) - the only shape with an own .mdo file on disk. The type
-        // token resolves bilingually to the canonical singular (English "CommonTemplate" / Russian
-        // "ОбщийМакет"). Note: CommonTemplate has no directoryName in MetadataTypeUtils, so the
-        // src directory ("CommonTemplates", the stable platform layout) is used directly here, the
-        // same way resolveFormFilePath hardcodes "CommonForms".
-        if (parts.length == 2 && "CommonTemplate".equals(MetadataTypeUtils.toEnglishSingular(parts[0]))) //$NON-NLS-1$
-        {
-            return "src/CommonTemplates/" + parts[1] + "/" + parts[1] + ".mdo"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        }
-        return null;
-    }
-
-    /**
      * Resolves a metadata type string to the directory name under {@code src/}.
      * Handles English/Russian, singular/plural forms via {@link MetadataTypeUtils}.
      *

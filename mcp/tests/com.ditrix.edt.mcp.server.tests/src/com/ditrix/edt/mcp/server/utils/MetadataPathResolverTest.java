@@ -281,42 +281,4 @@ public class MetadataPathResolverTest
     {
         assertNull(MetadataPathResolver.resolveMetadataDir("NotAType")); //$NON-NLS-1$
     }
-
-    // ==================== resolveTemplateMdoPath (common templates) ====================
-
-    @Test
-    public void testTemplateMdoCommonTemplateEnglish()
-    {
-        assertEquals("src/CommonTemplates/PrintForm/PrintForm.mdo", //$NON-NLS-1$
-            MetadataPathResolver.resolveTemplateMdoPath("CommonTemplate.PrintForm")); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testTemplateMdoCommonTemplateRussianToken()
-    {
-        // The Russian common-template token ОбщийМакет resolves to the same path.
-        assertEquals("src/CommonTemplates/PrintForm/PrintForm.mdo", //$NON-NLS-1$
-            MetadataPathResolver.resolveTemplateMdoPath(
-                "\u041E\u0431\u0449\u0438\u0439\u041C\u0430\u043A\u0435\u0442.PrintForm")); // ОбщийМакет.PrintForm //$NON-NLS-1$
-    }
-
-    @Test
-    public void testTemplateMdoOwnedTemplateReturnsNull()
-    {
-        // An owned object template (Type.Owner.Template.Name) has no own .mdo - unsupported here.
-        assertNull(MetadataPathResolver.resolveTemplateMdoPath("Catalog.Products.Template.PrintForm")); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testTemplateMdoNonTemplateTypeReturnsNull()
-    {
-        assertNull(MetadataPathResolver.resolveTemplateMdoPath("Catalog.Products")); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testTemplateMdoNullEmptyReturnsNull()
-    {
-        assertNull(MetadataPathResolver.resolveTemplateMdoPath(null));
-        assertNull(MetadataPathResolver.resolveTemplateMdoPath("")); //$NON-NLS-1$
-    }
 }

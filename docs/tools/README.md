@@ -102,7 +102,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 |------|-------------|
 | [`get_form_layout_snapshot`](get_form_layout_snapshot.md) | Return a YAML snapshot of a form's calculated WYSIWYG layout (bounds, element types, display properties) as text; use it to inspect or compare what a form ac… |
 | [`get_form_screenshot`](get_form_screenshot.md) | Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the form automatically or omit it to shoot the active editor. Requires EDT launche… |
-| [`get_template_screenshot`](get_template_screenshot.md) | Capture a PNG screenshot of a 1C template (a SpreadsheetDocument print form) as EDT renders it, so its layout and text are visible to an AI. Pass a common-te… |
+| [`get_template_screenshot`](get_template_screenshot.md) | Capture a PNG screenshot of a 1C template (a SpreadsheetDocument print form) as EDT renders it, so its layout and text are visible to an AI. Works for a comm… |
 
 ## Tags
 

@@ -17,8 +17,9 @@ import com.ditrix.edt.mcp.server.utils.TemplateScreenshotHelper;
 
 /**
  * Tool to capture a PNG screenshot of a 1C template (макет) - a {@code SpreadsheetDocument}
- * (табличный документ / print form) - as EDT renders it. Opens the common-template editor by FQN,
- * reaches its embedded spreadsheet editor and rasterizes it off-screen.
+ * print form - as EDT renders it. Resolves the template by FQN (a common template or an
+ * object-owned template), opens it in the EDT template editor, reaches the embedded spreadsheet
+ * editor and rasterizes it off-screen.
  */
 public class GetTemplateScreenshotTool implements IMcpTool
 {
@@ -38,9 +39,10 @@ public class GetTemplateScreenshotTool implements IMcpTool
     public String getDescription()
     {
         return "Capture a PNG screenshot of a 1C template (a SpreadsheetDocument print form) as EDT " + //$NON-NLS-1$
-            "renders it, so its layout and text are visible to an AI. Pass a common-template FQN " + //$NON-NLS-1$
-            "'CommonTemplate.<Name>'. Renders off-screen (no JVM flag needed). Full parameters and " + //$NON-NLS-1$
-            "examples: call get_tool_guide('get_template_screenshot')."; //$NON-NLS-1$
+            "renders it, so its layout and text are visible to an AI. Works for a common template " + //$NON-NLS-1$
+            "'CommonTemplate.<Name>' OR an object-owned template '<Type>.<Owner>.Template.<Name>' " + //$NON-NLS-1$
+            "(e.g. 'DataProcessor.Invoices.Template.Printout'). Renders off-screen (no JVM flag " + //$NON-NLS-1$
+            "needed). Full parameters and examples: call get_tool_guide('get_template_screenshot')."; //$NON-NLS-1$
     }
 
     @Override
@@ -49,7 +51,9 @@ public class GetTemplateScreenshotTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty(KEY_PROJECT_NAME, "EDT project name.", true) //$NON-NLS-1$
             .stringProperty(KEY_TEMPLATE_PATH,
-                "Common-template FQN 'CommonTemplate.<Name>', e.g. 'CommonTemplate.PrintForm'.", true) //$NON-NLS-1$
+                "Template FQN: a common template 'CommonTemplate.<Name>' or an object-owned template " + //$NON-NLS-1$
+                "'<Type>.<Owner>.Template.<Name>' (e.g. 'DataProcessor.Invoices.Template.Printout').", //$NON-NLS-1$
+                true)
             .build();
     }
 

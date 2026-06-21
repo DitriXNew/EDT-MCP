@@ -58,4 +58,11 @@
     <usePurposes>PersonalComputer</usePurposes>
     <usePurposes>MobileDevice</usePurposes>
   </forms>
+  <templates uuid="2e31a031-fca6-453d-bafe-b5346d08d0ec">
+    <name>Invoice</name>
+    <synonym>
+      <key>en</key>
+      <value>Invoice</value>
+    </synonym>
+  </templates>
 </mdclass:Catalog>

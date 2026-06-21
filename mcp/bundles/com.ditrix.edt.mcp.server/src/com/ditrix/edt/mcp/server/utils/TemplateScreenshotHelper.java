@@ -7,10 +7,9 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
-import org.eclipse.core.runtime.Path;
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
@@ -18,14 +17,14 @@ import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
-import org.eclipse.ui.ide.IDE;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.md.ui.presentation.IPresentationService;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.sheet.SheetAccessor;
 import com._1c.g5.v8.dt.moxel.sheet.UnitsConverter;
@@ -36,7 +35,7 @@ import com._1c.g5.v8.dt.moxel.ui.editor.MoxelRepaginator;
 import com._1c.g5.v8.dt.moxel.ui.editor.PositionHolder;
 import com._1c.g5.v8.dt.moxel.ui.editor.PrintHelper;
 import com._1c.g5.v8.dt.moxel.ui.editor.dialogs.PrintInfoProvider;
-import com._1c.g5.v8.dt.ui.util.ContentUtil;
+import com._1c.g5.v8.dt.ui.util.OpenHelper;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -58,8 +57,6 @@ import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper.CaptureResult;
  */
 public final class TemplateScreenshotHelper
 {
-    /** Editor id of the EDT common-template editor (registered for the {@code CommonTemplate} eclass). */
-    private static final String TEMPLATE_EDITOR_ID = "com._1c.g5.v8.dt.md.ui.editor.commonTemplate"; //$NON-NLS-1$
     /** Page id of the SpreadsheetDocument page inside the template editor. */
     private static final String SPREADSHEET_PAGE_ID = "editors.commontemplate.pages.spreadsheet"; //$NON-NLS-1$
     private static final String SET_ACTIVE_PAGE_METHOD = "setActivePage"; //$NON-NLS-1$
@@ -82,7 +79,8 @@ public final class TemplateScreenshotHelper
      * it to a PNG. Runs on the UI thread.
      *
      * @param projectName EDT project name
-     * @param templatePath template FQN ({@code CommonTemplate.<Name>})
+     * @param templatePath template FQN - a common template ({@code CommonTemplate.<Name>}) or an
+     *            object-owned template ({@code <Type>.<Owner>.Template.<Name>})
      * @return a {@link CaptureResult} carrying the base64 PNG on success, or an error JSON
      */
     public static CaptureResult capture(String projectName, String templatePath)
@@ -162,31 +160,37 @@ public final class TemplateScreenshotHelper
     }
 
     /**
-     * Resolves the template {@code .mdo}, opens it in the common-template editor and brings it to the
-     * top. Returns a holder with the opened editor part, or an error JSON. Runs on the UI thread.
+     * Resolves the template object by FQN and opens it in the EDT template editor, returning a holder
+     * with the opened editor part. Works for BOTH a common template ({@code CommonTemplate.<Name>}) and
+     * an owned object template ({@code <Type>.<Owner>.Template.<Name>}): the FQN is resolved to the
+     * {@code BasicTemplate} model object via {@link MetadataNodeResolver}, then opened via EDT's own
+     * navigator-open path ({@link OpenHelper#openEditor(EObject)}), which builds the correct editor
+     * input and opens the single TemplateEditor registered for both template eclasses. Runs on the UI
+     * thread.
      */
     private static OpenResult openTemplateEditor(String projectName, String templatePath)
     {
-        String relativePath = MetadataPathResolver.resolveTemplateMdoPath(templatePath);
-        if (relativePath == null)
+        ProjectContext.ConfigurationResult cfg = ProjectContext.resolveConfiguration(projectName);
+        if (!cfg.ok())
         {
-            return OpenResult.error(ToolResult.error(
-                "Cannot resolve template path: " + templatePath + ". Expected a common template FQN " //$NON-NLS-1$ //$NON-NLS-2$
-                + "'CommonTemplate.<Name>' (e.g. 'CommonTemplate.PrintForm'). Owned object templates " //$NON-NLS-1$
-                + "('Type.Owner.Template.Name') are not supported by this tool.").toJson()); //$NON-NLS-1$
+            return OpenResult.error(cfg.errorJson());
         }
 
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-        if (project == null || !project.exists())
-        {
-            return OpenResult.error(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
-        }
-
-        IFile mdoFile = project.getFile(new Path(relativePath));
-        if (!mdoFile.exists())
+        EObject templateObject = resolveTemplateObject(cfg.configuration(), templatePath);
+        if (templateObject == null)
         {
             return OpenResult.error(ToolResult.error(
-                "Template file not found: " + relativePath + " in project " + projectName).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+                "Cannot resolve template '" + templatePath + "'. Expected a template FQN: a common " //$NON-NLS-1$ //$NON-NLS-2$
+                + "template 'CommonTemplate.<Name>' or an owned object template " //$NON-NLS-1$
+                + "'<Type>.<Owner>.Template.<Name>' (e.g. 'DataProcessor.Invoices.Template.Printout'). " //$NON-NLS-1$
+                + "Verify the name with get_metadata_objects / get_metadata_details.").toJson()); //$NON-NLS-1$
+        }
+        if (!(templateObject instanceof BasicTemplate))
+        {
+            return OpenResult.error(ToolResult.error(
+                "'" + templatePath + "' is not a template (it resolves to a " //$NON-NLS-1$ //$NON-NLS-2$
+                + templateObject.eClass().getName() + "). Pass a template FQN: 'CommonTemplate.<Name>' " //$NON-NLS-1$
+                + "or '<Type>.<Owner>.Template.<Name>'.").toJson()); //$NON-NLS-1$
         }
 
         IWorkbenchPage page = EditorScreenshotHelper.getWorkbenchPage();
@@ -195,18 +199,13 @@ public final class TemplateScreenshotHelper
             return OpenResult.error(ToolResult.error("No active workbench page").toJson()); //$NON-NLS-1$
         }
 
-        IEditorInput editorInput = resolveGranularEditorInput(mdoFile);
-        if (editorInput == null)
-        {
-            return OpenResult.error(ToolResult.error(
-                "Could not resolve the template model for: " + templatePath + ". The project may still " //$NON-NLS-1$ //$NON-NLS-2$
-                + "be loading or building its model; wait for it to finish loading and try again.") //$NON-NLS-1$
-                .toJson());
-        }
-
         try
         {
-            IEditorPart editorPart = IDE.openEditor(page, editorInput, TEMPLATE_EDITOR_ID, true);
+            // EDT's own navigator-open path: it builds the correct TemplateEditorInput and opens the
+            // TemplateEditor (the SAME editor is registered for the CommonTemplate and Template
+            // eclasses), returning the opened part - so the downstream moxel resolution is identical
+            // for common and owned templates.
+            IEditorPart editorPart = new OpenHelper(page).openEditor(templateObject);
             if (editorPart == null)
             {
                 return OpenResult.error(
@@ -224,25 +223,28 @@ public final class TemplateScreenshotHelper
     }
 
     /**
-     * Resolves the EDT granular editor input for the template {@code .mdo}, retrying while the
-     * project's BM model is still loading (same transient as the form path). Runs on the UI thread.
+     * Resolves a template FQN to its {@code BasicTemplate} model object via
+     * {@link MetadataNodeResolver#resolveExisting} (handles a 2-part common template and a 4-part owned
+     * object template, bilingually), retrying while the project's model is still loading. Returns the
+     * resolved {@code EObject}, or {@code null} when it cannot be resolved. Runs on the UI thread.
      */
-    private static IEditorInput resolveGranularEditorInput(IFile mdoFile)
+    private static EObject resolveTemplateObject(Configuration configuration, String templatePath)
     {
         Display display = Display.getCurrent();
         for (int i = 0; i < MODEL_RESOLVE_RETRIES; i++)
         {
             try
             {
-                IEditorInput input = ContentUtil.createGranularEditorInput(mdoFile);
-                if (input != null)
+                MetadataNodeResolver.MetadataNode node =
+                    MetadataNodeResolver.resolveExisting(configuration, templatePath);
+                if (node != null && node.object != null)
                 {
-                    return input;
+                    return node.object;
                 }
             }
             catch (Exception e)
             {
-                Activator.logWarning("Template model not resolvable yet: " + e.getMessage()); //$NON-NLS-1$
+                Activator.logWarning("Template not resolvable yet: " + e.getMessage()); //$NON-NLS-1$
             }
             EditorScreenshotHelper.processEvents(display);
             sleep(MODEL_RESOLVE_INTERVAL_MS);
