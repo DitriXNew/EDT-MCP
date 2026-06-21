@@ -27,6 +27,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
+import com._1c.g5.v8.dt.md.ui.presentation.IPresentationService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
@@ -63,6 +64,7 @@ public class EdtServices
     private ServiceTracker<IInfobaseAssociationManager, IInfobaseAssociationManager> infobaseAssociationManagerTracker;
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
+    private ServiceTracker<IPresentationService, IPresentationService> presentationServiceTracker;
     private ServiceTracker<ITopObjectFqnGenerator, ITopObjectFqnGenerator> topObjectFqnGeneratorTracker;
     private ServiceTracker<IExtensionProjectManager, IExtensionProjectManager> extensionProjectManagerTracker;
     private ServiceTracker<IConfigurationProjectManager, IConfigurationProjectManager> configurationProjectManagerTracker;
@@ -164,6 +166,9 @@ public class EdtServices
         mdRefactoringServiceTracker = new ServiceTracker<>(context, IMdRefactoringService.class, null);
         mdRefactoringServiceTracker.open();
 
+        presentationServiceTracker = new ServiceTracker<>(context, IPresentationService.class, null);
+        presentationServiceTracker.open();
+
         topObjectFqnGeneratorTracker = new ServiceTracker<>(context, ITopObjectFqnGenerator.class, null);
         topObjectFqnGeneratorTracker.open();
 
@@ -238,6 +243,7 @@ public class EdtServices
         infobaseAssociationManagerTracker = closeTracker(infobaseAssociationManagerTracker);
         navigatorStateProviderTracker = closeTracker(navigatorStateProviderTracker);
         mdRefactoringServiceTracker = closeTracker(mdRefactoringServiceTracker);
+        presentationServiceTracker = closeTracker(presentationServiceTracker);
         topObjectFqnGeneratorTracker = closeTracker(topObjectFqnGeneratorTracker);
         extensionProjectManagerTracker = closeTracker(extensionProjectManagerTracker);
         configurationProjectManagerTracker = closeTracker(configurationProjectManagerTracker);
@@ -488,6 +494,23 @@ public class EdtServices
             return null;
         }
         return mdRefactoringServiceTracker.getService();
+    }
+
+    /**
+     * Returns the moxel {@link IPresentationService} used to build a SpreadsheetDocument render
+     * control (style/picture lookup). It is the md.ui Guice singleton, registered as an OSGi service
+     * by the EDT wiring framework. Used by the template screenshot to render a SpreadsheetDocument
+     * off-screen without opening an editor.
+     *
+     * @return the presentation service, or {@code null} if not available
+     */
+    public IPresentationService getPresentationService()
+    {
+        if (presentationServiceTracker == null)
+        {
+            return null;
+        }
+        return presentationServiceTracker.getService();
     }
 
     /**

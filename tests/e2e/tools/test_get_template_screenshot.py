@@ -4,10 +4,10 @@ e2e tests for get_template_screenshot (kind: read).
 WHAT THE TOOL DOES
   Renders a 1C template (макет) - a SpreadsheetDocument print form - to a PNG and
   returns it as an IMAGE response. Resolves the template object by FQN
-  (MetadataNodeResolver) and opens it in the EDT template editor via the same path
-  the navigator's "Open" uses, so it works for BOTH a common template
-  (CommonTemplate.<Name>) AND an object-owned template (<Type>.<Owner>.Template.<Name>);
-  then rasterizes the embedded spreadsheet off-screen via EDT's print/preview pipeline.
+  (MetadataNodeResolver), reads its content SpreadsheetDocument from the BM model, and
+  rasterizes it off-screen via a standalone moxel control - NO editor is opened - so it
+  works for BOTH a common template (CommonTemplate.<Name>) AND an object-owned template
+  (<Type>.<Owner>.Template.<Name>).
   Source: GetTemplateScreenshotTool.java + utils/TemplateScreenshotHelper.java.
 
 WIRE SHAPE (why this file reads r.raw, not r.text/r.structured)
@@ -17,14 +17,15 @@ WIRE SHAPE (why this file reads r.raw, not r.text/r.structured)
     * FAILURE -> ToolResult.error(...).toJson() -> isError:true; r.error_text() carries
                  the "error" string -> consumable by assert_error / assert_error_quality.
 
-RENDER (no JVM flag - unlike forms)
+RENDER (no JVM flag - unlike forms; no editor)
   The whole used cell range is painted as ONE continuous off-screen image (the editor
-  canvas, not print pages) via MoxelControl.paintViewPort, on the UI thread inside an
-  executeAndRollback BM sandbox (painting lazily touches the model; the sandbox discards
-  those edits). There is NO -DnativeFormBufferedLayoutRender dependency, so a healthy
-  stand renders a real, non-empty PNG. The happy paths decode the blob and assert a valid
-  PNG whose IHDR width AND height are > 0; the only tolerated error is the cold-editor
-  sentinel (a headless/cold workbench where the editor never realizes).
+  canvas, not print pages) via a standalone MoxelControl.paintViewPort built directly from
+  the document, on the UI thread inside an executeAndRollback BM sandbox (painting lazily
+  touches the model; the sandbox discards those edits). There is NO
+  -DnativeFormBufferedLayoutRender dependency and no editor is opened, so the render does
+  not depend on the editor's page structure (which varies across EDT builds / headless
+  runs). The happy paths therefore assert STRICTLY: a real, non-empty PNG whose IHDR width
+  AND height are > 0; an error here is a real bug.
 
   Read-only w.r.t. model + disk (the render's transient model writes are rolled back),
   so every test ends with assert_no_diff().
@@ -56,11 +57,6 @@ from harness import (
 )
 
 
-# The ONLY error tolerated by a happy path: the cold-editor sentinel, when the template
-# editor's spreadsheet control never realizes (e.g. a headless/cold workbench).
-_COLD_EDITOR_SENTINEL = "did not finish initializing"
-
-
 def _blob(result):
     """Extract the IMAGE resource blob from the raw JSON-RPC response, or None."""
     res = result.raw.get("result") if isinstance(result.raw, dict) else None
@@ -89,17 +85,15 @@ def _png_dimensions(blob_b64):
     return (width, height)
 
 
-def _assert_nonempty_png_or_cold_sentinel(r, fqn):
-    """Shared happy-path contract: the success channel MUST carry a genuine, NON-EMPTY PNG
-    (valid signature + IHDR width AND height > 0); the only acceptable error is the cold-editor
-    sentinel. Any other error for an existing, content-bearing template is a real bug."""
-    if r.is_error:
-        err = r.error_text()
-        assert _COLD_EDITOR_SENTINEL in err, (
-            "for the existing, content-bearing %r the only acceptable error is the cold-editor "
-            "%r sentinel; got: %r" % (fqn, _COLD_EDITOR_SENTINEL, err[:300])
-        )
-        return
+def _assert_nonempty_png(r, fqn):
+    """Shared happy-path contract: rendering an existing, content-bearing template MUST succeed and
+    return a genuine, NON-EMPTY PNG (valid signature + IHDR width AND height > 0). The render is
+    editor-free (it builds the moxel control directly from the document), so there is no cold-editor
+    flake to tolerate - any error here is a real bug."""
+    assert not r.is_error, (
+        "rendering the existing, content-bearing %r must succeed (the render is editor-free); "
+        "got error: %r" % (fqn, r.error_text()[:300])
+    )
     blob = _blob(r)
     assert blob, (
         "success channel must carry an image blob at content[0].resource.blob; got none "
@@ -122,12 +116,12 @@ def _assert_nonempty_png_or_cold_sentinel(r, fqn):
 @e2e_test(tool="get_template_screenshot", kind="read")
 def test_capture_common_template_returns_nonempty_png():
     """Render the real fixture COMMON template CommonTemplate.PrintForm and validate a
-    non-empty PNG is produced (the core contract). See _assert_nonempty_png_or_cold_sentinel."""
+    non-empty PNG is produced (the core contract). See _assert_nonempty_png."""
     r = call("get_template_screenshot", {
         "projectName": PROJECT,
         "templatePath": "CommonTemplate.PrintForm",
     })
-    _assert_nonempty_png_or_cold_sentinel(r, "CommonTemplate.PrintForm")
+    _assert_nonempty_png(r, "CommonTemplate.PrintForm")
     assert_no_diff("a template screenshot read must not touch the project on disk")
 
 
@@ -140,7 +134,7 @@ def test_capture_owned_template_returns_nonempty_png():
         "projectName": PROJECT,
         "templatePath": "Catalog.Catalog.Template.Invoice",
     })
-    _assert_nonempty_png_or_cold_sentinel(r, "Catalog.Catalog.Template.Invoice")
+    _assert_nonempty_png(r, "Catalog.Catalog.Template.Invoice")
     assert_no_diff("a template screenshot read must not touch the project on disk")
 
 

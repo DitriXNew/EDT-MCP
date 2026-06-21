@@ -3,10 +3,6 @@
  */
 package com.ditrix.edt.mcp.server.utils;
 
-import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
-
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.ecore.EObject;
@@ -16,11 +12,12 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.IEditorPart;
-import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.swt.widgets.Shell;
 
+import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.md.ui.presentation.IPresentationService;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
@@ -29,42 +26,39 @@ import com._1c.g5.v8.dt.moxel.sheet.SheetAccessor;
 import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
 import com._1c.g5.v8.dt.moxel.sheet.UnitsConverter;
 import com._1c.g5.v8.dt.moxel.ui.editor.MoxelControl;
-import com._1c.g5.v8.dt.moxel.ui.editor.MoxelEditor;
 import com._1c.g5.v8.dt.moxel.ui.editor.PositionHolder;
 import com._1c.g5.v8.dt.moxel.ui.editor.ViewPort;
-import com._1c.g5.v8.dt.ui.util.OpenHelper;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper.CaptureResult;
 
 /**
- * Captures a PNG screenshot of a 1C <b>template</b> (макет) - specifically a
- * {@code SpreadsheetDocument} (табличный документ / print form) template - by opening its EDT
- * editor and rasterizing the spreadsheet off-screen.
+ * Captures a PNG screenshot of a 1C <b>template</b> (макет) - a {@code SpreadsheetDocument} print form -
+ * as EDT renders it, <b>without opening an editor</b>.
  * <p>
- * In EDT a SpreadsheetDocument is the "moxel" model; its WHOLE used cell range is painted as one
- * continuous off-screen image - the editor-canvas look, not split into print pages - via
- * {@code MoxelControl.paintViewPort} into a self-made {@code new Image(Display.getCurrent(), w, h)} on
- * the UI thread. Unlike the managed-form render path there is no asynchronous render hop and no JVM
- * flag dependency, so a straight synchronous call on the UI thread produces the image.
+ * The FQN is resolved to its {@code BasicTemplate} model object (a common template or an object-owned
+ * template); its content {@code SpreadsheetDocument} ("moxel" model) is read from the BM model and
+ * painted as one continuous image - the editor-canvas look, not print pages - into an off-screen
+ * {@code Image} via a standalone, never-shown {@code MoxelControl.paintViewPort}. The render is
+ * editor-free on purpose: the EDT template editor's page structure varies across builds / headless
+ * runs (the embedded spreadsheet page is not always created), so reaching the moxel editor through the
+ * editor is unreliable; building the moxel control directly from the document is not.
  * <p>
  * All methods here must run on the SWT UI thread (via {@code Display.syncExec}); the render needs a
  * non-null {@link Display#getCurrent()}.
  */
 public final class TemplateScreenshotHelper
 {
-    /** Page id of the SpreadsheetDocument page inside the template editor. */
-    private static final String SPREADSHEET_PAGE_ID = "editors.commontemplate.pages.spreadsheet"; //$NON-NLS-1$
-    private static final String SET_ACTIVE_PAGE_METHOD = "setActivePage"; //$NON-NLS-1$
-    private static final String GET_EMBEDDED_EDITOR_METHOD = "getEmbeddedEditor"; //$NON-NLS-1$
-
+    /**
+     * SWT style for the off-screen render control - the same style EDT's print preview uses for its own
+     * off-screen {@code MoxelControl} (it only ever paints into a self-made GC, never shown).
+     */
+    private static final int MOXEL_CONTROL_STYLE = 262914;
     /** Upper bound on the rendered image area (pixels) - guards against an SWT image too large to allocate. */
     private static final long MAX_IMAGE_PIXELS = 120_000_000L;
     private static final int MODEL_RESOLVE_RETRIES = 20;
     private static final int MODEL_RESOLVE_INTERVAL_MS = 250;
-    private static final int CONTROL_WAIT_RETRIES = 40;
-    private static final int CONTROL_WAIT_INTERVAL_MS = 200;
 
     private TemplateScreenshotHelper()
     {
@@ -72,8 +66,8 @@ public final class TemplateScreenshotHelper
     }
 
     /**
-     * Opens the template editor, reaches its embedded SpreadsheetDocument (moxel) editor and renders
-     * it to a PNG. Runs on the UI thread.
+     * Resolves the template by FQN and renders its SpreadsheetDocument content to a PNG. Runs on the
+     * UI thread.
      *
      * @param projectName EDT project name
      * @param templatePath template FQN - a common template ({@code CommonTemplate.<Name>}) or an
@@ -84,41 +78,27 @@ public final class TemplateScreenshotHelper
     {
         try
         {
-            OpenResult open = openTemplateEditor(projectName, templatePath);
-            if (open.error != null)
+            ProjectContext.ConfigurationResult cfg = ProjectContext.resolveConfiguration(projectName);
+            if (!cfg.ok())
             {
-                return CaptureResult.error(open.error);
+                return CaptureResult.error(cfg.errorJson());
             }
 
-            // Reach the embedded moxel editor: activating the SpreadsheetDocument page forces its
-            // controls to be created (the page builds lazily). A null result means this template has
-            // no spreadsheet page - i.e. it is not a SpreadsheetDocument template.
-            MoxelResolveResult resolve = resolveSpreadsheetMoxelEditor(open.editorPart);
-            MoxelEditor moxelEditor = resolve.editor;
-            if (moxelEditor == null)
+            EObject templateObject = resolveTemplateObject(cfg.configuration(), templatePath);
+            if (templateObject == null)
             {
                 return CaptureResult.error(ToolResult.error(
-                    "Template '" + templatePath + "' is not a SpreadsheetDocument template (no " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "spreadsheet editor page found). Only SpreadsheetDocument (print form) " //$NON-NLS-1$
-                    + "templates can be rendered to an image. [diag: " + resolve.diag + "]").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+                    "Cannot resolve template '" + templatePath + "'. Expected a template FQN: a common " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "template 'CommonTemplate.<Name>' or an object-owned template " //$NON-NLS-1$
+                    + "'<Type>.<Owner>.Template.<Name>' (e.g. 'DataProcessor.Invoices.Template.Printout'). " //$NON-NLS-1$
+                    + "Verify the name with get_metadata_objects / get_metadata_details.").toJson()); //$NON-NLS-1$
             }
-
-            MoxelControl control = waitForMoxelControl(moxelEditor);
-            if (control == null)
+            if (!(templateObject instanceof BasicTemplate) || !(templateObject instanceof IBmObject))
             {
                 return CaptureResult.error(ToolResult.error(
-                    "The template editor for '" + templatePath + "' opened but its spreadsheet control " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "did not finish initializing in time; the project may still be loading - try " //$NON-NLS-1$
-                    + "again.").toJson()); //$NON-NLS-1$
-            }
-
-            SheetAccessor sheet = control.getSheet();
-            SpreadsheetDocument document = moxelEditor.getDocument();
-            if (sheet == null || document == null)
-            {
-                return CaptureResult.error(ToolResult.error(
-                    "Template '" + templatePath + "' editor is not ready (no spreadsheet model); try " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "again.").toJson()); //$NON-NLS-1$
+                    "'" + templatePath + "' is not a template (it resolves to a " //$NON-NLS-1$ //$NON-NLS-2$
+                    + templateObject.eClass().getName() + "). Pass a template FQN: 'CommonTemplate.<Name>' " //$NON-NLS-1$
+                    + "or '<Type>.<Owner>.Template.<Name>'.").toJson()); //$NON-NLS-1$
             }
 
             IBmModel bmModel = resolveBmModel(projectName);
@@ -127,11 +107,24 @@ public final class TemplateScreenshotHelper
                 return CaptureResult.error(ToolResult.error(
                     "Could not resolve the BM model for project '" + projectName + "'.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
             }
+            IPresentationService presentation = Activator.getDefault().getPresentationService();
+            if (presentation == null)
+            {
+                return CaptureResult.error(ToolResult.error(
+                    "The moxel presentation service is not available; cannot render the template.") //$NON-NLS-1$
+                    .toJson());
+            }
 
-            // The empty-content extent check and the render are the only reads of the BM-managed
-            // SpreadsheetDocument's features; both run inside the executeAndRollback boundary opened by
-            // renderTemplate, so no model feature is touched outside a transaction (hard-don't #1).
-            RenderOutcome outcome = renderTemplate(control, bmModel);
+            long bmId = ((IBmObject)templateObject).bmGetId();
+            RenderOutcome outcome = renderTemplate(bmModel, bmId, presentation);
+
+            if (outcome.notSpreadsheet)
+            {
+                return CaptureResult.error(ToolResult.error(
+                    "Template '" + templatePath + "' is not a SpreadsheetDocument template (its content " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "is " + outcome.detail + "). Only SpreadsheetDocument (print form) templates can be " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "rendered to an image.").toJson()); //$NON-NLS-1$
+            }
             if (outcome.emptyContent)
             {
                 return CaptureResult.error(ToolResult.error(
@@ -153,69 +146,6 @@ public final class TemplateScreenshotHelper
             Activator.logError("Failed to capture template screenshot", e); //$NON-NLS-1$
             return CaptureResult.error(
                 ToolResult.error("Failed to capture template screenshot: " + e.getMessage()).toJson()); //$NON-NLS-1$
-        }
-    }
-
-    /**
-     * Resolves the template object by FQN and opens it in the EDT template editor, returning a holder
-     * with the opened editor part. Works for BOTH a common template ({@code CommonTemplate.<Name>}) and
-     * an owned object template ({@code <Type>.<Owner>.Template.<Name>}): the FQN is resolved to the
-     * {@code BasicTemplate} model object via {@link MetadataNodeResolver}, then opened via EDT's own
-     * navigator-open path ({@link OpenHelper#openEditor(EObject)}), which builds the correct editor
-     * input and opens the single TemplateEditor registered for both template eclasses. Runs on the UI
-     * thread.
-     */
-    private static OpenResult openTemplateEditor(String projectName, String templatePath)
-    {
-        ProjectContext.ConfigurationResult cfg = ProjectContext.resolveConfiguration(projectName);
-        if (!cfg.ok())
-        {
-            return OpenResult.error(cfg.errorJson());
-        }
-
-        EObject templateObject = resolveTemplateObject(cfg.configuration(), templatePath);
-        if (templateObject == null)
-        {
-            return OpenResult.error(ToolResult.error(
-                "Cannot resolve template '" + templatePath + "'. Expected a template FQN: a common " //$NON-NLS-1$ //$NON-NLS-2$
-                + "template 'CommonTemplate.<Name>' or an owned object template " //$NON-NLS-1$
-                + "'<Type>.<Owner>.Template.<Name>' (e.g. 'DataProcessor.Invoices.Template.Printout'). " //$NON-NLS-1$
-                + "Verify the name with get_metadata_objects / get_metadata_details.").toJson()); //$NON-NLS-1$
-        }
-        if (!(templateObject instanceof BasicTemplate))
-        {
-            return OpenResult.error(ToolResult.error(
-                "'" + templatePath + "' is not a template (it resolves to a " //$NON-NLS-1$ //$NON-NLS-2$
-                + templateObject.eClass().getName() + "). Pass a template FQN: 'CommonTemplate.<Name>' " //$NON-NLS-1$
-                + "or '<Type>.<Owner>.Template.<Name>'.").toJson()); //$NON-NLS-1$
-        }
-
-        IWorkbenchPage page = EditorScreenshotHelper.getWorkbenchPage();
-        if (page == null)
-        {
-            return OpenResult.error(ToolResult.error("No active workbench page").toJson()); //$NON-NLS-1$
-        }
-
-        try
-        {
-            // EDT's own navigator-open path: it builds the correct TemplateEditorInput and opens the
-            // TemplateEditor (the SAME editor is registered for the CommonTemplate and Template
-            // eclasses), returning the opened part - so the downstream moxel resolution is identical
-            // for common and owned templates.
-            IEditorPart editorPart = new OpenHelper(page).openEditor(templateObject);
-            if (editorPart == null)
-            {
-                return OpenResult.error(
-                    ToolResult.error("Could not open template editor for: " + templatePath).toJson()); //$NON-NLS-1$
-            }
-            page.activate(editorPart);
-            return OpenResult.page(editorPart);
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Failed to open template editor for: " + templatePath, e); //$NON-NLS-1$
-            return OpenResult.error(
-                ToolResult.error("Failed to open template editor: " + e.getMessage()).toJson()); //$NON-NLS-1$
         }
     }
 
@@ -251,172 +181,6 @@ public final class TemplateScreenshotHelper
     }
 
     /**
-     * Reaches the embedded SpreadsheetDocument (moxel) editor of the opened template editor. It
-     * first tries the known SpreadsheetDocument page id; if that does not resolve, it enumerates the
-     * editor's pages ({@code FormEditor.pages}) and activates the one that carries an embedded
-     * {@link MoxelEditor} - robust against a different page id across EDT versions. Activating a page
-     * forces its (lazy) control creation, so the embedded editor and its model become available.
-     * Retries while the editor finishes building. Returns a holder with the moxel editor, or a
-     * diagnostic describing the pages found. Runs on the UI thread.
-     */
-    private static MoxelResolveResult resolveSpreadsheetMoxelEditor(IEditorPart editorPart)
-    {
-        Display display = Display.getCurrent();
-        String diag = ""; //$NON-NLS-1$
-        for (int attempt = 0; attempt < CONTROL_WAIT_RETRIES; attempt++)
-        {
-            // (a) Fast path: activate the known SpreadsheetDocument page id and read its embedded editor.
-            MoxelEditor direct = embeddedMoxelOf(invokeSetActivePage(editorPart, SPREADSHEET_PAGE_ID));
-            if (direct != null)
-            {
-                return MoxelResolveResult.found(direct);
-            }
-
-            // (b) Robust path: enumerate the editor's pages, activate any that exposes an embedded
-            // editor, and accept the first whose embedded editor is a MoxelEditor.
-            List<Object> pages = editorPages(editorPart);
-            StringBuilder sb = new StringBuilder();
-            sb.append(editorPart.getClass().getSimpleName()).append(" pages=").append(pages.size()); //$NON-NLS-1$
-            for (Object page : pages)
-            {
-                if (page == null)
-                {
-                    continue;
-                }
-                boolean hasEmbedded =
-                    ReflectionUtils.findMethod(page.getClass(), GET_EMBEDDED_EDITOR_METHOD) != null;
-                sb.append(" | ").append(page.getClass().getSimpleName()) //$NON-NLS-1$
-                    .append('#').append(pageId(page)).append(hasEmbedded ? "(emb)" : ""); //$NON-NLS-1$ //$NON-NLS-2$
-                if (hasEmbedded)
-                {
-                    invokeSetActivePage(editorPart, pageId(page));
-                    MoxelEditor moxel = embeddedMoxelOf(page);
-                    if (moxel != null)
-                    {
-                        return MoxelResolveResult.found(moxel);
-                    }
-                }
-            }
-            diag = sb.toString();
-            EditorScreenshotHelper.processEvents(display);
-            sleep(CONTROL_WAIT_INTERVAL_MS);
-            EditorScreenshotHelper.processEvents(display);
-        }
-        return MoxelResolveResult.diag(diag);
-    }
-
-    /**
-     * Activates a page of the template editor by id via the Eclipse Forms
-     * {@code FormEditor.setActivePage(String)} API (reflectively; {@code TemplateEditor} is internal)
-     * and returns the page instance, or {@code null}. Runs on the UI thread.
-     */
-    private static Object invokeSetActivePage(IEditorPart editorPart, String pageId)
-    {
-        if (pageId == null)
-        {
-            return null;
-        }
-        try
-        {
-            Method setActivePage =
-                ReflectionUtils.findMethod(editorPart.getClass(), SET_ACTIVE_PAGE_METHOD, String.class);
-            if (setActivePage == null)
-            {
-                return null;
-            }
-            setActivePage.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
-            return setActivePage.invoke(editorPart, pageId);
-        }
-        catch (Exception e)
-        {
-            return null;
-        }
-    }
-
-    /**
-     * Reads a page's embedded editor via its public {@code getEmbeddedEditor()} accessor (reflectively
-     * by name; the declaring base class is internal) and returns it when it is a {@link MoxelEditor},
-     * else {@code null}. The embedded editor is non-null only after the page's controls are created.
-     */
-    private static MoxelEditor embeddedMoxelOf(Object page)
-    {
-        if (page == null)
-        {
-            return null;
-        }
-        try
-        {
-            Object embedded = ReflectionUtils.invokeMethod(page, GET_EMBEDDED_EDITOR_METHOD);
-            return embedded instanceof MoxelEditor ? (MoxelEditor)embedded : null;
-        }
-        catch (Exception e)
-        {
-            return null;
-        }
-    }
-
-    /**
-     * Returns the multipage editor's page instances via the protected {@code FormEditor.pages} field,
-     * or an empty list. Runs on the UI thread.
-     */
-    private static List<Object> editorPages(IEditorPart editorPart)
-    {
-        try
-        {
-            Object pages = ReflectionUtils.getFieldValue(editorPart, "pages"); //$NON-NLS-1$
-            if (pages instanceof List)
-            {
-                return new ArrayList<>((List<?>)pages);
-            }
-        }
-        catch (Exception e)
-        {
-            Activator.logWarning("Could not enumerate template editor pages: " + e.getMessage()); //$NON-NLS-1$
-        }
-        return new ArrayList<>();
-    }
-
-    /**
-     * Reads a page's {@code getId()} (the Eclipse {@code IFormPage} id), or {@code null}.
-     */
-    private static String pageId(Object page)
-    {
-        try
-        {
-            Object id = ReflectionUtils.invokeMethod(page, "getId"); //$NON-NLS-1$
-            return id != null ? id.toString() : null;
-        }
-        catch (Exception e)
-        {
-            return null;
-        }
-    }
-
-    /**
-     * Waits (bounded) until the moxel editor's {@link MoxelControl} is created - it is built only in
-     * the embedded editor's {@code createPartControl}, which runs after the page is activated and the
-     * SWT event loop is pumped. Mirrors the form tool's "wait for the WYSIWYG viewer" readiness gate.
-     * Runs on the UI thread.
-     */
-    private static MoxelControl waitForMoxelControl(MoxelEditor moxelEditor)
-    {
-        Display display = Display.getCurrent();
-        for (int i = 0; i < CONTROL_WAIT_RETRIES; i++)
-        {
-            MoxelControl control = moxelEditor.getMoxelControl();
-            if (control != null && !control.isDisposed() && control.getSheet() != null)
-            {
-                return control;
-            }
-            EditorScreenshotHelper.processEvents(display);
-            sleep(CONTROL_WAIT_INTERVAL_MS);
-            EditorScreenshotHelper.processEvents(display);
-        }
-        MoxelControl control = moxelEditor.getMoxelControl();
-        return control != null && !control.isDisposed() ? control : null;
-    }
-
-    /**
      * Resolves the BM model for the project via the model manager, or {@code null} when unavailable.
      */
     private static IBmModel resolveBmModel(String projectName)
@@ -435,87 +199,116 @@ public final class TemplateScreenshotHelper
     }
 
     /**
-     * Renders the SpreadsheetDocument to {@link ImageData} inside a BM <b>auto-rolled-back</b>
-     * transaction. The document is BM-managed and painting it lazily initializes derived features
-     * while reading the model - those are model writes, so a plain read boundary rejects them and the
-     * model must not be persistently dirtied either. {@link BmTransactions#executeAndRollback} runs the
-     * render in a write-capable transaction and discards every change afterwards - the same sandbox
-     * EDT's form render uses. The returned image survives the rollback; the model edits do not. The
-     * empty-content extent check runs inside the same boundary, so every model-feature read stays in
-     * one transaction. Must run on the UI thread.
+     * Reads the template's content inside a BM <b>auto-rolled-back</b> transaction and renders it. The
+     * document is BM-managed and painting it lazily initializes derived features (those are model
+     * writes), so the work runs in {@link BmTransactions#executeAndRollback} (write-capable, every edit
+     * discarded) - the same sandbox EDT's form render uses. The template object is re-fetched by its BM
+     * id inside the transaction so {@code getTemplate()} materializes the content from {@code Template.mxlx}.
+     * Must run on the UI thread.
      *
-     * @param control the realized moxel control
-     * @param bmModel the BM model owning the document, for the rollback transaction
-     * @return a {@link RenderOutcome}: the rendered image, or the empty-content marker
+     * @param bmModel the BM model owning the template
+     * @param bmId the template object's BM id
+     * @param presentation the moxel presentation service for the render control
+     * @return the render outcome (image, empty marker, or not-a-SpreadsheetDocument marker)
      */
-    private static RenderOutcome renderTemplate(MoxelControl control, IBmModel bmModel)
+    private static RenderOutcome renderTemplate(IBmModel bmModel, long bmId, IPresentationService presentation)
     {
         return BmTransactions.executeAndRollback(bmModel, "renderTemplateScreenshot", //$NON-NLS-1$
             (tx, monitor) -> {
-                SheetAccessor sheet = control.getSheet();
-                if (sheet == null || sheet.getVerticalSize() <= 0 || sheet.getHorizontalSize() <= 0)
+                EObject txTemplate = tx.getObjectById(bmId);
+                EObject content =
+                    txTemplate instanceof BasicTemplate ? ((BasicTemplate)txTemplate).getTemplate() : null;
+                if (content == null)
                 {
                     return RenderOutcome.empty();
                 }
-                return RenderOutcome.image(renderSpreadsheet(control));
+                if (!(content instanceof SpreadsheetDocument))
+                {
+                    return RenderOutcome.notSpreadsheet(content.eClass().getName());
+                }
+                return renderSpreadsheet((SpreadsheetDocument)content, presentation);
             });
     }
 
     /**
-     * Renders the WHOLE used range of the SpreadsheetDocument to a single continuous {@link ImageData},
-     * the way the EDT editor canvas shows it - <b>not</b> split into print pages. It paints the full
-     * cell range into one off-screen {@link Image} via {@code MoxelControl.paintViewPort} (the same
-     * primitive the editor and the print preview draw cells with), sized to the used range's pixel
-     * extent. This is why a wide template's right-hand columns stay beside the header instead of
-     * spilling onto a separate print page (the old print-pipeline render paginated by paper width and
-     * stacked the pages, which mis-laid-out wide forms). Row/column header strips and print-page chrome
-     * are not drawn (paintViewPort draws cell content only). Must run on the UI thread inside the
-     * boundary opened by {@link #renderTemplate}.
+     * Renders the WHOLE used range of a SpreadsheetDocument to a single continuous {@link ImageData} via
+     * a standalone, never-shown {@link MoxelControl} (no editor). It builds the control from the document
+     * + presentation service, then paints the full inclusive cell range into one off-screen
+     * {@link Image} via {@code paintViewPort}, sized to the used range's pixel extent. Must run on the UI
+     * thread inside the boundary opened by {@link #renderTemplate}.
      *
-     * @param control the realized moxel control (source of sheet + display metrics)
-     * @return the rendered image data, or {@code null} if nothing could be produced
+     * @param document the spreadsheet document content
+     * @param presentation the moxel presentation service
+     * @return a {@link RenderOutcome}: the rendered image, the empty-content marker, or {@code image(null)}
+     *         when nothing could be produced
      */
-    private static ImageData renderSpreadsheet(MoxelControl control)
+    private static RenderOutcome renderSpreadsheet(SpreadsheetDocument document, IPresentationService presentation)
     {
-        Display display = control.getDisplay();
-        SheetAccessor sheet = control.getSheet();
-        PositionHolder positionHolder = control.getDisplayPositionHolder();
-        UnitsConverter unitsConverter = positionHolder.getUnitsConverter();
-
-        int columnCount = sheet.getHorizontalSize(); // used column count (last col index + 1)
-        int rowCount = sheet.getVerticalSize();       // used row count (last row index + 1)
-        if (columnCount <= 0 || rowCount <= 0)
+        Display display = Display.getCurrent();
+        Shell shell = new Shell(display);
+        try
         {
-            return null;
-        }
+            MoxelControl control = new MoxelControl(shell, MOXEL_CONTROL_STYLE, presentation);
+            control.setDocument(document);
 
-        // Pixel extent of the whole used range. The extent rect ends ONE PAST the last used cell, so
-        // getPositionForRectUnit returns {0,0,totalWidthUnits,totalHeightUnits} (the cumulative left/top
-        // edge of the column/row just past the last used one); convert units to device pixels.
-        SpreadsheetRect extent = SheetFactory.createSpreadsheetRect();
-        extent.getBegin().getCell().setX(0);
-        extent.getBegin().getCell().setY(0);
-        extent.getEnd().getCell().setX(columnCount);
-        extent.getEnd().getCell().setY(rowCount);
-        Rectangle unitRect = positionHolder.getPositionForRectUnit(extent);
-        int widthPx = unitsConverter.XUnitToPixel(unitRect.width);
-        int heightPx = unitsConverter.YUnitToPixel(unitRect.height);
-        if (widthPx <= 0 || heightPx <= 0 || (long)widthPx * heightPx > MAX_IMAGE_PIXELS)
+            SheetAccessor sheet = control.getSheet();
+            if (sheet == null)
+            {
+                return RenderOutcome.image(null);
+            }
+            int columnCount = sheet.getHorizontalSize(); // used column count (last col index + 1)
+            int rowCount = sheet.getVerticalSize();       // used row count (last row index + 1)
+            if (columnCount <= 0 || rowCount <= 0)
+            {
+                return RenderOutcome.empty();
+            }
+
+            PositionHolder positionHolder = control.getDisplayPositionHolder();
+            UnitsConverter unitsConverter = positionHolder.getUnitsConverter();
+
+            // Pixel extent of the whole used range. The extent rect ends ONE PAST the last used cell, so
+            // getPositionForRectUnit returns {0,0,totalWidthUnits,totalHeightUnits} (the cumulative
+            // left/top edge of the column/row just past the last used one); convert units to pixels.
+            SpreadsheetRect extent = SheetFactory.createSpreadsheetRect();
+            extent.getBegin().getCell().setX(0);
+            extent.getBegin().getCell().setY(0);
+            extent.getEnd().getCell().setX(columnCount);
+            extent.getEnd().getCell().setY(rowCount);
+            Rectangle unitRect = positionHolder.getPositionForRectUnit(extent);
+            int widthPx = unitsConverter.XUnitToPixel(unitRect.width);
+            int heightPx = unitsConverter.YUnitToPixel(unitRect.height);
+            if (widthPx <= 0 || heightPx <= 0 || (long)widthPx * heightPx > MAX_IMAGE_PIXELS)
+            {
+                // Nothing to draw, or pathologically large for a single SWT image.
+                return RenderOutcome.image(null);
+            }
+
+            // ViewPort over the whole INCLUSIVE used range (begin (0,0) .. end (lastCol, lastRow)).
+            SpreadsheetRect range = SheetFactory.createSpreadsheetRect();
+            range.getBegin().getCell().setX(0);
+            range.getBegin().getCell().setY(0);
+            range.getEnd().getCell().setX(columnCount - 1);
+            range.getEnd().getCell().setY(rowCount - 1);
+            ViewPort viewPort = new ViewPort(sheet, positionHolder);
+            viewPort.setSheetPosition(range);
+            viewPort.setDevicePosition(new Rectangle(0, 0, widthPx, heightPx));
+
+            return RenderOutcome.image(paintToImage(control, viewPort, display, widthPx, heightPx));
+        }
+        finally
         {
-            // Nothing to draw, or pathologically large for a single SWT image (avoid a native failure).
-            return null;
+            shell.dispose();
         }
+    }
 
-        // ViewPort over the whole INCLUSIVE used range (begin (0,0) .. end (lastCol, lastRow)).
-        SpreadsheetRect range = SheetFactory.createSpreadsheetRect();
-        range.getBegin().getCell().setX(0);
-        range.getBegin().getCell().setY(0);
-        range.getEnd().getCell().setX(columnCount - 1);
-        range.getEnd().getCell().setY(rowCount - 1);
-        ViewPort viewPort = new ViewPort(sheet, positionHolder);
-        viewPort.setSheetPosition(range);
-        viewPort.setDevicePosition(new Rectangle(0, 0, widthPx, heightPx));
-
+    /**
+     * Paints the viewport into a fresh off-screen {@link Image} on a white background and returns its
+     * {@link ImageData}. The image and GC are disposed on every path (the returned ImageData is a
+     * detached copy). Runs on the UI thread.
+     */
+    private static ImageData paintToImage(MoxelControl control, ViewPort viewPort, Display display,
+        int widthPx, int heightPx)
+    {
         Image image = new Image(display, widthPx, heightPx);
         try
         {
@@ -525,7 +318,7 @@ public final class TemplateScreenshotHelper
                 gc.setBackground(display.getSystemColor(SWT.COLOR_WHITE));
                 gc.fillRectangle(0, 0, widthPx, heightPx);
                 // paintViewPort(viewPort, gc, clip, drawSelection=false): paint the whole sheet content
-                // into the off-screen image, using the editor's current view settings (grid, etc.).
+                // into the off-screen image (no row/column header strips, no print-page chrome).
                 control.paintViewPort(viewPort, gc, new Rectangle(0, 0, widthPx, heightPx), false);
             }
             finally
@@ -553,82 +346,37 @@ public final class TemplateScreenshotHelper
     }
 
     /**
-     * Outcome of the in-transaction render: either the rendered {@link ImageData}, or the
-     * empty-content marker (the SpreadsheetDocument has no rows to render). Lets the empty check run
-     * inside the rollback boundary while still surfacing a distinct "no content" message to the caller.
+     * Outcome of the in-transaction render: the rendered {@link ImageData}, the empty-content marker, or
+     * the not-a-SpreadsheetDocument marker (with the actual content type for the error message).
      */
     private static final class RenderOutcome
     {
         final ImageData imageData;
         final boolean emptyContent;
+        final boolean notSpreadsheet;
+        final String detail;
 
-        private RenderOutcome(ImageData imageData, boolean emptyContent)
+        private RenderOutcome(ImageData imageData, boolean emptyContent, boolean notSpreadsheet, String detail)
         {
             this.imageData = imageData;
             this.emptyContent = emptyContent;
+            this.notSpreadsheet = notSpreadsheet;
+            this.detail = detail;
         }
 
         static RenderOutcome image(ImageData imageData)
         {
-            return new RenderOutcome(imageData, false);
+            return new RenderOutcome(imageData, false, false, null);
         }
 
         static RenderOutcome empty()
         {
-            return new RenderOutcome(null, true);
-        }
-    }
-
-    /**
-     * Holder for the embedded-moxel-editor resolution: either the resolved {@link MoxelEditor}, or a
-     * short diagnostic of the editor pages found (when no SpreadsheetDocument page was located).
-     */
-    private static final class MoxelResolveResult
-    {
-        final MoxelEditor editor;
-        final String diag;
-
-        private MoxelResolveResult(MoxelEditor editor, String diag)
-        {
-            this.editor = editor;
-            this.diag = diag;
+            return new RenderOutcome(null, true, false, null);
         }
 
-        static MoxelResolveResult found(MoxelEditor editor)
+        static RenderOutcome notSpreadsheet(String detail)
         {
-            return new MoxelResolveResult(editor, null);
-        }
-
-        static MoxelResolveResult diag(String diag)
-        {
-            return new MoxelResolveResult(null, diag);
-        }
-    }
-
-    /**
-     * Holder threading the opened template editor part or an early-return error JSON out of
-     * {@link #openTemplateEditor(String, String)}. Exactly one of {@code editorPart} / {@code error}
-     * is set.
-     */
-    private static final class OpenResult
-    {
-        final IEditorPart editorPart;
-        final String error;
-
-        private OpenResult(IEditorPart editorPart, String error)
-        {
-            this.editorPart = editorPart;
-            this.error = error;
-        }
-
-        static OpenResult page(IEditorPart editorPart)
-        {
-            return new OpenResult(editorPart, null);
-        }
-
-        static OpenResult error(String errorJson)
-        {
-            return new OpenResult(null, errorJson);
+            return new RenderOutcome(null, false, true, detail);
         }
     }
 }

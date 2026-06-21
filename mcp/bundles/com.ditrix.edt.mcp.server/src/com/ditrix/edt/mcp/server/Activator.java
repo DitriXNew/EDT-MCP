@@ -289,6 +289,16 @@ public class Activator extends AbstractUIPlugin
     }
 
     /**
+     * Returns the moxel IPresentationService for off-screen SpreadsheetDocument rendering.
+     *
+     * @return the presentation service or null if not available
+     */
+    public com._1c.g5.v8.dt.md.ui.presentation.IPresentationService getPresentationService()
+    {
+        return services.getPresentationService();
+    }
+
+    /**
      * Returns the {@link IExtensionProjectManager} service used to create
      * 1C configuration extension projects programmatically.
      *

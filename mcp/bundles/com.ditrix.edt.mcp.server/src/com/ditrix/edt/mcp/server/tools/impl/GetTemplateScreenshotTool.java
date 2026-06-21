@@ -18,8 +18,8 @@ import com.ditrix.edt.mcp.server.utils.TemplateScreenshotHelper;
 /**
  * Tool to capture a PNG screenshot of a 1C template (макет) - a {@code SpreadsheetDocument}
  * print form - as EDT renders it. Resolves the template by FQN (a common template or an
- * object-owned template), opens it in the EDT template editor, reaches the embedded spreadsheet
- * editor and rasterizes it off-screen.
+ * object-owned template), reads its content SpreadsheetDocument from the model and rasterizes it
+ * off-screen via a standalone moxel control (no editor is opened).
  */
 public class GetTemplateScreenshotTool implements IMcpTool
 {
