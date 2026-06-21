@@ -86,6 +86,8 @@ public final class FormElementWriter
     private static final String FEATURE_QUERY_TEXT = "queryText"; //$NON-NLS-1$
     private static final String FEATURE_CUSTOM_QUERY = "customQuery"; //$NON-NLS-1$
     private static final String FEATURE_AUTO_FILL_AVAILABLE_FIELDS = "autoFillAvailableFields"; //$NON-NLS-1$
+    /** "Dynamic data reading" - the designer enables it for a new dynamic list. */
+    private static final String FEATURE_DYNAMIC_DATA_READ = "dynamicDataRead"; //$NON-NLS-1$
     /** The dynamic list's main table - a DbViewDef reference (resolved from an object FQN). */
     private static final String FEATURE_MAIN_TABLE = "mainTable"; //$NON-NLS-1$
     private static final String FEATURE_VISIBLE = "visible"; //$NON-NLS-1$
@@ -1233,6 +1235,9 @@ public final class FormElementWriter
                 attribute.eSet(valueTypeFeature, dynamicListType);
             }
             setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
+            // The designer turns on "dynamic data reading" for a new dynamic list (the model default is
+            // false); mirror it so an MCP-created list matches a designer-created one.
+            setBooleanFeature(extInfo, FEATURE_DYNAMIC_DATA_READ, true);
             if (!hasMainAttribute(formModel))
             {
                 setBooleanFeature(attribute, FEATURE_MAIN, true);
