@@ -57,7 +57,7 @@ public final class JUnitMarkdownFormatter
      * kind/part words are localized, so they are matched but not interpreted.
      */
     private static final Pattern FRAME_LOCATION = Pattern.compile(
-        "\\{\\s*(?:([^.{}()\\s]+)\\s+)?[^.{}()]+\\.([^.{}()]+)\\.([^.{}()]+)\\((\\d+)\\)"); //$NON-NLS-1$
+        "\\{\\s*+(?:([^.{}()\\s]++)\\s++)?[^.{}()]++\\.([^.{}()]++)\\.([^.{}()]++)\\((\\d++)\\)"); //$NON-NLS-1$
 
     /** Minimum length before a head/message overlap is treated as a real duplicate. */
     private static final int MIN_DUPLICATE_LENGTH = 16;

@@ -270,6 +270,7 @@ public class CreateInfobaseTool implements IMcpTool
         String credUser = JsonUtils.extractStringArgument(params, KEY_USER);
         String credPassword = JsonUtils.extractStringArgument(params, "password"); //$NON-NLS-1$
         String credAccess = JsonUtils.extractStringArgument(params, KEY_ACCESS);
+        Credentials credentials = new Credentials(credUser, credPassword, credAccess);
 
         // Reject an out-of-enum access value before doing any work (the schema enum is advisory).
         String credAccessError = InfobaseAccessSupport.accessError(credAccess);
@@ -280,26 +281,17 @@ public class CreateInfobaseTool implements IMcpTool
 
         // Validate applicationKind (default 'infobase'). When absent or 'infobase' the behaviour is
         // byte-identical to the original file-infobase tool.
-        boolean standaloneServer;
-        if (applicationKind == null || applicationKind.isEmpty() || KIND_INFOBASE.equals(applicationKind))
+        FlagResult kind = parseApplicationKind(applicationKind);
+        if (kind.error != null)
         {
-            standaloneServer = false;
+            return kind.error;
         }
-        else if (KIND_STANDALONE_SERVER.equals(applicationKind))
-        {
-            standaloneServer = true;
-        }
-        else
-        {
-            return ToolResult.error("Invalid applicationKind: '" + applicationKind //$NON-NLS-1$
-                + "'. Allowed values: '" + KIND_INFOBASE + "', '" + KIND_STANDALONE_SERVER //$NON-NLS-1$ //$NON-NLS-2$
-                + "'.").toJson(); //$NON-NLS-1$
-        }
+        boolean standaloneServer = kind.value;
 
         // Credentials (#194) target a FILE infobase's access settings; the standalone-server path
         // manages its own infobase/auth and would silently drop them. Reject up front (before any
         // workspace/service access) rather than no-op so the caller is not misled.
-        if (standaloneServer && hasCredentialArgs(credUser, credPassword, credAccess))
+        if (standaloneServer && credentials.any())
         {
             return ToolResult.error("user/password/access are supported only with " //$NON-NLS-1$
                 + "applicationKind='infobase' (a file infobase). A standalone server manages its " //$NON-NLS-1$
@@ -307,20 +299,12 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         // Validate mode (default 'create').
-        boolean register;
-        if (modeStr == null || modeStr.isEmpty() || "create".equals(modeStr)) //$NON-NLS-1$
+        FlagResult mode = parseMode(modeStr);
+        if (mode.error != null)
         {
-            register = false;
+            return mode.error;
         }
-        else if ("register".equals(modeStr)) //$NON-NLS-1$
-        {
-            register = true;
-        }
-        else
-        {
-            return ToolResult.error("Invalid mode: '" + modeStr //$NON-NLS-1$
-                + "'. Allowed values: 'create', 'register'.").toJson(); //$NON-NLS-1$
-        }
+        boolean register = mode.value;
 
         // Validate and normalize the infobase path early (before acquiring services)
         Path infobaseDir;
@@ -356,12 +340,101 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register,
-            credUser, credPassword, credAccess);
+            credentials);
+    }
+
+    /**
+     * Validates {@code applicationKind} (default {@code 'infobase'}): {@link FlagResult#value} is
+     * {@code true} for {@code 'standaloneServer'}, {@code false} for {@code 'infobase'} / absent, and
+     * {@link FlagResult#error} carries a ready JSON error for any other value.
+     */
+    private static FlagResult parseApplicationKind(String applicationKind)
+    {
+        if (applicationKind == null || applicationKind.isEmpty() || KIND_INFOBASE.equals(applicationKind))
+        {
+            return FlagResult.of(false);
+        }
+        if (KIND_STANDALONE_SERVER.equals(applicationKind))
+        {
+            return FlagResult.of(true);
+        }
+        return FlagResult.failed(ToolResult.error("Invalid applicationKind: '" + applicationKind //$NON-NLS-1$
+            + "'. Allowed values: '" + KIND_INFOBASE + "', '" + KIND_STANDALONE_SERVER //$NON-NLS-1$ //$NON-NLS-2$
+            + "'.").toJson()); //$NON-NLS-1$
+    }
+
+    /**
+     * Validates {@code mode} (default {@code 'create'}): {@link FlagResult#value} is {@code true} for
+     * {@code 'register'}, {@code false} for {@code 'create'} / absent, and {@link FlagResult#error} carries
+     * a ready JSON error for any other value.
+     */
+    private static FlagResult parseMode(String modeStr)
+    {
+        if (modeStr == null || modeStr.isEmpty() || "create".equals(modeStr)) //$NON-NLS-1$
+        {
+            return FlagResult.of(false);
+        }
+        if ("register".equals(modeStr)) //$NON-NLS-1$
+        {
+            return FlagResult.of(true);
+        }
+        return FlagResult.failed(ToolResult.error("Invalid mode: '" + modeStr //$NON-NLS-1$
+            + "'. Allowed values: 'create', 'register'.").toJson()); //$NON-NLS-1$
+    }
+
+    /**
+     * A parsed boolean flag, or a ready JSON {@code error} when the input value was out of range. Lets the
+     * mode / applicationKind validations early-return out of {@link #execute} without inflating its
+     * cognitive complexity.
+     */
+    private static final class FlagResult
+    {
+        final boolean value;
+        final String error;
+
+        private FlagResult(boolean value, String error)
+        {
+            this.value = value;
+            this.error = error;
+        }
+
+        static FlagResult of(boolean value)
+        {
+            return new FlagResult(value, null);
+        }
+
+        static FlagResult failed(String error)
+        {
+            return new FlagResult(false, error);
+        }
+    }
+
+    /** The infobase connection credentials (#194); any field may be {@code null}/empty when not supplied. */
+    private static final class Credentials
+    {
+        final String user;
+        final String password;
+        final String access;
+
+        Credentials(String user, String password, String access)
+        {
+            this.user = user;
+            this.password = password;
+            this.access = access;
+        }
+
+        /** Whether the caller supplied any connection-credential argument (user / password / access). */
+        boolean any()
+        {
+            return (user != null && !user.isEmpty())
+                || (password != null && !password.isEmpty())
+                || (access != null && !access.isEmpty());
+        }
     }
 
     private String createInfobase(String projectName, Path infobaseDir,
             String infobaseName, String platform, boolean setDefault, boolean register,
-            String credUser, String credPassword, String credAccess)
+            Credentials credentials)
     {
         // --- 1-2. Resolve project + services ---
         CreateContext context = resolveCreateContext(projectName);
@@ -410,7 +483,7 @@ public class CreateInfobaseTool implements IMcpTool
         String setDefaultNote = setDefault ? applySetDefault(appManager, project, ibRef) : null;
 
         // --- 8.5 Optionally store infobase connection credentials (#194) ---
-        String credNote = storeCredentialsIfRequested(ibRef, credUser, credPassword, credAccess, register);
+        String credNote = storeCredentialsIfRequested(ibRef, credentials, register);
 
         // --- 9. Read back and return ---
         ResultContext rc = new ResultContext(projectName, infobaseDir, infobaseName, appManager, project);
@@ -427,30 +500,20 @@ public class CreateInfobaseTool implements IMcpTool
      * infobase creation itself (the base is already created and bound).
      *
      * @param ibRef the new infobase reference (the access-settings key)
-     * @param user the requested connection user (may be {@code null}/empty)
-     * @param password the requested password (may be {@code null}/empty)
-     * @param access the requested access kind (may be {@code null})
+     * @param credentials the requested connection credentials (any field may be {@code null}/empty)
      * @param register {@code true} for mode='register' (an existing base that already has users),
      *            {@code false} for mode='create' (a brand-new empty base with no users yet)
      * @return a message note, or {@code null} when no credentials were requested
      */
-    /** Whether the caller supplied any connection-credential argument (user / password / access). */
-    private static boolean hasCredentialArgs(String user, String password, String access)
+    private static String storeCredentialsIfRequested(InfobaseReference ibRef, Credentials credentials,
+            boolean register)
     {
-        return (user != null && !user.isEmpty())
-            || (password != null && !password.isEmpty())
-            || (access != null && !access.isEmpty());
-    }
-
-    private static String storeCredentialsIfRequested(InfobaseReference ibRef, String user,
-            String password, String access, boolean register)
-    {
-        if (!hasCredentialArgs(user, password, access))
+        if (!credentials.any())
         {
             return null;
         }
-        String error = InfobaseAccessSupport.storeCredentials(ibRef, user, password,
-            InfobaseAccessSupport.parseAccess(access));
+        String error = InfobaseAccessSupport.storeCredentials(ibRef, credentials.user, credentials.password,
+            InfobaseAccessSupport.parseAccess(credentials.access));
         if (error != null)
         {
             return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
@@ -463,7 +526,7 @@ public class CreateInfobaseTool implements IMcpTool
             ? "" //$NON-NLS-1$
             : " NOTE: a newly created infobase has no users yet — these credentials authenticate " //$NON-NLS-1$
                 + "only after a matching infobase user is added."; //$NON-NLS-1$
-        return " Stored connection credentials for user '" + (user == null ? "" : user) //$NON-NLS-1$ //$NON-NLS-2$
+        return " Stored connection credentials for user '" + (credentials.user == null ? "" : credentials.user) //$NON-NLS-1$ //$NON-NLS-2$
             + "' (change them later with set_infobase_credentials)." + userNote; //$NON-NLS-1$
     }
 

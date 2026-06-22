@@ -79,6 +79,10 @@ public final class FormElementWriter
     private static final String FEATURE_EXT_INFO = "extInfo"; //$NON-NLS-1$
     private static final String FEATURE_ID = "id"; //$NON-NLS-1$
     private static final String FEATURE_NAME = "name"; //$NON-NLS-1$
+    /** The command-bar / menu "auto-fill from the form commands" flag. */
+    private static final String FEATURE_AUTO_FILL = "autoFill"; //$NON-NLS-1$
+    /** The default field ext-info EClass (a plain input field, before the value type is known). */
+    private static final String ECLASS_INPUT_FIELD_EXT_INFO = "InputFieldExtInfo"; //$NON-NLS-1$
     /** The form attribute's "is the form's main data source" flag. */
     private static final String FEATURE_MAIN = "main"; //$NON-NLS-1$
     /** The dynamic-list ext-info EClass and its query-carrying features. */
@@ -1072,7 +1076,7 @@ public final class FormElementWriter
         {
             return null;
         }
-        setBooleanFeature(bar, "autoFill", true); //$NON-NLS-1$
+        setBooleanFeature(bar, FEATURE_AUTO_FILL, true);
         setEnumFeature(bar, KEY_HORIZONTAL_ALIGN, "Left"); //$NON-NLS-1$
         setIntFeature(bar, FEATURE_ID, -1);
         setStringFeature(bar, FEATURE_NAME,
@@ -1222,31 +1226,7 @@ public final class FormElementWriter
         }
         if (!alreadyDynamicList)
         {
-            // Turn a plain form attribute into a dynamic list: create the ext-info, set the DynamicList
-            // value type, auto-fill available fields, and make it the form's main attribute if none yet.
-            setExtInfoClassifier(formModel, attribute, ECLASS_DYNAMIC_LIST_EXT_INFO);
-            extInfo = singleReference(attribute, FEATURE_EXT_INFO);
-            if (extInfo == null)
-            {
-                throw new IllegalStateException(
-                    "The form model does not expose a DynamicListExtInfo classifier."); //$NON-NLS-1$
-            }
-            EObject dynamicListType = MetadataTypeBuilder.dynamicListType(version);
-            EStructuralFeature valueTypeFeature =
-                attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
-            if (dynamicListType != null && valueTypeFeature instanceof EReference)
-            {
-                attribute.eSet(valueTypeFeature, dynamicListType);
-            }
-            setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
-            // The designer turns on "dynamic data reading" for a new dynamic list (the model default is
-            // false); mirror it so an MCP-created list matches a designer-created one.
-            setBooleanFeature(extInfo, FEATURE_DYNAMIC_DATA_READ, true);
-            if (!hasMainAttribute(formModel))
-            {
-                setBooleanFeature(attribute, FEATURE_MAIN, true);
-            }
-            applied.add("dynamicList"); //$NON-NLS-1$
+            extInfo = convertPlainAttributeToDynamicList(formModel, attribute, version, applied);
         }
 
         boolean effectiveCustomQuery = customQuery != null ? customQuery.booleanValue() : queryText != null;
@@ -1268,21 +1248,66 @@ public final class FormElementWriter
         }
         if (mainTableFqn != null)
         {
-            EObject mainTable = resolveMainTableDbView(config, mainTableFqn);
-            if (mainTable == null)
-            {
-                throw new FormValidationException(ToolResult.error(
-                    "Cannot resolve the main table '" + mainTableFqn + "'. Pass the FQN of the object " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "the list reads from, e.g. 'Catalog.Products' or 'Document.Order'.").toJson()); //$NON-NLS-1$
-            }
-            EStructuralFeature mainTableFeature = extInfo.eClass().getEStructuralFeature(FEATURE_MAIN_TABLE);
-            if (mainTableFeature instanceof EReference)
-            {
-                extInfo.eSet(mainTableFeature, mainTable);
-                applied.add(FEATURE_MAIN_TABLE);
-            }
+            applyMainTable(extInfo, config, mainTableFqn, applied);
         }
         return applied;
+    }
+
+    /**
+     * Turns a plain form attribute into a dynamic list: creates the {@code DynamicListExtInfo}, sets the
+     * {@code DynamicList} value type, turns on {@code autoFillAvailableFields} and {@code dynamicDataRead}
+     * (mirroring the designer's new-list defaults), and marks the attribute as the form's main one when the
+     * form has none yet. Appends {@code "dynamicList"} to {@code applied} and returns the new ext-info.
+     */
+    private static EObject convertPlainAttributeToDynamicList(EObject formModel, EObject attribute,
+        Version version, List<String> applied)
+    {
+        setExtInfoClassifier(formModel, attribute, ECLASS_DYNAMIC_LIST_EXT_INFO);
+        EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
+        if (extInfo == null)
+        {
+            throw new IllegalStateException(
+                "The form model does not expose a DynamicListExtInfo classifier."); //$NON-NLS-1$
+        }
+        EObject dynamicListType = MetadataTypeBuilder.dynamicListType(version);
+        EStructuralFeature valueTypeFeature = attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+        if (dynamicListType != null && valueTypeFeature instanceof EReference)
+        {
+            attribute.eSet(valueTypeFeature, dynamicListType);
+        }
+        setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
+        // The designer turns on "dynamic data reading" for a new dynamic list (the model default is
+        // false); mirror it so an MCP-created list matches a designer-created one.
+        setBooleanFeature(extInfo, FEATURE_DYNAMIC_DATA_READ, true);
+        if (!hasMainAttribute(formModel))
+        {
+            setBooleanFeature(attribute, FEATURE_MAIN, true);
+        }
+        applied.add("dynamicList"); //$NON-NLS-1$
+        return extInfo;
+    }
+
+    /**
+     * Resolves {@code mainTableFqn} to its {@code DbViewDef} and sets it as the dynamic list's
+     * {@code mainTable} reference, appending {@code "mainTable"} to {@code applied}. Throws a
+     * {@link FormValidationException} when the FQN cannot be resolved.
+     */
+    private static void applyMainTable(EObject extInfo, Configuration config, String mainTableFqn,
+        List<String> applied)
+    {
+        EObject mainTable = resolveMainTableDbView(config, mainTableFqn);
+        if (mainTable == null)
+        {
+            throw new FormValidationException(ToolResult.error(
+                "Cannot resolve the main table '" + mainTableFqn + "'. Pass the FQN of the object " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the list reads from, e.g. 'Catalog.Products' or 'Document.Order'.").toJson()); //$NON-NLS-1$
+        }
+        EStructuralFeature mainTableFeature = extInfo.eClass().getEStructuralFeature(FEATURE_MAIN_TABLE);
+        if (mainTableFeature instanceof EReference)
+        {
+            extInfo.eSet(mainTableFeature, mainTable);
+            applied.add(FEATURE_MAIN_TABLE);
+        }
     }
 
     /** Whether a form attribute carries a {@code DynamicListExtInfo} (i.e. it is a dynamic list). */
@@ -1846,7 +1871,7 @@ public final class FormElementWriter
         // Pure-model default field type (InputField + a fresh InputFieldExtInfo), as the platform's
         // own factory does before the value type is known.
         setEnumFeature(item, FEATURE_TYPE, "InputField"); //$NON-NLS-1$
-        setExtInfoClassifier(formModel, item, "InputFieldExtInfo"); //$NON-NLS-1$
+        setExtInfoClassifier(formModel, item, ECLASS_INPUT_FIELD_EXT_INFO);
         // The designer's new-field defaults (FormObjectFactory.newFormField / newInputFieldExtInfo); // NOSONAR explanatory comment, not commented-out code
         // the booleans default to false in the model, so without them a created field renders with
         // no table header/footer, no wrap and a read-only text box. 'Auto'-valued enums are the
@@ -2010,7 +2035,7 @@ public final class FormElementWriter
         setBooleanFeature(column, "showInFooter", true); //$NON-NLS-1$
         setEnumFeature(column, "headerHorizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
         setEnumFeature(column, "editMode", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$
-        setExtInfoClassifier(formModel, column, "InputFieldExtInfo"); //$NON-NLS-1$
+        setExtInfoClassifier(formModel, column, ECLASS_INPUT_FIELD_EXT_INFO);
         EObject extInfo = singleReference(column, FEATURE_EXT_INFO);
         if (extInfo != null)
         {
@@ -2036,7 +2061,7 @@ public final class FormElementWriter
         }
         setStringFeature(bar, FEATURE_NAME, uniqueChildName(formModel, stringFeature(table, FEATURE_NAME),
             russianAutoNames ? RU_SUFFIX_COMMAND_BAR : SUFFIX_COMMAND_BAR));
-        setBooleanFeature(bar, "autoFill", true); //$NON-NLS-1$
+        setBooleanFeature(bar, FEATURE_AUTO_FILL, true);
         setEnumFeature(bar, KEY_HORIZONTAL_ALIGN, "Left"); //$NON-NLS-1$
         table.eSet(barFeat, bar);
         setIntFeature(bar, FEATURE_ID, nextItemId(formModel));
@@ -2275,7 +2300,7 @@ public final class FormElementWriter
             {
                 setStringFeature(menu, FEATURE_NAME, uniqueChildName(formModel, base,
                     russianAutoNames ? RU_SUFFIX_CONTEXT_MENU : SUFFIX_CONTEXT_MENU));
-                setBooleanFeature(menu, "autoFill", true); //$NON-NLS-1$
+                setBooleanFeature(menu, FEATURE_AUTO_FILL, true);
                 item.eSet(menuFeat, menu);
                 setIntFeature(menu, FEATURE_ID, nextItemId(formModel));
             }
@@ -2872,7 +2897,7 @@ public final class FormElementWriter
         m.put("PictureDecorationExtInfo", "FormDecorationExtensionForAPicture"); //$NON-NLS-1$ //$NON-NLS-2$
         // Field ext-infos.
         m.put("LabelFieldExtInfo", "FormFieldExtensionForALabelField"); //$NON-NLS-1$ //$NON-NLS-2$
-        m.put("InputFieldExtInfo", "FormFieldExtensionForATextBox"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put(ECLASS_INPUT_FIELD_EXT_INFO, "FormFieldExtensionForATextBox"); //$NON-NLS-1$
         m.put("CheckBoxFieldExtInfo", "FormFieldExtensionForACheckBoxField"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("ImageFieldExtInfo", "FormFieldExtensionForAPictureField"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("RadioButtonsFieldExtInfo", "FormFieldExtensionForARadioButtonField"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -3304,23 +3329,35 @@ public final class FormElementWriter
 
         for (EObject item : items)
         {
-            if (item == rootAutoCommandBar)
-            {
-                continue;
-            }
-            int id = intFeature(item, FEATURE_ID);
-            if (id > 0 && seen.add(Integer.valueOf(id)))
-            {
-                continue;
-            }
-            do
-            {
-                max++;
-            }
-            while (max <= 0 || seen.contains(Integer.valueOf(max)));
-            setIntFeature(item, FEATURE_ID, max);
-            seen.add(Integer.valueOf(max));
+            max = assignItemId(item, rootAutoCommandBar, seen, max);
         }
+    }
+
+    /**
+     * Assigns {@code item} a positive id unique within {@code seen} - skipping the form root's
+     * {@code autoCommandBar} (which keeps the platform sentinel {@code -1}) and keeping an already-unique
+     * positive id - then advances and returns the running {@code max}. Early-returns keep the per-item
+     * logic free of loop {@code continue}s.
+     */
+    private static int assignItemId(EObject item, EObject rootAutoCommandBar, Set<Integer> seen, int max)
+    {
+        if (item == rootAutoCommandBar)
+        {
+            return max;
+        }
+        int id = intFeature(item, FEATURE_ID);
+        if (id > 0 && seen.add(Integer.valueOf(id)))
+        {
+            return max;
+        }
+        do
+        {
+            max++;
+        }
+        while (max <= 0 || seen.contains(Integer.valueOf(max)));
+        setIntFeature(item, FEATURE_ID, max);
+        seen.add(Integer.valueOf(max));
+        return max;
     }
 
     // ---- reflective helpers ---------------------------------------------------------------------

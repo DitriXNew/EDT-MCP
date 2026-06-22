@@ -57,7 +57,7 @@ public final class BslModuleUtils
 
     /** Regex for BSL method start (Процедура/Функция / Procedure/Function). Group 1 = method name, group 2 = params text after '(' */
     public static final Pattern METHOD_START_PATTERN = Pattern.compile(
-        "^\\s*(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+(\\S+?)\\s*\\((.*)$", //$NON-NLS-1$
+        "^\\s*(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+([^\\s(]+)\\s*\\((.*)$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Regex for BSL method end (КонецПроцедуры/КонецФункции / EndProcedure/EndFunction) */

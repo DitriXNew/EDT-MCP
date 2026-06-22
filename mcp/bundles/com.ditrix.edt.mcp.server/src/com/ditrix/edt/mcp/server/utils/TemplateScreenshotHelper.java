@@ -224,7 +224,7 @@ public final class TemplateScreenshotHelper
                 }
                 if (!(content instanceof SpreadsheetDocument))
                 {
-                    return RenderOutcome.notSpreadsheet(content.eClass().getName());
+                    return RenderOutcome.nonSpreadsheet(content.eClass().getName());
                 }
                 return renderSpreadsheet((SpreadsheetDocument)content, presentation);
             });
@@ -374,7 +374,7 @@ public final class TemplateScreenshotHelper
             return new RenderOutcome(null, true, false, null);
         }
 
-        static RenderOutcome notSpreadsheet(String detail)
+        static RenderOutcome nonSpreadsheet(String detail)
         {
             return new RenderOutcome(null, false, true, detail);
         }
