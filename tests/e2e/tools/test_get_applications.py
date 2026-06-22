@@ -295,7 +295,7 @@ def test_dependent_project_inherits_base_applications():
     # The base must actually own applications for the inherited branch to fire.
     base_r = call("get_applications", {"projectName": PROJECT})
     assert_ok(base_r, "base project applications (for inheritance comparison)")
-    _, base_apps, base_count = _envelope(base_r, "base project envelope")
+    _, base_count = _envelope(base_r, "base project envelope")
     if base_count == 0:
         # Base has no applications -> the dependent legitimately inherits nothing; the
         # inherited branch is not reachable in this environment. Skip the assertion the
