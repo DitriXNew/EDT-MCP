@@ -220,13 +220,19 @@ def test_nonexistent_project_is_error():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# FORM structure — a form FQN renders the form's structure (folds get_form_structure)
+# FORM structure — a form FQN renders the form's ENRICHED structure
+# (folds get_form_structure; FormStructureReader.render adds visibility / dataPath /
+# per-kind extras to the items outline, Main / SavedData flags to the Attributes table,
+# and a new Event handlers section)
 # ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="get_metadata_details", kind="write-metadata")
 def test_form_fqn_renders_structure():
-    # A managed-form FQN (Type.Object.Form.FormName) renders its STRUCTURE: items / attributes /
-    # commands. Seed an attribute + command, then read the whole form back by its FQN.
+    # A managed-form FQN (Type.Object.Form.FormName) renders its ENRICHED STRUCTURE: items
+    # outline (now with visibility / dataPath / per-kind extras), an Attributes table (now
+    # carrying Main / SavedData flags) and a NEW Event handlers section -- the enrichment folded
+    # into get_metadata_details by FormStructureReader.render. Seed an attribute + command,
+    # then read the whole form back by its FQN.
     r1 = call("create_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.GMDFAttr"})
     assert_ok(r1, "seed form attribute")
@@ -242,6 +248,18 @@ def test_form_fqn_renders_structure():
     assert_contains(r.text, "## Attributes", "must render the Attributes section")
     assert_contains(r.text, "GMDFAttr", "must list the seeded form attribute")
     assert_contains(r.text, "GMDFCmd", "must list the seeded form command")
+    # Enriched markers (render). The auto-generated ItemForm binds its fields to the
+    # object (e.g. Object.Code / Object.Description), so the items outline now exposes their
+    # dataPath. A no-op enrichment (the former plain render) would lack all three. Because the
+    # dataPath marker depends on the auto-generated form actually binding a field, also assert a
+    # marker the enriched render ALWAYS emits for any form (the enriched Attributes header row).
+    assert_contains(r.text, "dataPath", "the enriched items outline must expose item dataPath")
+    # The Attributes table gained the Main / SavedData flag columns: assert the enriched header row
+    # rather than bare "Main" / "SavedData" substrings (which could match anywhere in the body).
+    assert_contains(r.text, "| Main | SavedData |", "the enriched Attributes header must carry Main / SavedData columns")
+    # A new, always-rendered Event handlers section (empty-section convention emits the header
+    # even when the form has no handlers).
+    assert_contains(r.text, "Event handlers", "the enriched structure must add an Event handlers section")
 
 
 @e2e_test(tool="get_metadata_details", kind="read")
@@ -251,3 +269,6 @@ def test_common_form_fqn_renders_structure():
     assert_ok(r, "get_metadata_details on a CommonForm FQN")
     assert_contains(r.text, "Form Structure", "a CommonForm FQN must render the form structure")
     assert_contains(r.text, "## Items", "must render the Items section")
+    # The enriched renderer (FormStructureReader.render) always emits the Event handlers section
+    # header, even for a form that declares no handlers (empty-section convention).
+    assert_contains(r.text, "Event handlers", "the enriched structure must add an Event handlers section")

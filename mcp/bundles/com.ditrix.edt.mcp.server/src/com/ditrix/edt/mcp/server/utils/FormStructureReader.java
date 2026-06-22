@@ -12,6 +12,7 @@ import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
+import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
@@ -20,10 +21,12 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 /**
  * Shared READER for a 1C managed form's structure: it resolves the {@code BasicForm} mdo from a form
- * FQN path and renders the editable form content model ({@code com._1c.g5.v8.dt.form.model.Form}) - the
- * nested items tree, the form attributes and the form commands - to Markdown. The form model is read
- * entirely through EMF reflection ({@code EObject} / {@code eGet}), so this bundle needs no compile-time
- * dependency on the form-model package (mirroring {@link FormElementWriter}, the form WRITER).
+ * FQN path and renders the editable form content model ({@code com._1c.g5.v8.dt.form.model.Form}) to a
+ * full enriched Markdown document - the nested items tree (with per-element synonym/visibility/dataPath
+ * and per-kind extras), an Attributes table (Name/Synonym/Type/Main/SavedData), a Commands table and an
+ * Event handlers section. The form model is read entirely through EMF reflection ({@code EObject} /
+ * {@code eGet}), so this bundle needs no compile-time dependency on the form-model package (mirroring
+ * {@link FormElementWriter}, the form WRITER).
  *
  * <p>This is the single home for the form-read logic that {@code get_metadata_details} (a form FQN
  * renders its structure) and {@code delete_metadata} (the form-member delete preview lists item
@@ -57,6 +60,53 @@ public final class FormStructureReader
     /** Singular item-bearing containments outside {@code items} (bar / context menu / tooltip). */
     private static final String[] SINGULAR_ITEM_CONTAINMENTS =
         {FEATURE_AUTO_COMMAND_BAR, "contextMenu", "extendedTooltip"}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** EAttribute name (Boolean) carrying an item's visibility on a {@code FormVisualEntity}. */
+    private static final String FEATURE_VISIBLE = "visible"; //$NON-NLS-1$
+    /** EReference name holding the contained {@code DataPath} on a bound {@code FormItem}. */
+    private static final String FEATURE_DATA_PATH = "dataPath"; //$NON-NLS-1$
+    /** EAttribute name (EList of String) carrying the dot-joined path parts on a {@code DataPath}. */
+    private static final String FEATURE_SEGMENTS = "segments"; //$NON-NLS-1$
+    /** EReference name holding a visual item's type-specific {@code extInfo} sub-object. */
+    private static final String FEATURE_EXT_INFO = "extInfo"; //$NON-NLS-1$
+    /** EAttribute name (EEnum) carrying the layout {@code group} mode on a group's extInfo. */
+    private static final String FEATURE_GROUP = "group"; //$NON-NLS-1$
+    /** EAttribute name (EEnum) carrying the optional {@code behavior} on a group's extInfo. */
+    private static final String FEATURE_BEHAVIOR = "behavior"; //$NON-NLS-1$
+    /** EAttribute name (EEnum) carrying the platform {@code type} on a {@code FormField}/group. */
+    private static final String FEATURE_TYPE = "type"; //$NON-NLS-1$
+    /** EAttribute name (EEnum) carrying the {@code editMode} on a {@code FormField}. */
+    private static final String FEATURE_EDIT_MODE = "editMode"; //$NON-NLS-1$
+    /** EAttribute name carrying the bound metadata-command name on a {@code FormButton}. */
+    private static final String FEATURE_COMMAND_NAME = "commandName"; //$NON-NLS-1$
+    /** EAttribute name (Boolean) flagging the MAIN form attribute on a {@code FormAttribute}. */
+    private static final String FEATURE_MAIN = "main"; //$NON-NLS-1$
+    /** EAttribute name (Boolean) flagging the saved-data form attribute on a {@code FormAttribute}. */
+    private static final String FEATURE_SAVED_DATA = "savedData"; //$NON-NLS-1$
+    /** EReference name carrying the single {@code event} on an {@code EventHandler}. */
+    private static final String FEATURE_EVENT = "event"; //$NON-NLS-1$
+    /** EAttribute name carrying the Russian event name on an {@code Event}. */
+    private static final String FEATURE_NAME_RU = "nameRu"; //$NON-NLS-1$
+
+    /** EClass simple-name token identifying a group item. */
+    private static final String ECLASS_FORM_GROUP = "FormGroup"; //$NON-NLS-1$
+    /** EClass simple-name token identifying a field item. */
+    private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
+    /**
+     * EClass simple-name token identifying a button item. The concrete form-model button EClass is
+     * {@code Button} (NOT {@code FormButton}, which is its platform-type presentation name); this mirrors
+     * {@code FormElementWriter.ELEM_BUTTON} and is matched against {@code item.eClass().getName()}.
+     */
+    private static final String ECLASS_BUTTON = "Button"; //$NON-NLS-1$
+
+    /** The Russian language CODE; selects the {@code nameRu} event name over the English {@code name}. */
+    private static final String LANG_RU = "ru"; //$NON-NLS-1$
+
+    /** Upper bound on total visited item nodes for {@link #render}, guarding a pathological form. */
+    private static final int MAX_NODES = 5000;
+
+    /** The root-owner label used in the Event handlers table for a form-level handler. */
+    private static final String FORM_OWNER_LABEL = "(form)"; //$NON-NLS-1$
 
     private FormStructureReader()
     {
@@ -137,14 +187,19 @@ public final class FormStructureReader
     // ==================== Rendering (pure, transaction-bound EObjects only) ====================
 
     /**
-     * Renders the whole form structure (items tree + attributes + commands) to a Markdown document.
-     * Pure aside from reading the supplied EObjects, which must still be inside the read transaction
-     * when this runs.
+     * Renders the FULL enriched form structure to a Markdown document: the nested items tree (each line
+     * carries name / type / id / title plus per-item visibility and dataPath and kind-specific extras -
+     * group layout / field type+editMode / button command), an Attributes table (Name / Synonym / Type /
+     * Main / SavedData) and a Commands table, followed by an Event handlers section listing the BSL
+     * handler bound to each event of the form root and every element. Read entirely through EMF
+     * reflection - any absent feature simply degrades to nothing, so this never throws on a model that
+     * lacks a feature. Pure aside from reading the supplied EObjects, which must still be inside the read
+     * transaction when this runs.
      *
      * @param formPath the (normalized) form FQN path, for the heading
-     * @param formModel the editable form model EObject
-     * @param language the resolved title language CODE (may be {@code null})
-     * @return the Markdown document
+     * @param formModel the editable form model EObject (must still be inside the read transaction)
+     * @param language the resolved title/event language CODE (may be {@code null})
+     * @return the enriched Markdown document
      */
     public static String render(String formPath, EObject formModel, String language)
     {
@@ -160,15 +215,23 @@ public final class FormStructureReader
         }
         else
         {
-            // The form's auto command bar is a separate containment, not part of 'items'; render it
-            // first (the way the designer shows it). Address it as parent 'AutoCommandBar'.
+            int[] budget = {MAX_NODES};
+            boolean[] truncated = {false};
             if (autoCommandBar != null)
             {
-                appendItem(sb, autoCommandBar, 0, language);
+                appendItem(sb, autoCommandBar, 0, language, budget, truncated);
             }
             for (EObject item : items)
             {
-                appendItem(sb, item, 0, language);
+                appendItem(sb, item, 0, language, budget, truncated);
+            }
+            // Gate the note on the explicit flag (set only when a node was actually dropped), NOT on an
+            // exhausted budget: a form with EXACTLY MAX_NODES nodes drains the budget to 0 yet renders
+            // every node, so inferring truncation from budget[0] <= 0 would falsely flag it.
+            if (truncated[0])
+            {
+                sb.append("- _(item outline truncated: more than ") //$NON-NLS-1$
+                    .append(MAX_NODES).append(" nodes)_\n"); //$NON-NLS-1$
             }
             sb.append('\n');
         }
@@ -181,10 +244,13 @@ public final class FormStructureReader
         }
         else
         {
-            sb.append(MarkdownUtils.tableHeader("Name", "Type")); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(MarkdownUtils.tableHeader(
+                "Name", "Synonym", "Type", "Main", "SavedData")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             for (EObject attribute : attributes)
             {
-                sb.append(MarkdownUtils.tableRow(nameOf(attribute), valueTypeOf(attribute)));
+                sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
+                    valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
+                    Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
             }
             sb.append('\n');
         }
@@ -206,22 +272,53 @@ public final class FormStructureReader
             sb.append('\n');
         }
 
+        sb.append("## Event handlers\n\n"); //$NON-NLS-1$
+        List<String[]> handlers = new ArrayList<>();
+        // collectHandlers recurses the form root's 'items' AND its singular containments (the form-wide
+        // auto command bar, context menus, tooltips), so the whole element tree is covered from here. It
+        // shares the same MAX_NODES bound as the item-outline pass (its own fresh budget, since it is an
+        // independent walk) so the Event-handlers section honours the same cap on a pathological form.
+        collectHandlers(formModel, FORM_OWNER_LABEL, language, handlers, new int[] {MAX_NODES});
+        if (handlers.isEmpty())
+        {
+            sb.append("_(no event handlers)_\n\n"); //$NON-NLS-1$
+        }
+        else
+        {
+            sb.append(MarkdownUtils.tableHeader("Element", "Event", "Handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            for (String[] row : handlers)
+            {
+                sb.append(MarkdownUtils.tableRow(row[0], row[1], row[2]));
+            }
+            sb.append('\n');
+        }
+
         return sb.toString();
     }
 
     /**
-     * Appends one item (and recursively its child items) as a nested outline line. The item NAME is
-     * the stable programmatic id; the integer id and item type are shown alongside, and the title (by
-     * language code) is appended when present.
+     * Appends one item (and recursively its child items) as a nested outline line: beyond name / type /
+     * id / title it appends visibility (only when {@code false}), the bound dataPath, and per-kind
+     * extras (group layout, field type+editMode, button command). The item NAME is the stable
+     * programmatic id; the integer id and item type are shown alongside, and the title (by language
+     * code) is appended when present. A shared {@code budget} caps the total node count for a
+     * pathological form; when it is hit the shared {@code truncated} flag is raised so the caller can
+     * record that nodes were actually dropped.
      */
-    private static void appendItem(StringBuilder sb, EObject item, int depth, String language)
+    private static void appendItem(StringBuilder sb, EObject item, int depth, String language,
+        int[] budget, boolean[] truncated)
     {
+        if (budget[0] <= 0)
+        {
+            truncated[0] = true;
+            return;
+        }
+        budget[0]--;
         for (int i = 0; i < depth; i++)
         {
             sb.append("  "); //$NON-NLS-1$
         }
-        String name = nameOf(item);
-        sb.append("- ").append(escapeOutline(name)); //$NON-NLS-1$
+        sb.append("- ").append(escapeOutline(nameOf(item))); //$NON-NLS-1$
         sb.append(" (type: ").append(escapeOutline(typeOf(item))); //$NON-NLS-1$
         Integer id = idOf(item);
         if (id != null)
@@ -233,12 +330,26 @@ public final class FormStructureReader
         {
             sb.append(", title: ").append(escapeOutline(title)); //$NON-NLS-1$
         }
+        if (!visibilityOf(item))
+        {
+            sb.append(", visible: false"); //$NON-NLS-1$
+        }
+        String dataPath = dataPathOf(item);
+        if (!dataPath.isEmpty())
+        {
+            sb.append(", dataPath: ").append(escapeOutline(dataPath)); //$NON-NLS-1$
+        }
+        String extras = kindExtrasOf(item);
+        if (!extras.isEmpty())
+        {
+            sb.append(", ").append(escapeOutline(extras)); //$NON-NLS-1$
+        }
         sb.append(")\n"); //$NON-NLS-1$
 
         // Recurse into containers (groups / tables expose the same 'items' feature).
         for (EObject child : getReferenceList(item, FEATURE_ITEMS))
         {
-            appendItem(sb, child, depth + 1, language);
+            appendItem(sb, child, depth + 1, language, budget, truncated);
         }
         // Singular item-bearing containments OUTSIDE 'items' (a table's command bar, an item's
         // context menu / extended tooltip). Their names occupy the form-wide namespace, so they must
@@ -251,7 +362,7 @@ public final class FormStructureReader
                 && (!getReferenceList(child, FEATURE_ITEMS).isEmpty()
                     || !titleOf(child, language).isEmpty()))
             {
-                appendItem(sb, child, depth + 1, language);
+                appendItem(sb, child, depth + 1, language, budget, truncated);
             }
         }
     }
@@ -443,6 +554,225 @@ public final class FormStructureReader
     private static String stringValue(Object value)
     {
         return value instanceof String ? (String)value : ""; //$NON-NLS-1$
+    }
+
+    // ==================== Enrichment reflection helpers ====================
+
+    /**
+     * @return the item's {@code visible} flag; an absent feature or a non-Boolean value is treated as
+     *         visible ({@code true}), so the render only ever calls out a HIDDEN item
+     */
+    private static boolean visibilityOf(EObject item)
+    {
+        Object value = getValue(item, FEATURE_VISIBLE);
+        return !(value instanceof Boolean) || ((Boolean)value).booleanValue();
+    }
+
+    /**
+     * @return the item's bound data path, the contained {@code DataPath}'s {@code segments} joined by
+     *         {@code "."} (e.g. {@code Object.Description}), or {@code ""} when the item carries no
+     *         data path or it has no segments
+     */
+    @SuppressWarnings("unchecked")
+    private static String dataPathOf(EObject item)
+    {
+        EObject dataPath = getSingleReference(item, FEATURE_DATA_PATH);
+        if (dataPath == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        EStructuralFeature segments = dataPath.eClass().getEStructuralFeature(FEATURE_SEGMENTS);
+        if (segments == null || !segments.isMany())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        Object value = dataPath.eGet(segments);
+        if (!(value instanceof List<?>))
+        {
+            return ""; //$NON-NLS-1$
+        }
+        List<String> parts = new ArrayList<>();
+        for (Object part : (List<Object>)value)
+        {
+            if (part != null)
+            {
+                parts.add(part.toString());
+            }
+        }
+        return String.join(".", parts); //$NON-NLS-1$
+    }
+
+    /**
+     * @return kind-specific extras for the outline line, or {@code ""} for a kind with none:
+     *         <ul>
+     *         <li>group ({@code FormGroup}): {@code "group: <extInfoSimpleName> <group> [behavior]"};</li>
+     *         <li>field ({@code FormField}): {@code "field: type=<type> editMode=<editMode>"};</li>
+     *         <li>button ({@code Button}): {@code "command: <commandName>"}.</li>
+     *         </ul>
+     *         Every enum is read as its literal via {@link Enumerator}; an absent feature is omitted.
+     */
+    private static String kindExtrasOf(EObject item)
+    {
+        if (item == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        String eClassName = item.eClass().getName();
+        if (ECLASS_FORM_GROUP.equals(eClassName))
+        {
+            return groupExtras(item);
+        }
+        if (ECLASS_FORM_FIELD.equals(eClassName))
+        {
+            return fieldExtras(item);
+        }
+        if (ECLASS_BUTTON.equals(eClassName))
+        {
+            String command = stringValue(getValue(item, FEATURE_COMMAND_NAME));
+            return command.isEmpty() ? "" : "command: " + command; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return ""; //$NON-NLS-1$
+    }
+
+    /** Builds the {@code group: ...} extras from a group's {@code extInfo} (EClass + group + behavior). */
+    private static String groupExtras(EObject group)
+    {
+        EObject extInfo = getSingleReference(group, FEATURE_EXT_INFO);
+        if (extInfo == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder("group: ").append(extInfo.eClass().getName()); //$NON-NLS-1$
+        String groupMode = enumLiteralOf(extInfo, FEATURE_GROUP);
+        if (!groupMode.isEmpty())
+        {
+            sb.append(' ').append(groupMode);
+        }
+        String behavior = enumLiteralOf(extInfo, FEATURE_BEHAVIOR);
+        if (!behavior.isEmpty())
+        {
+            sb.append(' ').append(behavior);
+        }
+        return sb.toString();
+    }
+
+    /** Builds the {@code field: type=... editMode=...} extras from a field's own enum features. */
+    private static String fieldExtras(EObject field)
+    {
+        String type = enumLiteralOf(field, FEATURE_TYPE);
+        String editMode = enumLiteralOf(field, FEATURE_EDIT_MODE);
+        if (type.isEmpty() && editMode.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder("field:"); //$NON-NLS-1$
+        if (!type.isEmpty())
+        {
+            sb.append(" type=").append(type); //$NON-NLS-1$
+        }
+        if (!editMode.isEmpty())
+        {
+            sb.append(" editMode=").append(editMode); //$NON-NLS-1$
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Reads an EEnum feature as its literal, NEVER importing the enum type: the value is cast to
+     * {@link Enumerator} and its {@code getName()} returned (falling back to {@code toString()}).
+     *
+     * @return the enum literal, or {@code ""} when the feature is absent / unset / not an enum value
+     */
+    private static String enumLiteralOf(EObject object, String featureName)
+    {
+        if (object == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
+        // Only an EXPLICITLY-SET enum is reported: an unset enum feature reads back as the metamodel's
+        // default literal (e.g. a field's default view type), which is noise rather than authored
+        // structure, so an absent/unset feature contributes no extra.
+        if (feature == null || !object.eIsSet(feature))
+        {
+            return ""; //$NON-NLS-1$
+        }
+        Object value = object.eGet(feature);
+        if (value instanceof Enumerator)
+        {
+            String name = ((Enumerator)value).getName();
+            return name != null ? name : value.toString();
+        }
+        return value != null ? value.toString() : ""; //$NON-NLS-1$
+    }
+
+    /**
+     * @return the value of a Boolean feature; an absent feature or a non-Boolean value yields
+     *         {@code false}, so a missing flag never throws and never reports as set
+     */
+    private static boolean booleanFeature(EObject object, String featureName)
+    {
+        Object value = getValue(object, featureName);
+        return value instanceof Boolean && ((Boolean)value).booleanValue();
+    }
+
+    /**
+     * Appends one {@code [owner, event, handler]} row per bound event handler of {@code element} to
+     * {@code rows}, then recurses into the element's child items (and singular item containments) so the
+     * whole subtree is covered. Each handler exposes its own {@code name} (the BSL procedure) and a
+     * single {@code event} reference whose {@code name} (en) / {@code nameRu} (ru) is the event name.
+     *
+     * @param element the form root or a form item whose {@code handlers} list is read
+     * @param ownerLabel the Element-column label for handlers directly on {@code element}
+     * @param language the event-name language CODE
+     * @param rows the accumulator receiving {@code {owner, event, handler}} rows
+     * @param budget the shared per-visited-element node budget, capping the walk on a pathological form
+     */
+    private static void collectHandlers(EObject element, String ownerLabel, String language,
+        List<String[]> rows, int[] budget)
+    {
+        if (element == null || budget[0] <= 0)
+        {
+            return;
+        }
+        budget[0]--;
+        for (EObject handler : getReferenceList(element, FEATURE_HANDLERS))
+        {
+            String procName = stringValue(getValue(handler, FEATURE_NAME));
+            String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
+            rows.add(new String[] {ownerLabel, eventName, procName});
+        }
+        for (EObject child : getReferenceList(element, FEATURE_ITEMS))
+        {
+            collectHandlers(child, nameOf(child), language, rows, budget);
+        }
+        for (String featureName : SINGULAR_ITEM_CONTAINMENTS)
+        {
+            EObject child = getSingleReference(element, featureName);
+            if (child != null)
+            {
+                collectHandlers(child, nameOf(child), language, rows, budget);
+            }
+        }
+    }
+
+    /**
+     * @return the event's name for the given language CODE - {@code nameRu} for {@code "ru"}, otherwise
+     *         the English {@code name}, falling back to the other when the preferred one is blank
+     */
+    private static String eventNameOf(EObject event, String language)
+    {
+        if (event == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        boolean ru = LANG_RU.equalsIgnoreCase(language);
+        String preferred = stringValue(getValue(event, ru ? FEATURE_NAME_RU : FEATURE_NAME));
+        if (!preferred.isEmpty())
+        {
+            return preferred;
+        }
+        return stringValue(getValue(event, ru ? FEATURE_NAME : FEATURE_NAME_RU));
     }
 
     /**

@@ -14,9 +14,12 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.List;
 
+import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EEnum;
+import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
@@ -249,6 +252,206 @@ public class FormStructureReaderTest
         assertFalse(md.contains("| Cmd|Name |")); //$NON-NLS-1$
     }
 
+    // ==================== render: enriched outline + tables + event handlers =====================
+
+    /**
+     * The detailed render of a representative form: a group (extInfo + group + child field), a field
+     * (type + editMode + dataPath + hidden), a button (commandName), an attribute (main + savedData +
+     * synonym) and a form-root event handler. Asserts every enrichment the slice adds.
+     */
+    @Test
+    public void testRenderDetailedEnrichments()
+    {
+        EObject form = buildRichForm();
+
+        String md = FormStructureReader.render(
+            "Catalog.Products.Forms.ItemForm", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Items: per-kind extras + visibility + dataPath on the field. NON-default enum literals are
+        // used (Horizontal/LabelField/Directly) so the values are genuinely authored — only explicitly
+        // set enums are reported (an unset enum reads back as the metamodel default, which is noise).
+        assertTrue(md.contains("- MainGroup (type: FormGroup, id: 1, " //$NON-NLS-1$
+            + "group: UsualGroupExtInfo Horizontal Collapsible)")); //$NON-NLS-1$
+        assertTrue(md.contains("field: type=LabelField editMode=Directly")); //$NON-NLS-1$
+        assertTrue(md.contains("visible: false")); //$NON-NLS-1$
+        assertTrue(md.contains("dataPath: Object.Description")); //$NON-NLS-1$
+        assertTrue(md.contains("command: Post")); //$NON-NLS-1$
+
+        // Attributes: the new Synonym / Main / SavedData columns.
+        assertTrue(md.contains("| Name | Synonym | Type | Main | SavedData |")); //$NON-NLS-1$
+        assertTrue(md.contains("| Goods | Goods item | ")); //$NON-NLS-1$
+        assertTrue(md.contains("| true | true |")); //$NON-NLS-1$
+
+        // Event handlers: a NEW section with the form-root handler row.
+        assertTrue(md.contains("## Event handlers")); //$NON-NLS-1$
+        assertTrue(md.contains("| Element | Event | Handler |")); //$NON-NLS-1$
+        assertTrue(md.contains("| (form) | OnOpen | FormOnOpen |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRenderDetailedVisibleTrueOmitted()
+    {
+        // A visible (default) field must NOT carry the 'visible: false' note.
+        EObject form = newForm();
+        EObject field = newItem(MODEL.formField, "Price", 2); //$NON-NLS-1$
+        setBoolean(field, "visible", true); //$NON-NLS-1$
+        addItem(form, field);
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(md.contains("visible: false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRenderDetailedElementHandlerOwner()
+    {
+        // A handler on an ELEMENT (not the form root) is attributed to that element's name.
+        EObject form = newForm();
+        EObject field = newItem(MODEL.formField, "Quantity", 3); //$NON-NLS-1$
+        addHandler(field, "OnChange", null, "QuantityOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(form, field);
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md.contains("| Quantity | OnChange | QuantityOnChange |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRenderDetailedNoHandlers()
+    {
+        // With no handlers anywhere the section shows the empty placeholder.
+        EObject form = newForm();
+        addItem(form, newItem(MODEL.formField, "Plain", 1)); //$NON-NLS-1$
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md.contains("## Event handlers")); //$NON-NLS-1$
+        assertTrue(md.contains("_(no event handlers)_")); //$NON-NLS-1$
+    }
+
+    /** Mirrors {@code FormStructureReader.MAX_NODES} (private): the detailed-render item-outline cap. */
+    private static final int MAX_NODES = 5000;
+
+    @Test
+    public void testRenderDetailedExactlyMaxNodesNotTruncated()
+    {
+        // BOUNDARY (off-by-one guard): a form with EXACTLY MAX_NODES item nodes drains the budget to 0
+        // while every node is still rendered, so the truncation note must NOT appear. The note is gated
+        // on an explicit 'a node was dropped' flag, not on the exhausted budget.
+        EObject form = newForm();
+        for (int i = 0; i < MAX_NODES; i++)
+        {
+            addItem(form, newItem(MODEL.formField, "F" + i, i)); //$NON-NLS-1$
+        }
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(md.contains("item outline truncated")); //$NON-NLS-1$
+        // The last node IS present in the outline (nothing was dropped).
+        assertTrue(md.contains("- F" + (MAX_NODES - 1) + " (")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRenderDetailedBeyondMaxNodesTruncated()
+    {
+        // A form with MAX_NODES + 1 item nodes genuinely exceeds the cap: the outline is capped and the
+        // truncation note is emitted, naming the cap.
+        EObject form = newForm();
+        for (int i = 0; i <= MAX_NODES; i++)
+        {
+            addItem(form, newItem(MODEL.formField, "F" + i, i)); //$NON-NLS-1$
+        }
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md.contains(
+            "- _(item outline truncated: more than " + MAX_NODES + " nodes)_")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The node past the cap is dropped from the outline.
+        assertFalse(md.contains("- F" + MAX_NODES + " (")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRenderDetailedEnumReadsLiteralNotName()
+    {
+        // Pin the accessor: enumLiteralOf reads Enumerator.getName(), NOT getLiteral(). The shared
+        // enums set name==literal (true of the real 1C metamodel) so they can't tell the two apart;
+        // here the field's 'type' literal carries a DISTINCT name ('Vertical') vs literal ('vertical'),
+        // so a future swap of getName() for getLiteral() flips the rendered token and fails this test.
+        // The distinct literal is added to the SHARED 'type' enum only for this test, then removed in a
+        // finally so the singleton MODEL is not mutated for any other test.
+        EEnum fieldTypeEnum = (EEnum)((EAttribute)MODEL.formField.getEStructuralFeature("type")) //$NON-NLS-1$
+            .getEAttributeType();
+        EEnumLiteral distinct = EcoreFactory.eINSTANCE.createEEnumLiteral();
+        distinct.setName("Vertical"); //$NON-NLS-1$
+        distinct.setLiteral("vertical"); //$NON-NLS-1$
+        distinct.setValue(fieldTypeEnum.getELiterals().size());
+        fieldTypeEnum.getELiterals().add(distinct);
+        try
+        {
+            EObject form = newForm();
+            EObject field = newItem(MODEL.formField, "Mode", 1); //$NON-NLS-1$
+            field.eSet(field.eClass().getEStructuralFeature("type"), distinct.getInstance()); //$NON-NLS-1$
+            addItem(form, field);
+
+            String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+            // The rendered token is the literal's NAME, never its (lower-case) literal.
+            assertTrue(md.contains("field: type=Vertical")); //$NON-NLS-1$
+            assertFalse(md.contains("vertical")); //$NON-NLS-1$
+        }
+        finally
+        {
+            fieldTypeEnum.getELiterals().remove(distinct);
+        }
+    }
+
+    @Test
+    public void testRenderDetailedEventNameByLanguageRu()
+    {
+        // The event name is selected by language CODE: 'ru' picks nameRu, never the English name.
+        EObject form = newForm();
+        addHandler(form, "OnOpen", "ПриОткрытии", "ФормаПриОткрытии"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        String mdRu = FormStructureReader.render("CommonForm.F", form, "ru"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(mdRu.contains("ПриОткрытии")); //$NON-NLS-1$
+        String mdEn = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(mdEn.contains("| (form) | OnOpen | ")); //$NON-NLS-1$
+    }
+
+    /**
+     * Builds a representative form exercising every enrichment: a {@code MainGroup}
+     * (extInfo Horizontal/Collapsible) containing a hidden {@code Description} field (LabelField /
+     * Directly, dataPath {@code Object.Description}); a {@code Post} button bound to a metadata command; a
+     * {@code Goods} attribute (main + savedData, synonym "Goods item"); and a form-root {@code OnOpen}
+     * handler ({@code FormOnOpen}).
+     */
+    @SuppressWarnings("unchecked")
+    private static EObject buildRichForm()
+    {
+        EObject form = newForm();
+
+        EObject group = newItem(MODEL.formGroup, "MainGroup", 1); //$NON-NLS-1$
+        setGroupExtInfo(group, "Horizontal", "Collapsible"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject field = newItem(MODEL.formField, "Description", 2); //$NON-NLS-1$
+        setEnum(field, "type", "LabelField"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnum(field, "editMode", "Directly"); //$NON-NLS-1$ //$NON-NLS-2$
+        setBoolean(field, "visible", false); //$NON-NLS-1$
+        setDataPath(field, "Object", "Description"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(group, field);
+        addItem(form, group);
+
+        EObject button = newItem(MODEL.formButton, "PostButton", 4); //$NON-NLS-1$
+        button.eSet(button.eClass().getEStructuralFeature("commandName"), "Post"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(form, button);
+
+        EObject attribute = newAttribute("Goods"); //$NON-NLS-1$
+        setBoolean(attribute, "main", true); //$NON-NLS-1$
+        setBoolean(attribute, "savedData", true); //$NON-NLS-1$
+        EMap<String, String> title =
+            (EMap<String, String>)attribute.eGet(attribute.eClass().getEStructuralFeature("title")); //$NON-NLS-1$
+        title.put("en", "Goods item"); //$NON-NLS-1$ //$NON-NLS-2$
+        addAttribute(form, attribute);
+
+        addHandler(form, "OnOpen", "ПриОткрытии", //$NON-NLS-1$
+            "FormOnOpen"); //$NON-NLS-1$
+
+        return form;
+    }
+
     // ==================== Dynamic EMF model shaped like a managed form ====================
 
     private static final FormLikeModel MODEL = new FormLikeModel();
@@ -314,6 +517,66 @@ public class FormStructureReaderTest
         ((List<EObject>)owner.eGet(owner.eClass().getEStructuralFeature(featureName))).add(child);
     }
 
+    // ---- detailed-render test scaffolding ------------------------------------------------------
+
+    /** Sets a Boolean feature by name on an item (e.g. {@code visible}, {@code main}). */
+    private static void setBoolean(EObject object, String featureName, boolean value)
+    {
+        object.eSet(object.eClass().getEStructuralFeature(featureName), Boolean.valueOf(value));
+    }
+
+    /** Sets an EEnum feature to a named literal, read back by the reader as that literal. */
+    private static void setEnum(EObject object, String featureName, String literal)
+    {
+        EAttribute feature = (EAttribute)object.eClass().getEStructuralFeature(featureName);
+        EEnumLiteral lit = ((EEnum)feature.getEAttributeType()).getEEnumLiteral(literal);
+        object.eSet(feature, lit.getInstance());
+    }
+
+    /** Attaches a contained {@code DataPath} whose {@code segments} are the given parts. */
+    @SuppressWarnings("unchecked")
+    private static void setDataPath(EObject item, String... parts)
+    {
+        EObject dataPath = new DynamicEObjectImpl(MODEL.dataPath);
+        EList<String> segments =
+            (EList<String>)dataPath.eGet(MODEL.dataPath.getEStructuralFeature("segments")); //$NON-NLS-1$
+        for (String part : parts)
+        {
+            segments.add(part);
+        }
+        item.eSet(item.eClass().getEStructuralFeature("dataPath"), dataPath); //$NON-NLS-1$
+    }
+
+    /** Attaches a contained {@code UsualGroupExtInfo} carrying the layout {@code group} + {@code behavior}. */
+    private static void setGroupExtInfo(EObject group, String groupMode, String behavior)
+    {
+        EObject extInfo = new DynamicEObjectImpl(MODEL.usualGroupExtInfo);
+        setEnum(extInfo, "group", groupMode); //$NON-NLS-1$
+        if (behavior != null)
+        {
+            setEnum(extInfo, "behavior", behavior); //$NON-NLS-1$
+        }
+        group.eSet(group.eClass().getEStructuralFeature("extInfo"), extInfo); //$NON-NLS-1$
+    }
+
+    /** Appends an {@code EventHandler} (its BSL proc name + a contained {@code Event}) to the element. */
+    private static void addHandler(EObject element, String eventName, String eventNameRu, String procName)
+    {
+        EObject handler = new DynamicEObjectImpl(MODEL.eventHandler);
+        handler.eSet(MODEL.eventHandler.getEStructuralFeature("name"), procName); //$NON-NLS-1$
+        EObject event = new DynamicEObjectImpl(MODEL.event);
+        if (eventName != null)
+        {
+            event.eSet(MODEL.event.getEStructuralFeature("name"), eventName); //$NON-NLS-1$
+        }
+        if (eventNameRu != null)
+        {
+            event.eSet(MODEL.event.getEStructuralFeature("nameRu"), eventNameRu); //$NON-NLS-1$
+        }
+        handler.eSet(MODEL.eventHandler.getEStructuralFeature("event"), event); //$NON-NLS-1$
+        addTo(element, "handlers", handler); //$NON-NLS-1$
+    }
+
     /**
      * A tiny dynamic EMF metamodel reproducing the feature names the reader reads via reflection:
      * {@code items} / {@code attributes} / {@code formCommands} on the form, {@code name} / {@code id}
@@ -326,12 +589,17 @@ public class FormStructureReaderTest
         final EClass form;
         final EClass formGroup;
         final EClass formField;
+        final EClass formButton;
         final EClass formAttribute;
         final EClass formCommand;
         final EClass commandHandler;
         final EClass handlerContainer;
         final EClass autoCommandBar;
         final EClass table;
+        final EClass usualGroupExtInfo;
+        final EClass dataPath;
+        final EClass eventHandler;
+        final EClass event;
 
         final EAttribute itemName;
         final EAttribute itemId;
@@ -347,8 +615,61 @@ public class FormStructureReaderTest
             pkg.setNsPrefix("formlike"); //$NON-NLS-1$
             pkg.setNsURI("http://ditrix.com/test/formlike"); //$NON-NLS-1$
 
-            // FormItem-like base: name + id. Both groups and fields extend it, so the many-valued
-            // 'items' references can be typed to this common supertype.
+            // ---- enums the detailed render reads as their literal (via Enumerator) -------------------
+            EEnum groupTypeEnum = enumOf(factory, "FormGroupExtInfoType", "Vertical", "Horizontal"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            EEnum behaviorEnum = enumOf(factory, "UsualGroupBehavior", "Usual", "Collapsible"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            EEnum fieldTypeEnum = enumOf(factory, "FormFieldType", "InputField", "LabelField"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            EEnum editModeEnum = enumOf(factory, "FormFieldEditMode", "Enter", "Directly"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+            // ---- supporting contained objects --------------------------------------------------------
+            // DataPath-like: a 'segments' string list joined by '.' to form an item's bound path.
+            dataPath = factory.createEClass();
+            dataPath.setName("DataPath"); //$NON-NLS-1$
+            EAttribute segments = factory.createEAttribute();
+            segments.setName("segments"); //$NON-NLS-1$
+            segments.setEType(EcorePackage.Literals.ESTRING);
+            segments.setUpperBound(-1);
+            dataPath.getEStructuralFeatures().add(segments);
+
+            // UsualGroupExtInfo-like: a group's extInfo carrying the layout 'group' + 'behavior' enums.
+            usualGroupExtInfo = factory.createEClass();
+            usualGroupExtInfo.setName("UsualGroupExtInfo"); //$NON-NLS-1$
+            EAttribute groupMode = factory.createEAttribute();
+            groupMode.setName("group"); //$NON-NLS-1$
+            groupMode.setEType(groupTypeEnum);
+            usualGroupExtInfo.getEStructuralFeatures().add(groupMode);
+            EAttribute behavior = factory.createEAttribute();
+            behavior.setName("behavior"); //$NON-NLS-1$
+            behavior.setEType(behaviorEnum);
+            usualGroupExtInfo.getEStructuralFeatures().add(behavior);
+
+            // Event-like + EventHandler-like: a handler's own 'name' (BSL proc) + single 'event' ref
+            // whose 'name' (en) / 'nameRu' (ru) is the platform event name.
+            event = factory.createEClass();
+            event.setName("Event"); //$NON-NLS-1$
+            EAttribute eventName = factory.createEAttribute();
+            eventName.setName("name"); //$NON-NLS-1$
+            eventName.setEType(EcorePackage.Literals.ESTRING);
+            event.getEStructuralFeatures().add(eventName);
+            EAttribute eventNameRu = factory.createEAttribute();
+            eventNameRu.setName("nameRu"); //$NON-NLS-1$
+            eventNameRu.setEType(EcorePackage.Literals.ESTRING);
+            event.getEStructuralFeatures().add(eventNameRu);
+            eventHandler = factory.createEClass();
+            eventHandler.setName("EventHandler"); //$NON-NLS-1$
+            EAttribute ehName = factory.createEAttribute();
+            ehName.setName("name"); //$NON-NLS-1$
+            ehName.setEType(EcorePackage.Literals.ESTRING);
+            eventHandler.getEStructuralFeatures().add(ehName);
+            EReference ehEvent = factory.createEReference();
+            ehEvent.setName("event"); //$NON-NLS-1$
+            ehEvent.setEType(event);
+            ehEvent.setContainment(true);
+            eventHandler.getEStructuralFeatures().add(ehEvent);
+
+            // FormItem-like base: name + id + visible + dataPath + extInfo + handlers. Groups, fields and
+            // buttons extend it, so the many-valued 'items' references can be typed to this supertype and
+            // every item carries the detailed-render features (read reflectively, only when present).
             formItem = factory.createEClass();
             formItem.setName("FormItem"); //$NON-NLS-1$
             formItem.setAbstract(true);
@@ -360,6 +681,22 @@ public class FormStructureReaderTest
             itemId.setName("id"); //$NON-NLS-1$
             itemId.setEType(EcorePackage.Literals.EINT);
             formItem.getEStructuralFeatures().add(itemId);
+            EAttribute itemVisible = factory.createEAttribute();
+            itemVisible.setName("visible"); //$NON-NLS-1$
+            itemVisible.setEType(EcorePackage.Literals.EBOOLEAN);
+            itemVisible.setDefaultValueLiteral("true"); //$NON-NLS-1$
+            formItem.getEStructuralFeatures().add(itemVisible);
+            EReference itemDataPath = factory.createEReference();
+            itemDataPath.setName("dataPath"); //$NON-NLS-1$
+            itemDataPath.setEType(dataPath);
+            itemDataPath.setContainment(true);
+            formItem.getEStructuralFeatures().add(itemDataPath);
+            EReference itemExtInfo = factory.createEReference();
+            itemExtInfo.setName("extInfo"); //$NON-NLS-1$
+            itemExtInfo.setEType(usualGroupExtInfo);
+            itemExtInfo.setContainment(true);
+            formItem.getEStructuralFeatures().add(itemExtInfo);
+            formItem.getEStructuralFeatures().add(handlersReference(factory, eventHandler));
 
             // FormGroup-like container: a FormItem that also exposes an 'items' list.
             formGroup = factory.createEClass();
@@ -367,18 +704,51 @@ public class FormStructureReaderTest
             formGroup.getESuperTypes().add(formItem);
             formGroup.getEStructuralFeatures().add(itemsReference(factory, formItem));
 
-            // FormField-like leaf: a FormItem with no 'items' feature.
+            // FormField-like leaf: a FormItem with 'type' + 'editMode' enums, no 'items' feature.
             formField = factory.createEClass();
             formField.setName("FormField"); //$NON-NLS-1$
             formField.getESuperTypes().add(formItem);
+            EAttribute fieldType = factory.createEAttribute();
+            fieldType.setName("type"); //$NON-NLS-1$
+            fieldType.setEType(fieldTypeEnum);
+            formField.getEStructuralFeatures().add(fieldType);
+            EAttribute fieldEditMode = factory.createEAttribute();
+            fieldEditMode.setName("editMode"); //$NON-NLS-1$
+            fieldEditMode.setEType(editModeEnum);
+            formField.getEStructuralFeatures().add(fieldEditMode);
 
-            // FormAttribute-like: name only.
+            // Button-like leaf: a FormItem carrying the bound metadata 'commandName'. The concrete
+            // form-model button EClass is named "Button" (NOT "FormButton", its platform-type name), so
+            // the dynamic EClass must use that name for kindExtrasOf's eClass()-name match to fire.
+            formButton = factory.createEClass();
+            formButton.setName("Button"); //$NON-NLS-1$
+            formButton.getESuperTypes().add(formItem);
+            EAttribute buttonCommand = factory.createEAttribute();
+            buttonCommand.setName("commandName"); //$NON-NLS-1$
+            buttonCommand.setEType(EcorePackage.Literals.ESTRING);
+            formButton.getEStructuralFeatures().add(buttonCommand);
+
+            // FormAttribute-like: name + title (EMap by language code) + main + savedData flags.
             formAttribute = factory.createEClass();
             formAttribute.setName("FormAttribute"); //$NON-NLS-1$
             attributeName = factory.createEAttribute();
             attributeName.setName("name"); //$NON-NLS-1$
             attributeName.setEType(EcorePackage.Literals.ESTRING);
             formAttribute.getEStructuralFeatures().add(attributeName);
+            EReference attributeTitle = factory.createEReference();
+            attributeTitle.setName("title"); //$NON-NLS-1$
+            attributeTitle.setEType(EcorePackage.Literals.ESTRING_TO_STRING_MAP_ENTRY);
+            attributeTitle.setContainment(true);
+            attributeTitle.setUpperBound(-1);
+            formAttribute.getEStructuralFeatures().add(attributeTitle);
+            EAttribute attributeMain = factory.createEAttribute();
+            attributeMain.setName("main"); //$NON-NLS-1$
+            attributeMain.setEType(EcorePackage.Literals.EBOOLEAN);
+            formAttribute.getEStructuralFeatures().add(attributeMain);
+            EAttribute attributeSavedData = factory.createEAttribute();
+            attributeSavedData.setName("savedData"); //$NON-NLS-1$
+            attributeSavedData.setEType(EcorePackage.Literals.EBOOLEAN);
+            formAttribute.getEStructuralFeatures().add(attributeSavedData);
 
             // CommandHandler-like pair: the command's contained action holding the handler name.
             commandHandler = factory.createEClass();
@@ -444,11 +814,22 @@ public class FormStructureReaderTest
             barRef.setEType(autoCommandBar);
             barRef.setContainment(true);
             form.getEStructuralFeatures().add(barRef);
+            // The form ROOT carries its own event handlers (e.g. OnOpen / BeforeClose).
+            form.getEStructuralFeatures().add(handlersReference(factory, eventHandler));
 
+            pkg.getEClassifiers().add(groupTypeEnum);
+            pkg.getEClassifiers().add(behaviorEnum);
+            pkg.getEClassifiers().add(fieldTypeEnum);
+            pkg.getEClassifiers().add(editModeEnum);
+            pkg.getEClassifiers().add(dataPath);
+            pkg.getEClassifiers().add(usualGroupExtInfo);
+            pkg.getEClassifiers().add(event);
+            pkg.getEClassifiers().add(eventHandler);
             pkg.getEClassifiers().add(formItem);
             pkg.getEClassifiers().add(form);
             pkg.getEClassifiers().add(formGroup);
             pkg.getEClassifiers().add(formField);
+            pkg.getEClassifiers().add(formButton);
             pkg.getEClassifiers().add(formAttribute);
             pkg.getEClassifiers().add(formCommand);
             pkg.getEClassifiers().add(commandHandler);
@@ -460,6 +841,27 @@ public class FormStructureReaderTest
         private static EReference itemsReference(EcoreFactory factory, EClass itemType)
         {
             return containment(factory, "items", itemType); //$NON-NLS-1$
+        }
+
+        private static EReference handlersReference(EcoreFactory factory, EClass handlerType)
+        {
+            return containment(factory, "handlers", handlerType); //$NON-NLS-1$
+        }
+
+        private static EEnum enumOf(EcoreFactory factory, String name, String... literals)
+        {
+            EEnum eEnum = factory.createEEnum();
+            eEnum.setName(name);
+            int value = 0;
+            for (String literal : literals)
+            {
+                EEnumLiteral lit = factory.createEEnumLiteral();
+                lit.setName(literal);
+                lit.setLiteral(literal);
+                lit.setValue(value++);
+                eEnum.getELiterals().add(lit);
+            }
+            return eEnum;
         }
 
         private static EReference containment(EcoreFactory factory, String name, EClass type)

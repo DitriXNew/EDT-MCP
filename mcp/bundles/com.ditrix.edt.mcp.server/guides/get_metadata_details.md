@@ -5,7 +5,7 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - Batch several objects in one call by passing multiple FQNs in `objectFqns`.
 - Prefer the default (basic) view first; reach for `full: true` only when you need the exhaustive reflection.
 - Pass `assignable: true` to get the SETTABLE-property schema instead of the details view: per property its value kind, current value, and ALLOWED values (enum literals) - exactly what modify_metadata can set. In this mode an FQN may address a member (e.g. `Catalog.Products.Attribute.Weight`), not just a top object.
-- Pass a FORM FQN (`Catalog.Products.Form.ItemForm` or `CommonForm.MyForm`) to render that form's STRUCTURE - its items (the nested visual tree), attributes and commands. (For a CommonForm this renders the form structure, not the CommonForm's mdclass properties.) Form members are created/edited/removed by their own FQNs via create_metadata / modify_metadata / delete_metadata.
+- Pass a FORM FQN (`Catalog.Products.Form.ItemForm` or `CommonForm.MyForm`) to render that form's enriched STRUCTURE: its items (the nested visual tree, with each item's visibility, bound `dataPath` and per-kind extras), an attributes table (with the `Main`/`SavedData` flags), a commands table and an Event handlers section. (For a CommonForm this renders the form structure, not the CommonForm's mdclass properties.) Form members are created/edited/removed by their own FQNs via create_metadata / modify_metadata / delete_metadata.
 
 ## Parameter details
 - `projectName` (required) - EDT project name.
@@ -15,6 +15,7 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 
 ## Output
 - Markdown, one section per resolved object, separated by `---`.
+- A form FQN renders the enriched form structure instead of an mdclass object section: an Items outline (each item with its visibility, bound `dataPath` and per-kind extras), an Attributes table (with the `Main`/`SavedData` columns), a Commands table and an Event handlers section.
 - Per-object failures (malformed FQN or object not found) do NOT fail the whole call. They are collected into a dedicated `## Errors` table at the end with an `ERROR` status row carrying the FQN and reason, so a client can tell a failed object from data.
 
 ## Examples
