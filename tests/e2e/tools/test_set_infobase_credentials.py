@@ -3,11 +3,15 @@ e2e tests for set_infobase_credentials (kind: action).
 
 WHAT THE TOOL DOES
 ------------------
-set_infobase_credentials stores the infobase connection credentials (user/password)
-EDT uses to authenticate the designer agent for update_database / debug_launch against
-an infobase that has a user list (issue #194). It selects an EXISTING infobase user
-(does not create users); an empty password is valid (demo bases). Target by
-launchConfigurationName (preferred) or projectName + applicationId.
+set_infobase_credentials only PERSISTS the infobase connection credentials
+(user/password) into EDT's per-infobase access settings. The store path is
+DESIGNER-FREE: it commits via IInfobaseAccessManager.updateSettings and never opens,
+connects to, or validates a designer session. Those stored credentials are later read
+by EDT when update_database / debug_launch authenticate the designer agent against an
+infobase that has a user list (issue #194) — but that authentication happens in those
+other tools, not here. The tool selects an EXISTING infobase user (does not create
+users); an empty password is valid (demo bases). Target by launchConfigurationName
+(preferred) or projectName + applicationId.
 
 RESPONSE SHAPE
 --------------
@@ -20,8 +24,19 @@ CI STRATEGY
 -----------
 The negative/contract matrix is CI-safe (no platform, no infobase needed): it exercises
 the argument guards and the project/application resolution chain. The live happy path
-(store credentials -> the update agent authenticates) needs a registered infobase with a
-user list and is verified on the EDT stand, not in CI.
+(persist credentials) needs a registered infobase with a user list and is verified on
+the EDT stand, not in CI.
+
+HANG FIX (#194 follow-up)
+-------------------------
+The previously-reported hang was NOT in the credential store itself (updateSettings is
+designer-free). It was an EDT BACKGROUND application-update-state recompute provoked by
+running the model reads synchronously on the unbounded MCP worker thread, which could
+loop forever waiting on a designer connection. The store is now wrapped in a bounded
+background Eclipse Job joined with a short timeout: credentials are persisted FIRST, and
+on timeout the recorded success is returned (else a graceful error). This is a server-side
+concern only — the wire surface (params / output fields) is unchanged, so this matrix and
+its assert_no_diff() stay exactly as-is.
 
 NOTE: the tool writes EDT's per-infobase access settings (secure storage), never
 TestConfiguration source files — every call leaves the project tree clean: assert_no_diff().

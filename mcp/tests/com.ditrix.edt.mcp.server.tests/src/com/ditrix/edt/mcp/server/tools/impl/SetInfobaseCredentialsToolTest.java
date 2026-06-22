@@ -157,4 +157,60 @@ public class SetInfobaseCredentialsToolTest
         assertTrue("missing applicationId must produce an error", //$NON-NLS-1$
             result.contains("applicationId is required")); //$NON-NLS-1$
     }
+
+    // ==================== Pure storeOutcome seam (no live EDT, no jobs framework) ====================
+
+    /** A representative SUCCESS JSON the bounded Job records the instant updateSettings commits. */
+    private static final String SUCCESS_JSON =
+        "{\"success\":true,\"project\":\"TestProject\",\"applicationId\":\"app1\"," //$NON-NLS-1$
+            + "\"applicationName\":\"My Infobase\",\"user\":\"Admin\",\"access\":\"INFOBASE\"," //$NON-NLS-1$
+            + "\"passwordSet\":true,\"message\":\"Stored ...\"}"; //$NON-NLS-1$
+
+    @Test
+    public void testStoreOutcomeFinishedReturnsRecordedSuccess()
+    {
+        // A clean finish returns whatever the Job recorded, verbatim.
+        String result = SetInfobaseCredentialsTool.storeOutcome(true, SUCCESS_JSON, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(SUCCESS_JSON, result);
+    }
+
+    @Test
+    public void testStoreOutcomeTimeoutWithRecordedSuccessReturnsSuccess()
+    {
+        // Persist-first guarantee: a timeout AFTER updateSettings committed still reports success.
+        String result = SetInfobaseCredentialsTool.storeOutcome(false, SUCCESS_JSON, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a persisted success must survive a post-commit timeout", SUCCESS_JSON, result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStoreOutcomeTimeoutWithNoResultIsGracefulError()
+    {
+        // A timeout BEFORE the credentials committed yields a graceful, actionable error.
+        String result = SetInfobaseCredentialsTool.storeOutcome(false, null, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(result);
+        assertTrue("timeout-with-no-result must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must say it timed out", result.contains("timed out")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the application", result.contains("app1")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must name the project", result.contains("TestProject")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStoreOutcomeFinishedWithNoResultIsGracefulError()
+    {
+        // A clean finish that recorded nothing must not hang or NPE — graceful "no result" error.
+        String result = SetInfobaseCredentialsTool.storeOutcome(true, null, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(result);
+        assertTrue("no-result finish must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must explain no result was produced", result.contains("no result")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStoreOutcomeKeepsLowerCamelCaseOutputKeys()
+    {
+        // The success branch (recorded JSON returned verbatim) preserves the lowerCamelCase wire keys.
+        String result = SetInfobaseCredentialsTool.storeOutcome(true, SUCCESS_JSON, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must keep applicationId", result.contains("\"applicationId\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must keep applicationName", result.contains("\"applicationName\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must keep passwordSet", result.contains("\"passwordSet\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

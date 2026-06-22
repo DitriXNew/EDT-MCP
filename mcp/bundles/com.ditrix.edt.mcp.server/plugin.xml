@@ -595,4 +595,16 @@
          </includes>
       </viewerContentBinding>
    </extension>
+   <!-- Non-interactive master password for the Eclipse default secure storage, so
+        set_infobase_credentials / create_infobase never block on the "Secure Storage"
+        master-password dialog on a fresh/headless stand (issue #194). -->
+   <extension
+         id="mcpSecureStorageProvider"
+         point="org.eclipse.equinox.security.secureStorage">
+      <provider
+            class="com.ditrix.edt.mcp.server.utils.McpSecureStorageProvider"
+            description="EDT MCP unattended secure-storage password provider"
+            priority="3">
+      </provider>
+   </extension>
 </plugin>

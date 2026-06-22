@@ -12,9 +12,10 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
- * Tests for {@link InfobaseAuthDialogSuppressor#isAuthDialogTitle(String)} — the pure title-prefix
- * matcher for EDT's "Configure Infobase access Settings" dialog (#194). The SWT install/cancel path
- * needs a live workbench display and is verified on the e2e stand.
+ * Tests for the pure title-prefix matchers of {@link InfobaseAuthDialogSuppressor} — EDT's
+ * "Configure Infobase access Settings" dialog and Eclipse Secure Storage's "Password Hint Needed"
+ * follow-up dialog (#194). The SWT install/dismiss path needs a live workbench display and is verified
+ * on the e2e stand.
  */
 public class InfobaseAuthDialogSuppressorTest
 {
@@ -61,5 +62,32 @@ public class InfobaseAuthDialogSuppressorTest
     {
         assertFalse(InfobaseAuthDialogSuppressor.isAuthDialogTitle(null));
         assertFalse(InfobaseAuthDialogSuppressor.isAuthDialogTitle("")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSecureStorageHintTitleMatches()
+    {
+        // pswdRecoveryOptionTitle from org.eclipse.equinox.security.ui — shipped untranslated.
+        assertTrue(InfobaseAuthDialogSuppressor.isSecureStorageHintDialogTitle(
+            "Secure Storage - Password Hint Needed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHintMatcherIgnoresAccessSettingsAndUnrelated()
+    {
+        // The two matchers are disjoint: neither claims the other's dialog, nor any unrelated one.
+        assertFalse(InfobaseAuthDialogSuppressor.isSecureStorageHintDialogTitle(
+            "Configure Infobase \"ERP\" access Settings")); //$NON-NLS-1$
+        assertFalse(InfobaseAuthDialogSuppressor.isSecureStorageHintDialogTitle("Secure Storage")); //$NON-NLS-1$
+        assertFalse(InfobaseAuthDialogSuppressor.isSecureStorageHintDialogTitle("Some other dialog")); //$NON-NLS-1$
+        assertFalse(InfobaseAuthDialogSuppressor.isAuthDialogTitle(
+            "Secure Storage - Password Hint Needed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHintMatcherNullAndEmptyDoNotMatch()
+    {
+        assertFalse(InfobaseAuthDialogSuppressor.isSecureStorageHintDialogTitle(null));
+        assertFalse(InfobaseAuthDialogSuppressor.isSecureStorageHintDialogTitle("")); //$NON-NLS-1$
     }
 }
