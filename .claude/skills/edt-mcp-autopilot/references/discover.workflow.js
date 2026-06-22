@@ -123,6 +123,16 @@ const SPEC_SCHEMA = {
   required: ['summary', 'acceptanceCriteria', 'approach', 'devPartition'],
 }
 
+// Resilient agent call: re-spawn a few times if the subagent dies (e.g. a transient API 529).
+async function retryAgent(prompt, opts, attempts = 3) {
+  for (let i = 1; i <= attempts; i++) {
+    const r = await agent(prompt, opts)
+    if (r !== null && r !== undefined) return r
+    log(`retry ${(opts && opts.label) || (opts && opts.phase) || 'agent'} (attempt ${i}/${attempts})`)
+  }
+  return null
+}
+
 // ---- Phase 1: documentation research (2 agents) ----------------------------------------------
 phase('Docs')
 const docPrompts = [
@@ -175,7 +185,7 @@ for (let wave = 1; wave <= MAX_WAVES; wave++) {
   reworkNotes = ''
   const numbered = fresh.map((f, i) => `#${i}: ${f.title}${f.file ? ' [' + f.file + ']' : ''} - ${f.detail}`).join('\n')
   const panels = (await parallel(Array.from({ length: PANEL }, (_, c) => () =>
-    agent(
+    retryAgent(
       `You are adversarial CRITIC #${c + 1} for this EDT-MCP task:\n\n${task}\n\nHere are ${fresh.length} research findings (indexed):\n${numbered}\n\nVerify EACH against the real code/docs and return a verdict per index: CONFIRMED (you can point at the proof), REFUTED (wrong/unfounded), or REWORK (right direction, specifics need re-checking - say what). Default to REFUTED when uncertain. Return one verdict object per finding index.`,
       { phase: 'Critique', label: `critic:w${wave}#${c + 1}`, schema: BATCH_VERDICT_SCHEMA }))))
     .filter(Boolean)
@@ -202,8 +212,16 @@ for (let wave = 1; wave <= MAX_WAVES; wave++) {
 // ---- Phase 4: architect synthesis -----------------------------------------------------------
 phase('Architect')
 const corpus = JSON.stringify({ docFindings, confirmed }, null, 0)
-const spec = await agent(
+const spec = await retryAgent(
   `You are the ARCHITECT for this EDT-MCP task:\n\n${task}\n\nConfirmed research findings and documentation facts (JSON):\n${corpus}\n\nProduce a concrete, Spec-Driven implementation plan:\n- a short summary and TESTABLE acceptance criteria;\n- the chosen approach;\n- a DEVELOPER PARTITION that splits the work into INDEPENDENT, FILE-DISJOINT slices so multiple developers can work in parallel without conflict - each slice with its files, the exact change, the invariant to preserve, and its tests;\n- recommendedDevs (how many of those slices can run in parallel).\n\nRespect the project MUST-ENFORCE rules (English-only code, unattended-safety, bilingual language-CODE keys, schema/execute parity + lowerCamelCase, reflective forms with no form-model import, transaction boundaries with state-flags only after commit, the unit + e2e + golden ratchets).\n\nIf a PRINCIPAL design question must be answered by a human BEFORE implementation (a wire-contract change, an architecture choice, bilingual semantics, a breaking change, a destructive operation, or an ambiguous/infeasible requirement), list it under escalations with 2-3 options - do NOT guess.`,
   { phase: 'Architect', schema: SPEC_SCHEMA, effort: 'high' })
 
+if (!spec) {
+  log('architect step failed (likely transient API error) - returning a resumable escalation')
+  return {
+    spec: null,
+    devPartition: [],
+    escalations: [{ question: 'The architect step failed after retries (transient API error). Resume the discover workflow once the API is healthy.', options: 'Resume from this run id (cached research is reused).', why: 'No spec could be synthesised.' }],
+  }
+}
 return { spec, devPartition: spec.devPartition, escalations: spec.escalations || [] }
