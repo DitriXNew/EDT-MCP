@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.BuildExternalObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
@@ -120,6 +121,7 @@ public final class BuiltInToolRegistrar
         registry.register(new ResyncToDiskTool());
         registry.register(new ExportConfigurationToXmlTool());
         registry.register(new ImportConfigurationFromXmlTool());
+        registry.register(new BuildExternalObjectsTool());
         registry.register(new DeleteProjectTool());
         registry.register(new CreateProjectTool());
         registry.register(new GetProblemSummaryTool());
