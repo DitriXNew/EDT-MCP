@@ -110,6 +110,11 @@ public class GetApplicationsToolTest
         assertTrue("outputSchema must declare message", schema.contains("\"message\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare defaultApplicationId", //$NON-NLS-1$
             schema.contains("\"defaultApplicationId\"")); //$NON-NLS-1$
+        // inheritedFromProject is emitted only when applications are resolved via the base
+        // project of a dependent (external-objects/extension) project; the schema must still
+        // declare it so the wire contract advertises the field for every consumer.
+        assertTrue("outputSchema must declare inheritedFromProject", //$NON-NLS-1$
+            schema.contains("\"inheritedFromProject\"")); //$NON-NLS-1$
     }
 
     // ==================== Argument validation (no live workbench needed) ====================
@@ -153,5 +158,16 @@ public class GetApplicationsToolTest
             result.contains("\"success\":false")); //$NON-NLS-1$
         assertFalse("a validation error must not emit a success envelope", //$NON-NLS-1$
             result.contains("\"success\":true")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingProjectNameOmitsInheritedFromProject()
+    {
+        // inheritedFromProject is a marker emitted ONLY on the base-project (inherited)
+        // branch of a dependent project. A pure argument-error envelope returns before any
+        // application lookup, so the marker must be absent here.
+        String result = new GetApplicationsTool().execute(new HashMap<>());
+        assertFalse("a validation error must not emit inheritedFromProject", //$NON-NLS-1$
+            result.contains("inheritedFromProject")); //$NON-NLS-1$
     }
 }

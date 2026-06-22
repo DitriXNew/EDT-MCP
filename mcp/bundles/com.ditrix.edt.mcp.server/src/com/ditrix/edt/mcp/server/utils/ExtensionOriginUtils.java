@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import org.eclipse.core.resources.IProject;
 
+import com._1c.g5.v8.dt.core.platform.IDependentProject;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
@@ -66,6 +67,38 @@ public final class ExtensionOriginUtils
     public static boolean isExtensionProject(IProject project)
     {
         return resolveV8Project(project) instanceof IExtensionProject;
+    }
+
+    /**
+     * Resolves the BASE (parent) configuration project a dependent project derives
+     * from. External-objects projects ({@code V8ExternalObjectsNature}) and
+     * configuration extensions ({@code V8ExtensionNature}) both implement the EDT
+     * supertype {@link IDependentProject}, whose {@code getParentProject()} returns the
+     * base configuration project they depend on. Configuration projects are never
+     * {@link IDependentProject} and therefore always resolve to {@code null}.
+     *
+     * @param project the workspace project (may be {@code null})
+     * @return the base/parent {@link IProject} for a dependent project (may itself be
+     *         {@code null} when the parent is unset), or {@code null} when the project
+     *         is not dependent or cannot be resolved
+     */
+    public static IProject resolveBaseProject(IProject project)
+    {
+        try
+        {
+            IV8Project v8Project = resolveV8Project(project);
+            if (v8Project instanceof IDependentProject)
+            {
+                return ((IDependentProject)v8Project).getParentProject();
+            }
+            return null;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Error resolving base project for: " //$NON-NLS-1$
+                + (project == null ? "<null>" : project.getName()), e); //$NON-NLS-1$
+            return null;
+        }
     }
 
     /**

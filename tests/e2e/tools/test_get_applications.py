@@ -44,6 +44,26 @@ if the tool is broken regardless of how many applications exist:
 A read tool must never touch the project tree, so every test ends with
 assert_no_diff().
 
+Inherited applications for a DEPENDENT project (issue #203)
+-----------------------------------------------------------
+An external-objects (V8ExternalObjectsNature) or extension project has NO
+applications of its own — both share the EDT supertype IDependentProject, whose
+getParentProject() points at the BASE configuration that owns the infobases. The
+tool therefore RE-RUNS the lookup against the parent when the named (dependent)
+project has none, and surfaces the base project's applications. On that inherited
+branch the envelope keeps echoing the NAMED (dependent) project in "project" and
+adds a NEW field "inheritedFromProject" == the base project name. The field is
+emitted ONLY on the inherited branch; a plain Configuration project (never an
+IDependentProject) never carries it, so its envelope stays byte-identical.
+
+This is exercised by test_dependent_project_inherits_base_applications below. It is
+ENVIRONMENT-TOLERANT in the SAME spirit as the happy path's count==0 handling: it
+only asserts the inherited contract when a dependent fixture bound to a base WITH
+applications is actually present in the workspace (applications live in the EDT
+workspace, not the git fixture, so neither the dependent project nor its base is
+guaranteed to have any). When no such fixture/application exists the inherited
+assertions are skipped, so the case never fails in a headless CI workspace.
+
 Parameter shape (from GetApplicationsTool.getInputSchema / execute)
 -------------------------------------------------------------------
 There is exactly ONE parameter: projectName (string, REQUIRED). There is NO enum,
@@ -66,7 +86,59 @@ from harness import (
     assert_no_diff,
     e2e_test,
     PROJECT,
+    TESTS_PROJECT,
 )
+
+
+# Natures that identify an EDT DEPENDENT project (IDependentProject supertype): an
+# extension or an external-objects project. Either inherits its applications from the
+# base project it depends on (issue #203). list_projects abbreviates the nature ids to
+# their last dotted segment in its Natures column, so match on those short tokens.
+_DEPENDENT_NATURE_TOKENS = ("V8ExtensionNature", "V8ExternalObjectsNature")
+
+
+def _project_natures():
+    """Map every workspace project name -> its (abbreviated) Natures cell from
+    list_projects. Used to detect, environment-tolerantly, whether a dependent
+    (extension / external-objects) fixture is present without hard-coding it."""
+    r = call("list_projects", {})
+    assert_ok(r, "list_projects (dependent-fixture discovery)")
+    natures = {}
+    for line in (r.text or "").splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        # Header row is "| Name | State | ... | Natures |"; skip it and the separator.
+        if len(cells) < 6 or cells[0] in ("Name", "") or set(cells[0]) <= set("-"):
+            continue
+        natures[cells[0]] = cells[-1]
+    return natures
+
+
+def _is_dependent(natures_cell):
+    return any(tok in (natures_cell or "") for tok in _DEPENDENT_NATURE_TOKENS)
+
+
+def _apps_envelope(r, expected_project, ctx):
+    """Validate the JSON success envelope of a get_applications call that echoes
+    `expected_project` (which may be a DEPENDENT project, unlike _envelope which pins
+    the base PROJECT). Returns (structured, applications_list, count)."""
+    sc = r.structured
+    if not isinstance(sc, dict):
+        raise AssertionError("expected structuredContent dict [%s]: %r" % (ctx, sc))
+    if sc.get("project") != expected_project:
+        raise AssertionError(
+            "envelope must echo project %r [%s]: %r" % (expected_project, ctx, sc.get("project")))
+    apps = sc.get("applications")
+    count = sc.get("count")
+    if not isinstance(apps, list):
+        raise AssertionError("'applications' must be a list [%s]: %r" % (ctx, apps))
+    if not isinstance(count, int):
+        raise AssertionError("'count' must be an int [%s]: %r" % (ctx, count))
+    if count != len(apps):
+        raise AssertionError(
+            "count(%d) must equal len(applications)(%d) [%s]" % (count, len(apps), ctx))
+    return sc, apps, count
 
 
 def _envelope(r, ctx):
@@ -169,6 +241,113 @@ def test_success_flag_set_and_no_error_field_on_happy_path():
         raise AssertionError("happy-path envelope must set success=true: %r" % sc)
     if "error" in sc:
         raise AssertionError("happy-path envelope must NOT carry an 'error' field: %r" % sc)
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DEPENDENT-PROJECT INHERITANCE (issue #203)
+# ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="get_applications", kind="read")
+def test_dependent_project_inherits_base_applications():
+    """A DEPENDENT project (extension / external-objects, IDependentProject) inherits
+    its base project's applications, and the envelope flags the inheritance.
+
+    ENVIRONMENT-TOLERANT (issue #203): applications live in the EDT workspace, not the
+    git fixture, so neither a dependent project nor its base is guaranteed to have any.
+    The inherited branch only fires when a dependent project's OWN application set is
+    empty AND its base owns applications. We therefore:
+      - discover whether the canonical dependent fixture is present (the extension
+        fixture TestConfiguration.tests == TESTS_PROJECT, base = PROJECT); we pin to it
+        so the base it inherits from is KNOWN to be PROJECT and the inheritedFromProject /
+        count assertions below stay valid by construction. If it is absent there is
+        nothing to assert here (mirrors how the happy path tolerates count==0) and the
+        case is a no-op pass;
+      - only assert the inherited contract when the BASE project actually has
+        applications (otherwise the dependent legitimately also has none and the
+        inherited branch never runs).
+    When the contract IS exercised it pins the #203 fix:
+      - success=true and a well-formed, count-consistent envelope;
+      - every inherited entry carries the round-trip id + name (so update_database /
+        debug_launch can consume them through the dependent project);
+      - count == the base project's application count (the set was inherited verbatim);
+      - "inheritedFromProject" == the BASE project name (the new field);
+      - "project" still echoes the NAMED (dependent) project, NOT the base.
+    A regression that stopped inheriting (empty dependent envelope) or mislabelled the
+    fields fails here whenever the fixture is present."""
+    natures = _project_natures()
+
+    # Exercise the inherited contract ONLY for the dependent project whose base is KNOWN
+    # to be our base PROJECT: the canonical extension fixture TESTS_PROJECT
+    # (TestConfiguration.tests, base = PROJECT). Pinning to it keeps the count==base_count
+    # and inheritedFromProject==PROJECT assertions below valid by construction — a generic
+    # "pick any dependent project" fallback would contradict them, since a dependent whose
+    # base is some OTHER project would legitimately inherit a different base name/count and
+    # falsely fail the test even though the tool behaved correctly.
+    dependent = None
+    if TESTS_PROJECT in natures and _is_dependent(natures[TESTS_PROJECT]):
+        dependent = TESTS_PROJECT
+    if dependent is None:
+        # No dependent fixture whose base is PROJECT in this workspace -> nothing to
+        # exercise (CI-safe no-op, mirrors how the happy path tolerates count==0).
+        assert_no_diff("a read tool must not touch the project on disk")
+        return
+
+    # The base must actually own applications for the inherited branch to fire.
+    base_r = call("get_applications", {"projectName": PROJECT})
+    assert_ok(base_r, "base project applications (for inheritance comparison)")
+    _, base_apps, base_count = _envelope(base_r, "base project envelope")
+    if base_count == 0:
+        # Base has no applications -> the dependent legitimately inherits nothing; the
+        # inherited branch is not reachable in this environment. Skip the assertion the
+        # same way the happy path skips the non-empty checks when count==0.
+        assert_no_diff("a read tool must not touch the project on disk")
+        return
+
+    # Inherited branch is reachable: the dependent project must surface the base's apps.
+    r = call("get_applications", {"projectName": dependent})
+    assert_ok(r, "get_applications on the dependent project")
+    sc, apps, count = _apps_envelope(r, dependent, "dependent project envelope")
+
+    if count != base_count:
+        raise AssertionError(
+            "dependent count(%d) must equal the base application count(%d) it inherits"
+            % (count, base_count))
+    for entry in apps:
+        if not isinstance(entry, dict):
+            raise AssertionError("each inherited application entry must be an object: %r" % entry)
+        if not entry.get("id"):
+            raise AssertionError("every inherited entry must carry a non-empty 'id': %r" % entry)
+        if "name" not in entry:
+            raise AssertionError("every inherited entry must carry a 'name': %r" % entry)
+    # The defining #203 signal: the new field names the BASE project the apps came from.
+    if sc.get("inheritedFromProject") != PROJECT:
+        raise AssertionError(
+            "inherited envelope must set inheritedFromProject==%r (the base project): %r"
+            % (PROJECT, sc.get("inheritedFromProject")))
+    # And the envelope still identifies the NAMED dependent project, not the base.
+    if sc.get("project") != dependent:
+        raise AssertionError(
+            "inherited envelope must keep echoing the named project %r, not the base: %r"
+            % (dependent, sc.get("project")))
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_applications", kind="read")
+def test_configuration_project_carries_no_inherited_field():
+    """A plain Configuration project (never an IDependentProject) must NEVER carry the
+    inheritedFromProject field — its output stays byte-identical to before #203. This
+    guards the other half of the fix: the new field is emitted ONLY on the inherited
+    branch, so a tool that started tagging every project with it is caught here. Holds
+    regardless of how many applications the base has (the field is about the project
+    KIND, not the application count)."""
+    r = call("get_applications", {"projectName": PROJECT})
+    assert_ok(r, "get_applications on the base configuration project")
+    sc = r.structured
+    if not isinstance(sc, dict):
+        raise AssertionError("expected structuredContent dict: %r" % sc)
+    if "inheritedFromProject" in sc:
+        raise AssertionError(
+            "a Configuration project envelope must NOT carry 'inheritedFromProject': %r" % sc)
     assert_no_diff("a read tool must not touch the project on disk")
 
 

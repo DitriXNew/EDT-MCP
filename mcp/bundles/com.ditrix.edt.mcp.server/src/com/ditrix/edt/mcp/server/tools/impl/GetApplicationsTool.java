@@ -18,6 +18,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -72,6 +73,9 @@ public class GetApplicationsTool implements IMcpTool
             .integerProperty(KEY_COUNT, "Number of applications found") //$NON-NLS-1$
             .stringProperty("message", "Informational message when no applications are found") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("defaultApplicationId", "Id of the project's default application") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("inheritedFromProject", //$NON-NLS-1$
+                "Base/parent project the applications are inherited from (present only for " //$NON-NLS-1$
+                    + "external-objects/extension projects whose applications come from their base project).") //$NON-NLS-1$
             .build();
     }
 
@@ -121,10 +125,32 @@ public class GetApplicationsTool implements IMcpTool
             }
             IProject project = mr.project();
             IApplicationManager appManager = mr.manager();
-            
-            // Get applications for the project
+
+            // Get applications for the named project
             List<IApplication> applications = appManager.getApplications(project);
-            
+
+            // The project whose applications and default application are reported. For a
+            // configuration project this is always the named project. For a dependent
+            // project (external-objects / extension) whose own application list is empty,
+            // fall back to the BASE configuration project the applications are inherited from.
+            IProject applicationsProject = project;
+            String baseProjectName = null;
+
+            if (applications == null || applications.isEmpty())
+            {
+                IProject base = ExtensionOriginUtils.resolveBaseProject(project);
+                if (base != null && base.exists() && base.isOpen())
+                {
+                    List<IApplication> baseApplications = appManager.getApplications(base);
+                    if (baseApplications != null && !baseApplications.isEmpty())
+                    {
+                        applications = baseApplications;
+                        applicationsProject = base;
+                        baseProjectName = base.getName();
+                    }
+                }
+            }
+
             if (applications == null || applications.isEmpty())
             {
                 return ToolResult.success()
@@ -134,7 +160,7 @@ public class GetApplicationsTool implements IMcpTool
                     .put("message", "No applications found for project") //$NON-NLS-1$ //$NON-NLS-2$
                     .toJson();
             }
-            
+
             // Build applications array
             JsonArray appsArray = new JsonArray();
             for (IApplication app : applications)
@@ -159,19 +185,26 @@ public class GetApplicationsTool implements IMcpTool
                 appsArray.add(appObj);
             }
             
-            // Get default application
-            String defaultAppId = resolveDefaultApplicationId(appManager, project);
-            
+            // Get default application from whichever project supplied the applications
+            String defaultAppId = resolveDefaultApplicationId(appManager, applicationsProject);
+
             ToolResult result = ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
                 .put(KEY_APPLICATIONS, appsArray)
                 .put(KEY_COUNT, applications.size());
-            
+
             if (defaultAppId != null)
             {
                 result.put("defaultApplicationId", defaultAppId); //$NON-NLS-1$
             }
-            
+
+            // Present only on the inherited branch (dependent project whose applications
+            // come from its base configuration project).
+            if (baseProjectName != null)
+            {
+                result.put("inheritedFromProject", baseProjectName); //$NON-NLS-1$
+            }
+
             return result.toJson();
         }
         catch (ApplicationException e)

@@ -1401,6 +1401,10 @@
           "description": "Id of the project's default application",
           "type": "string"
         },
+        "inheritedFromProject": {
+          "description": "Base/parent project the applications are inherited from (present only for external-objects/extension projects whose applications come from their base project).",
+          "type": "string"
+        },
         "message": {
           "description": "Informational message when no applications are found",
           "type": "string"
