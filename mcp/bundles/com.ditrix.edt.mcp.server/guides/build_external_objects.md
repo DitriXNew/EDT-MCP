@@ -16,6 +16,7 @@ The platform compiles the object against an **associated infobase + a resolvable
 - `projectName` (required) - the EDT external-object project to build. Must be a `projectKind=externalObjects` project.
 - `objectName` (optional) - the name of a single external data processor/report to build. **Omit to build ALL** external objects of the project.
 - `outputDir` (required) - filesystem directory the `.epf`/`.erf` files are written to. Relative paths are resolved to absolute; the directory is created if missing. If the path exists but is a file, the call errors. A directory outside the EDT workspace is allowed but flagged (`outsideWorkspace: true`) - the server is trusted-caller-only.
+- `recordBuildTime` (optional, default `true`) - when `true`, the build time is written into each built object's `Comment` (`Время сборки: <yyyy-MM-dd HH:mm:ss>`) and flushed to the `.mdo`, so the object records when it was last built. Set `false` to build **without mutating the object** (no `Comment` change, no `.mdo` diff). The build time is reported in the response `message` either way.
 
 ## What you get
 A JSON result:
@@ -30,7 +31,7 @@ A JSON result:
 - **Unattended-safe:** the compile/dump runs in a background job off the JSON-RPC thread, with a bounded timeout; the "Configure Infobase access Settings" and "Application update"/"Restructure data" modals are auto-handled so the call never blocks.
 - A build failure that looks like a connection/authentication problem is annotated with a hint pointing at `create_infobase` / `set_infobase_credentials`.
 - **Stale output is deleted before each build:** the target `.epf`/`.erf` is removed before the object is dumped, because EDT can cache the compiled artifact and leave an old version in place; deleting it first forces a clean, current build. If the file cannot be deleted, that object is reported as a failure rather than silently shipping a stale file.
-- **Each object's Comment is stamped with the build time:** before dumping, the object's Comment property is overwritten with a build-time stamp (`Время сборки: <yyyy-MM-dd HH:mm:ss>`) — one timestamp per build run, shared by all objects — and persisted to its `.mdo` on disk, so both the source and the built `.epf`/`.erf` record when it was built. Note this **mutates the object's source on every build**.
+- **Each object's Comment is stamped with the build time (by default, opt-out):** when `recordBuildTime` is `true` (the default), before dumping, the object's Comment property is overwritten with a build-time stamp (`Время сборки: <yyyy-MM-dd HH:mm:ss>`) — one timestamp per build run, shared by all objects — and persisted to its `.mdo` on disk, so both the source and the built `.epf`/`.erf` record when it was built. This **mutates the object's source on every build**; pass `recordBuildTime: false` to build without touching the object (the build time is still reported in the response `message`).
 - This **writes to the filesystem at the path you give** - double-check `outputDir`.
 
 ## Maintainer note

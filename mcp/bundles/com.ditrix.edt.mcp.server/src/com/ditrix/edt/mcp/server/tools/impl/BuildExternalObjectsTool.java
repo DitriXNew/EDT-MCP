@@ -92,6 +92,9 @@ public class BuildExternalObjectsTool implements IMcpTool
     /** Input/output param: filesystem directory the built .epf/.erf files are written to. */
     private static final String KEY_OUTPUT_DIR = "outputDir"; //$NON-NLS-1$
 
+    /** Input param: whether to stamp the build time into each object's Comment (optional, default true). */
+    private static final String KEY_RECORD_BUILD_TIME = "recordBuildTime"; //$NON-NLS-1$
+
     /** Output key: per-object results (name -> path on success, or an error entry). */
     private static final String KEY_RESULTS = "results"; //$NON-NLS-1$
 
@@ -160,6 +163,12 @@ public class BuildExternalObjectsTool implements IMcpTool
                 "Filesystem directory the built .epf/.erf files are written to (required). Relative " //$NON-NLS-1$
                     + "paths are resolved to absolute; the directory is created if missing. If the path " //$NON-NLS-1$
                     + "exists but is a file, the call errors.", true) //$NON-NLS-1$
+            .booleanProperty(KEY_RECORD_BUILD_TIME,
+                "Optional, default true. When true, the build time is written into each built object's " //$NON-NLS-1$
+                    + "Comment property (\"" + STAMP_PREFIX + "<yyyy-MM-dd HH:mm:ss>\") and the .mdo is " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "flushed to disk, so the object records when it was last built. Set false to build " //$NON-NLS-1$
+                    + "without modifying the object (no Comment change, no .mdo diff); the build time is " //$NON-NLS-1$
+                    + "still reported in the response message either way.") //$NON-NLS-1$
             .build();
     }
 
@@ -200,6 +209,8 @@ public class BuildExternalObjectsTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String objectName = normalizeObjectName(JsonUtils.extractStringArgument(params, KEY_OBJECT_NAME));
         String outputDirStr = JsonUtils.extractStringArgument(params, KEY_OUTPUT_DIR);
+        boolean recordBuildTime =
+            parseRecordBuildTime(JsonUtils.extractStringArgument(params, KEY_RECORD_BUILD_TIME));
 
         // 2. Normalize the output directory: absolute, reject a file path, create if missing,
         //    warn (do not reject) when it is outside the workspace. Mirrors export_configuration_to_xml.
@@ -246,7 +257,21 @@ public class BuildExternalObjectsTool implements IMcpTool
 
         // 7. Run the dump loop off the calling thread, with dialog suppressors armed and a timeout.
         return runBuild(new BuildContext(projectName, resolved.project, enumeration.bmModel, dumper,
-            enumeration.targets, outputDir, outsideWorkspace));
+            enumeration.targets, outputDir, outsideWorkspace, recordBuildTime));
+    }
+
+    /**
+     * Parses the optional {@code recordBuildTime} argument, which defaults to {@code true}: an absent or
+     * blank value, or {@code "true"} (case-insensitive), enables build-time Comment stamping; any other
+     * value disables it. Keeping the default {@code true} preserves the behaviour shipped in #202 while
+     * letting a caller opt out of mutating the object (issue #202 follow-up).
+     *
+     * @param raw the raw argument value (may be {@code null})
+     * @return {@code true} to stamp the build time into each object's Comment, {@code false} to skip it
+     */
+    static boolean parseRecordBuildTime(String raw)
+    {
+        return raw == null || raw.trim().isEmpty() || "true".equalsIgnoreCase(raw.trim()); //$NON-NLS-1$
     }
 
     /**
@@ -551,17 +576,21 @@ public class BuildExternalObjectsTool implements IMcpTool
             Files.deleteIfExists(targetPath);
             // Stamp the build time into the object's Comment (overwrite), then flush the .mdo to disk so
             // the compiled .epf/.erf records when it was built (the maintainer's "version bump"). The
-            // mutation runs in a WRITE boundary; forceExportToDisk persists the .mdo OUTSIDE it.
-            BmTransactions.write(bc.bmModel, "BuildExternalObjects.stampBuildTime", (tx, pm) -> //$NON-NLS-1$
+            // mutation runs in a WRITE boundary; forceExportToDisk persists the .mdo OUTSIDE it. Skipped
+            // when recordBuildTime=false, so the build leaves the object (and its .mdo) untouched.
+            if (bc.recordBuildTime)
             {
-                Object mo = tx.getObjectById(target.bmId);
-                if (mo instanceof MdObject)
+                BmTransactions.write(bc.bmModel, "BuildExternalObjects.stampBuildTime", (tx, pm) -> //$NON-NLS-1$
                 {
-                    ((MdObject)mo).setComment(buildStamp);
-                }
-                return Boolean.TRUE;
-            });
-            BmTransactions.forceExportToDisk(bc.project, target.fqn);
+                    Object mo = tx.getObjectById(target.bmId);
+                    if (mo instanceof MdObject)
+                    {
+                        ((MdObject)mo).setComment(buildStamp);
+                    }
+                    return Boolean.TRUE;
+                });
+                BmTransactions.forceExportToDisk(bc.project, target.fqn);
+            }
             // Re-resolve the object handle inside a SHORT read transaction (a BM-model lookup must run in
             // a transaction), then close it and hand the handle to dump() OUTSIDE the transaction so no
             // read lock is held across the long external compile. getObjectById may return null if the
@@ -794,9 +823,11 @@ public class BuildExternalObjectsTool implements IMcpTool
         final List<Target> targets;
         final Path outputDir;
         final boolean outsideWorkspace;
+        final boolean recordBuildTime;
 
         private BuildContext(String projectName, IProject project, IBmModel bmModel,
-                IExternalObjectDumper dumper, List<Target> targets, Path outputDir, boolean outsideWorkspace)
+                IExternalObjectDumper dumper, List<Target> targets, Path outputDir, boolean outsideWorkspace,
+                boolean recordBuildTime)
         {
             this.projectName = projectName;
             this.project = project;
@@ -805,6 +836,7 @@ public class BuildExternalObjectsTool implements IMcpTool
             this.targets = targets;
             this.outputDir = outputDir;
             this.outsideWorkspace = outsideWorkspace;
+            this.recordBuildTime = recordBuildTime;
         }
     }
 }

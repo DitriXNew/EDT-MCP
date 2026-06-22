@@ -37,7 +37,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 public class BuildExternalObjectsToolTest
 {
     /** The exact set of input parameters {@code execute()} reads. Keep in lockstep with the schema. */
-    private static final String[] EXECUTE_PARAMS = {"projectName", "objectName", "outputDir"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    private static final String[] EXECUTE_PARAMS =
+        {"projectName", "objectName", "outputDir", "recordBuildTime"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     /** The input parameters that are required. */
     private static final String[] REQUIRED_PARAMS = {"projectName", "outputDir"}; //$NON-NLS-1$ //$NON-NLS-2$
@@ -135,6 +136,46 @@ public class BuildExternalObjectsToolTest
         // objectName is optional (omit = build all): it must NOT be in the required array.
         assertFalse("objectName must be optional (omit = build all)", //$NON-NLS-1$
             tail.contains("\"objectName\"")); //$NON-NLS-1$
+        // recordBuildTime is optional (default true): it must NOT be in the required array.
+        assertFalse("recordBuildTime must be optional (default true)", //$NON-NLS-1$
+            tail.contains("\"recordBuildTime\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInputSchemaDeclaresRecordBuildTime()
+    {
+        String schema = new BuildExternalObjectsTool().getInputSchema();
+        assertTrue("input schema must declare recordBuildTime", //$NON-NLS-1$
+            schema.contains("\"recordBuildTime\"")); //$NON-NLS-1$
+    }
+
+    // ==================== recordBuildTime parsing (default true, opt-out) ====================
+
+    @Test
+    public void testRecordBuildTimeDefaultsTrueWhenAbsentOrBlank()
+    {
+        // Absent (null) and blank both keep the #202 behaviour: stamp the build time.
+        assertTrue(BuildExternalObjectsTool.parseRecordBuildTime(null));
+        assertTrue(BuildExternalObjectsTool.parseRecordBuildTime("")); //$NON-NLS-1$
+        assertTrue(BuildExternalObjectsTool.parseRecordBuildTime("   ")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRecordBuildTimeTrueValuesEnableStamping()
+    {
+        assertTrue(BuildExternalObjectsTool.parseRecordBuildTime("true")); //$NON-NLS-1$
+        assertTrue(BuildExternalObjectsTool.parseRecordBuildTime("TRUE")); //$NON-NLS-1$
+        assertTrue(BuildExternalObjectsTool.parseRecordBuildTime(" True ")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRecordBuildTimeFalseValuesDisableStamping()
+    {
+        // false (or any non-true token) opts out of mutating the object's Comment.
+        assertFalse(BuildExternalObjectsTool.parseRecordBuildTime("false")); //$NON-NLS-1$
+        assertFalse(BuildExternalObjectsTool.parseRecordBuildTime("FALSE")); //$NON-NLS-1$
+        assertFalse(BuildExternalObjectsTool.parseRecordBuildTime("0")); //$NON-NLS-1$
+        assertFalse(BuildExternalObjectsTool.parseRecordBuildTime("no")); //$NON-NLS-1$
     }
 
     @Test
