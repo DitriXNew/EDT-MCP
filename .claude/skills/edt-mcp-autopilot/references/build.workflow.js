@@ -7,18 +7,22 @@ export const meta = {
   ],
 }
 
-// args:
+// args arrives as a JSON STRING in this harness - parse defensively (object/undefined handled too).
 //   task            - the task statement (string, required)
 //   spec            - the architect spec object (optional, for context)
 //   devPartition    - array of slices { slice, files, change, invariant, tests } (required)
 //   reviewChecklist - the MUST-ENFORCE checklist text reviewers apply (string)
 //   maxRounds       - review-loop cap before escalating (default 4)
-const task = (args && args.task) || ''
-const spec = (args && args.spec) || {}
-const partition = (args && args.devPartition) || (spec && spec.devPartition) || []
-const checklist = (args && args.reviewChecklist) ||
+const A = (() => {
+  if (typeof args === 'string') { try { return JSON.parse(args) } catch (e) { return {} } }
+  return args || {}
+})()
+const task = A.task || ''
+const spec = A.spec || {}
+const partition = A.devPartition || (spec && spec.devPartition) || []
+const checklist = A.reviewChecklist ||
   'Apply the project review checklist (review-checklist.md) and the project code rules.'
-const MAX_ROUNDS = (args && args.maxRounds) || 4
+const MAX_ROUNDS = A.maxRounds || 4
 const REVIEWERS = partition.length > 4 ? 4 : 3
 
 const CHANGE_SCHEMA = {
