@@ -33,13 +33,15 @@ The platform compiles the object against an **associated infobase + a resolvable
 A JSON result:
 - `success` - `true` only when **every** requested object built; `false` (with `isError`) when any object failed.
 - `project`, `outputDir` (absolute), `built`, `failed`.
-- `results` - one entry per object: `{name, success, path}` on success or `{name, success:false, error}` on failure (a build of all objects continues past one bad object).
+- `results` - one entry per object: `{name, success, path, durationMs}` on success or `{name, success:false, error, durationMs}` on failure (a build of all objects continues past one bad object). `durationMs` is that object's build time in milliseconds.
 - `outsideWorkspace` - present and `true` when `outputDir` is outside the workspace.
+- `message` (on a successful build) reports the total build time and a `built at` timestamp, so you can tell which build is the latest.
 
 ## Notes & gotchas
 - **Build ALL of an empty project** (no external objects yet, `objectName` omitted) is a clear **success** with `built: 0`, `failed: 0` and a "nothing to build" message - not an error. Note the prerequisites are checked first: the 1C build service and the infobase/runtime precondition are validated before enumeration, so a project with no associated infobase returns the precondition error rather than the empty "nothing to build" success. Requesting a specific `objectName` that the project does not have IS a value-naming "not found" error.
 - **Unattended-safe:** the compile/dump runs in a background job off the JSON-RPC thread, with a bounded timeout; the "Configure Infobase access Settings" and "Application update"/"Restructure data" modals are auto-handled so the call never blocks.
 - A build failure that looks like a connection/authentication problem is annotated with a hint pointing at `create_infobase` / `set_infobase_credentials`.
+- **Stale output is deleted before each build:** the target `.epf`/`.erf` is removed before the object is dumped, because EDT can cache the compiled artifact and leave an old version in place; deleting it first forces a clean, current build. If the file cannot be deleted, that object is reported as a failure rather than silently shipping a stale file.
 - This **writes to the filesystem at the path you give** - double-check `outputDir`.
 
 ## Maintainer note

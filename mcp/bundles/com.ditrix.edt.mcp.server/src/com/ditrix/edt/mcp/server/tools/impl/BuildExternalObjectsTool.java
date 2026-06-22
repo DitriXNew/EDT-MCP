@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -109,6 +110,9 @@ public class BuildExternalObjectsTool implements IMcpTool
 
     /** Per-result key: whether this object built successfully. */
     private static final String RES_SUCCESS = "success"; //$NON-NLS-1$
+
+    /** Per-result key: build duration for this object in milliseconds. */
+    private static final String RES_DURATION_MS = "durationMs"; //$NON-NLS-1$
 
     /** Timeout (ms) for the background build Job (compile + dump of all objects). */
     private static final long BUILD_TIMEOUT_MS = 300_000L;
@@ -409,12 +413,13 @@ public class BuildExternalObjectsTool implements IMcpTool
      */
     private static String runBuild(BuildContext bc)
     {
+        long buildStartMs = System.currentTimeMillis();
         // Build ALL over an empty project: nothing to compile — return a clear success with
         // built=0/failed=0 (no Job, no infobase needed) rather than failing. This only happens
         // for build-all; a specific objectName that matched nothing already errored in enumeration.
         if (bc.targets.isEmpty())
         {
-            return buildResponse(bc, new ArrayList<>());
+            return buildResponse(bc, new ArrayList<>(), System.currentTimeMillis() - buildStartMs);
         }
 
         // Ensure the always-on auth-dialog suppressor is installed (it auto-cancels the
@@ -485,7 +490,7 @@ public class BuildExternalObjectsTool implements IMcpTool
                 + authHint(fatalHolder[0])).toJson();
         }
 
-        return buildResponse(bc, results);
+        return buildResponse(bc, results, System.currentTimeMillis() - buildStartMs);
     }
 
     /**
@@ -519,9 +524,15 @@ public class BuildExternalObjectsTool implements IMcpTool
     {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put(RES_NAME, target.name);
+        long startMs = System.currentTimeMillis();
         try
         {
             Path targetPath = bc.outputDir.resolve(target.fileName);
+            // Delete any stale output FIRST: EDT can cache the compiled artifact, so an old .epf/.erf
+            // left in place may shadow the fresh build (its old version "hangs there"). Removing it forces
+            // a clean write; a deletion failure surfaces as an honest per-object error, not a silent stale
+            // file.
+            Files.deleteIfExists(targetPath);
             // Re-resolve the object handle inside a SHORT read transaction (a BM-model lookup must run in
             // a transaction), then close it and hand the handle to dump() OUTSIDE the transaction so no
             // read lock is held across the long external compile. getObjectById may return null if the
@@ -547,6 +558,7 @@ public class BuildExternalObjectsTool implements IMcpTool
             result.put(RES_ERROR,
                 (t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName()) + authHint(t));
         }
+        result.put(RES_DURATION_MS, System.currentTimeMillis() - startMs);
         return result;
     }
 
@@ -559,7 +571,7 @@ public class BuildExternalObjectsTool implements IMcpTool
      * @param results the per-object result maps
      * @return the JSON response
      */
-    private static String buildResponse(BuildContext bc, List<Map<String, Object>> results)
+    private static String buildResponse(BuildContext bc, List<Map<String, Object>> results, long elapsedMs)
     {
         int built = 0;
         int failed = 0;
@@ -577,7 +589,8 @@ public class BuildExternalObjectsTool implements IMcpTool
 
         boolean allOk = failed == 0;
         ToolResult tr = allOk ? ToolResult.success() : ToolResult.error("Built " + built //$NON-NLS-1$
-            + " of " + (built + failed) + " external object(s); " + failed + " failed."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " of " + (built + failed) + " external object(s) in " + elapsedMs + " ms; " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + failed + " failed."); //$NON-NLS-1$
         tr.put(McpKeys.PROJECT, bc.projectName)
             .put(KEY_OUTPUT_DIR, bc.outputDir.toString())
             .put(KEY_BUILT, built)
@@ -591,7 +604,8 @@ public class BuildExternalObjectsTool implements IMcpTool
         {
             String message = results.isEmpty()
                 ? "The external-object project has no external data processors/reports to build; nothing to build." //$NON-NLS-1$
-                : "Built " + built + " external object(s) to " + bc.outputDir + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                : "Built " + built + " external object(s) to " + bc.outputDir + " in " + elapsedMs //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + " ms (built at " + Instant.now() + ")."; //$NON-NLS-1$ //$NON-NLS-2$
             tr.put(McpKeys.MESSAGE, message);
         }
         return tr.toJson();
