@@ -67,6 +67,79 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Build (compile to disk) the external data processors/reports of an EDT external-object project to .epf/.erf files. Build ONE object with objectName, or ALL of them when objectName is omitted. Requires an associated infobase + a resolvable 1C runtime (like update_database): if missing, set it up with create_infobase / set_infobase_credentials. Full parameters and examples: call get_tool_guide('build_external_objects').",
+    "inputSchema": {
+      "properties": {
+        "objectName": {
+          "description": "Name of a single external data processor/report to build. Omit to build ALL external objects of the project.",
+          "type": "string"
+        },
+        "outputDir": {
+          "description": "Filesystem directory the built .epf/.erf files are written to (required). Relative paths are resolved to absolute; the directory is created if missing. If the path exists but is a file, the call errors.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT external-object project name to build (required). Must be a project created with create_project projectKind=externalObjects.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "outputDir"
+      ],
+      "type": "object"
+    },
+    "name": "build_external_objects",
+    "outputSchema": {
+      "properties": {
+        "built": {
+          "description": "Count of objects built successfully.",
+          "type": "integer"
+        },
+        "failed": {
+          "description": "Count of objects that failed to build.",
+          "type": "integer"
+        },
+        "message": {
+          "description": "Human-readable status message.",
+          "type": "string"
+        },
+        "outputDir": {
+          "description": "Absolute output directory the files were written to.",
+          "type": "string"
+        },
+        "outsideWorkspace": {
+          "description": "Present and true when outputDir is outside the EDT workspace (a warning, not a failure).",
+          "type": "boolean"
+        },
+        "project": {
+          "description": "Target EDT external-object project name.",
+          "type": "string"
+        },
+        "results": {
+          "description": "Per-object results: {name, success, path (on success), error (on failure)}.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "success": {
+          "description": "true only when every requested object was built; false when any object failed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation.",
     "inputSchema": {
       "properties": {
