@@ -81,6 +81,10 @@
         "projectName": {
           "description": "EDT external-object project name to build (required). Must be a project created with create_project projectKind=externalObjects.",
           "type": "string"
+        },
+        "recordBuildTime": {
+          "description": "Optional, default true. When true, the build time is written into each built object's Comment property (\"Время сборки: <yyyy-MM-dd HH:mm:ss>\") and the .mdo is flushed to disk, so the object records when it was last built. Set false to build without modifying the object (no Comment change, no .mdo diff); the build time is still reported in the response message either way.",
+          "type": "boolean"
         }
       },
       "required": [

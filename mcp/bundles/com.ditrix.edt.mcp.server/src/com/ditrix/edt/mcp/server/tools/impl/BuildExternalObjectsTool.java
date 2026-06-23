@@ -124,10 +124,11 @@ public class BuildExternalObjectsTool implements IMcpTool
 
     /**
      * Prefix written into each built object's Comment so the deliverable .epf/.erf records when it was
-     * built (the maintainer's "version bump"). The label is real 1C object-comment DATA, so the
-     * Cyrillic is justified here (same as the type tokens in {@code MetadataTypeUtils}).
+     * built (the maintainer's "version bump"). The label is real 1C object-comment DATA ("Время сборки: "),
+     * written as Unicode escapes (like {@code MetadataTypeUtils} does for its Cyrillic type tokens) for
+     * non-UTF-8 Tycho build safety; the runtime string is unchanged.
      */
-    private static final String STAMP_PREFIX = "Время сборки: "; //$NON-NLS-1$
+    private static final String STAMP_PREFIX = "\u0412\u0440\u0435\u043C\u044F \u0441\u0431\u043E\u0440\u043A\u0438: "; //$NON-NLS-1$
 
     /** Build-stamp timestamp format (local, human-readable — to see which build was the latest). */
     private static final DateTimeFormatter STAMP_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"); //$NON-NLS-1$
