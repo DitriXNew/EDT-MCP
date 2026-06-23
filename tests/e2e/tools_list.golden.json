@@ -3427,7 +3427,7 @@
           "type": "string"
         },
         "applicationName": {
-          "description": "Display name of the target application.",
+          "description": "Display name of the target application (falls back to the application ID).",
           "type": "string"
         },
         "message": {

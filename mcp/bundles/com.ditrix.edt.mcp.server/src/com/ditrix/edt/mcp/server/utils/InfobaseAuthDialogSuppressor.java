@@ -20,9 +20,18 @@ import org.eclipse.swt.widgets.Shell;
 import com.ditrix.edt.mcp.server.Activator;
 
 /**
- * Auto-cancels EDT's blocking <em>"Configure Infobase access Settings"</em>
- * dialog ({@code InfobaseAccessSettingsDialog}, raised by
- * {@code InfobaseAccessSettingsRequestor}) while the MCP server is running.
+ * Auto-dismisses the unattended-blocking dialogs that EDT / Eclipse can raise around infobase
+ * authentication while the MCP server is running:
+ * <ul>
+ *   <li>EDT's <em>"Configure Infobase access Settings"</em> credentials dialog
+ *       ({@code InfobaseAccessSettingsDialog}, raised by {@code InfobaseAccessSettingsRequestor}) — closed
+ *       (Cancel) so a connection with missing/wrong credentials fails fast instead of waiting for a human;</li>
+ *   <li>Eclipse Secure Storage's <em>"Secure Storage - Password Hint Needed"</em> follow-up prompt, shown
+ *       the first time the keyring master password is created — declined (No), because the MCP server
+ *       supplies that master password programmatically ({@link McpSecureStorageProvider}) and needs no
+ *       recovery hint. Without this, the first {@code set_infobase_credentials} call would leave this modal
+ *       sitting on the headless UI even though the credential write itself already succeeded.</li>
+ * </ul>
  *
  * <h2>Why this is needed (issue #194)</h2>
  * When an MCP operation connects to an infobase that requires user authentication
@@ -49,12 +58,13 @@ import com.ditrix.edt.mcp.server.Activator;
  *
  * <h2>Scope &amp; safety</h2>
  * <ul>
- *   <li>Only a shell title with the exact "Configure Infobase…" prefix is matched
- *       (English / Russian — the only NL variants EDT ships), so no unrelated dialog
- *       is touched.</li>
- *   <li>The match closes the shell ({@link Shell#close()}, which JFace maps to
- *       Cancel); the blocked connection then fails fast with an authentication error
- *       the tool reports (pointing at {@code set_infobase_credentials}).</li>
+ *   <li>Only a shell title with the exact "Configure Infobase…" prefix (English / Russian — the only NL
+ *       variants EDT ships) or the "Secure Storage - Password Hint" prefix is matched, so no unrelated
+ *       dialog is touched.</li>
+ *   <li>The match closes the shell ({@link Shell#close()}, which JFace maps to Cancel): for the
+ *       access-settings dialog the blocked connection fails fast with an authentication error the tool
+ *       reports (pointing at {@code set_infobase_credentials}); for the hint dialog the question resolves
+ *       to "No" so the keyring keeps its (programmatically supplied) master password without a hint.</li>
  *   <li>Headless (no workbench {@link Display}) is a no-op — the probe never CREATES
  *       a display — and the install is idempotent and never throws.</li>
  * </ul>
@@ -80,6 +90,16 @@ public final class InfobaseAuthDialogSuppressor
     /** Every shipped localized title prefix of the access-settings dialog (English / Russian). */
     static final Set<String> AUTH_DIALOG_TITLE_PREFIXES = Collections.unmodifiableSet(
         new LinkedHashSet<>(Arrays.asList(AUTH_DIALOG_TITLE_PREFIX, AUTH_DIALOG_TITLE_PREFIX_RU)));
+
+    /**
+     * Title prefix of the Eclipse Secure Storage password-hint follow-up dialog
+     * ({@code pswdRecoveryOptionTitle} in {@code org.eclipse.equinox.security.ui}'s
+     * {@code messages.properties}: "Secure Storage - Password Hint Needed"). After a master password is
+     * first created, the security UI asks whether to record a recovery hint. The string ships
+     * <em>untranslated</em> (no NL fragment provides {@code pswdRecoveryOptionTitle}), so a single English
+     * prefix matches on every locale.
+     */
+    static final String SECURE_STORAGE_HINT_TITLE_PREFIX = "Secure Storage - Password Hint"; //$NON-NLS-1$
 
     private static final Object LOCK = new Object();
 
@@ -115,6 +135,19 @@ public final class InfobaseAuthDialogSuppressor
             }
         }
         return false;
+    }
+
+    /**
+     * Pure decision (and test seam): is {@code shellTitle} the Eclipse Secure Storage
+     * "Password Hint Needed" follow-up dialog? Matched on its leading prefix
+     * ({@link #SECURE_STORAGE_HINT_TITLE_PREFIX}).
+     *
+     * @param shellTitle a shell title (may be {@code null})
+     * @return {@code true} when the title begins with the secure-storage password-hint prefix
+     */
+    static boolean isSecureStorageHintDialogTitle(String shellTitle)
+    {
+        return shellTitle != null && shellTitle.startsWith(SECURE_STORAGE_HINT_TITLE_PREFIX);
     }
 
     /**
@@ -185,21 +218,33 @@ public final class InfobaseAuthDialogSuppressor
             {
                 return;
             }
-            if (!isAuthDialogTitle(title))
+            boolean authDialog = isAuthDialogTitle(title);
+            boolean hintDialog = !authDialog && isSecureStorageHintDialogTitle(title);
+            if (!authDialog && !hintDialog)
             {
                 return;
             }
-            // Defer so the modal finishes building before we cancel it.
-            shell.getDisplay().asyncExec(() -> cancelDialog(shell));
+            // Defer so the modal finishes building before we dismiss it.
+            shell.getDisplay().asyncExec(() -> dismissDialog(shell, hintDialog));
         };
     }
 
     /**
-     * Cancels the access-settings dialog by closing its shell (JFace maps the close to Cancel), so
-     * the blocked connection attempt fails fast instead of waiting for human input. Guarded against
-     * disposal; never throws onto the UI thread.
+     * Dismisses an unattended-blocking dialog by closing its shell. JFace maps the shell close to its
+     * {@code CANCEL} return code, which is exactly what each case needs:
+     * <ul>
+     *   <li>access-settings dialog → Cancel, so the blocked connection attempt fails fast with an
+     *       authentication error instead of waiting for human input;</li>
+     *   <li>secure-storage hint dialog ({@code isHint}) → the {@code openQuestion} call returns
+     *       {@code false} (No), so no recovery hint is recorded — the master password is already created.</li>
+     * </ul>
+     * Guarded against disposal; never throws onto the UI thread.
+     *
+     * @param shell the dialog shell to close
+     * @param isHint {@code true} for the secure-storage password-hint dialog, {@code false} for the
+     *            infobase access-settings dialog (controls only the log message)
      */
-    private static void cancelDialog(Shell shell)
+    private static void dismissDialog(Shell shell, boolean isHint)
     {
         try
         {
@@ -207,14 +252,23 @@ public final class InfobaseAuthDialogSuppressor
             {
                 return;
             }
-            Activator.logInfo("Auto-cancelling infobase access-settings dialog '" //$NON-NLS-1$
-                + safeShellText(shell) + "' (no/invalid stored credentials — set them with " //$NON-NLS-1$
-                + "set_infobase_credentials)"); //$NON-NLS-1$
+            if (isHint)
+            {
+                Activator.logInfo("Auto-declining Eclipse Secure Storage password-hint dialog '" //$NON-NLS-1$
+                    + safeShellText(shell) + "' (master password is supplied programmatically by " //$NON-NLS-1$
+                    + "McpSecureStorageProvider — no recovery hint needed)"); //$NON-NLS-1$
+            }
+            else
+            {
+                Activator.logInfo("Auto-cancelling infobase access-settings dialog '" //$NON-NLS-1$
+                    + safeShellText(shell) + "' (no/invalid stored credentials — set them with " //$NON-NLS-1$
+                    + "set_infobase_credentials)"); //$NON-NLS-1$
+            }
             shell.close();
         }
         catch (RuntimeException e)
         {
-            Activator.logError("Failed to auto-cancel the infobase access-settings dialog", e); //$NON-NLS-1$
+            Activator.logError("Failed to auto-dismiss an unattended-blocking dialog", e); //$NON-NLS-1$
         }
     }
 
