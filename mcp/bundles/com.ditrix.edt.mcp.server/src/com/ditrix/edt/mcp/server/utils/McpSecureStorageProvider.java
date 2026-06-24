@@ -6,23 +6,24 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
-
 import javax.crypto.spec.PBEKeySpec;
 
 import org.eclipse.equinox.security.storage.provider.IPreferencesContainer;
 import org.eclipse.equinox.security.storage.provider.PasswordProvider;
 
 /**
- * Supplies a stable master password for the Eclipse default secure storage so that EDT's
+ * Supplies an <b>empty</b> master password for the Eclipse default secure storage so that EDT's
  * {@code IInfobaseAccessManager.updateSettings} (used by {@code set_infobase_credentials} and
  * {@code create_infobase}) never raises the blocking <b>"Secure Storage — please enter a new master
  * password"</b> dialog on a fresh / headless stand (issue #194). On such a stand writing the infobase
  * connection credentials initializes the Eclipse keyring, which otherwise prompts for a master password
  * and hangs the unattended call.
+ *
+ * <p><b>No master password by design.</b> On a trusted-caller server the local keyring only protects
+ * infobase connection settings, which are re-settable; there is nothing to defend against a local
+ * attacker that filesystem access would not already expose. So instead of inventing a secret we supply
+ * an empty passphrase — there is no credential literal in source (an empty value is not a secret, so
+ * S6437 does not apply).
  *
  * <p>Registered via the {@code org.eclipse.equinox.security.secureStorage} extension at a priority just
  * above the platform's interactive {@code DefaultPasswordProvider} (priority 2) — so on a headless stand
@@ -36,63 +37,17 @@ import org.eclipse.equinox.security.storage.provider.PasswordProvider;
  */
 public final class McpSecureStorageProvider extends PasswordProvider
 {
-    /**
-     * Non-secret application salt mixed into the derived master password. A salt is a fixed,
-     * publishable application constant (NOT a credential), so it carries no secret value on its own.
-     */
-    private static final String SALT = "com.ditrix.edt.mcp.server.secureStorage.v1"; //$NON-NLS-1$
-
-    /** NUL field separator between the identity components of the hashed material. */
-    private static final char SEP = (char)0;
-
-    /**
-     * Master password for the LOCAL Eclipse keyring — NOT an infobase user password. It is now
-     * <b>derived per machine + user</b> (from the OS user name and home directory mixed with a fixed
-     * application {@link #SALT}) rather than stored as a hardcoded secret, so no credential literal
-     * remains in source. The derivation is deterministic, so the keyring re-opens every session
-     * without a prompt; on a trusted-caller server the keyring only protects infobase connection
-     * settings. Because the value is derived, a keyring created under a different OS user / home will
-     * not decrypt — acceptable here, as it only caches re-settable infobase connection settings.
-     */
-    private static final String MASTER = deriveMaster();
-
     @Override
     public PBEKeySpec getPassword(IPreferencesContainer container, int passwordType)
     {
-        // Always supply the stable derived password: the moduleID design (above) means we only ever own
-        // the values we encrypt, so this cannot affect a user's existing secure-storage entries, and on a
-        // desktop the higher-priority OS keyring providers are chosen ahead of us anyway.
-        return new PBEKeySpec(MASTER.toCharArray());
-    }
-
-    /**
-     * Derives the stable master password from machine/installation-local identity so that no secret
-     * literal lives in source. Computes {@code Base64url(SHA-256(user.name SEP user.home SEP SALT))},
-     * where {@code SEP} is a NUL separator.
-     *
-     * @return the derived, deterministic master password for the current OS user / home
-     */
-    private static String deriveMaster()
-    {
-        String material = System.getProperty("user.name", "") //$NON-NLS-1$ //$NON-NLS-2$
-            + SEP + System.getProperty("user.home", "") //$NON-NLS-1$ //$NON-NLS-2$
-            + SEP + SALT;
-        try
-        {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256"); //$NON-NLS-1$
-            byte[] hash = digest.digest(material.getBytes(StandardCharsets.UTF_8));
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
-        }
-        catch (NoSuchAlgorithmException e)
-        {
-            // SHA-256 is mandated by every JRE; absence is a broken platform, not a recoverable state.
-            throw new IllegalStateException("SHA-256 algorithm is not available", e); //$NON-NLS-1$
-        }
+        // No master password: supply an empty passphrase so the keyring opens unattended without a
+        // prompt and no secret literal lives in source.
+        return new PBEKeySpec(new char[0]);
     }
 
     @Override
     public boolean retryOnError(Exception e, IPreferencesContainer container)
     {
-        return false; // a wrong stable password must not loop
+        return false; // the empty password is fixed; retrying cannot help
     }
 }
