@@ -144,7 +144,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation.",
+    "description": "Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. Full rebuild of the ENTIRE configuration — slow on large projects. For a single externally-edited object prefer revalidate_objects([FQN]).",
     "inputSchema": {
       "properties": {
         "projectName": {
@@ -425,9 +425,20 @@
           "description": "Full-name FQN of the node to create (required). Top object: 'Type.Name' (e.g. 'Catalog.Products'). Member: 'Type.Name.Kind.Name' (e.g. 'Catalog.Products.Attribute.Weight'). The trailing Name is the new node's programmatic Name; type / kind tokens may be English or Russian.",
           "type": "string"
         },
+        "generateContent": {
+          "description": "Form OBJECT create only (FQN 'Type.Object.Form.FormName'), and only for an OBJECT-form owner: Catalog / Document / ChartOfCharacteristicTypes / ChartOfAccounts / ChartOfCalculationTypes / ExchangePlan / BusinessProcess / Task / Report / DataProcessor. When true, seeds the new form with the main Object attribute (type '<Type>Object.<Name>', main + savedData + view/edit) like the designer's 'New form' wizard - so agents never need to edit the .form outside MCP. Default: false (an empty form). Ignored (no seeding) for a register / Constant / other non-object owner and for other create kinds - the result then echoes generateContent=false.",
+          "type": "boolean"
+        },
         "normalizeYo": {
           "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing FQN segment) and in any synonym / comment value (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied.",
           "type": "boolean"
+        },
+        "objectFields": {
+          "description": "Form OBJECT create only, and only with generateContent=true: the owner attribute names to render as bound input fields (dataPath 'Object.<name>'), like the designer's checked attribute list. Omitted -> the kind defaults (documents: Number, Date; catalogs: Code, Description; other object kinds: none). An explicit non-empty list -> exactly those names. An empty array [] -> only the main Object attribute (no fields). Ignored for other create kinds.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "privileged": {
           "description": "CommonModule top-object only. When true, the module runs with full (privileged) access. Valid only with the 'Server' kind (not a server call). Ignored for other types.",
@@ -490,6 +501,10 @@
         "fqn": {
           "description": "Normalized full-name FQN of the created node",
           "type": "string"
+        },
+        "generateContent": {
+          "description": "Whether the new form was seeded with the main Object attribute (form-object create only)",
+          "type": "boolean"
         },
         "kind": {
           "description": "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')",
@@ -3226,7 +3241,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Revalidate EDT project or specific objects. If objects array is empty or missing, revalidates entire project. FQN examples: 'Document.SalesOrder', 'Catalog.Products', 'CommonModule.Common'. Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура').",
+    "description": "Revalidate EDT project or specific objects. If objects array is empty or missing, revalidates entire project. FQN examples: 'Document.SalesOrder', 'Catalog.Products', 'CommonModule.Common'. Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура'). Refreshes the project from disk first, so it picks up .mdo/.form edits made outside EDT. Lightweight, targeted alternative to clean_project (no full rebuild).",
     "inputSchema": {
       "properties": {
         "objects": {

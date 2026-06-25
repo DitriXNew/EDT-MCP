@@ -52,7 +52,9 @@ public class CleanProjectTool implements IMcpTool
     {
         return "Clean EDT project and trigger full revalidation. " + //$NON-NLS-1$
                "Refreshes files from disk, clears all validation markers, " + //$NON-NLS-1$
-               "and waits for EDT to complete revalidation."; //$NON-NLS-1$
+               "and waits for EDT to complete revalidation. " + //$NON-NLS-1$
+               "Full rebuild of the ENTIRE configuration — slow on large projects. " + //$NON-NLS-1$
+               "For a single externally-edited object prefer revalidate_objects([FQN])."; //$NON-NLS-1$
     }
     
     @Override

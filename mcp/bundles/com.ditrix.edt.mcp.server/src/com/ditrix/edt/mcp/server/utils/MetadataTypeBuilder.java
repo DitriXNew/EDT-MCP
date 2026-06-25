@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.dt.mcore.DateFractions;
@@ -20,6 +24,10 @@ import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.md.resource.MdTypeUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil;
+import com._1c.g5.v8.dt.metadata.mdtype.BasicDbObjectTypes;
+import com._1c.g5.v8.dt.metadata.mdtype.MdObjectType;
+import com._1c.g5.v8.dt.metadata.mdtype.MdTypes;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.google.gson.JsonArray;
@@ -145,6 +153,39 @@ public final class MetadataTypeBuilder
     private static final String DYNAMIC_LIST_TYPE = "DynamicList"; //$NON-NLS-1$
 
     /**
+     * The English-singular TYPE tokens whose object form carries a main {@code Object} attribute of type
+     * {@code <Type>Object.<Name>} - the reference / object metadata kinds with an object module (Catalog,
+     * Document, the three ChartOf* plans, ExchangePlan, BusinessProcess, Task) plus Report / DataProcessor
+     * (whose object form's main attribute is likewise {@code ReportObject} / {@code DataProcessorObject}).
+     * Record-based owners (Information / Accumulation / Accounting / Calculation registers), Constant,
+     * Enum, etc. are deliberately EXCLUDED: their object/record form's main data source is not a
+     * {@code <Type>Object} value type, so seeding an {@code Object} attribute there would be semantically
+     * wrong (issue #208 review).
+     */
+    private static final Set<String> OBJECT_FORM_TYPES = new HashSet<>(Arrays.asList(
+        "Catalog", "Document", "ChartOfCharacteristicTypes", "ChartOfAccounts", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "ChartOfCalculationTypes", "ExchangePlan", "BusinessProcess", "Task", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "Report", "DataProcessor")); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /**
+     * Whether a metadata owner addressed by {@code englishSingularType} (the canonical English-singular
+     * TYPE token, e.g. {@code Catalog} / {@code Document}) has an object form whose main attribute is the
+     * {@code Object} attribute of type {@code <Type>Object.<Name>}. Only for such owners may
+     * {@code create_metadata}'s {@code generateContent} seed the main {@code Object} attribute; for any
+     * other owner (registers, Constant, ...) the object-form {@code Object} attribute does not apply, so
+     * the seed must be skipped. The check is on the static type KIND, not on a runtime proxy resolve (a
+     * Catalog created in the same BM transaction may not yet resolve its {@code CatalogObject.X} proxy, but
+     * it IS an object-form type and must still be seeded). See issue #208.
+     *
+     * @param englishSingularType the owner's English-singular TYPE token, or {@code null}
+     * @return {@code true} when the owner carries a {@code <Type>Object} main form attribute
+     */
+    public static boolean hasObjectFormMainAttribute(String englishSingularType)
+    {
+        return englishSingularType != null && OBJECT_FORM_TYPES.contains(englishSingularType);
+    }
+
+    /**
      * Builds a {@link TypeDescription} carrying ONLY the {@code DynamicList} platform pseudo-type - the
      * value type a form list attribute uses ({@code <types>DynamicList</types>} on disk). Reuses the
      * same platform type provider as {@link #build}. Returns {@code null} when the platform version is
@@ -175,6 +216,59 @@ public final class MetadataTypeBuilder
         }
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         td.getTypes().add((TypeItem)proxy);
+        return td;
+    }
+
+    /**
+     * Builds a {@link TypeDescription} carrying ONLY the OBJECT value-type of {@code owner} - the type the
+     * main {@code Object} attribute of a managed object form carries
+     * ({@code <types><Type>Object.<Name></types>} on disk, e.g. {@code DocumentObject.Invoice} /
+     * {@code CatalogObject.Goods}). The object type is taken from the owner's OWN produced types (the same
+     * path {@code MetadataReferenceService.collectProducedTypesReferences} uses), NOT synthesized from a
+     * type token: {@link MdClassUtil#getProducedTypes} returns the owner's derived {@link MdTypes}, and for
+     * a reference / object owner that is a {@link BasicDbObjectTypes} whose {@link BasicDbObjectTypes#getObjectType()
+     * object type}'s {@link MdObjectType#getType() Type} is the {@code <Type>Object.<Name>} value the
+     * attribute needs. The owner is a PRE-EXISTING object resolved inside the same BM transaction, so its
+     * produced-types derived data is already computed and resolvable here.
+     * <p>
+     * Mirrors the working {@link #addType} Ref path: the model-owned {@code Type} is added straight into a
+     * fresh {@code TypeDescription}'s {@code getTypes()} - a NON-containment reference list, so the type is
+     * SHARED (not detached from the owner's produced types). Returns {@code null} when the owner is blank,
+     * has no produced object type yet, or is not an object-form owner (the caller then seeds the attribute
+     * without a value type rather than failing). The returned object is an mcore {@code TypeDescription}
+     * ready to {@code eSet} onto a form attribute's {@code valueType} feature. Never throws
+     * (unattended-safe). The wrong path would be {@code MdTypeUtil.getRefType}, which yields the REF type
+     * ({@code CatalogRef.X}); the main {@code Object} attribute needs the OBJECT type
+     * ({@code <Type>Object.<Name>}) from {@link BasicDbObjectTypes#getObjectType()}.
+     *
+     * @param owner the owner metadata object (re-fetched inside the active BM transaction), or {@code null}
+     * @return the object value-type description, or {@code null} when it cannot be built
+     */
+    public static EObject objectType(EObject owner)
+    {
+        if (!(owner instanceof MdObject))
+        {
+            return null;
+        }
+        MdTypes producedTypes = MdClassUtil.getProducedTypes((MdObject)owner);
+        if (!(producedTypes instanceof BasicDbObjectTypes))
+        {
+            return null;
+        }
+        MdObjectType mdObjType = ((BasicDbObjectTypes)producedTypes).getObjectType();
+        if (mdObjType == null)
+        {
+            return null;
+        }
+        Type objType = mdObjType.getType();
+        if (objType == null)
+        {
+            return null;
+        }
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        // getTypes() is a NON-containment reference list, so the model-owned Type is SHARED, not detached
+        // (the same way the Ref path adds MdTypeUtil.getRefType(target) - itself a model-owned Type).
+        td.getTypes().add(objType);
         return td;
     }
 

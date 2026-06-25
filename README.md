@@ -487,7 +487,7 @@ with `python docs/generate_tool_docs.py`.
 | Tool | Description |
 |------|-------------|
 | [`build_external_objects`](docs/tools/build_external_objects.md) | Build (compile to disk) the external data processors/reports of an EDT external-object project to .epf/.erf files. Build ONE object with objectName, or ALL o… |
-| [`clean_project`](docs/tools/clean_project.md) | Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. |
+| [`clean_project`](docs/tools/clean_project.md) | Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. Full r… |
 | [`create_infobase`](docs/tools/create_infobase.md) | Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create'… |
 | [`create_project`](docs/tools/create_project.md) | Create a NEW 1C project in the EDT workspace. projectKind selects the kind: 'configuration' (standalone), 'extension' (bound to a base configuration), or 'ex… |
 | [`delete_infobase`](docs/tools/delete_infobase.md) | Remove a FILE infobase association from a configuration project OR delete a standalone (autonomous) server application. Destructive: guarded by a confirm-pre… |

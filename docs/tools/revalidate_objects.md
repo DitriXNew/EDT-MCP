@@ -1,6 +1,6 @@
 # revalidate_objects
 
-Revalidate EDT project or specific objects. If objects array is empty or missing, revalidates entire project. FQN examples: 'Document.SalesOrder', 'Catalog.Products', 'CommonModule.Common'. Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура').
+Revalidate EDT project or specific objects. If objects array is empty or missing, revalidates entire project. FQN examples: 'Document.SalesOrder', 'Catalog.Products', 'CommonModule.Common'. Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура'). Refreshes the project from disk first, so it picks up .mdo/.form edits made outside EDT. Lightweight, targeted alternative to clean_project (no full rebuild).
 
 ## Parameters
 | Parameter | Required | Type | Description |

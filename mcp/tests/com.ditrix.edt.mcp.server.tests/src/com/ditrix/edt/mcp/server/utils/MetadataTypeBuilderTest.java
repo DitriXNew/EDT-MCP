@@ -12,6 +12,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EcoreFactory;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.mcore.DateFractions;
@@ -96,5 +98,46 @@ public class MetadataTypeBuilderTest
         assertFalse(MetadataTypeBuilder.isRefKind("String")); //$NON-NLS-1$
         assertFalse(MetadataTypeBuilder.isRefKind("Reference")); //$NON-NLS-1$
         assertFalse(MetadataTypeBuilder.isRefKind(null));
+    }
+
+    @Test
+    public void testHasObjectFormMainAttribute()
+    {
+        // Object-form types (a <Type>Object main attribute on their object form) - issue #208 gate.
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("Catalog")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("Document")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("ChartOfCharacteristicTypes")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("ChartOfAccounts")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("ChartOfCalculationTypes")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("ExchangePlan")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("BusinessProcess")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("Task")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("Report")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("DataProcessor")); //$NON-NLS-1$
+        // Record-based owners (registers) and other non-object types carry NO <Type>Object attribute.
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute("InformationRegister")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute("AccumulationRegister")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute("AccountingRegister")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute("CalculationRegister")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute("Constant")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute("Enum")); //$NON-NLS-1$
+        // The gate expects the canonical English-singular token (the caller resolves it first), so a
+        // Russian / plural spelling is NOT recognized here, and null is safe.
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute("Catalogs")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute(null));
+    }
+
+    @Test
+    public void testObjectTypeGracefulWithoutModelOwner()
+    {
+        // objectType now takes the owner MdObject and reads its OWN produced object type
+        // (MdClassUtil.getProducedTypes -> BasicDbObjectTypes.getObjectType). It must NEVER throw and must
+        // return null for an owner that cannot supply an object type: a null owner, or a non-MdObject
+        // EObject. The REAL value-type build needs a model-resolved owner with computed produced-types
+        // derived data, so the byte-exact value type (<Type>Object.<Name>) is proven by the e2e/live
+        // byte-diff, not headless here (issue #208).
+        assertNull(MetadataTypeBuilder.objectType(null));
+        EObject notAnMdObject = EcoreFactory.eINSTANCE.createEObject();
+        assertNull(MetadataTypeBuilder.objectType(notAnMdObject));
     }
 }

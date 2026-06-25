@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -85,6 +86,14 @@ public final class FormElementWriter
     private static final String ECLASS_INPUT_FIELD_EXT_INFO = "InputFieldExtInfo"; //$NON-NLS-1$
     /** The form attribute's "is the form's main data source" flag. */
     private static final String FEATURE_MAIN = "main"; //$NON-NLS-1$
+    /** The form attribute's "store the value with the form's data" flag (the main Object carries it). */
+    private static final String FEATURE_SAVED_DATA = "savedData"; //$NON-NLS-1$
+    /** The form attribute's "use in view mode" presentation flag (an {@code AdjustableBoolean}). */
+    private static final String FEATURE_VIEW = "view"; //$NON-NLS-1$
+    /** The form attribute's "use in edit mode" presentation flag (an {@code AdjustableBoolean}). */
+    private static final String FEATURE_EDIT = "edit"; //$NON-NLS-1$
+    /** The English programmatic Name of a managed object form's main attribute. */
+    private static final String MAIN_ATTRIBUTE_NAME_EN = "Object"; //$NON-NLS-1$
     /** The dynamic-list ext-info EClass and its query-carrying features. */
     private static final String ECLASS_DYNAMIC_LIST_EXT_INFO = "DynamicListExtInfo"; //$NON-NLS-1$
     private static final String FEATURE_QUERY_TEXT = "queryText"; //$NON-NLS-1$
@@ -436,6 +445,22 @@ public final class FormElementWriter
     private static final String EN_LINE_NUMBER = "LineNumber"; //$NON-NLS-1$
     private static final String RU_LINE_NUMBER = cp(0x041d, 0x043e, 0x043c, 0x0435, 0x0440, 0x0421,
         0x0442, 0x0440, 0x043e, 0x043a, 0x0438); // NomerStroki
+    /** ru "Объект" - the main object-form attribute Name in a Russian script variant (== "Object"). */
+    private static final String RU_MAIN_ATTRIBUTE_NAME = cp(0x041e, 0x0431, 0x044a, 0x0435, 0x043a,
+        0x0442); // Obyekt
+    // The standard-attribute programmatic names the EDT "New form" wizard binds by default. They are
+    // bilingual: in a Russian script variant the standard attributes carry the Russian programmatic
+    // name (a dotted dataPath segment IS the programmatic name), so the generated dataPath matches the
+    // owner's actual sub-attribute (e.g. "Объект.Номер" vs "Object.Number"). Issue #208.
+    private static final String EN_DOCUMENT_NUMBER = "Number"; //$NON-NLS-1$
+    private static final String RU_DOCUMENT_NUMBER = cp(0x041d, 0x043e, 0x043c, 0x0435, 0x0440); // Nomer
+    private static final String EN_DOCUMENT_DATE = "Date"; //$NON-NLS-1$
+    private static final String RU_DOCUMENT_DATE = cp(0x0414, 0x0430, 0x0442, 0x0430); // Data
+    private static final String EN_CATALOG_CODE = "Code"; //$NON-NLS-1$
+    private static final String RU_CATALOG_CODE = cp(0x041a, 0x043e, 0x0434); // Kod
+    private static final String EN_CATALOG_DESCRIPTION = "Description"; //$NON-NLS-1$
+    private static final String RU_CATALOG_DESCRIPTION =
+        cp(0x041d, 0x0430, 0x0438, 0x043c, 0x0435, 0x043d, 0x043e, 0x0432, 0x0430, 0x043d, 0x0438, 0x0435); // Naimenovanie
 
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
@@ -827,12 +852,25 @@ public final class FormElementWriter
      * @param version the platform version (drives the designer's version-dependent form defaults)
      * @param russianAutoNames whether the configuration script variant is Russian (localizes the
      *     fallback predefined command-bar name, like the designer's default-name provider)
+     * @param generateContent when {@code true}, seeds the content form with the main {@code Object}
+     *     attribute (type {@code <Type>Object.<Name>} from the owner's produced types, main + savedData)
+     *     like the designer's "New form" wizard; otherwise the content form is left empty (today's
+     *     behaviour)
+     * @param ownerEnglishType the owner's English-singular TYPE token (e.g. {@code Catalog} /
+     *     {@code Document}) - the object-form-type GATE for the seed; the value type itself is taken from
+     *     {@code owner}'s produced types, not from this token
+     * @param objectFields when {@code generateContent} is on, the owner attribute names to render as
+     *     bound input fields (dataPath {@code Object.<name>}): {@code null} -> the kind defaults
+     *     (Document -> Number/Date, Catalog -> Code/Description, other -> none); a non-empty list ->
+     *     exactly those names; an empty list -> none (only the main {@code Object} attribute). Ignored
+     *     when {@code generateContent} is off.
      * @return the content form's own top-object FQN (serialized to {@code Form.form}), for force-export
      */
     public static String createForm(IBmTransaction tx, MdObject owner, String formName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         String synonymLanguage, String synonym, String comment, boolean setAsDefault,
         IModelObjectFactory mdFactory, IModelObjectFactory formFactory,
-        ITopObjectFqnGenerator fqnGenerator, Version version, boolean russianAutoNames)
+        ITopObjectFqnGenerator fqnGenerator, Version version, boolean russianAutoNames,
+        boolean generateContent, String ownerEnglishType, List<String> objectFields)
     {
         EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature(KEY_FORMS);
         if (formsFeature == null || !(formsFeature.getEType() instanceof EClass))
@@ -863,10 +901,40 @@ public final class FormElementWriter
             mdForm.setComment(comment);
         }
 
+        // Resolve the bound object fields to render: an OMITTED (null) list falls back to the per-kind
+        // designer defaults (Document -> Number/Date, Catalog -> Code/Description; other object kinds ->
+        // none), an EXPLICIT list (incl. an empty one) is taken verbatim. Resolved here where the owner
+        // TYPE token is known. Issue #208.
+        List<String> resolvedFields = resolveObjectFields(ownerEnglishType, objectFields, russianAutoNames);
+
+        // Validate an EXPLICIT objectFields list against the owner's bindable sub-attributes (its custom
+        // attributes + standard attributes), but only when the seed actually applies (generateContent on
+        // an object-form owner): an unknown name is a user error and must be ACTIONABLE rather than
+        // silently turned into a field bound to Object.<bogus> with no resolvable target. An OMITTED
+        // (null) list is the per-kind designer defaults (always valid standard attributes), so it is not
+        // re-validated. Throwing a FormValidationException here (before any eSet on the BM-attached
+        // owner / content form) rolls the transaction back with no partial mutation; the caller surfaces
+        // the ready JSON verbatim. Issue #208 (round 2 review). Unattended-safe: when the owner's
+        // bindable set cannot be determined (empty - e.g. an owner whose attributes have not resolved in
+        // this transaction), the rejection is skipped rather than blocking, mirroring the rest of the
+        // seed's best-effort, abstract-/null-guarded stance.
+        if (objectFields != null && generateContent
+            && MetadataTypeBuilder.hasObjectFormMainAttribute(ownerEnglishType))
+        {
+            String fieldsError = validateObjectFields(owner, resolvedFields);
+            if (fieldsError != null)
+            {
+                throw new FormValidationException(ToolResult.error(fieldsError).toJson());
+            }
+        }
+
         // (2) The content form, built by the FORM factory so it gets EDT's default structure
         // (autoCommandBar, command interface, form flags). Falls back to a manual minimal-but-
-        // renderable build if the factory is unavailable.
-        EObject content = createContentForm(formFactory, owner, version, russianAutoNames);
+        // renderable build if the factory is unavailable. When generateContent, the form is seeded with
+        // the main Object attribute (type <ownerEnglishType>Object.<ownerName>) like the designer, plus
+        // a bound input field per resolved object field (dataPath Object.<name>).
+        EObject content = createContentForm(formFactory, owner, version, russianAutoNames,
+            generateContent, ownerEnglishType, resolvedFields);
 
         // (3) Link MD-form <-> content form (both directions, by feature - no typed form API).
         mdForm.eSet(MdClassPackage.Literals.BASIC_FORM__FORM, content);
@@ -915,9 +983,68 @@ public final class FormElementWriter
      * Fully reflective: the {@code Form} EClass is reached through {@link #contentFormEClass()} (the
      * EMF package registry, by nsURI), so no compile-time dependency on
      * {@code com._1c.g5.v8.dt.form.model} is needed. Package-visible for the headless unit test.
+     * <p>
+     * This overload leaves the form EMPTY (no attributes) - the default {@code create_metadata}
+     * behaviour; use {@link #createContentForm(IModelObjectFactory, MdObject, Version, boolean, boolean,
+     * String, List)} with {@code generateContent} to also seed the main {@code Object} attribute.
      */
     static EObject createContentForm(IModelObjectFactory formFactory, MdObject owner, Version version,
         boolean russianAutoNames)
+    {
+        return createContentForm(formFactory, owner, version, russianAutoNames, false, null, null);
+    }
+
+    /**
+     * The {@code generateContent}-aware build WITHOUT explicit object fields - the seeded form carries
+     * only its main {@code Object} attribute (no bound fields). Equivalent to passing {@code null}
+     * object fields, which resolves to NO fields here (the per-kind defaults apply only via
+     * {@link #createForm}). Kept for the headless unit tests that exercised the pre-#208-round-2 shape.
+     */
+    static EObject createContentForm(IModelObjectFactory formFactory, MdObject owner, Version version,
+        boolean russianAutoNames, boolean generateContent, String ownerEnglishType)
+    {
+        return createContentForm(formFactory, owner, version, russianAutoNames, generateContent,
+            ownerEnglishType, Collections.emptyList());
+    }
+
+    /**
+     * Builds the content {@code Form} (see {@link #createContentForm(IModelObjectFactory, MdObject,
+     * Version, boolean)}) and, when {@code generateContent}, additionally seeds the form's main
+     * {@code Object} attribute the way the EDT "New form" wizard does for an object form:
+     * <ul>
+     * <li>name {@code Object} / {@code Объект} (per {@code russianAutoNames}),</li>
+     * <li>value type {@code <Type>Object.<Name>} (e.g. {@code DocumentObject.Invoice}), taken from the
+     * {@code owner}'s OWN produced object type ({@code MdClassUtil.getProducedTypes} ->
+     * {@code BasicDbObjectTypes.getObjectType}) - left unset when the {@code owner} is {@code null}
+     * (headless) or has no produced object type yet (the attribute is still seeded), so this stays
+     * unattended-safe,</li>
+     * <li>{@code main = true} (it is the form's main data source) and {@code savedData = true}.</li>
+     * </ul>
+     * The seeding mirrors the proven {@code configureDynamicListQuery} / {@code createAttribute} pattern
+     * (reflective {@code valueType} set + the form-attribute id space) and re-runs
+     * {@link #normalizeFormAttributeIds} afterwards. Like the empty build it keeps
+     * {@link #enforceAutoCommandBarIdSentinel} idempotent; the caller {@link #createForm} re-asserts it
+     * LAST after the BM integration (issue #189). Package-visible for the headless unit test.
+     *
+     * <p>
+     * When {@code generateContent} is on, after the main {@code Object} attribute the form is also seeded
+     * with one bound {@code InputField} per name in {@code objectFields} (dataPath {@code Object.<name>},
+     * via the same {@link #createField} the manual create uses, so each field carries the identical
+     * designer defaults + auto-children). The fields land under the form ROOT, after the main attribute.
+     *
+     * @param generateContent when {@code true}, seeds the main {@code Object} attribute; otherwise the
+     *     form is left empty (today's behaviour - byte-stable)
+     * @param ownerEnglishType the owner's English-singular TYPE token - the object-form-type GATE (only a
+     *     {@code Catalog} / {@code Document} / ... is seeded); may be {@code null}/blank (then no seed).
+     *     The value type itself is taken from {@code owner}'s produced types, not from this token.
+     * @param objectFields the owner attribute names to render as bound input fields (dataPath
+     *     {@code Object.<name>}) when {@code generateContent} is on: a non-empty list -> exactly those
+     *     names; an empty / {@code null} list -> no fields (only the main {@code Object} attribute). The
+     *     per-kind defaults (Document -> Number/Date, Catalog -> Code/Description) are resolved by
+     *     {@link #createForm} BEFORE this point, so here {@code null} means "no fields".
+     */
+    static EObject createContentForm(IModelObjectFactory formFactory, MdObject owner, Version version, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        boolean russianAutoNames, boolean generateContent, String ownerEnglishType, List<String> objectFields)
     {
         EClass formEClass = contentFormEClass();
         EObject content = null;
@@ -945,10 +1072,314 @@ public final class FormElementWriter
         // step (6a). This set here still matters for the direct (headless / no-BM) callers. Issue #189.
         enforceAutoCommandBarIdSentinel(content);
         applyFormDefaults(content, version);
+        // Seed the main Object attribute BEFORE the id normalize so it gets an id in the form-attribute
+        // id space, mirroring a designer-built object form. Default false keeps the empty-form behaviour.
+        if (generateContent)
+        {
+            seedMainObjectAttribute(content, russianAutoNames, ownerEnglishType, owner);
+            // Then the bound object fields (dataPath Object.<name>) under the form root, mirroring the
+            // designer wizard's checked attribute list. Each via createField, so it carries the same
+            // designer defaults + auto-children as a manually-created field. Only when the main Object
+            // attribute is actually present (it gates createField's dotted-path acceptance). Issue #208.
+            seedObjectFields(content, russianAutoNames, objectFields);
+        }
         normalizeFormAttributeIds(content);
         normalizeFormItemIds(content);
         normalizeFormCommandIds(content);
         return content;
+    }
+
+    /**
+     * Seeds one bound {@code InputField} per name in {@code objectFields} on the just-seeded object form,
+     * each with dataPath {@code <MainAttr>.<name>} (e.g. {@code Object.Number} / {@code Объект.Номер}),
+     * placed under the form ROOT, after the main attribute. A no-op when {@code objectFields} is null /
+     * empty or the form has no main object attribute (createField's dotted-path acceptance depends on
+     * it). Reuses {@link #createField}, so a seeded field is byte-identical to a manually-created one
+     * (same designer defaults + auto-children). The field name defaults to the attribute name. The id
+     * normalization the caller runs afterwards assigns the final item ids. Issue #208.
+     * <p>
+     * Each {@link #createField} result is captured: a non-null return is an error (a name collision -
+     * {@link #ERR_ITEM_EXISTS} - or a failed item create) and is NOT silently dropped, otherwise the
+     * caller would be misled by a success result while a requested field was skipped. The skipped
+     * field names are logged via {@link Activator#logWarning(String)} so the gap is visible (the bound
+     * object fields are best-effort here, like the table columns; an EXPLICIT list's names are already
+     * validated up-front by {@link #validateObjectFields}, so any collision here is between requested
+     * names or with the main attribute). Issue #208 (round 2 review).
+     */
+    private static void seedObjectFields(EObject content, boolean russianAutoNames, List<String> objectFields)
+    {
+        if (objectFields == null || objectFields.isEmpty())
+        {
+            return;
+        }
+        EObject mainAttribute = mainAttribute(content);
+        if (mainAttribute == null)
+        {
+            return;
+        }
+        String mainName = stringFeature(mainAttribute, FEATURE_NAME);
+        List<String> skipped = new ArrayList<>();
+        for (String fieldName : objectFields)
+        {
+            if (fieldName == null || fieldName.trim().isEmpty())
+            {
+                continue;
+            }
+            String trimmed = fieldName.trim();
+            // The field's own name = the attribute name (the designer's default field name). The bound
+            // dataPath is "<MainAttr>.<attr>" so it resolves to the object's sub-attribute.
+            String fieldError = createField(content, trimmed, null, mainName + "." + trimmed, null, //$NON-NLS-1$
+                null, russianAutoNames, null);
+            if (fieldError != null)
+            {
+                skipped.add(trimmed);
+                continue;
+            }
+            // The designer's object-form wizard creates these bound object fields with editMode
+            // "EnterOnInput" (the table-column path already uses it), whereas createField's default
+            // "Enter" is for a manually-created standalone field. Re-set the just-created field
+            // (named after the attribute) for byte-parity with the designer. Issue #208.
+            EObject seededField = findItem(content, trimmed);
+            if (seededField != null)
+            {
+                setEnumFeature(seededField, "editMode", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (!skipped.isEmpty())
+        {
+            Activator.logWarning("create_metadata form-object seeding skipped bound object field(s) " //$NON-NLS-1$
+                + String.join(", ", skipped) + " (name collision or failed item create); the form was " //$NON-NLS-1$ //$NON-NLS-2$
+                + "still created without them"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Validates an EXPLICIT {@code objectFields} list against the owner's bindable sub-attributes - its
+     * custom attributes ({@code attributes} feature) plus its standard attributes
+     * ({@code getStandardAttributes()}, e.g. Number / Date / Code / Description). Returns an actionable
+     * error message (naming the first offending value and listing the available names) when a requested
+     * field is not a bindable sub-attribute, or {@code null} when every name resolves. A blank entry is
+     * tolerated (skipped by {@link #seedObjectFields}). Unattended-safe: when the owner's bindable set
+     * cannot be determined (none collected), the check is skipped (returns {@code null}) rather than
+     * rejecting a possibly-valid name. Package-visible for the headless unit test. Issue #208 (round 2
+     * review).
+     */
+    static String validateObjectFields(EObject owner, List<String> objectFields)
+    {
+        if (objectFields == null || objectFields.isEmpty() || owner == null)
+        {
+            return null;
+        }
+        Set<String> available = collectBindableSubAttributeNames(owner);
+        if (available.isEmpty())
+        {
+            return null;
+        }
+        Set<String> availableLower = new HashSet<>();
+        for (String name : available)
+        {
+            availableLower.add(name.toLowerCase());
+        }
+        for (String fieldName : objectFields)
+        {
+            if (fieldName == null || fieldName.trim().isEmpty())
+            {
+                continue;
+            }
+            String trimmed = fieldName.trim();
+            if (!availableLower.contains(trimmed.toLowerCase()))
+            {
+                List<String> sorted = new ArrayList<>(available);
+                Collections.sort(sorted);
+                return "Unknown objectFields name '" + trimmed + "'. A bound object field must name a " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "sub-attribute of the owner's Object (a standard or custom attribute). Available: " //$NON-NLS-1$
+                    + String.join(", ", sorted); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Collects the owner's bindable sub-attribute names - the names a generated object form's field can
+     * bind to via {@code Object.<name>}: its custom attributes (the {@code attributes} feature) and its
+     * standard attributes ({@code getStandardAttributes()}). Fully reflective (by feature name / method),
+     * so no extra compile dependency; best-effort (a name source that does not resolve is skipped).
+     * Issue #208 (round 2 review).
+     */
+    private static Set<String> collectBindableSubAttributeNames(EObject owner)
+    {
+        Set<String> names = new HashSet<>();
+        addNamedElementNames(owner, FEATURE_ATTRIBUTES, names);
+        addStandardAttributeNames(owner, names);
+        return names;
+    }
+
+    /** Adds the {@code name} of each element of the owner's {@code featureName} list (best-effort). */
+    private static void addNamedElementNames(EObject owner, String featureName, Set<String> out)
+    {
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (feature == null || !(owner.eGet(feature) instanceof EList<?>))
+        {
+            return;
+        }
+        for (Object element : (EList<?>)owner.eGet(feature))
+        {
+            String name = namedElementName(element);
+            if (name != null && !name.isEmpty())
+            {
+                out.add(name);
+            }
+        }
+    }
+
+    /** Adds the owner's standard-attribute names via the reflective {@code getStandardAttributes()}. */
+    private static void addStandardAttributeNames(EObject owner, Set<String> out)
+    {
+        try
+        {
+            Method getter = owner.getClass().getMethod("getStandardAttributes"); //$NON-NLS-1$
+            Object value = getter.invoke(owner);
+            if (value instanceof Iterable<?>)
+            {
+                for (Object element : (Iterable<?>)value)
+                {
+                    String name = namedElementName(element);
+                    if (name != null && !name.isEmpty())
+                    {
+                        out.add(name);
+                    }
+                }
+            }
+        }
+        catch (ReflectiveOperationException e)
+        {
+            // No getStandardAttributes() on this owner type - the custom attributes alone are the
+            // bindable set (best-effort, like the rest of the reflective form writer).
+        }
+    }
+
+    /** The programmatic {@code name} of a model element, via its {@code name} EStructuralFeature. */
+    private static String namedElementName(Object element)
+    {
+        return element instanceof EObject ? stringFeature((EObject)element, FEATURE_NAME) : null;
+    }
+
+    /**
+     * Resolves the bound object fields the generated form renders, mirroring the designer's "New form"
+     * checkbox list:
+     * <ul>
+     * <li>an OMITTED ({@code null}) list -> the per-kind defaults: a {@code Document} -> Number/Date
+     * (Russian: Номер/Дата), a {@code Catalog} -> Code/Description (Russian: Код/Наименование), any
+     * other object kind -> none;</li>
+     * <li>an EXPLICIT list (incl. an empty one) -> taken verbatim (an empty list -> no fields, only the
+     * main {@code Object} attribute).</li>
+     * </ul>
+     * The default names follow the configuration script variant ({@code russianAutoNames}) because a
+     * dataPath segment IS the standard attribute's programmatic name (Russian on a Russian config).
+     * Returns an empty list (never {@code null}) when no field applies. Package-visible for the headless
+     * unit test. Issue #208.
+     */
+    static List<String> resolveObjectFields(String ownerEnglishType, List<String> objectFields,
+        boolean russianAutoNames)
+    {
+        if (objectFields != null)
+        {
+            return objectFields;
+        }
+        if ("Document".equalsIgnoreCase(ownerEnglishType)) //$NON-NLS-1$
+        {
+            return Arrays.asList(russianAutoNames ? RU_DOCUMENT_NUMBER : EN_DOCUMENT_NUMBER,
+                russianAutoNames ? RU_DOCUMENT_DATE : EN_DOCUMENT_DATE);
+        }
+        if ("Catalog".equalsIgnoreCase(ownerEnglishType)) //$NON-NLS-1$
+        {
+            return Arrays.asList(russianAutoNames ? RU_CATALOG_CODE : EN_CATALOG_CODE,
+                russianAutoNames ? RU_CATALOG_DESCRIPTION : EN_CATALOG_DESCRIPTION);
+        }
+        return Collections.emptyList();
+    }
+
+    /** The form's main object attribute ({@code main = true}), or {@code null} when none is present. */
+    private static EObject mainAttribute(EObject formModel)
+    {
+        for (EObject attr : referenceList(formModel, FEATURE_ATTRIBUTES))
+        {
+            if (isMainAttribute(attr))
+            {
+                return attr;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Seeds the form's main {@code Object} attribute the way the designer's object-form wizard does -
+     * a near-copy of {@link #createAttribute} / the {@code configureDynamicListQuery} main-attribute
+     * path, fully reflective (no {@code form.model} import). A no-op when the owner is not an object-form
+     * type (see {@link MetadataTypeBuilder#hasObjectFormMainAttribute}), the form does not expose the
+     * {@code attributes} feature, or it already has a main attribute. Package-visible for the headless
+     * test.
+     * <p>
+     * The seeded attribute carries the full flag set a designer object form persists for its predefined
+     * {@code Object} attribute: {@code main = true}, {@code savedData = true}, and the presentation flags
+     * {@code view.common = true} / {@code edit.common = true} (each an {@code AdjustableBoolean} - "use"),
+     * so the generated attribute is byte-identical to the designer's (verified against the committed
+     * fixture {@code Catalogs/Catalog/Forms/ItemForm/Form.form}). Issue #208.
+     *
+     * @param content the content form being built (tx-bound when called from {@link #createForm})
+     * @param russianAutoNames whether the configuration script variant is Russian (Name {@code Объект})
+     * @param ownerEnglishType the owner's English-singular TYPE token, or {@code null}/blank (the
+     *     object-form-type GATE; the value type itself comes from {@code owner}'s produced types)
+     * @param owner the owner metadata object (re-fetched inside the active BM transaction), or
+     *     {@code null} when called headless - the value type is then left unset, the seed still applies
+     */
+    static void seedMainObjectAttribute(EObject content, boolean russianAutoNames,
+        String ownerEnglishType, EObject owner)
+    {
+        // Only an object-form owner (Catalog / Document / ChartOf* / ExchangePlan / BusinessProcess /
+        // Task / Report / DataProcessor) carries a main Object attribute of type <Type>Object.<Name>.
+        // For a record-based owner (Information / Accumulation / Accounting / Calculation register),
+        // Constant, or any other type the Object attribute does not apply, so seed nothing rather than a
+        // misnamed / value-type-less main attribute (issue #208). The gate is on the static type KIND,
+        // not on a runtime proxy resolve: a Catalog created in the SAME transaction may not yet resolve
+        // its CatalogObject.X proxy, but it IS an object-form type and must still be seeded.
+        if (!MetadataTypeBuilder.hasObjectFormMainAttribute(ownerEnglishType))
+        {
+            return;
+        }
+        if (content.eClass().getEStructuralFeature(FEATURE_ATTRIBUTES) == null
+            || hasMainAttribute(content))
+        {
+            return;
+        }
+        EObject attr = createFromFeatureType(content, FEATURE_ATTRIBUTES);
+        if (attr == null)
+        {
+            return;
+        }
+        setStringFeature(attr, FEATURE_NAME, russianAutoNames ? RU_MAIN_ATTRIBUTE_NAME
+            : MAIN_ATTRIBUTE_NAME_EN);
+        setIntFeature(attr, FEATURE_ID, nextAttributeId(content));
+        // The value type is <Type>Object.<Name> (e.g. DocumentObject.Invoice), taken from the owner's OWN
+        // produced object type (MdClassUtil.getProducedTypes -> BasicDbObjectTypes.getObjectType). Left
+        // unset when the owner is null (headless) or has no produced object type yet, so the seed stays
+        // unattended-safe; the value type is then proven by the e2e/live byte-diff, not headless.
+        EObject objectType = MetadataTypeBuilder.objectType(owner);
+        EStructuralFeature valueTypeFeature = attr.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+        if (objectType != null && valueTypeFeature instanceof EReference)
+        {
+            attr.eSet(valueTypeFeature, objectType);
+        }
+        setBooleanFeature(attr, FEATURE_MAIN, true);
+        setBooleanFeature(attr, FEATURE_SAVED_DATA, true);
+        // The designer's predefined Object attribute also carries view/edit = common("use"), so the
+        // generated attribute is byte-identical to a designer-built object form (issue #208). Both are
+        // AdjustableBoolean references, so reuse the existing guarded helper (it creates the reference
+        // type, sets common = true, and guards isAbstract()/isMany() - the abstract guard matters since
+        // the declared AdjustableBoolean type may be abstract on the live stand).
+        setAdjustableBooleanFeature(attr, FEATURE_VIEW);
+        setAdjustableBooleanFeature(attr, FEATURE_EDIT);
+        addToList(content, FEATURE_ATTRIBUTES, attr);
     }
 
     /**
@@ -1317,6 +1748,13 @@ public final class FormElementWriter
         return extInfo != null && ECLASS_DYNAMIC_LIST_EXT_INFO.equals(extInfo.eClass().getName());
     }
 
+    /** Whether a form attribute is flagged as the form's main data source ({@code main = true}). */
+    private static boolean isMainAttribute(EObject attribute)
+    {
+        EStructuralFeature mainFeature = attribute.eClass().getEStructuralFeature(FEATURE_MAIN);
+        return mainFeature != null && Boolean.TRUE.equals(attribute.eGet(mainFeature));
+    }
+
     /**
      * Resolves an object FQN (e.g. {@code "Document.Order"}) to the {@code DbViewDef} of its MAIN table -
      * the value a dynamic list's {@code mainTable} reference holds. Reflective (no compile dependency on
@@ -1357,8 +1795,7 @@ public final class FormElementWriter
     {
         for (EObject attr : referenceList(formModel, FEATURE_ATTRIBUTES))
         {
-            EStructuralFeature mainFeature = attr.eClass().getEStructuralFeature(FEATURE_MAIN);
-            if (mainFeature != null && Boolean.TRUE.equals(attr.eGet(mainFeature)))
+            if (isMainAttribute(attr))
             {
                 return true;
             }
@@ -1827,10 +2264,13 @@ public final class FormElementWriter
             return "A form field needs a 'dataPath' property naming the form attribute it shows " //$NON-NLS-1$
                 + "(e.g. {name:'dataPath', value:'Price'})."; //$NON-NLS-1$
         }
-        // The field binds to a form attribute by name. A DOTTED path (e.g. "List.Number") binds to a
-        // dynamic-list COLUMN: the head segment is the dynamic-list attribute, the tail is one of its
-        // query fields (auto-filled by EDT - not a model attribute). Validate the head attribute, and
-        // require it to be a dynamic list when a dotted path is used.
+        // The field binds to a form attribute by name. A DOTTED path binds to a SUB-attribute of the
+        // head form attribute. Two heads are valid for a dotted path:
+        //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields
+        //     (auto-filled by EDT - not a model attribute);
+        //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of
+        //     the object type, like the designer's bound object fields.
+        // Validate the head attribute, and require one of those two heads when a dotted path is used.
         int dot = attrName.indexOf('.');
         String headAttr = dot > 0 ? attrName.substring(0, dot) : attrName;
         EObject boundAttribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), headAttr);
@@ -1839,11 +2279,12 @@ public final class FormElementWriter
             return "Form attribute '" + headAttr + "' not found - create it first, then bind the field " //$NON-NLS-1$ //$NON-NLS-2$
                 + "to it (so the data path resolves)."; //$NON-NLS-1$
         }
-        if (dot > 0 && !isDynamicListAttribute(boundAttribute))
+        if (dot > 0 && !isDynamicListAttribute(boundAttribute) && !isMainAttribute(boundAttribute))
         {
-            return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is not a dynamic " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "list. A field binds to a form attribute by name (e.g. 'Price'); a dotted path is only " //$NON-NLS-1$
-                + "for a dynamic-list column (e.g. 'List.Number', where the list has a custom query)."; //$NON-NLS-1$
+            return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is neither a dynamic " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "list nor the form's main object attribute. A field binds to a form attribute by name " //$NON-NLS-1$
+                + "(e.g. 'Price'); a dotted path is for a dynamic-list column (e.g. 'List.Number', where " //$NON-NLS-1$
+                + "the list has a custom query) or for an object sub-attribute (e.g. 'Object.Number')."; //$NON-NLS-1$
         }
         if (findItem(formModel, name) != null)
         {
@@ -3668,8 +4109,16 @@ public final class FormElementWriter
 
     /**
      * Fills a contained {@code AdjustableBoolean} feature ({@code userVisible} on a visual item,
-     * {@code use} on a command) with a fresh instance whose {@code common} flag is set - what the
-     * platform factory's {@code newAdjustableBoolean} produces. A no-op when the feature is absent.
+     * {@code use} on a command, {@code view} / {@code edit} on the main object attribute) with a fresh
+     * instance whose {@code common} flag is set - what the platform factory's
+     * {@code newAdjustableBoolean} produces. A no-op when the feature is absent.
+     * <p>
+     * When the declared reference type is ABSTRACT (the {@code AdjustableBoolean} EReference type may be
+     * abstract on a live stand - the EFactory cannot instantiate it directly), a CONCRETE instantiable
+     * subtype is resolved from the type's own EPackage and instantiated instead, so the feature is set
+     * rather than silently dropped (which would lose the designer-exact {@code view}/{@code edit} flags
+     * on the seeded object attribute - issue #208 round 2). Only when no concrete subtype is available
+     * (the genuinely un-instantiable case) is the feature left unset, staying unattended-safe.
      */
     private static void setAdjustableBooleanFeature(EObject owner, String featureName)
     {
@@ -3678,14 +4127,42 @@ public final class FormElementWriter
         {
             return;
         }
-        EClass type = ((EReference)feature).getEReferenceType();
-        if (type == null || type.getEPackage() == null || type.isAbstract())
+        EClass declared = ((EReference)feature).getEReferenceType();
+        if (declared == null || declared.getEPackage() == null)
         {
             return;
         }
-        EObject adjustable = type.getEPackage().getEFactoryInstance().create(type);
+        EClass concrete = declared.isAbstract() ? concreteSubtype(declared) : declared;
+        if (concrete == null)
+        {
+            return;
+        }
+        EObject adjustable = concrete.getEPackage().getEFactoryInstance().create(concrete);
         setBooleanFeature(adjustable, FEATURE_COMMON, true);
         owner.eSet(feature, adjustable);
+    }
+
+    /**
+     * Resolves a CONCRETE, instantiable EClass assignable to {@code abstractType} from that type's own
+     * EPackage - the substitute the EFactory can create when the declared type is abstract. Returns the
+     * first concrete subtype found, or {@code null} when the package declares none. Used to set an
+     * {@code AdjustableBoolean} feature whose declared type is abstract at runtime. Issue #208 (round 2).
+     */
+    private static EClass concreteSubtype(EClass abstractType)
+    {
+        for (EClassifier classifier : abstractType.getEPackage().getEClassifiers())
+        {
+            if (classifier instanceof EClass)
+            {
+                EClass candidate = (EClass)classifier;
+                if (!candidate.isAbstract() && !candidate.isInterface()
+                    && abstractType.isSuperTypeOf(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings("unchecked")

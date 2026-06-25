@@ -475,6 +475,185 @@ def test_create_form_object_on_catalog():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_default_seeds_no_attributes():
+    # Issue #208: WITHOUT generateContent the form stays EMPTY (today's byte-stable behaviour) - no
+    # main Object attribute is seeded. The serialized Form.form must carry no <attributes> block.
+    form = "Z_McpEmptyForm"
+    form_rel = "src/Catalogs/Catalog/Forms/%s/Form.form" % form
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Form." + form})
+    assert_ok(r, "create form object without generateContent")
+    assert r.structured.get("generateContent") is False, \
+        "the default create must echo generateContent=false: %r" % (r.structured,)
+    poll_diff_contains(form, ctx="the empty form must land on disk")
+    form_xml = read_disk(form_rel)
+    assert "<attributes>" not in form_xml, \
+        "an unseeded object form must carry no <attributes> block: %s" % form_xml
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_generate_content_seeds_main_object_attribute():
+    # Issue #208: generateContent=true seeds the main Object attribute like the designer's "New form"
+    # wizard - name Object, type CatalogObject.Catalog (the owner is the fixture Catalog.Catalog),
+    # main=true and savedData=true - so an agent never needs to edit the .form outside MCP.
+    form = "Z_McpSeededForm"
+    fqn = "Catalog.Catalog.Form." + form
+    form_rel = "src/Catalogs/Catalog/Forms/%s/Form.form" % form
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn, "generateContent": True})
+    assert_ok(r, "create form object with generateContent")
+    assert r.structured.get("kind") == "Form", "kind must be Form: %r" % (r.structured,)
+    assert r.structured.get("generateContent") is True, \
+        "the create must echo generateContent=true: %r" % (r.structured,)
+    poll_diff_contains(form, ctx="the seeded form must land on disk")
+
+    # The seeded main Object attribute must serialize with its designer flags + the object value type.
+    form_xml = read_disk(form_rel)
+    assert "<attributes>" in form_xml, \
+        "generateContent must seed an <attributes> block: %s" % form_xml
+    assert "<name>Object</name>" in form_xml, \
+        "the seeded main attribute must be named Object: %s" % form_xml
+    assert "<main>true</main>" in form_xml, \
+        "the seeded Object attribute must be the form's main attribute: %s" % form_xml
+    assert "<savedData>true</savedData>" in form_xml, \
+        "the seeded Object attribute must carry savedData: %s" % form_xml
+    assert "CatalogObject.Catalog" in form_xml, \
+        "the seeded Object attribute must carry the CatalogObject.Catalog value type: %s" % form_xml
+
+    # The form must still resolve/render with the seeded attribute (a malformed seed would fail here),
+    # and the rendered structure must surface the Object attribute.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+    assert_ok(d, "render the seeded form's structure")
+    assert_contains(d.text, "Form Structure", "the seeded form must still render a structure")
+    assert_contains(d.text, "Object", "the rendered structure must surface the main Object attribute")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_generate_content_seeds_default_object_fields():
+    # Issue #208 round 2: generateContent on a DOCUMENT object form seeds the kind-default bound fields
+    # (Number, Date) as InputFields whose dataPath is Object.Number / Object.Date - mirroring the
+    # designer's checked-attribute list. The owner is created first so its DocumentObject type resolves.
+    doc, form = "Z_McpSeedDoc", "Z_McpSeedDocForm"
+    fqn = "Document.%s.Form.%s" % (doc, form)
+    form_rel = "src/Documents/%s/Forms/%s/Form.form" % (doc, form)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Document." + doc}),
+              "seed the owning document")
+    wait_for_project_ready()
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn, "generateContent": True})
+    assert_ok(r, "create document form object with generateContent (default fields)")
+    assert r.structured.get("generateContent") is True, \
+        "the create must echo generateContent=true: %r" % (r.structured,)
+    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+
+    # The form carries the main Object attribute plus the two default bound fields.
+    form_xml = read_disk(form_rel)
+    assert "<name>Object</name>" in form_xml, \
+        "the seeded form must carry the main Object attribute: %s" % form_xml
+    # Each default field is an InputField bound to Object.<name> (a 2-segment data path).
+    for seg in ("Number", "Date"):
+        assert "<segments>Object</segments>" in form_xml, \
+            "a bound field's data path head must be the Object attribute: %s" % form_xml
+        assert "<segments>%s</segments>" % seg in form_xml, \
+            "generateContent must seed a bound field for the default attribute %s: %s" % (seg, form_xml)
+    # The seeded fields reuse the field builder, so they carry the designer auto-children.
+    assert "ContextMenu" in form_xml and "ExtendedTooltip" in form_xml, \
+        "the seeded default fields must carry the designer auto-children: %s" % form_xml
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_explicit_object_fields_seeds_only_listed():
+    # Issue #208 round 2 (Part 1): an EXPLICIT non-empty objectFields list is seeded VERBATIM - exactly
+    # the listed sub-attributes, NOT the per-kind defaults. A Document defaults to Number/Date; passing
+    # objectFields=["Number"] must seed the Number field and must NOT seed the default Date field.
+    doc, form = "Z_McpPickFieldsDoc", "Z_McpPickFieldsForm"
+    fqn = "Document.%s.Form.%s" % (doc, form)
+    form_rel = "src/Documents/%s/Forms/%s/Form.form" % (doc, form)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Document." + doc}),
+              "seed the owning document")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn, "generateContent": True, "objectFields": ["Number"]})
+    assert_ok(r, "create document form with an explicit single objectFields list")
+    assert r.structured.get("generateContent") is True, \
+        "the create must echo generateContent=true: %r" % (r.structured,)
+    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+    form_xml = read_disk(form_rel)
+    # The main Object attribute is still seeded, and the one listed field binds to Object.Number.
+    assert "<name>Object</name>" in form_xml, \
+        "the main Object attribute must still be seeded: %s" % form_xml
+    assert "<segments>Object</segments>" in form_xml and "<segments>Number</segments>" in form_xml, \
+        "the explicit Number field must bind to the 2-segment Object.Number data path: %s" % form_xml
+    # The per-kind default Date field must NOT appear - an explicit list overrides the defaults.
+    assert "<segments>Date</segments>" not in form_xml, \
+        "an explicit objectFields list must not seed the unlisted default Date field: %s" % form_xml
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_field_bound_to_object_sub_attribute():
+    # Issue #208 round 2 (Part 2): a standalone Field may bind to a sub-attribute of the form's main
+    # Object attribute via a dotted dataPath (Object.<attr>) - not only a top-level attribute or a
+    # dynamic-list column. Seed a Catalog object form (gives the main Object attribute), then bind a
+    # field to Object.Description (a real Catalog standard attribute).
+    form, fld = "Z_McpObjFieldForm", "DescriptionField"
+    base_fqn = "Catalog.Catalog.Form." + form
+    form_rel = "src/Catalogs/Catalog/Forms/%s/Form.form" % form
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": base_fqn, "generateContent": True}),
+              "seed a Catalog object form with the main Object attribute")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "%s.Field.%s" % (base_fqn, fld),
+        "properties": [{"name": "dataPath", "value": "Object.Description"}]})
+    assert_ok(r, "create a Field bound to Object.Description")
+    assert "FormField" in (r.structured.get("kind") or ""), \
+        "kind must be FormField: %r" % (r.structured,)
+    poll_diff_contains("<name>%s</name>" % fld,
+                       ctx="the object sub-attribute field must land on disk")
+    # The dotted path serialized as two <segments> (Object / Description), like a designer-bound field.
+    form_xml = read_disk(form_rel)
+    assert "<segments>Object</segments>" in form_xml and "<segments>Description</segments>" in form_xml, \
+        "the field must bind to the 2-segment Object.Description data path: %s" % form_xml
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_empty_object_fields_seeds_only_main_attribute():
+    # Issue #208 round 2 (Part 1): an explicit empty objectFields array seeds the main Object attribute
+    # but NO bound fields (the designer's "main attribute only" choice).
+    doc, form = "Z_McpEmptyFieldsDoc", "Z_McpEmptyFieldsForm"
+    fqn = "Document.%s.Form.%s" % (doc, form)
+    form_rel = "src/Documents/%s/Forms/%s/Form.form" % (doc, form)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Document." + doc}),
+              "seed the owning document")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn, "generateContent": True, "objectFields": []})
+    assert_ok(r, "create document form with an empty objectFields list")
+    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+    form_xml = read_disk(form_rel)
+    assert "<name>Object</name>" in form_xml, \
+        "the main Object attribute must still be seeded: %s" % form_xml
+    # No bound field is seeded -> the default attribute names do not appear as field data-path segments.
+    assert "<segments>Number</segments>" not in form_xml, \
+        "an empty objectFields must seed no bound fields: %s" % form_xml
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_unknown_object_field_is_error():
+    # Issue #208 round 2 (review): an EXPLICIT objectFields name that is not a bindable sub-attribute of
+    # the owner's Object is a clean, actionable error - it names the bad value and lists the available
+    # names (mirrors test_create_form_field_missing_attribute_is_error). The owner is seeded first so its
+    # object type + bindable attributes resolve.
+    doc, form = "Z_McpBadFieldDoc", "Z_McpBadFieldForm"
+    fqn = "Document.%s.Form.%s" % (doc, form)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Document." + doc}),
+              "seed the owning document")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn, "generateContent": True,
+        "objectFields": ["NoSuchAttr_zz"]})
+    e = assert_error(r, "form object with a bogus objectFields name")
+    assert_error_quality(e, names=["NoSuchAttr_zz"], suggests=["Available"],
+                         ctx="an unknown objectFields name is a clean error that lists the available ones")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_object_then_add_member():
     # End-to-end: create a form OBJECT, then add a member to it via the folded member path. This
     # only works if the content form was created renderable + reachable.

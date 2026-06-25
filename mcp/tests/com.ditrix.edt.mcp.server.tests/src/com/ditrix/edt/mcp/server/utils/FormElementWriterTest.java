@@ -1029,6 +1029,55 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testCreateFieldBindsToMainObjectSubAttribute()
+    {
+        // Issue #208 round 2 (Part 2): a Field may bind to a sub-attribute of the form's MAIN object
+        // attribute via a dotted dataPath (e.g. 'Object.Number'). The head segment names the main
+        // attribute (main=true), the tail is the object's sub-attribute. The build must succeed and
+        // produce a 2-segment DataPath (Object / Number).
+        EObject form = newForm();
+        EObject objectAttr = newObject(MODEL.formAttribute);
+        objectAttr.eSet(feature(objectAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        objectAttr.eSet(feature(objectAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", objectAttr); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "NumberField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+        EObject field = FormElementWriter.findFormItem(form, "NumberField"); //$NON-NLS-1$
+        assertNotNull(field);
+        // The dotted path resolved to a 2-segment DataPath (the validator walks Object -> Number),
+        // byte-identical to the designer's bound object field.
+        EObject dataPath = (EObject)field.eGet(feature(field, "dataPath")); //$NON-NLS-1$
+        assertNotNull("the field must carry a contained DataPath", dataPath); //$NON-NLS-1$
+        assertEquals("Object.Number must split into 2 segments", //$NON-NLS-1$
+            Arrays.asList("Object", "Number"), //$NON-NLS-1$ //$NON-NLS-2$
+            dataPath.eGet(feature(dataPath, "segments"))); //$NON-NLS-1$
+        // The field still carries the designer InputField defaults (same path as a plain field).
+        assertEquals("InputField", literalOf(field, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCreateFieldRejectsDottedPathOnNonMainNonListAttribute()
+    {
+        // A dotted dataPath whose head attribute is neither the main object attribute nor a dynamic
+        // list is still rejected (the only two valid dotted heads). The error names the head and the
+        // two legitimate uses so the caller can self-correct.
+        EObject form = newForm();
+        EObject plainAttr = newObject(MODEL.formAttribute);
+        plainAttr.eSet(feature(plainAttr, "name"), "Plain"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", plainAttr); //$NON-NLS-1$
+
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "PlainSubField", null, //$NON-NLS-1$
+            "Plain.Sub", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("a dotted path on a plain attribute must be rejected", err); //$NON-NLS-1$
+        assertTrue("the error must name the offending head attribute", err.contains("Plain")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must mention the main object attribute as a valid dotted head", //$NON-NLS-1$
+            err.contains("main object attribute")); //$NON-NLS-1$
+        // Nothing was created.
+        assertNull(FormElementWriter.findFormItem(form, "PlainSubField")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testNormalizeFormItemIdsRepairsAutoChildrenAndRootBar()
     {
         EObject form = newForm();
@@ -1631,6 +1680,286 @@ public class FormElementWriterTest
         assertEquals(Boolean.TRUE, content.eGet(feature(content, "saveWindowSettings"))); //$NON-NLS-1$
     }
 
+    @Test
+    public void testCreateContentFormGenerateContentSeedsMainObjectAttribute()
+    {
+        // generateContent=true (issue #208): the content form is seeded with the main 'Object'
+        // attribute like the designer's object-form wizard - name Object, main=true, savedData=true. The
+        // value type (<Type>Object.<Name>) is read from the owner's OWN produced object type, which needs
+        // a model-resolved owner; headless (owner == null) it is left unset, so the name/main/savedData
+        // flags are the headless must-haves and the value type is proven by the e2e/live byte-diff.
+        EObject content = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false,
+            true, "Document"); //$NON-NLS-1$
+        assertNotNull(content);
+        List<?> attributes = (List<?>)content.eGet(feature(content, "attributes")); //$NON-NLS-1$
+        assertEquals("generateContent must seed exactly one (main Object) attribute", //$NON-NLS-1$
+            1, attributes.size());
+        EObject mainAttr = (EObject)attributes.get(0);
+        assertEquals("the seeded attribute is named Object", //$NON-NLS-1$
+            "Object", mainAttr.eGet(feature(mainAttr, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the seeded Object attribute must be the form's main attribute", //$NON-NLS-1$
+            Boolean.TRUE, mainAttr.eGet(feature(mainAttr, "main"))); //$NON-NLS-1$
+        assertEquals("the seeded Object attribute must carry savedData", //$NON-NLS-1$
+            Boolean.TRUE, mainAttr.eGet(feature(mainAttr, "savedData"))); //$NON-NLS-1$
+        // The designer's predefined Object attribute also carries view/edit = common("use"); the seed
+        // must match it byte-for-byte (issue #208 review). The real form metamodel types view/edit by
+        // AdjustableBoolean - assert each was created with common=true.
+        EObject view = (EObject)mainAttr.eGet(feature(mainAttr, "view")); //$NON-NLS-1$
+        assertNotNull("the seeded Object attribute must carry a view AdjustableBoolean", view); //$NON-NLS-1$
+        assertEquals("the seeded Object attribute's view must be common ('use')", //$NON-NLS-1$
+            Boolean.TRUE, view.eGet(feature(view, "common"))); //$NON-NLS-1$
+        EObject edit = (EObject)mainAttr.eGet(feature(mainAttr, "edit")); //$NON-NLS-1$
+        assertNotNull("the seeded Object attribute must carry an edit AdjustableBoolean", edit); //$NON-NLS-1$
+        assertEquals("the seeded Object attribute's edit must be common ('use')", //$NON-NLS-1$
+            Boolean.TRUE, edit.eGet(feature(edit, "common"))); //$NON-NLS-1$
+        // The attribute gets a positive id in the form-attribute id space (survives normalize).
+        assertTrue("the seeded attribute must get a positive form-attribute id", //$NON-NLS-1$
+            ((Integer)mainAttr.eGet(feature(mainAttr, "id"))).intValue() > 0); //$NON-NLS-1$
+        // The render-critical command bar still carries the -1 sentinel (issue #189 untouched).
+        EObject bar = (EObject)content.eGet(feature(content, "autoCommandBar")); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(-1), bar.eGet(feature(bar, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateContentFormGenerateContentSkippedForNonObjectOwner()
+    {
+        // generateContent must NOT seed an Object attribute for a record-based owner (registers) or any
+        // non-object-form type: those forms' main data source is not a <Type>Object value type, so a
+        // seeded 'Object' attribute would be semantically wrong (issue #208 review). Even with
+        // generateContent=true the form stays EMPTY for an InformationRegister / Constant owner.
+        EObject registerForm = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false,
+            true, "InformationRegister"); //$NON-NLS-1$
+        assertEquals("a register owner must not get a seeded Object attribute", 0, //$NON-NLS-1$
+            ((List<?>)registerForm.eGet(feature(registerForm, "attributes"))).size()); //$NON-NLS-1$
+        EObject constantForm = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false,
+            true, "Constant"); //$NON-NLS-1$
+        assertEquals("a constant owner must not get a seeded Object attribute", 0, //$NON-NLS-1$
+            ((List<?>)constantForm.eGet(feature(constantForm, "attributes"))).size()); //$NON-NLS-1$
+        // An unknown / null owner type is likewise not seeded (defensive).
+        EObject unknownForm = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false,
+            true, null);
+        assertEquals("an unknown owner type must not get a seeded Object attribute", 0, //$NON-NLS-1$
+            ((List<?>)unknownForm.eGet(feature(unknownForm, "attributes"))).size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateContentFormGenerateContentRussianAttributeName()
+    {
+        // In a Russian script variant the main attribute Name is the localized 'Объект' (== Object),
+        // built independently from code points (not a round-trip of the writer's own literal).
+        EObject content = FormElementWriter.createContentForm(null, null, Version.V8_5_1, true,
+            true, "Catalog"); //$NON-NLS-1$
+        List<?> attributes = (List<?>)content.eGet(feature(content, "attributes")); //$NON-NLS-1$
+        assertEquals(1, attributes.size());
+        EObject mainAttr = (EObject)attributes.get(0);
+        // Объект (Obyekt).
+        String ruObject = fromCp(0x041e, 0x0431, 0x044a, 0x0435, 0x043a, 0x0442);
+        assertEquals("the Russian script variant names the main attribute Объект", //$NON-NLS-1$
+            ruObject, mainAttr.eGet(feature(mainAttr, "name"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, mainAttr.eGet(feature(mainAttr, "main"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateContentFormWithoutGenerateContentSeedsNoAttributes()
+    {
+        // Default (generateContent omitted / false): the form stays EMPTY - byte-stable existing
+        // behaviour. Both the legacy 4-arg overload and the explicit false must seed zero attributes.
+        EObject viaOverload = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false);
+        assertEquals("the empty-form overload must seed no attributes", //$NON-NLS-1$
+            0, ((List<?>)viaOverload.eGet(feature(viaOverload, "attributes"))).size()); //$NON-NLS-1$
+        EObject explicitFalse = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false,
+            false, "Document"); //$NON-NLS-1$
+        assertEquals("generateContent=false must seed no attributes", //$NON-NLS-1$
+            0, ((List<?>)explicitFalse.eGet(feature(explicitFalse, "attributes"))).size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveObjectFieldsPerKindDefaultsAndExplicitList()
+    {
+        // Issue #208 round 2 (Part 1): the object-field resolution mirrors the designer's checkbox list.
+        // OMITTED (null) -> the per-kind defaults. English script variant.
+        assertEquals("a document with no objectFields defaults to Number/Date", //$NON-NLS-1$
+            Arrays.asList("Number", "Date"), //$NON-NLS-1$ //$NON-NLS-2$
+            FormElementWriter.resolveObjectFields("Document", null, false)); //$NON-NLS-1$
+        assertEquals("a catalog with no objectFields defaults to Code/Description", //$NON-NLS-1$
+            Arrays.asList("Code", "Description"), //$NON-NLS-1$ //$NON-NLS-2$
+            FormElementWriter.resolveObjectFields("Catalog", null, false)); //$NON-NLS-1$
+        // Other object kinds default to NO fields (only the main Object attribute).
+        assertTrue("a report defaults to no object fields", //$NON-NLS-1$
+            FormElementWriter.resolveObjectFields("Report", null, false).isEmpty()); //$NON-NLS-1$
+        // An EXPLICIT list is taken verbatim regardless of the kind.
+        assertEquals("an explicit list is taken verbatim", //$NON-NLS-1$
+            Arrays.asList("Number", "Posted", "Comment"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            FormElementWriter.resolveObjectFields("Document", //$NON-NLS-1$
+                Arrays.asList("Number", "Posted", "Comment"), false)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // An EXPLICIT EMPTY list -> no fields (overrides the per-kind default).
+        assertTrue("an explicit empty list yields no fields", //$NON-NLS-1$
+            FormElementWriter.resolveObjectFields("Document", Collections.emptyList(), false).isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveObjectFieldsRussianDefaults()
+    {
+        // In a Russian script variant the standard-attribute programmatic names are Russian (a dataPath
+        // segment IS the programmatic name), so the per-kind defaults are localized.
+        assertEquals("a Russian document defaults to Номер/Дата", //$NON-NLS-1$
+            Arrays.asList(fromCp(0x041d, 0x043e, 0x043c, 0x0435, 0x0440), // Nomer
+                fromCp(0x0414, 0x0430, 0x0442, 0x0430)), // Data
+            FormElementWriter.resolveObjectFields("Document", null, true)); //$NON-NLS-1$
+        assertEquals("a Russian catalog defaults to Код/Наименование", //$NON-NLS-1$
+            Arrays.asList(fromCp(0x041a, 0x043e, 0x0434), // Kod
+                fromCp(0x041d, 0x0430, 0x0438, 0x043c, 0x0435, 0x043d, 0x043e, 0x0432, 0x0430, 0x043d,
+                    0x0438, 0x0435)), // Naimenovanie
+            FormElementWriter.resolveObjectFields("Catalog", null, true)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateContentFormGenerateContentSeedsBoundObjectFields()
+    {
+        // Issue #208 round 2 (Part 1): with an explicit object-field list, the seeded object form carries
+        // a bound InputField per name (dataPath Object.<name>) under the form root, after the main
+        // attribute - mirroring the designer's checked-attribute output. The list resolution itself is
+        // covered by testResolveObjectFields*; createForm threads the resolved list to this overload.
+        EObject content = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false, true,
+            "Document", Arrays.asList("Number", "Date")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotNull(content);
+        // The main Object attribute is still seeded (one attribute).
+        assertEquals("only the main Object attribute lives in attributes (fields are items)", //$NON-NLS-1$
+            1, ((List<?>)content.eGet(feature(content, "attributes"))).size()); //$NON-NLS-1$
+        // The two bound fields are form ITEMS (under the root), each an InputField bound to Object.<name>.
+        EObject numberField = FormElementWriter.findFormItem(content, "Number"); //$NON-NLS-1$
+        EObject dateField = FormElementWriter.findFormItem(content, "Date"); //$NON-NLS-1$
+        assertNotNull("the Number field must be seeded", numberField); //$NON-NLS-1$
+        assertNotNull("the Date field must be seeded", dateField); //$NON-NLS-1$
+        assertEquals("InputField", literalOf(numberField, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertObjectSubPath(numberField, "Number"); //$NON-NLS-1$
+        assertObjectSubPath(dateField, "Date"); //$NON-NLS-1$
+        // Issue #208: the designer's object-form wizard creates these bound object fields with editMode
+        // "EnterOnInput" (not createField's standalone "Enter" default), so seedObjectFields re-sets them.
+        assertEquals("a seeded object field must be EnterOnInput like the designer's", //$NON-NLS-1$
+            "EnterOnInput", literalOf(numberField, "editMode")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a seeded object field must be EnterOnInput like the designer's", //$NON-NLS-1$
+            "EnterOnInput", literalOf(dateField, "editMode")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Each seeded field reuses createField, so it carries the designer auto-children (a context menu
+        // + an extended tooltip) - byte-diff parity with a manually-created field.
+        assertNotNull("the seeded field must carry the auto context menu", //$NON-NLS-1$
+            numberField.eGet(feature(numberField, "contextMenu"))); //$NON-NLS-1$
+        assertNotNull("the seeded field must carry the auto extended tooltip", //$NON-NLS-1$
+            numberField.eGet(feature(numberField, "extendedTooltip"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateContentFormGenerateContentEmptyObjectFieldsSeedsOnlyMainAttribute()
+    {
+        // An explicit EMPTY object-field list -> only the main Object attribute, no bound fields (the
+        // 'main attribute only' choice from the designer's list). The form items stay empty.
+        EObject content = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false, true,
+            "Document", Collections.emptyList()); //$NON-NLS-1$
+        assertEquals("the main Object attribute is still seeded", //$NON-NLS-1$
+            1, ((List<?>)content.eGet(feature(content, "attributes"))).size()); //$NON-NLS-1$
+        assertEquals("an empty object-field list seeds no bound fields", //$NON-NLS-1$
+            0, ((List<?>)content.eGet(feature(content, "items"))).size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValidateObjectFieldsRejectsUnknownNameAndListsAvailable()
+    {
+        // Issue #208 round 2 (review): an EXPLICIT objectFields name that is not a bindable sub-attribute
+        // of the owner's Object is an actionable error - it must NAME the bad value and LIST the available
+        // names so the caller can self-correct (the error-shape sentinel the ratchet enforces).
+        EObject owner = newOwnerWithAttributes("Posted", "Comment"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = FormElementWriter.validateObjectFields(owner,
+            Arrays.asList("BogusAttr_zz")); //$NON-NLS-1$
+        assertNotNull("an unknown objectFields name must be rejected", err); //$NON-NLS-1$
+        assertTrue("the error must name the offending value", err.contains("BogusAttr_zz")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must offer the available names", err.contains("Available:")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must list a real bindable attribute", err.contains("Posted")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the available list must be the owner's own attributes", err.contains("Comment")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testValidateObjectFieldsAcceptsKnownNameAndNullEmpty()
+    {
+        // A name that IS a bindable sub-attribute (case-insensitively), and the null / empty / owner-less
+        // inputs, all pass (return null - no rejection). A valid name must not be turned into an error.
+        EObject owner = newOwnerWithAttributes("Posted", "Comment"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a known attribute name (exact) must be accepted", //$NON-NLS-1$
+            FormElementWriter.validateObjectFields(owner, Arrays.asList("Posted"))); //$NON-NLS-1$
+        assertNull("a known attribute name (case-insensitive) must be accepted", //$NON-NLS-1$
+            FormElementWriter.validateObjectFields(owner, Arrays.asList("comment"))); //$NON-NLS-1$
+        assertNull("a null list is not validated", //$NON-NLS-1$
+            FormElementWriter.validateObjectFields(owner, null));
+        assertNull("an empty list is not validated", //$NON-NLS-1$
+            FormElementWriter.validateObjectFields(owner, Collections.<String>emptyList()));
+        assertNull("a null owner is not validated", //$NON-NLS-1$
+            FormElementWriter.validateObjectFields(null, Arrays.asList("Posted"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValidateObjectFieldsSkipsWhenBindableSetEmpty()
+    {
+        // Unattended-safe contract: when the owner's bindable set cannot be determined (no custom
+        // attributes and no getStandardAttributes() to read), the check is SKIPPED (returns null) rather
+        // than rejecting a possibly-valid name - the seed then proceeds best-effort. An owner with an
+        // empty 'attributes' list and no standard-attribute getter has an empty bindable set.
+        EObject owner = newOwnerWithAttributes();
+        assertNull("an owner with no determinable bindable attributes is not validated", //$NON-NLS-1$
+            FormElementWriter.validateObjectFields(owner, Arrays.asList("AnyName_zz"))); //$NON-NLS-1$
+    }
+
+    /**
+     * Builds a minimal owner EObject exposing the given custom attribute names via the {@code attributes}
+     * containment feature {@link FormElementWriter#validateObjectFields} reads (a no-{@code
+     * getStandardAttributes()} owner exercises the custom-attribute branch alone, which is enough to
+     * cover the rejection + available-list shape). Issue #208 (round 2 review).
+     */
+    @SuppressWarnings("unchecked")
+    private static EObject newOwnerWithAttributes(String... attributeNames)
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("ownerlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("ownerlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/ownerlike-writer"); //$NON-NLS-1$
+
+        EClass attribute = f.createEClass();
+        attribute.setName("Attribute"); //$NON-NLS-1$
+        EAttribute attrName = f.createEAttribute();
+        attrName.setName("name"); //$NON-NLS-1$
+        attrName.setEType(EcorePackage.Literals.ESTRING);
+        attribute.getEStructuralFeatures().add(attrName);
+
+        EClass ownerClass = f.createEClass();
+        ownerClass.setName("Owner"); //$NON-NLS-1$
+        EReference attributes = f.createEReference();
+        attributes.setName("attributes"); //$NON-NLS-1$
+        attributes.setEType(attribute);
+        attributes.setContainment(true);
+        attributes.setUpperBound(-1);
+        ownerClass.getEStructuralFeatures().add(attributes);
+
+        pkg.getEClassifiers().add(attribute);
+        pkg.getEClassifiers().add(ownerClass);
+
+        EObject owner = new DynamicEObjectImpl(ownerClass);
+        for (String name : attributeNames)
+        {
+            EObject attr = new DynamicEObjectImpl(attribute);
+            attr.eSet(attrName, name);
+            ((List<EObject>)owner.eGet(attributes)).add(attr);
+        }
+        return owner;
+    }
+
+    /** Asserts a seeded field's dataPath is the 2-segment Object.<sub> path. */
+    private static void assertObjectSubPath(EObject field, String sub)
+    {
+        EObject dataPath = (EObject)field.eGet(feature(field, "dataPath")); //$NON-NLS-1$
+        assertNotNull("the seeded field must carry a contained DataPath", dataPath); //$NON-NLS-1$
+        assertEquals("the field must bind to Object." + sub, Arrays.asList("Object", sub), //$NON-NLS-1$ //$NON-NLS-2$
+            dataPath.eGet(feature(dataPath, "segments"))); //$NON-NLS-1$
+    }
+
     // ==================== dynamic form-like EMF metamodel ====================
 
     private static final FormLikeModel MODEL = new FormLikeModel();
@@ -1742,7 +2071,8 @@ public class FormElementWriterTest
             EEnum decorationType = newEnum(f, "ManagedFormDecorationType", "Label", "Picture"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             EEnum fieldType = newEnum(f, "ManagedFormFieldType", "InputField", "LabelField"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             EEnum horizontalAlign = newEnum(f, "ItemHorizontalAlignment", "Auto", "Left"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            EEnum editMode = newEnum(f, "TableFieldEditMode", "Directly", "Enter"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            EEnum editMode =
+                newEnum(f, "TableFieldEditMode", "Directly", "Enter", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
             EClass adjustableBoolean = f.createEClass();
             adjustableBoolean.setName("AdjustableBoolean"); //$NON-NLS-1$
@@ -1896,6 +2226,16 @@ public class FormElementWriterTest
             formAttribute = f.createEClass();
             formAttribute.setName("FormAttribute"); //$NON-NLS-1$
             formAttribute.getESuperTypes().add(abstractFormAttribute);
+            // The seed (issue #208) sets these on the main Object attribute: main/savedData booleans and
+            // the presentation flags view/edit (each an AdjustableBoolean - "use"). Declare them so the
+            // headless write logic can be exercised and the test can read them back (an absent feature
+            // would make the reflective writer a no-op and the eGet(null) read throw).
+            addBoolean(f, formAttribute, "main"); //$NON-NLS-1$
+            addBoolean(f, formAttribute, "savedData"); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "view", adjustableBoolean, false)); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "edit", adjustableBoolean, false)); //$NON-NLS-1$
 
             autoCommandBar = f.createEClass();
             autoCommandBar.setName("AutoCommandBar"); //$NON-NLS-1$

@@ -73,9 +73,56 @@ public class CreateMetadataToolTest
         // Form-object create flag (execute() reads it; schema parity).
         assertTrue("schema must declare the setAsDefault form-object flag", //$NON-NLS-1$
             schema.contains("\"setAsDefault\"")); //$NON-NLS-1$
+        // Form-object content-seeding flag (issue #208; execute() reads it; schema parity).
+        assertTrue("schema must declare the generateContent form-object flag", //$NON-NLS-1$
+            schema.contains("\"generateContent\"")); //$NON-NLS-1$
+        // Form-object bound-field list (issue #208 round 2; execute() reads it; schema parity).
+        assertTrue("schema must declare the objectFields form-object list", //$NON-NLS-1$
+            schema.contains("\"objectFields\"")); //$NON-NLS-1$
         // Extension event-interception call type (execute() reads it; schema parity).
         assertTrue("schema must declare the callType form-event flag", //$NON-NLS-1$
             schema.contains("\"callType\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGenerateContentIsOptional()
+    {
+        // generateContent is a form-object-create flag, defaults false -> must not be required.
+        String schema = new CreateMetadataTool().getInputSchema();
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue(requiredIdx >= 0);
+        String tail = schema.substring(requiredIdx);
+        assertFalse("generateContent must not be required (defaults false)", //$NON-NLS-1$
+            tail.contains("\"generateContent\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresGenerateContent()
+    {
+        // Output parity: a form-object create echoes generateContent in the result payload.
+        String schema = new CreateMetadataTool().getOutputSchema();
+        assertNotNull(schema);
+        assertTrue("output schema must declare generateContent", //$NON-NLS-1$
+            schema.contains("\"generateContent\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testObjectFieldsIsOptionalStringArray()
+    {
+        // objectFields (issue #208 round 2) is a form-object-create list, optional (defaults to the
+        // per-kind fields), declared as an array of strings. Scope the type check to its property block.
+        String schema = new CreateMetadataTool().getInputSchema();
+        int idx = schema.indexOf("\"objectFields\""); //$NON-NLS-1$
+        assertTrue("schema must declare objectFields", idx >= 0); //$NON-NLS-1$
+        // The property block runs up to the next property (callType is declared right after it).
+        int nextIdx = schema.indexOf("\"callType\"", idx); //$NON-NLS-1$
+        String block = nextIdx > idx ? schema.substring(idx, nextIdx) : schema.substring(idx);
+        assertTrue("objectFields must be an array", block.contains("\"array\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("objectFields items must be strings", block.contains("\"string\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue(requiredIdx >= 0);
+        assertFalse("objectFields must not be required (defaults to the per-kind fields)", //$NON-NLS-1$
+            schema.substring(requiredIdx).contains("\"objectFields\"")); //$NON-NLS-1$
     }
 
     @Test

@@ -150,7 +150,7 @@ When adding a new element — insert it **after** existing elements of the same 
 
 - Before modifying a form — `get_form_layout_snapshot` (YAML structure) or `get_form_screenshot` (PNG). Do not make changes "blind" without this.
 - UUID rules for form attributes and elements are the same.
-- If you change a form's binding to an object/attribute — run `get_project_errors` afterwards; the form is not automatically rebuilt.
+- If you change a form's binding to an object/attribute — the form is not automatically rebuilt; sync it with `revalidate_objects([FQN])` (it refreshes from disk first), then run `get_project_errors`. See "After any `.mdo` / `.form` edit" below.
 
 ## Referring to ref types in `<types>`
 
@@ -163,6 +163,9 @@ An attribute type referencing a metadata object:
 
 The object name in the reference must **exactly** match the object name in the configuration (case-sensitive).
 
-## After any `.mdo` edit
+## After any `.mdo` / `.form` edit
 
-Run `get_project_errors` (or `get_problem_summary` after a batch of edits). EDT may not notice the change immediately — if errors look strange, try `revalidate_objects` on the affected objects.
+After a manual `.mdo` / `.form` edit, sync EDT in a **targeted** way: call `revalidate_objects([FQN])` for the affected objects (it refreshes the project from disk first, so it picks up the on-disk change), then run `get_project_errors` (or `get_problem_summary` after a batch of edits).
+
+- For a single externally-edited object **do not use `clean_project`** — it is a full rebuild of the whole configuration (slow on large projects). Reach for it only when the project state is truly stuck/stale.
+- `resync_to_disk` is **not** for this: it exports memory → disk and would clobber your manual edit. Use it only when you deliberately want the in-memory model written back to disk.

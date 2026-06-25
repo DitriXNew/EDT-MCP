@@ -1,6 +1,6 @@
 # clean_project
 
-Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation.
+Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. Full rebuild of the ENTIRE configuration — slow on large projects. For a single externally-edited object prefer revalidate_objects([FQN]).
 
 ## Parameters
 | Parameter | Required | Type | Description |
