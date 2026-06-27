@@ -547,11 +547,10 @@ def test_create_form_object_generate_content_seeds_default_object_fields():
     form_xml = read_disk(form_rel)
     assert "<name>Object</name>" in form_xml, \
         "the seeded form must carry the main Object attribute: %s" % form_xml
-    # Each default field is an InputField bound to Object.<name> (a 2-segment data path).
+    # Each default field is an InputField bound to Object.<name>; a multi-segment dataPath serializes
+    # as ONE dot-joined <segments> element (Object.Number / Object.Date), not two separate ones.
     for seg in ("Number", "Date"):
-        assert "<segments>Object</segments>" in form_xml, \
-            "a bound field's data path head must be the Object attribute: %s" % form_xml
-        assert "<segments>%s</segments>" % seg in form_xml, \
+        assert "<segments>Object.%s</segments>" % seg in form_xml, \
             "generateContent must seed a bound field for the default attribute %s: %s" % (seg, form_xml)
     # The seeded fields reuse the field builder, so they carry the designer auto-children.
     assert "ContextMenu" in form_xml and "ExtendedTooltip" in form_xml, \
@@ -579,10 +578,10 @@ def test_create_form_object_explicit_object_fields_seeds_only_listed():
     # The main Object attribute is still seeded, and the one listed field binds to Object.Number.
     assert "<name>Object</name>" in form_xml, \
         "the main Object attribute must still be seeded: %s" % form_xml
-    assert "<segments>Object</segments>" in form_xml and "<segments>Number</segments>" in form_xml, \
+    assert "<segments>Object.Number</segments>" in form_xml, \
         "the explicit Number field must bind to the 2-segment Object.Number data path: %s" % form_xml
     # The per-kind default Date field must NOT appear - an explicit list overrides the defaults.
-    assert "<segments>Date</segments>" not in form_xml, \
+    assert "<segments>Object.Date</segments>" not in form_xml, \
         "an explicit objectFields list must not seed the unlisted default Date field: %s" % form_xml
 
 
@@ -606,9 +605,10 @@ def test_create_form_field_bound_to_object_sub_attribute():
         "kind must be FormField: %r" % (r.structured,)
     poll_diff_contains("<name>%s</name>" % fld,
                        ctx="the object sub-attribute field must land on disk")
-    # The dotted path serialized as two <segments> (Object / Description), like a designer-bound field.
+    # The dotted path serialized as ONE dot-joined <segments> element (Object.Description), like a
+    # designer-bound field.
     form_xml = read_disk(form_rel)
-    assert "<segments>Object</segments>" in form_xml and "<segments>Description</segments>" in form_xml, \
+    assert "<segments>Object.Description</segments>" in form_xml, \
         "the field must bind to the 2-segment Object.Description data path: %s" % form_xml
 
 

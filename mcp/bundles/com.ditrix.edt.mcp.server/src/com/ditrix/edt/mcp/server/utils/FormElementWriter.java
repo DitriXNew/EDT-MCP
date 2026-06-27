@@ -1211,6 +1211,26 @@ public final class FormElementWriter
         Set<String> names = new HashSet<>();
         addNamedElementNames(owner, FEATURE_ATTRIBUTES, names);
         addStandardAttributeNames(owner, names);
+        // getStandardAttributes() returns an EMPTY list for a FRESH object (the standard attributes are
+        // derived data not yet materialized in the create transaction), so back the bindable set with the
+        // per-kind standard default attribute names - the same ones resolveObjectFields seeds - in BOTH
+        // the English and Russian programmatic forms, so an explicit objectFields name validates for the
+        // common kinds regardless of the configuration script variant. Issue #208 (round 2 review).
+        String englishType = owner != null ? owner.eClass().getName() : null;
+        if ("Document".equals(englishType)) //$NON-NLS-1$
+        {
+            names.add(EN_DOCUMENT_NUMBER);
+            names.add(EN_DOCUMENT_DATE);
+            names.add(RU_DOCUMENT_NUMBER);
+            names.add(RU_DOCUMENT_DATE);
+        }
+        else if ("Catalog".equals(englishType)) //$NON-NLS-1$
+        {
+            names.add(EN_CATALOG_CODE);
+            names.add(EN_CATALOG_DESCRIPTION);
+            names.add(RU_CATALOG_CODE);
+            names.add(RU_CATALOG_DESCRIPTION);
+        }
         return names;
     }
 
