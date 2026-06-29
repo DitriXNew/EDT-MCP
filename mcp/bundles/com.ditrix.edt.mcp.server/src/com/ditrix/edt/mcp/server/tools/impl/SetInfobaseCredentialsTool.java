@@ -152,55 +152,24 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         }
 
         boolean hasName = configName != null && !configName.isEmpty();
-        if (!hasName)
-        {
-            if (projectName == null || projectName.isEmpty())
-            {
-                return ToolResult.error("projectName is required (or pass launchConfigurationName).").toJson(); //$NON-NLS-1$
-            }
-            if (applicationId == null || applicationId.isEmpty())
-            {
-                return ToolResult.error("applicationId is required (or pass launchConfigurationName). " //$NON-NLS-1$
-                    + "Use get_applications or list_configurations.").toJson(); //$NON-NLS-1$
-            }
-        }
-
-        // Resolve the project + applicationId from the launch configuration when a name was given.
         if (hasName)
         {
-            String resolveError = null;
-            ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
-            if (launchManager == null)
+            // Resolve the project + applicationId from the launch configuration when a name was given.
+            TargetResolution resolved = resolveFromLaunchConfig(configName);
+            if (resolved.error() != null)
             {
-                return ToolResult.error("Launch manager is not available").toJson(); //$NON-NLS-1$
+                return resolved.error();
             }
-            ILaunchConfiguration cfg = LaunchConfigUtils.findLaunchConfigByName(launchManager, configName);
-            if (cfg == null)
+            projectName = resolved.projectName();
+            applicationId = resolved.applicationId();
+        }
+        else
+        {
+            String targetError = validateExplicitTarget(projectName, applicationId);
+            if (targetError != null)
             {
-                return ToolResult.error("Launch configuration not found: '" + configName //$NON-NLS-1$
-                    + "'. Use list_configurations to see what's available.").toJson(); //$NON-NLS-1$
+                return targetError;
             }
-            // findLaunchConfigByName also matches Attach/debug configs (ALL_DEBUG_CONFIG_TYPE_IDS);
-            // credentials target a runtime-client config (same guard as update_database) — an attach
-            // config has no project/applicationId to derive from.
-            if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(cfg)))
-            {
-                return ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
-                    + "' is not a runtime-client config — set_infobase_credentials requires one.").toJson(); //$NON-NLS-1$
-            }
-            String cfgProject = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            String cfgAppId = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
-            if (cfgProject.isEmpty() || cfgAppId.isEmpty())
-            {
-                resolveError = "Launch configuration '" + cfg.getName() //$NON-NLS-1$
-                    + "' has no project or applicationId attribute — cannot derive the target."; //$NON-NLS-1$
-            }
-            if (resolveError != null)
-            {
-                return ToolResult.error(resolveError).toJson();
-            }
-            projectName = cfgProject;
-            applicationId = cfgAppId;
         }
 
         String building = ProjectStateChecker.buildingErrorOrNull(projectName);
@@ -210,6 +179,106 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         }
 
         return store(projectName, applicationId, user, password, access);
+    }
+
+    /**
+     * Validates that an explicit (project + applicationId) target was supplied when no launch
+     * configuration name was given.
+     *
+     * @return an error tool-result JSON, or {@code null} when both values are present
+     */
+    private static String validateExplicitTarget(String projectName, String applicationId)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return ToolResult.error("projectName is required (or pass launchConfigurationName).").toJson(); //$NON-NLS-1$
+        }
+        if (applicationId == null || applicationId.isEmpty())
+        {
+            return ToolResult.error("applicationId is required (or pass launchConfigurationName). " //$NON-NLS-1$
+                + "Use get_applications or list_configurations.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Resolves the target project + applicationId from a runtime-client launch configuration name.
+     *
+     * @return a {@link TargetResolution} carrying either the resolved project/applicationId or an
+     *         error tool-result JSON
+     */
+    private static TargetResolution resolveFromLaunchConfig(String configName)
+    {
+        ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
+        if (launchManager == null)
+        {
+            return TargetResolution.error(ToolResult.error("Launch manager is not available").toJson()); //$NON-NLS-1$
+        }
+        ILaunchConfiguration cfg = LaunchConfigUtils.findLaunchConfigByName(launchManager, configName);
+        if (cfg == null)
+        {
+            return TargetResolution.error(ToolResult.error("Launch configuration not found: '" + configName //$NON-NLS-1$
+                + "'. Use list_configurations to see what's available.").toJson()); //$NON-NLS-1$
+        }
+        // findLaunchConfigByName also matches Attach/debug configs, not just runtime-client ones.
+        // Credentials target a runtime-client config — the same guard update_database applies — and
+        // an attach config has no project or applicationId to derive from.
+        if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(cfg)))
+        {
+            return TargetResolution.error(ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' is not a runtime-client config — set_infobase_credentials requires one.").toJson()); //$NON-NLS-1$
+        }
+        String cfgProject = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+        String cfgAppId = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+        if (cfgProject.isEmpty() || cfgAppId.isEmpty())
+        {
+            return TargetResolution.error(ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' has no project or applicationId attribute — cannot derive the target.").toJson()); //$NON-NLS-1$
+        }
+        return TargetResolution.resolved(cfgProject, cfgAppId);
+    }
+
+    /**
+     * Outcome of resolving a launch-configuration name: either the resolved project + applicationId,
+     * or an error tool-result JSON.
+     */
+    private static final class TargetResolution
+    {
+        private final String projectName;
+        private final String applicationId;
+        private final String error;
+
+        private TargetResolution(String projectName, String applicationId, String error)
+        {
+            this.projectName = projectName;
+            this.applicationId = applicationId;
+            this.error = error;
+        }
+
+        static TargetResolution resolved(String projectName, String applicationId)
+        {
+            return new TargetResolution(projectName, applicationId, null);
+        }
+
+        static TargetResolution error(String error)
+        {
+            return new TargetResolution(null, null, error);
+        }
+
+        String projectName()
+        {
+            return projectName;
+        }
+
+        String applicationId()
+        {
+            return applicationId;
+        }
+
+        String error()
+        {
+            return error;
+        }
     }
 
     private String store(String projectName, String applicationId, String user, String password,

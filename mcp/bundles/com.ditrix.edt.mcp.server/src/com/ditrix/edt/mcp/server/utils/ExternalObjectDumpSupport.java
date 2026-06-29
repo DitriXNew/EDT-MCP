@@ -55,9 +55,6 @@ public final class ExternalObjectDumpSupport
     /** File extension of a dumped external report. */
     public static final String EXTENSION_ERF = "erf"; //$NON-NLS-1$
 
-    /** EClass name of an external data processor (used as a class-loader-independent fallback check). */
-    private static final String ECLASS_EXTERNAL_DATA_PROCESSOR = "ExternalDataProcessor"; //$NON-NLS-1$
-
     /** EClass name of an external report (used as a class-loader-independent fallback check). */
     private static final String ECLASS_EXTERNAL_REPORT = "ExternalReport"; //$NON-NLS-1$
 

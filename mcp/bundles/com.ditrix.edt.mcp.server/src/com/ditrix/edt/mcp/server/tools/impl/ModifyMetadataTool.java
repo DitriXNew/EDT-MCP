@@ -744,53 +744,71 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private DynListQueryRequest parseDynListQueryProps(List<JsonObject> properties)
     {
-        String queryText = null;
-        Boolean customQuery = null;
-        String mainTable = null;
-        boolean queryTextGiven = false;
+        DynListQueryProps acc = new DynListQueryProps();
         for (JsonObject prop : properties)
         {
-            String name = asString(prop.get("name")); //$NON-NLS-1$
-            if (isQueryTextProp(name))
+            String error = readDynListQueryProp(prop, acc);
+            if (error != null)
             {
-                queryText = asString(prop.get(KEY_VALUE));
-                queryTextGiven = true;
-            }
-            else if (isCustomQueryProp(name))
-            {
-                Boolean parsed = parseBooleanFlag(prop.get(KEY_VALUE));
-                if (parsed == null)
-                {
-                    return DynListQueryRequest.failed(
-                        ToolResult.error("'customQuery' must be a boolean (true / false).").toJson()); //$NON-NLS-1$
-                }
-                customQuery = parsed;
-            }
-            else if (isMainTableProp(name))
-            {
-                mainTable = asString(prop.get(KEY_VALUE));
-                if (mainTable == null || mainTable.trim().isEmpty())
-                {
-                    return DynListQueryRequest.failed(ToolResult.error("'mainTable' must be an object FQN, e.g. " //$NON-NLS-1$
-                        + "'Catalog.Products' or 'Document.Order'.").toJson()); //$NON-NLS-1$
-                }
-            }
-            else
-            {
-                return DynListQueryRequest.failed(
-                    ToolResult.error("Setting a dynamic-list query ('queryText' / 'customQuery' / " //$NON-NLS-1$
-                        + "'mainTable') cannot be combined with other property changes ('" + name //$NON-NLS-1$
-                        + "') in one call. Configure the query first, then make the other changes " //$NON-NLS-1$
-                        + "separately.").toJson()); //$NON-NLS-1$
+                return DynListQueryRequest.failed(error);
             }
         }
-        if (queryTextGiven && (queryText == null || queryText.trim().isEmpty()))
+        if (acc.queryTextGiven && (acc.queryText == null || acc.queryText.trim().isEmpty()))
         {
             return DynListQueryRequest.failed(ToolResult.error("'queryText' must be a non-empty 1C query, e.g. " //$NON-NLS-1$
                 + "\"SELECT Ref, Description AS Description FROM Catalog.Products\". To switch the " //$NON-NLS-1$
                 + "dynamic list back to its automatic query, pass 'customQuery' = false instead.").toJson()); //$NON-NLS-1$
         }
-        return DynListQueryRequest.of(queryText, customQuery, mainTable);
+        return DynListQueryRequest.of(acc.queryText, acc.customQuery, acc.mainTable);
+    }
+
+    /** Mutable accumulator for the dynamic-list query properties read by {@link #readDynListQueryProp}. */
+    private static final class DynListQueryProps
+    {
+        String queryText;
+        Boolean customQuery;
+        String mainTable;
+        boolean queryTextGiven;
+    }
+
+    /**
+     * Reads a single property into {@code acc}, returning a ready JSON error string when the value is
+     * malformed or a query prop is mixed with another property change, or {@code null} to continue.
+     * Pure apart from updating {@code acc}.
+     */
+    private String readDynListQueryProp(JsonObject prop, DynListQueryProps acc)
+    {
+        String name = asString(prop.get("name")); //$NON-NLS-1$
+        if (isQueryTextProp(name))
+        {
+            acc.queryText = asString(prop.get(KEY_VALUE));
+            acc.queryTextGiven = true;
+            return null;
+        }
+        if (isCustomQueryProp(name))
+        {
+            Boolean parsed = parseBooleanFlag(prop.get(KEY_VALUE));
+            if (parsed == null)
+            {
+                return ToolResult.error("'customQuery' must be a boolean (true / false).").toJson(); //$NON-NLS-1$
+            }
+            acc.customQuery = parsed;
+            return null;
+        }
+        if (isMainTableProp(name))
+        {
+            acc.mainTable = asString(prop.get(KEY_VALUE));
+            if (acc.mainTable == null || acc.mainTable.trim().isEmpty())
+            {
+                return ToolResult.error("'mainTable' must be an object FQN, e.g. " //$NON-NLS-1$
+                    + "'Catalog.Products' or 'Document.Order'.").toJson(); //$NON-NLS-1$
+            }
+            return null;
+        }
+        return ToolResult.error("Setting a dynamic-list query ('queryText' / 'customQuery' / " //$NON-NLS-1$
+            + "'mainTable') cannot be combined with other property changes ('" + name //$NON-NLS-1$
+            + "') in one call. Configure the query first, then make the other changes " //$NON-NLS-1$
+            + "separately.").toJson(); //$NON-NLS-1$
     }
 
     /**

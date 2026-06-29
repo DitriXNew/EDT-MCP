@@ -177,7 +177,7 @@ public class BuildExternalObjectsTool implements IMcpTool
     public String getOutputSchema()
     {
         return JsonSchemaBuilder.object()
-            .booleanProperty("success", //$NON-NLS-1$
+            .booleanProperty(RES_SUCCESS,
                 "true only when every requested object was built; false when any object failed.", true) //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT, "Target EDT external-object project name.") //$NON-NLS-1$
             .stringProperty(KEY_OUTPUT_DIR, "Absolute output directory the files were written to.") //$NON-NLS-1$
@@ -257,7 +257,9 @@ public class BuildExternalObjectsTool implements IMcpTool
         }
 
         // 7. Run the dump loop off the calling thread, with dialog suppressors armed and a timeout.
-        return runBuild(new BuildContext(projectName, resolved.project, enumeration.bmModel, dumper,
+        //    projectName is derived from resolved.project.getName() in BuildContext: for a resolved
+        //    workspace project handle IWorkspaceRoot.getProject(name).getName() equals the passed name.
+        return runBuild(new BuildContext(resolved.project, enumeration.bmModel, dumper,
             enumeration.targets, outputDir, outsideWorkspace, recordBuildTime));
     }
 
@@ -402,43 +404,75 @@ public class BuildExternalObjectsTool implements IMcpTool
             Collection<MdObject> all = resolved.externalObjectProject.getExternalObjects();
             if (all == null || all.isEmpty())
             {
-                if (objectName == null)
-                {
-                    // Build ALL of an empty project: not an error — an empty target list yields a
-                    // clear "nothing to build" success (built=0/failed=0) in runBuild.
-                    return EnumerationResult.ok(new ArrayList<>(), bmModel);
-                }
-                // A SPECIFIC object was requested but the project has none: a value-naming not-found.
-                return EnumerationResult.failure(ToolResult.error("External object not found: '" //$NON-NLS-1$
-                    + objectName + "'. The external-object project has no external data " //$NON-NLS-1$
-                    + "processors/reports.").toJson()); //$NON-NLS-1$
+                return enumerateEmpty(objectName, bmModel);
             }
-            List<Target> matched = new ArrayList<>();
-            List<String> available = new ArrayList<>();
-            for (MdObject object : all)
-            {
-                String name = object.getName();
-                available.add(name);
-                if (objectName == null || objectName.equals(name))
-                {
-                    // Resolve name + extension (.epf for a data processor, .erf for a report) here, in
-                    // the read boundary, so the file name is fully decided before the Job runs. Capture
-                    // the BM id so the Job can re-resolve the object inside its own read transaction.
-                    String fileName = ExternalObjectDumpSupport.outputFileName(name,
-                        ExternalObjectDumpSupport.extensionForObject(object));
-                    matched.add(new Target(((IBmObject)object).bmGetId(),
-                        ((IBmObject)object).bmGetFqn(), name, fileName));
-                }
-            }
-            if (matched.isEmpty())
-            {
-                // Reachable only with a specific objectName that matched nothing (build-all over a
-                // non-empty project always matches >=1).
-                return EnumerationResult.failure(ToolResult.error("External object not found: '" //$NON-NLS-1$
-                    + objectName + "'. Available external objects: " + available + ".").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            return EnumerationResult.ok(matched, bmModel);
+            return matchTargets(all, objectName, bmModel);
         });
+    }
+
+    /**
+     * Handles the empty-project branch of {@link #enumerateTargets}: build-all over a project with no
+     * external objects is not an error (an empty target list yields a clear "nothing to build" success),
+     * but a SPECIFIC requested object that the empty project cannot contain is a value-naming not-found.
+     *
+     * @param objectName the single object name requested, or {@code null} for build-all
+     * @param bmModel the resolved BM model (carried on the success result)
+     * @return an empty-targets success for build-all, or a ready-to-return not-found error
+     */
+    private static EnumerationResult enumerateEmpty(String objectName, IBmModel bmModel)
+    {
+        if (objectName == null)
+        {
+            // Build ALL of an empty project: not an error — an empty target list yields a
+            // clear "nothing to build" success (built=0/failed=0) in runBuild.
+            return EnumerationResult.ok(new ArrayList<>(), bmModel);
+        }
+        // A SPECIFIC object was requested but the project has none: a value-naming not-found.
+        return EnumerationResult.failure(ToolResult.error("External object not found: '" //$NON-NLS-1$
+            + objectName + "'. The external-object project has no external data " //$NON-NLS-1$
+            + "processors/reports.").toJson()); //$NON-NLS-1$
+    }
+
+    /**
+     * Walks the project's external objects (inside the BM read boundary opened by
+     * {@link #enumerateTargets}) and selects the build targets: when {@code objectName} is {@code null}
+     * every object is selected, otherwise only the one whose name matches. Each selected object's name,
+     * BM id, FQN and {@code .epf}/{@code .erf} file name are captured on a detached {@link Target}. When a
+     * specific {@code objectName} matched nothing, a value-naming not-found error (listing the available
+     * names) is returned instead.
+     *
+     * @param all the project's external objects (non-empty)
+     * @param objectName the single object name to match, or {@code null} for all
+     * @param bmModel the resolved BM model (carried on the success result)
+     * @return the matched targets, or a ready-to-return not-found error
+     */
+    private static EnumerationResult matchTargets(Collection<MdObject> all, String objectName, IBmModel bmModel)
+    {
+        List<Target> matched = new ArrayList<>();
+        List<String> available = new ArrayList<>();
+        for (MdObject object : all)
+        {
+            String name = object.getName();
+            available.add(name);
+            if (objectName == null || objectName.equals(name))
+            {
+                // Resolve name + extension (.epf for a data processor, .erf for a report) here, in
+                // the read boundary, so the file name is fully decided before the Job runs. Capture
+                // the BM id so the Job can re-resolve the object inside its own read transaction.
+                String fileName = ExternalObjectDumpSupport.outputFileName(name,
+                    ExternalObjectDumpSupport.extensionForObject(object));
+                matched.add(new Target(((IBmObject)object).bmGetId(),
+                    ((IBmObject)object).bmGetFqn(), name, fileName));
+            }
+        }
+        if (matched.isEmpty())
+        {
+            // Reachable only with a specific objectName that matched nothing (build-all over a
+            // non-empty project always matches >=1).
+            return EnumerationResult.failure(ToolResult.error("External object not found: '" //$NON-NLS-1$
+                + objectName + "'. Available external objects: " + available + ".").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return EnumerationResult.ok(matched, bmModel);
     }
 
     /**
@@ -471,7 +505,7 @@ public class BuildExternalObjectsTool implements IMcpTool
         // One timestamp per build run: every object stamped in this call shares the same build time.
         final String buildStamp = STAMP_PREFIX + LocalDateTime.now().format(STAMP_FMT);
 
-        Job buildJob = new Job(NAME + ": " + bc.projectName) //$NON-NLS-1$
+        Job buildJob = new Job(NAME + ": " + bc.project.getName()) //$NON-NLS-1$
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
@@ -526,7 +560,7 @@ public class BuildExternalObjectsTool implements IMcpTool
         }
         if (fatalHolder[0] != null)
         {
-            Activator.logError(NAME + " failed for project " + bc.projectName, fatalHolder[0]); //$NON-NLS-1$
+            Activator.logError(NAME + " failed for project " + bc.project.getName(), fatalHolder[0]); //$NON-NLS-1$
             return ToolResult.error("External object build failed: " + fatalHolder[0].getMessage() //$NON-NLS-1$
                 + authHint(fatalHolder[0])).toJson();
         }
@@ -650,7 +684,7 @@ public class BuildExternalObjectsTool implements IMcpTool
         ToolResult tr = allOk ? ToolResult.success() : ToolResult.error("Built " + built //$NON-NLS-1$
             + " of " + (built + failed) + " external object(s) in " + elapsedMs + " ms; " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + failed + " failed."); //$NON-NLS-1$
-        tr.put(McpKeys.PROJECT, bc.projectName)
+        tr.put(McpKeys.PROJECT, bc.project.getName())
             .put(KEY_OUTPUT_DIR, bc.outputDir.toString())
             .put(KEY_BUILT, built)
             .put(KEY_FAILED, failed)
@@ -814,10 +848,15 @@ public class BuildExternalObjectsTool implements IMcpTool
         }
     }
 
-    /** Immutable bundle of the resolved inputs threaded through the build loop. */
+    /**
+     * Immutable bundle of the resolved inputs threaded through the build loop. The project name is
+     * derived from {@link #project} via {@code project.getName()} at its read sites rather than carried
+     * as a separate field: for a resolved workspace project handle
+     * {@code IWorkspaceRoot.getProject(name).getName()} equals the passed name, so this is identical to
+     * the original {@code projectName} argument.
+     */
     private static final class BuildContext
     {
-        final String projectName;
         final IProject project;
         final IBmModel bmModel;
         final IExternalObjectDumper dumper;
@@ -826,11 +865,10 @@ public class BuildExternalObjectsTool implements IMcpTool
         final boolean outsideWorkspace;
         final boolean recordBuildTime;
 
-        private BuildContext(String projectName, IProject project, IBmModel bmModel,
+        private BuildContext(IProject project, IBmModel bmModel,
                 IExternalObjectDumper dumper, List<Target> targets, Path outputDir, boolean outsideWorkspace,
                 boolean recordBuildTime)
         {
-            this.projectName = projectName;
             this.project = project;
             this.bmModel = bmModel;
             this.dumper = dumper;

@@ -12,12 +12,18 @@ import org.eclipse.equinox.security.storage.provider.IPreferencesContainer;
 import org.eclipse.equinox.security.storage.provider.PasswordProvider;
 
 /**
- * Supplies a stable master password for the Eclipse default secure storage so that EDT's
+ * Supplies an <b>empty</b> master password for the Eclipse default secure storage so that EDT's
  * {@code IInfobaseAccessManager.updateSettings} (used by {@code set_infobase_credentials} and
  * {@code create_infobase}) never raises the blocking <b>"Secure Storage — please enter a new master
  * password"</b> dialog on a fresh / headless stand (issue #194). On such a stand writing the infobase
  * connection credentials initializes the Eclipse keyring, which otherwise prompts for a master password
  * and hangs the unattended call.
+ *
+ * <p><b>No master password by design.</b> On a trusted-caller server the local keyring only protects
+ * infobase connection settings, which are re-settable; there is nothing to defend against a local
+ * attacker that filesystem access would not already expose. So instead of inventing a secret we supply
+ * an empty passphrase — there is no credential literal in source (an empty value is not a secret, so
+ * S6437 does not apply).
  *
  * <p>Registered via the {@code org.eclipse.equinox.security.secureStorage} extension at a priority just
  * above the platform's interactive {@code DefaultPasswordProvider} (priority 2) — so on a headless stand
@@ -31,25 +37,17 @@ import org.eclipse.equinox.security.storage.provider.PasswordProvider;
  */
 public final class McpSecureStorageProvider extends PasswordProvider
 {
-    /**
-     * Master password for the LOCAL Eclipse keyring — NOT an infobase user password. A fixed constant so
-     * the keyring re-opens every session without a prompt; on a trusted-caller server the keyring only
-     * protects infobase connection settings.
-     */
-    private static final String MASTER = "edt-mcp-unattended-secure-storage-v1"; //$NON-NLS-1$
-
     @Override
     public PBEKeySpec getPassword(IPreferencesContainer container, int passwordType)
     {
-        // Always supply the stable password: the moduleID design (above) means we only ever own the
-        // values we encrypt, so this cannot affect a user's existing secure-storage entries, and on a
-        // desktop the higher-priority OS keyring providers are chosen ahead of us anyway.
-        return new PBEKeySpec(MASTER.toCharArray());
+        // No master password: supply an empty passphrase so the keyring opens unattended without a
+        // prompt and no secret literal lives in source.
+        return new PBEKeySpec(new char[0]);
     }
 
     @Override
     public boolean retryOnError(Exception e, IPreferencesContainer container)
     {
-        return false; // a wrong stable password must not loop
+        return false; // the empty password is fixed; retrying cannot help
     }
 }

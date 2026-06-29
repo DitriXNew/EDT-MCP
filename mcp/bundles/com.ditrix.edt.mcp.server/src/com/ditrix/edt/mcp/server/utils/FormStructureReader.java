@@ -205,73 +205,101 @@ public final class FormStructureReader
     {
         StringBuilder sb = new StringBuilder();
         sb.append("# Form Structure: ").append(formPath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        renderItems(sb, formModel, language);
+        renderAttributes(sb, formModel, language);
+        renderCommands(sb, formModel, language);
+        renderEventHandlers(sb, formModel, language);
+        return sb.toString();
+    }
 
+    /**
+     * Renders the {@code ## Items} section: the nested item outline (auto command bar first, then the
+     * form root's items), capped at {@link #MAX_NODES} nodes with a truncation note. Falls back to
+     * {@code _(no items)_} when the form carries neither items nor an auto command bar.
+     */
+    private static void renderItems(StringBuilder sb, EObject formModel, String language)
+    {
         sb.append("## Items\n\n"); //$NON-NLS-1$
         List<EObject> items = getReferenceList(formModel, FEATURE_ITEMS);
         EObject autoCommandBar = getSingleReference(formModel, FEATURE_AUTO_COMMAND_BAR);
         if (items.isEmpty() && autoCommandBar == null)
         {
             sb.append("_(no items)_\n\n"); //$NON-NLS-1$
+            return;
         }
-        else
+        int[] budget = {MAX_NODES};
+        boolean[] truncated = {false};
+        if (autoCommandBar != null)
         {
-            int[] budget = {MAX_NODES};
-            boolean[] truncated = {false};
-            if (autoCommandBar != null)
-            {
-                appendItem(sb, autoCommandBar, 0, language, budget, truncated);
-            }
-            for (EObject item : items)
-            {
-                appendItem(sb, item, 0, language, budget, truncated);
-            }
-            // Gate the note on the explicit flag (set only when a node was actually dropped), NOT on an
-            // exhausted budget: a form with EXACTLY MAX_NODES nodes drains the budget to 0 yet renders
-            // every node, so inferring truncation from budget[0] <= 0 would falsely flag it.
-            if (truncated[0])
-            {
-                sb.append("- _(item outline truncated: more than ") //$NON-NLS-1$
-                    .append(MAX_NODES).append(" nodes)_\n"); //$NON-NLS-1$
-            }
-            sb.append('\n');
+            appendItem(sb, autoCommandBar, 0, language, budget, truncated);
         }
+        for (EObject item : items)
+        {
+            appendItem(sb, item, 0, language, budget, truncated);
+        }
+        // Gate the note on the explicit flag (set only when a node was actually dropped), NOT on an
+        // exhausted budget: a form with EXACTLY MAX_NODES nodes drains the budget to 0 yet renders
+        // every node, so inferring truncation from budget[0] <= 0 would falsely flag it.
+        if (truncated[0])
+        {
+            sb.append("- _(item outline truncated: more than ") //$NON-NLS-1$
+                .append(MAX_NODES).append(" nodes)_\n"); //$NON-NLS-1$
+        }
+        sb.append('\n');
+    }
 
+    /**
+     * Renders the {@code ## Attributes} table (Name / Synonym / Type / Main / SavedData), or
+     * {@code _(no attributes)_} when the form has no attributes.
+     */
+    private static void renderAttributes(StringBuilder sb, EObject formModel, String language)
+    {
         sb.append("## Attributes\n\n"); //$NON-NLS-1$
         List<EObject> attributes = getReferenceList(formModel, FEATURE_ATTRIBUTES);
         if (attributes.isEmpty())
         {
             sb.append("_(no attributes)_\n\n"); //$NON-NLS-1$
+            return;
         }
-        else
+        sb.append(MarkdownUtils.tableHeader(
+            "Name", "Synonym", "Type", "Main", "SavedData")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        for (EObject attribute : attributes)
         {
-            sb.append(MarkdownUtils.tableHeader(
-                "Name", "Synonym", "Type", "Main", "SavedData")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-            for (EObject attribute : attributes)
-            {
-                sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
-                    valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
-                    Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
-            }
-            sb.append('\n');
+            sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
+                valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
+                Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
         }
+        sb.append('\n');
+    }
 
+    /**
+     * Renders the {@code ## Commands} table (Name / Title / Action handler), or {@code _(no commands)_}
+     * when the form has no commands.
+     */
+    private static void renderCommands(StringBuilder sb, EObject formModel, String language)
+    {
         sb.append("## Commands\n\n"); //$NON-NLS-1$
         List<EObject> commands = getReferenceList(formModel, FEATURE_FORM_COMMANDS);
         if (commands.isEmpty())
         {
             sb.append("_(no commands)_\n\n"); //$NON-NLS-1$
+            return;
         }
-        else
+        sb.append(MarkdownUtils.tableHeader("Name", "Title", "Action handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (EObject command : commands)
         {
-            sb.append(MarkdownUtils.tableHeader("Name", "Title", "Action handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            for (EObject command : commands)
-            {
-                sb.append(MarkdownUtils.tableRow(nameOf(command), titleOf(command, language),
-                    actionHandlerOf(command)));
-            }
-            sb.append('\n');
+            sb.append(MarkdownUtils.tableRow(nameOf(command), titleOf(command, language),
+                actionHandlerOf(command)));
         }
+        sb.append('\n');
+    }
 
+    /**
+     * Renders the {@code ## Event handlers} table (Element / Event / Handler) for the BSL handler bound
+     * to each event of the form root and every element, or {@code _(no event handlers)_} when none.
+     */
+    private static void renderEventHandlers(StringBuilder sb, EObject formModel, String language)
+    {
         sb.append("## Event handlers\n\n"); //$NON-NLS-1$
         List<String[]> handlers = new ArrayList<>();
         // collectHandlers recurses the form root's 'items' AND its singular containments (the form-wide
@@ -282,18 +310,14 @@ public final class FormStructureReader
         if (handlers.isEmpty())
         {
             sb.append("_(no event handlers)_\n\n"); //$NON-NLS-1$
+            return;
         }
-        else
+        sb.append(MarkdownUtils.tableHeader("Element", "Event", "Handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String[] row : handlers)
         {
-            sb.append(MarkdownUtils.tableHeader("Element", "Event", "Handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            for (String[] row : handlers)
-            {
-                sb.append(MarkdownUtils.tableRow(row[0], row[1], row[2]));
-            }
-            sb.append('\n');
+            sb.append(MarkdownUtils.tableRow(row[0], row[1], row[2]));
         }
-
-        return sb.toString();
+        sb.append('\n');
     }
 
     /**

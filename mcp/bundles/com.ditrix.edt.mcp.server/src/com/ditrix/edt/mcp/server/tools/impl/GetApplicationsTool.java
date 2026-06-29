@@ -126,30 +126,10 @@ public class GetApplicationsTool implements IMcpTool
             IProject project = mr.project();
             IApplicationManager appManager = mr.manager();
 
-            // Get applications for the named project
-            List<IApplication> applications = appManager.getApplications(project);
-
-            // The project whose applications and default application are reported. For a
-            // configuration project this is always the named project. For a dependent
-            // project (external-objects / extension) whose own application list is empty,
-            // fall back to the BASE configuration project the applications are inherited from.
-            IProject applicationsProject = project;
-            String baseProjectName = null;
-
-            if (applications == null || applications.isEmpty())
-            {
-                IProject base = ExtensionOriginUtils.resolveBaseProject(project);
-                if (base != null && base.exists() && base.isOpen())
-                {
-                    List<IApplication> baseApplications = appManager.getApplications(base);
-                    if (baseApplications != null && !baseApplications.isEmpty())
-                    {
-                        applications = baseApplications;
-                        applicationsProject = base;
-                        baseProjectName = base.getName();
-                    }
-                }
-            }
+            // Get applications for the named project, falling back to the base
+            // configuration project for dependent projects with an empty list.
+            ResolvedApplications resolved = resolveApplications(appManager, project);
+            List<IApplication> applications = resolved.applications;
 
             if (applications == null || applications.isEmpty())
             {
@@ -162,31 +142,10 @@ public class GetApplicationsTool implements IMcpTool
             }
 
             // Build applications array
-            JsonArray appsArray = new JsonArray();
-            for (IApplication app : applications)
-            {
-                JsonObject appObj = new JsonObject();
-                appObj.addProperty("id", app.getId()); //$NON-NLS-1$
-                appObj.addProperty("name", app.getName()); //$NON-NLS-1$
-                
-                // Add type info
-                if (app.getType() != null)
-                {
-                    appObj.addProperty("type", app.getType().getId()); //$NON-NLS-1$
-                }
-                
-                // Add update state
-                addUpdateState(appManager, app, appObj);
-                
-                // Add required version if present
-                app.getRequiredVersion().ifPresent(version -> 
-                    appObj.addProperty("requiredVersion", version)); //$NON-NLS-1$
-                
-                appsArray.add(appObj);
-            }
-            
+            JsonArray appsArray = buildApplicationsArray(appManager, applications);
+
             // Get default application from whichever project supplied the applications
-            String defaultAppId = resolveDefaultApplicationId(appManager, applicationsProject);
+            String defaultAppId = resolveDefaultApplicationId(appManager, resolved.applicationsProject);
 
             ToolResult result = ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
@@ -200,9 +159,9 @@ public class GetApplicationsTool implements IMcpTool
 
             // Present only on the inherited branch (dependent project whose applications
             // come from its base configuration project).
-            if (baseProjectName != null)
+            if (resolved.baseProjectName != null)
             {
-                result.put("inheritedFromProject", baseProjectName); //$NON-NLS-1$
+                result.put("inheritedFromProject", resolved.baseProjectName); //$NON-NLS-1$
             }
 
             return result.toJson();
@@ -213,7 +172,94 @@ public class GetApplicationsTool implements IMcpTool
             return ToolResult.error("Error getting applications: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
-    
+
+    /**
+     * Resolves the applications for the named project. For a configuration project this is always
+     * the named project's own list. For a dependent project (external-objects / extension) whose
+     * own application list is empty, falls back to the BASE configuration project the applications
+     * are inherited from.
+     *
+     * @param appManager the application manager
+     * @param project the named project
+     * @return the resolved applications together with the supplying project and (for the inherited
+     *         branch only) the base project name
+     * @throws ApplicationException if the application list cannot be read
+     */
+    private ResolvedApplications resolveApplications(IApplicationManager appManager, IProject project)
+        throws ApplicationException
+    {
+        List<IApplication> applications = appManager.getApplications(project);
+        if (applications != null && !applications.isEmpty())
+        {
+            return new ResolvedApplications(applications, project, null);
+        }
+
+        IProject base = ExtensionOriginUtils.resolveBaseProject(project);
+        if (base != null && base.exists() && base.isOpen())
+        {
+            List<IApplication> baseApplications = appManager.getApplications(base);
+            if (baseApplications != null && !baseApplications.isEmpty())
+            {
+                return new ResolvedApplications(baseApplications, base, base.getName());
+            }
+        }
+
+        return new ResolvedApplications(applications, project, null);
+    }
+
+    /**
+     * Builds the JSON array describing the given applications, preserving the original
+     * per-application property order (id, name, type, update state, required version).
+     *
+     * @param appManager the application manager
+     * @param applications the applications to render
+     * @return the JSON array of applications
+     */
+    private JsonArray buildApplicationsArray(IApplicationManager appManager, List<IApplication> applications)
+    {
+        JsonArray appsArray = new JsonArray();
+        for (IApplication app : applications)
+        {
+            JsonObject appObj = new JsonObject();
+            appObj.addProperty("id", app.getId()); //$NON-NLS-1$
+            appObj.addProperty("name", app.getName()); //$NON-NLS-1$
+
+            // Add type info
+            if (app.getType() != null)
+            {
+                appObj.addProperty("type", app.getType().getId()); //$NON-NLS-1$
+            }
+
+            // Add update state
+            addUpdateState(appManager, app, appObj);
+
+            // Add required version if present
+            app.getRequiredVersion().ifPresent(version ->
+                appObj.addProperty("requiredVersion", version)); //$NON-NLS-1$
+
+            appsArray.add(appObj);
+        }
+        return appsArray;
+    }
+
+    /**
+     * Holds the applications resolved for a project together with the project that supplied them
+     * and, only when inherited from a base configuration project, that base project's name.
+     */
+    private static final class ResolvedApplications
+    {
+        final List<IApplication> applications;
+        final IProject applicationsProject;
+        final String baseProjectName;
+
+        ResolvedApplications(List<IApplication> applications, IProject applicationsProject, String baseProjectName)
+        {
+            this.applications = applications;
+            this.applicationsProject = applicationsProject;
+            this.baseProjectName = baseProjectName;
+        }
+    }
+
     /**
      * Adds the update-state properties for a single application to its JSON object.
      * On error the state is reported as {@code "ERROR"} together with the error message,
