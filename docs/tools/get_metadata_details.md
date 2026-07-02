@@ -1,6 +1,6 @@
 # get_metadata_details
 
-Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').
+Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties ('full: true' shows every object, otherwise only the non-default rows, the first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -8,6 +8,7 @@ Get detailed properties of one or more 1C metadata objects (basic info by defaul
 | projectName | yes | string | EDT project name (required) |
 | objectFqns | yes | array | Required. FQNs as Type.Name, e.g. ['Catalog.Products', 'Document.SalesOrder']; Russian type tokens also work (e.g. 'Справочник.Products'). |
 | full | — | boolean | All reflected properties (true) or only key info (false). Default: false |
+| roleObjectOffset | — | integer | For a ROLE FQN only: 0-based object offset into the rights matrix, for paging past the first 100 authored objects in the default (non-full) view (default: 0; ignored when 'full: true', which renders every object up to 1000). Use it (or 'full: true') to read a role that authors more than 100 objects. |
 | assignable | — | boolean | Instead of the details view, return the ASSIGNABLE-property schema (default false): per property its value kind, current value and ALLOWED values (enum literals). This is what modify_metadata can set; FQNs may address members (e.g. 'Catalog.Products.Attribute.Weight'). |
 | language | — | string | Synonym language code, e.g. 'en'/'ru' (default: configuration default) |
 
@@ -25,6 +26,7 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - `projectName` (required) - EDT project name.
 - `objectFqns` (required) - array of fully-qualified names in `Type.Name` form, e.g. `Catalog.Products`, `Document.SalesOrder`. Only the **Type** token may be bilingual: the English or Russian, singular or plural type is accepted (e.g. `Справочник.Products` resolves the same as `Catalog.Products`). The **Name** part is the programmatic object Name, never the synonym.
 - `full` - `true` returns every reflected section, `false` (default) returns only key info. In full mode each section is capped and a `[truncated]` row marks omitted rows.
+- `roleObjectOffset` - for a ROLE FQN only: 0-based object offset into the rights matrix. The default (non-`full`) view shows only the first 100 authored objects; page past them by passing the next offset (the matrix notice tells you the exact value), or use `full: true` (which renders every object, capped at 1000). Ignored in `full` mode.
 - `language` - language **code** (`en`/`ru`) used for the synonym columns. Defaults to the configuration's default language; the synonym map is keyed by code, not by the language's display name.
 
 ## Output

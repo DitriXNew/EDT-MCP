@@ -19,8 +19,10 @@ import org.eclipse.ui.PlatformUI;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.metadata.mdclass.AbstractRoleDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -38,6 +40,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
 
 /**
  * Tool to get detailed properties of metadata objects from 1C configuration.
@@ -64,7 +67,10 @@ public class GetMetadataDetailsTool implements IMcpTool
                "inspect a known object's attributes/forms/commands; in full mode each section is " + //$NON-NLS-1$
                "capped so request fewer FQNs to keep the response small. A FORM FQN " + //$NON-NLS-1$
                "('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE " + //$NON-NLS-1$
-               "(items / attributes / commands). " + //$NON-NLS-1$
+               "(items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's " + //$NON-NLS-1$
+               "ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role " + //$NON-NLS-1$
+               "properties ('full: true' shows every object, otherwise only the non-default rows, the " + //$NON-NLS-1$
+               "first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). " + //$NON-NLS-1$
                "Use this for the full properties of one named object; to list objects by type use get_metadata_objects. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
@@ -81,6 +87,11 @@ public class GetMetadataDetailsTool implements IMcpTool
                 true)
             .booleanProperty("full", //$NON-NLS-1$
                 "All reflected properties (true) or only key info (false). Default: false") //$NON-NLS-1$
+            .integerProperty("roleObjectOffset", //$NON-NLS-1$
+                "For a ROLE FQN only: 0-based object offset into the rights matrix, for paging past the " + //$NON-NLS-1$
+                "first 100 authored objects in the default (non-full) view (default: 0; ignored when " + //$NON-NLS-1$
+                "'full: true', which renders every object up to 1000). Use it (or 'full: true') to read a " + //$NON-NLS-1$
+                "role that authors more than 100 objects.") //$NON-NLS-1$
             .booleanProperty("assignable", //$NON-NLS-1$
                 "Instead of the details view, return the ASSIGNABLE-property schema (default false): " + //$NON-NLS-1$
                 "per property its value kind, current value and ALLOWED values (enum literals). This " + //$NON-NLS-1$
@@ -116,6 +127,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         String fullStr = JsonUtils.extractStringArgument(params, "full"); //$NON-NLS-1$
         boolean assignable = JsonUtils.extractBooleanArgument(params, "assignable", false); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
+        // Role-matrix pagination offset (0-based objects). Only the ROLE branch consumes it; a negative
+        // request is clamped to 0 downstream. Ignored in full mode.
+        int roleObjectOffset = JsonUtils.extractIntArgument(params, "roleObjectOffset", 0); //$NON-NLS-1$
 
         // Validate required parameters
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
@@ -137,12 +151,14 @@ public class GetMetadataDetailsTool implements IMcpTool
         final boolean fullMode = full;
         final boolean assignableMode = assignable;
         final String lang = language;
+        final int roleOffset = roleObjectOffset;
 
         Display display = PlatformUI.getWorkbench().getDisplay();
         display.syncExec(() -> {
             try
             {
-                String result = getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode, lang);
+                String result =
+                    getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode, lang, roleOffset);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -159,7 +175,8 @@ public class GetMetadataDetailsTool implements IMcpTool
      * Internal implementation that runs on UI thread.
      */
     private String getMetadataDetailsInternal(String projectName, List<String> objectFqns,
-                                               boolean full, boolean assignable, String language)
+                                               boolean full, boolean assignable, String language,
+                                               int roleObjectOffset)
     {
         // Resolve the project and its configuration
         ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
@@ -198,7 +215,7 @@ public class GetMetadataDetailsTool implements IMcpTool
 
         // Per-request render context, constant across every FQN in the loop.
         RenderContext ctx = new RenderContext(config, bmModel, effectiveLanguage, full, assignable,
-            isExtensionProject);
+            isExtensionProject, roleObjectOffset);
 
         // Process each FQN
         for (String fqn : objectFqns)
@@ -262,6 +279,29 @@ public class GetMetadataDetailsTool implements IMcpTool
             failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
             return;
         }
+
+        // A Role FQN renders its ACCESS-RIGHTS matrix (rights values / RLS / templates / role
+        // properties) via the cross-model hop into the editable rights model, mirroring the FORM branch.
+        // The rights model is a sub-resource of the Role top object, so it is read inside a BM read
+        // boundary; the EObjects must not escape the read task.
+        if (mdObject instanceof Role)
+        {
+            String roleRights = renderRoleRights(ctx.bmModel, (Role)mdObject,
+                MetadataTypeUtils.normalizeFqn(fqn), ctx.full, ctx.effectiveLanguage, ctx.roleObjectOffset);
+            if (roleRights == null)
+            {
+                failures.add(new String[] { fqn, "the role's rights model is unavailable (the BM model " //$NON-NLS-1$
+                    + "is not ready or the project is not yet built)" }); //$NON-NLS-1$
+                return;
+            }
+            sb.append(roleRights);
+            sb.append("\n**Origin:** ") //$NON-NLS-1$
+                .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), ctx.isExtensionProject))
+                .append("\n"); //$NON-NLS-1$
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
+
         sb.append(MetadataFormatterRegistry.format(mdObject, ctx.full, ctx.effectiveLanguage));
         // ORIGIN footer: core / core (adopted) / extension. For a base
         // configuration this is always "core"; for an extension it distinguishes
@@ -287,9 +327,11 @@ public class GetMetadataDetailsTool implements IMcpTool
         final boolean full;
         final boolean assignable;
         final boolean isExtensionProject;
+        /** 0-based object offset for a Role FQN's paginated rights matrix (ignored in {@code full} mode). */
+        final int roleObjectOffset;
 
         RenderContext(Configuration config, IBmModel bmModel, String effectiveLanguage,
-            boolean full, boolean assignable, boolean isExtensionProject)
+            boolean full, boolean assignable, boolean isExtensionProject, int roleObjectOffset)
         {
             this.config = config;
             this.bmModel = bmModel;
@@ -297,6 +339,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             this.full = full;
             this.assignable = assignable;
             this.isExtensionProject = isExtensionProject;
+            this.roleObjectOffset = roleObjectOffset;
         }
     }
 
@@ -365,6 +408,47 @@ public class GetMetadataDetailsTool implements IMcpTool
                 return null;
             }
             return FormStructureReader.render(normalized, formModel, language);
+        });
+    }
+
+    /**
+     * Renders a Role's access-rights matrix (rights values / RLS restrictions / RLS templates / the three
+     * role-property booleans) for a Role FQN, reusing {@link RoleRightsReader}: resolve the Role live
+     * inside a BM READ transaction and read its editable rights model ({@code Role.getRights()}, guarded to
+     * the concrete {@code RoleDescription}), then render it to Markdown. The rights EObjects must not escape
+     * the read task. Returns {@code null} when the BM model is unavailable or the Role cannot be
+     * re-resolved in the transaction; a role that simply has no editable rights model still renders a
+     * document (with a note), so it is NOT a failure.
+     *
+     * @param bmModel the (best-effort) BM model; {@code null} yields {@code null}
+     * @param role the resolved Role MdObject (used only for its BM id)
+     * @param normalizedFqn the normalized Role FQN, for the heading
+     * @param full render every object with any right cell (true) or only the authored/non-default objects
+     *            plus a summary count and pagination (false)
+     * @param language the right/field-name language CODE (may be {@code null})
+     * @param objectOffset the 0-based object offset into the paginated matrix (ignored in {@code full}
+     *            mode); lets a caller page past the first 100 authored objects in the default view
+     * @return the Markdown document, or {@code null} when the rights model is unavailable
+     */
+    private static String renderRoleRights(IBmModel bmModel, Role role, String normalizedFqn,
+        boolean full, String language, int objectOffset)
+    {
+        if (bmModel == null || !(role instanceof IBmObject))
+        {
+            return null;
+        }
+        final long roleBmId = ((IBmObject)role).bmGetId();
+        return BmTransactions.read(bmModel, "GetMetadataDetailsRole", (tx, monitor) -> //$NON-NLS-1$
+        {
+            EObject txRole = tx.getObjectById(roleBmId);
+            if (!(txRole instanceof Role))
+            {
+                return null;
+            }
+            // Role.getRights() may be null or a bare AbstractRoleDescription marker; the reader guards on
+            // the concrete RoleDescription and renders a note when the matrix is absent.
+            AbstractRoleDescription rights = ((Role)txRole).getRights();
+            return RoleRightsReader.render(normalizedFqn, rights, full, language, objectOffset);
         });
     }
 

@@ -1794,7 +1794,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
+    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties ('full: true' shows every object, otherwise only the non-default rows, the first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
         "assignable": {
@@ -1819,6 +1819,10 @@
         "projectName": {
           "description": "EDT project name (required)",
           "type": "string"
+        },
+        "roleObjectOffset": {
+          "description": "For a ROLE FQN only: 0-based object offset into the rights matrix, for paging past the first 100 authored objects in the default (non-full) view (default: 0; ignored when 'full: true', which renders every object up to 1000). Use it (or 'full: true') to read a role that authors more than 100 objects.",
+          "type": "integer"
         }
       },
       "required": [
@@ -2815,7 +2819,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
+    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
     "inputSchema": {
       "properties": {
         "fqn": {
@@ -2831,7 +2835,25 @@
           "type": "string"
         },
         "properties": {
-          "description": "Properties to set, as [{name, value, language?}] (required, at least one). 'name' is the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new value; 'language' is the code for a synonym (default: config default).",
+          "description": "Properties to set, as [{name, value, language?}]. 'name' is the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new value; 'language' is the code for a synonym (default: config default). Required unless the FQN is a Role and a role payload (rights / templates / roleProperties) is given.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "rights": {
+          "description": "ROLE only: per-object access rights to set, as [{object, right, value?, rls?, rlsFields?}]. 'object' is a metadata FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары'); 'right' is a bilingual right name (e.g. 'Read'/'Чтение', 'Update'/'Изменение'); 'value' is 'set' (allowed, default) / 'unset' (denied) / 'provided' (default/inherited), or a boolean (true=set, false=unset). 'rls' is an optional Row-Level-Security restriction condition (1C query text); 'rlsFields' is an optional array of field names the RLS applies to (omit / empty = whole-object restriction).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "roleProperties": {
+          "description": "ROLE only: the three role properties, as optional booleans {setForNewObjects, setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags are changed.",
+          "type": "object"
+        },
+        "templates": {
+          "description": "ROLE only: RLS restriction templates to change, as [{op?, name, condition?}]. 'op' is 'add' (default) / 'edit' / 'delete'; 'name' is the template name; 'condition' is the RLS restriction text (required for add/edit).",
           "items": {
             "type": "object"
           },
@@ -2840,8 +2862,7 @@
       },
       "required": [
         "projectName",
-        "fqn",
-        "properties"
+        "fqn"
       ],
       "type": "object"
     },
@@ -2853,7 +2874,7 @@
           "type": "string"
         },
         "applied": {
-          "description": "Names of the properties that were set",
+          "description": "Names of the properties that were set (for a Role rights change this is instead an object {rights, templates, roleProperties} with the applied counts)",
           "items": {
             "type": "string"
           },

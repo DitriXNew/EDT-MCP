@@ -11,6 +11,7 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - `projectName` (required) - EDT project name.
 - `objectFqns` (required) - array of fully-qualified names in `Type.Name` form, e.g. `Catalog.Products`, `Document.SalesOrder`. Only the **Type** token may be bilingual: the English or Russian, singular or plural type is accepted (e.g. `Справочник.Products` resolves the same as `Catalog.Products`). The **Name** part is the programmatic object Name, never the synonym.
 - `full` - `true` returns every reflected section, `false` (default) returns only key info. In full mode each section is capped and a `[truncated]` row marks omitted rows.
+- `roleObjectOffset` - for a ROLE FQN only: 0-based object offset into the rights matrix. The default (non-`full`) view shows only the first 100 authored objects; page past them by passing the next offset (the matrix notice tells you the exact value), or use `full: true` (which renders every object, capped at 1000). Ignored in `full` mode.
 - `language` - language **code** (`en`/`ru`) used for the synonym columns. Defaults to the configuration's default language; the synonym map is keyed by code, not by the language's display name.
 
 ## Output

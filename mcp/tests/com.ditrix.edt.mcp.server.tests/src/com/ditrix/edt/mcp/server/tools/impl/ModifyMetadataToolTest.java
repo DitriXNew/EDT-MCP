@@ -188,7 +188,11 @@ public class ModifyMetadataToolTest
         String tail = schema.substring(requiredIdx);
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("fqn must be required", tail.contains("\"fqn\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("properties must be required", tail.contains("\"properties\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        // 'properties' is no longer unconditionally required: a Role FQN is modified through the
+        // role payload ('rights' / 'templates' / 'roleProperties') instead, so 'properties' is
+        // conditionally required (enforced in execute(), not the schema's required array).
+        assertFalse("properties must not be schema-required (role payload is the alternative)", //$NON-NLS-1$
+            tail.contains("\"properties\"")); //$NON-NLS-1$
     }
 
     @Test

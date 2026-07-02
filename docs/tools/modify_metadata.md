@@ -1,17 +1,20 @@
 # modify_metadata
 
-Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').
+Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project name (required). |
 | fqn | yes | string | Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or 'Catalog.Products.Attribute.Weight' (type / kind tokens may be English or Russian; the Name parts are the programmatic Name). |
-| properties | yes | array | Properties to set, as [{name, value, language?}] (required, at least one). 'name' is the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new value; 'language' is the code for a synonym (default: config default). |
+| properties | — | array | Properties to set, as [{name, value, language?}]. 'name' is the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new value; 'language' is the code for a synonym (default: config default). Required unless the FQN is a Role and a role payload (rights / templates / roleProperties) is given. |
+| rights | — | array | ROLE only: per-object access rights to set, as [{object, right, value?, rls?, rlsFields?}]. 'object' is a metadata FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары'); 'right' is a bilingual right name (e.g. 'Read'/'Чтение', 'Update'/'Изменение'); 'value' is 'set' (allowed, default) / 'unset' (denied) / 'provided' (default/inherited), or a boolean (true=set, false=unset). 'rls' is an optional Row-Level-Security restriction condition (1C query text); 'rlsFields' is an optional array of field names the RLS applies to (omit / empty = whole-object restriction). |
+| templates | — | array | ROLE only: RLS restriction templates to change, as [{op?, name, condition?}]. 'op' is 'add' (default) / 'edit' / 'delete'; 'name' is the template name; 'condition' is the RLS restriction text (required for add/edit). |
+| roleProperties | — | object | ROLE only: the three role properties, as optional booleans {setForNewObjects, setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags are changed. |
 | normalizeYo | — | boolean | Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / title) and in the 'comment' property (default true). Matches the 1C standard mdo-ru-name-unallowed-letter. Other free-text strings can be identifier-like (e.g. XDTOPackage.namespace is a URI) and always keep the supplied value. Set false to keep 'ё' exactly as supplied everywhere. |
 
 ## Guide
-Sets one or more properties of a metadata node addressed by a 1C full-name FQN (a top object or a member: attribute / tabular section / dimension / resource / enum value), then force-exports the owning top object to its `.mdo`. Replaces the former set_metadata_property (which set only Comment / Synonym); this tool sets any assignable scalar / boolean / integer / enum / synonym property.
+Sets one or more properties of a metadata node addressed by a 1C full-name FQN (a top object or a member: attribute / tabular section / dimension / resource / enum value), then force-exports the owning top object to its `.mdo`. Replaces the former set_metadata_property (which set only Comment / Synonym); this tool sets any assignable scalar / boolean / integer / enum / synonym property. A ROLE FQN (`Role.<Name>`) is modified through a dedicated access-rights surface (`rights` / `templates` / `roleProperties`) instead of `properties` - see [Setting role access rights](#setting-role-access-rights).
 
 ## Validation (errors are help)
 - A property that is NOT assignable on this node is rejected with the list of assignable properties - discover them with get_metadata_details(assignable:true).
@@ -20,7 +23,7 @@ Sets one or more properties of a metadata node addressed by a 1C full-name FQN (
 ## Parameter details
 - `projectName` (required) - EDT project name.
 - `fqn` (required) - full-name FQN of the node.
-- `properties` (required) - array of `{name, value, language?}`. `name` is the property name; `value` the new value; `language` the CODE for a synonym (default: config default).
+- `properties` (required, EXCEPT for a Role FQN with a role payload) - array of `{name, value, language?}`. `name` is the property name; `value` the new value; `language` the CODE for a synonym (default: config default). It is optional (and cannot be combined with) the role `rights` / `templates` / `roleProperties` payload; see [Setting role access rights](#setting-role-access-rights).
 - `normalizeYo` (optional, default true) - normalize the Russian letter `ё`->`е` / `Ё`->`Е` in localized-string values (synonym / title) and in the `comment` property (matches the 1C standard `mdo-ru-name-unallowed-letter`). Other free-text strings can be identifier-like (e.g. `XDTOPackage.namespace` is a URI) and always keep the supplied value. Set `false` to keep `ё` exactly as supplied everywhere. The result lists the rewritten properties under `normalized`.
 
 ## Not supported here
@@ -61,6 +64,23 @@ A list / choice form shows its rows through a **dynamic list** form attribute. T
 
 When the attribute is not yet a dynamic list it is converted: a `DynamicList` value type and a dynamic-list ext-info are created, the form's main attribute is set when it has none, and `autoFillAvailableFields` is turned on so EDT derives the available `<fields>` from the query - you do NOT author a DCS `<fields>` block. Create the bare attribute first (`create_metadata` with `...Form.ListForm.Attribute.List`), then set its query here. **Output a column** with `create_metadata` for a form Field bound to `dataPath` `List.<field>` (e.g. `List.Number`), where `<field>` is a query select field; the Field shows that query column in the list table. The query props are structural, so they cannot be combined with other property changes in one call (set the query first, then make other changes). A non-existent attribute or a malformed FQN is a clean error. The change force-exports the form's `Form.form` to disk; verify with get_project_errors (an invalid query is reported by the platform's dynamic-list validation). Property names are bilingual: ru `ТекстЗапроса` / `ПроизвольныйЗапрос` / `ОсновнаяТаблица`.
 
+## Setting role access rights
+When the `fqn` is a **Role** (`Role.<Name>`) you set the role's ACCESS RIGHTS through three sibling payload keys instead of `properties` - a role is modified through its rights surface, not the generic property bag. All three keys are optional; give any combination in one call. A role payload CANNOT be combined with a generic `properties` change in the same call (set the role's own comment / synonym separately). Read a role's current rights matrix, RLS restrictions and templates with `get_metadata_details` on the Role FQN. The change goes through the EDT-native rights tasks and force-exports `Role.<Name>` (draining the sibling `Rights.rights` sub-resource).
+
+- `rights` - array of `{object, right, value?, rls?, rlsFields?}` (per-object right VALUES + optional per-object Row-Level-Security):
+  - `object` (required) - the guarded metadata FQN, e.g. `Catalog.Products` or the Russian `Справочник.Товары` (only the type token is bilingual; the Name is the programmatic Name).
+  - `right` (required) - a bilingual right name, e.g. `Read` / `Чтение`, `Update` / `Изменение`, `Insert` / `Добавление`. An unknown right is rejected WITH the list of valid rights for that object type.
+  - `value` (optional, default `set`) - `set` (allowed) / `unset` (denied) / `provided` (default / inherited), or a boolean (`true`=set, `false`=unset).
+  - `rls` (optional) - a Row-Level-Security restriction condition (1C query text). Setting it adds (or edits, if one already exists for that object+right) the RLS restriction.
+  - `rlsFields` (optional) - an array of field names the RLS applies to; omit or leave empty for a WHOLE-OBJECT restriction. Field names are matched bilingually against the object's RLS field pool.
+- `templates` - array of `{op?, name, condition?}` (RLS restriction templates):
+  - `op` (optional, default `add`) - `add` / `edit` / `delete`.
+  - `name` (required) - the template name.
+  - `condition` (required for `add` / `edit`) - the RLS restriction text.
+- `roleProperties` - object of optional booleans `{setForNewObjects, setForAttributesByDefault, independentRightsOfChildObjects}` - the three role-wide flags. Only supplied flags are changed.
+
+An unknown right or a bad object FQN is a clean, actionable error (not-found + the valid list / a suggestion). Nothing is written unless the payload resolves.
+
 ## Examples
 - Move a field into a group: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Field.Price', properties:[{name:'parent', value:'PriceGroup'}]}`
 - Move a button into the command bar: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Button.Print', properties:[{name:'parent', value:'AutoCommandBar'}]}`
@@ -81,9 +101,15 @@ When the attribute is not yet a dynamic list it is converted: a `DynamicList` va
 - Set a style item to a red color: `{projectName:'P', fqn:'StyleItem.MyColor', properties:[{name:'value', value:{color:{red:255, green:0, blue:0}}}]}`
 - Set a style item to the automatic color: `{projectName:'P', fqn:'StyleItem.MyColor', properties:[{name:'value', value:{color:'auto'}}]}`
 - Set a style item to a font: `{projectName:'P', fqn:'StyleItem.MyFont', properties:[{name:'value', value:{font:{faceName:'Arial', height:12, bold:true}}}]}`
+- Grant a role a right on an object: `{projectName:'P', fqn:'Role.FullAccess', rights:[{object:'Catalog.Products', right:'Read', value:'set'}]}`
+- Deny a right (bilingual right name): `{projectName:'P', fqn:'Role.FullAccess', rights:[{object:'Справочник.Товары', right:'Изменение', value:'unset'}]}`
+- Add a whole-object RLS restriction: `{projectName:'P', fqn:'Role.Sales', rights:[{object:'Catalog.Products', right:'Read', value:'set', rls:'WHERE Ref.Company = &Company'}]}`
+- Add a per-field RLS restriction: `{projectName:'P', fqn:'Role.Sales', rights:[{object:'Catalog.Products', right:'Read', value:'set', rls:'WHERE Ref.Company = &Company', rlsFields:['Price', 'Cost']}]}`
+- Add an RLS restriction template: `{projectName:'P', fqn:'Role.Sales', templates:[{op:'add', name:'ByCompany', condition:'WHERE Company = &Company'}]}`
+- Set the role-wide flags: `{projectName:'P', fqn:'Role.Sales', roleProperties:{setForNewObjects:true, setForAttributesByDefault:false}}`
 
 ## Result
-JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, `persisted`, and (when the ё->е normalization rewrote anything) the list of `normalized` properties. A move additionally returns `destination` (where the moved item ended up, e.g. `group 'Main' at index 1`).
+JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, `persisted`, and (when the ё->е normalization rewrote anything) the list of `normalized` properties. A move additionally returns `destination` (where the moved item ended up, e.g. `group 'Main' at index 1`). For a ROLE rights change `applied` is instead a counts object `{rights, templates, roleProperties}` (how many of each were applied).
 
 ## Reverting (no undo)
 There is no automatic undo: to revert a change, call modify_metadata again with the previous value (read the current value first with get_metadata_details). modify_metadata is intentionally NOT confirm-gated because it is reversible that way; only the destructive / high-blast-radius writes (delete_metadata, rename_metadata_object, update_database, delete_project) are gated with a confirm-preview.

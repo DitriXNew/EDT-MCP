@@ -27,6 +27,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
@@ -45,9 +46,11 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 
 /**
@@ -105,6 +108,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "turns the attribute into a DynamicList and lets EDT auto-fill the available fields from " //$NON-NLS-1$
             + "the query (no manual XML; output a column with create_metadata Field dataPath " //$NON-NLS-1$
             + "'List.<field>'). " //$NON-NLS-1$
+            + "For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' " //$NON-NLS-1$
+            + "(per-object right VALUES + optional per-field RLS restriction conditions), 'templates' " //$NON-NLS-1$
+            + "(RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role " //$NON-NLS-1$
+            + "booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. " //$NON-NLS-1$
             + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -121,9 +128,28 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "'Catalog.Products.Attribute.Weight' (type / kind tokens may be English or Russian; " //$NON-NLS-1$
                 + "the Name parts are the programmatic Name).", true) //$NON-NLS-1$
             .objectArrayProperty("properties", //$NON-NLS-1$
-                "Properties to set, as [{name, value, language?}] (required, at least one). 'name' is " //$NON-NLS-1$
+                "Properties to set, as [{name, value, language?}]. 'name' is " //$NON-NLS-1$
                 + "the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new " //$NON-NLS-1$
-                + "value; 'language' is the code for a synonym (default: config default).", true) //$NON-NLS-1$
+                + "value; 'language' is the code for a synonym (default: config default). Required " //$NON-NLS-1$
+                + "unless the FQN is a Role and a role payload (rights / templates / roleProperties) " //$NON-NLS-1$
+                + "is given.") //$NON-NLS-1$
+            .objectArrayProperty("rights", //$NON-NLS-1$
+                "ROLE only: per-object access rights to set, as [{object, right, value?, rls?, " //$NON-NLS-1$
+                + "rlsFields?}]. 'object' is a metadata FQN (e.g. 'Catalog.Products' or the Russian " //$NON-NLS-1$
+                + "'Справочник.Товары'); 'right' is a bilingual right name (e.g. 'Read'/'Чтение', " //$NON-NLS-1$
+                + "'Update'/'Изменение'); 'value' is 'set' (allowed, default) / 'unset' (denied) / " //$NON-NLS-1$
+                + "'provided' (default/inherited), or a boolean (true=set, false=unset). 'rls' is an " //$NON-NLS-1$
+                + "optional Row-Level-Security restriction condition (1C query text); 'rlsFields' is " //$NON-NLS-1$
+                + "an optional array of field names the RLS applies to (omit / empty = whole-object " //$NON-NLS-1$
+                + "restriction).") //$NON-NLS-1$
+            .objectArrayProperty("templates", //$NON-NLS-1$
+                "ROLE only: RLS restriction templates to change, as [{op?, name, condition?}]. 'op' is " //$NON-NLS-1$
+                + "'add' (default) / 'edit' / 'delete'; 'name' is the template name; 'condition' is " //$NON-NLS-1$
+                + "the RLS restriction text (required for add/edit).") //$NON-NLS-1$
+            .objectProperty("roleProperties", //$NON-NLS-1$
+                "ROLE only: the three role properties, as optional booleans {setForNewObjects, " //$NON-NLS-1$
+                + "setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags " //$NON-NLS-1$
+                + "are changed.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
                 + "title) and in the 'comment' property (default true). Matches the 1C standard " //$NON-NLS-1$
@@ -140,7 +166,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .booleanProperty("success", "Whether the properties were set", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.ACTION, "'modified' on success") //$NON-NLS-1$
             .stringProperty("fqn", "Normalized FQN of the modified node") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set") //$NON-NLS-1$
+            .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
+                + "rights change this is instead an object {rights, templates, roleProperties} with " //$NON-NLS-1$
+                + "the applied counts)") //$NON-NLS-1$
             .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
@@ -163,10 +191,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
-        if (properties.isEmpty())
+
+        // Role payload (rights[] / templates[] / roleProperties): dispatched when the resolved FQN is a
+        // Role. When present, 'properties' is optional (a role is modified through the rights surface,
+        // not the generic property bag).
+        List<JsonObject> rolePayloadRights = JsonUtils.extractObjectArray(params, "rights"); //$NON-NLS-1$
+        List<JsonObject> rolePayloadTemplates = JsonUtils.extractObjectArray(params, "templates"); //$NON-NLS-1$
+        JsonObject roleProperties = parseRolePropertiesArg(params);
+        boolean hasRolePayload =
+            !rolePayloadRights.isEmpty() || !rolePayloadTemplates.isEmpty() || roleProperties != null;
+
+        if (properties.isEmpty() && !hasRolePayload)
         {
             return ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
-                + "set, e.g. [{name: 'comment', value: 'Goods'}].").toJson(); //$NON-NLS-1$
+                + "set, e.g. [{name: 'comment', value: 'Goods'}]. For a Role FQN, provide 'rights', " //$NON-NLS-1$
+                + "'templates' or 'roleProperties' instead.").toJson(); //$NON-NLS-1$
         }
 
         // 'ё'->'е' normalization is applied at the parse step to every localized-string / free-text
@@ -212,6 +251,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             normFqn = resolved.fqn;
         }
         MdObject target = node.object;
+
+        // A ROLE FQN carrying a role payload (rights / templates / roleProperties) is dispatched to the
+        // dedicated rights writer: a role is modified through its access-rights surface, not the generic
+        // property bag. The mutation goes through the EDT-native rights tasks + a forceExport of the
+        // Role FQN (draining the sibling Rights.rights sub-resource).
+        if (target instanceof Role && hasRolePayload)
+        {
+            return modifyRoleRights(ctx, normFqn, (Role)target, properties, rolePayloadRights,
+                rolePayloadTemplates, roleProperties);
+        }
+
+        // A role payload addressed to a NON-Role FQN is rejected here (it must not fall through to the
+        // generic property path, which - with an empty 'properties' - would apply nothing yet report a
+        // false success and silently drop the rights / templates / roleProperties payload).
+        if (hasRolePayload)
+        {
+            return ToolResult.error("'rights' / 'templates' / 'roleProperties' are only valid for a " //$NON-NLS-1$
+                + "Role FQN; '" + normFqn + "' is a " + target.eClass().getName() + ". Use " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'properties' for its generic properties, or address a Role.<Name>.").toJson(); //$NON-NLS-1$
+        }
 
         // Resolve the BM re-fetch strategy (mutation must re-fetch inside the write tx). Only TOP
         // objects are re-fetchable by bmId, so for a member we re-fetch the TOP object and
@@ -352,6 +411,88 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         normReport.addTo(result);
         return result
             .put(McpKeys.MESSAGE, "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .toJson();
+    }
+
+    /**
+     * Parses the optional {@code roleProperties} argument (a single JSON object) from the raw params.
+     * Returns {@code null} when the argument is absent or is not a JSON object (an invalid shape is
+     * surfaced later by {@link RoleRightsWriter}'s validation). Kept separate from the array parsing
+     * because {@link JsonUtils} has no single-object extractor.
+     */
+    private static JsonObject parseRolePropertiesArg(Map<String, String> params)
+    {
+        String raw = params.get("roleProperties"); //$NON-NLS-1$
+        if (raw == null || raw.trim().isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            JsonElement element = JsonParser.parseString(raw.trim());
+            return element.isJsonObject() ? element.getAsJsonObject() : null;
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Modifies a ROLE's access rights (the {@code rights} / {@code templates} / {@code roleProperties}
+     * payload) via {@link RoleRightsWriter}. A role is modified through its rights surface, not the
+     * generic property bag, so mixing the role payload with a generic {@code properties} change in the
+     * same call is refused (the same policy the move / handler / command form branches enforce). The
+     * writer mutates only through the EDT-native rights tasks; this branch then force-exports BOTH the
+     * Role FQN AND the {@code RoleDescription}'s own top-object FQN, OUTSIDE the writer, because the
+     * rights matrix lives in its OWN BM resource ({@code Rights.rights}) that the role FQN alone does
+     * not drain.
+     */
+    private String modifyRoleRights(ProjectContext ctx, String normFqn, Role role,
+        List<JsonObject> properties, List<JsonObject> rights, List<JsonObject> templates,
+        JsonObject roleProperties)
+    {
+        if (!properties.isEmpty())
+        {
+            return ToolResult.error("A role rights change ('rights' / 'templates' / 'roleProperties') " //$NON-NLS-1$
+                + "cannot be combined with a generic 'properties' change in one call. Set the role's " //$NON-NLS-1$
+                + "own properties (comment / synonym) separately.").toJson(); //$NON-NLS-1$
+        }
+
+        RoleRightsWriter.Result result =
+            RoleRightsWriter.apply(ctx.project, ctx.config, role, rights, templates, roleProperties);
+        if (result.hasError())
+        {
+            return result.error;
+        }
+
+        // The rights matrix (the Rights.rights file) is a SEPARATE BM resource from Role.mdo: the
+        // RoleDescription is its own top BM object (its impl extends com._1c.g5.v8.bm.core.BmObject)
+        // with its own EClass-keyed exporter (RightsExporter supports ROLE_DESCRIPTION). Exporting only
+        // the role FQN drains Role.mdo but never Rights.rights, so force-export its OWN FQN too.
+        // 'persisted' stays honest: true only when the rights resource FQN resolved and was exported.
+        String rightsFqn = RoleRightsWriter.resolveRightsDescriptionFqn(ctx.project, role);
+        List<String> exportFqns = new ArrayList<>();
+        exportFqns.add(normFqn);
+        if (rightsFqn != null && !rightsFqn.equals(normFqn))
+        {
+            exportFqns.add(rightsFqn);
+        }
+        boolean exported = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
+        boolean persisted = exported && rightsFqn != null;
+
+        JsonObject applied = new JsonObject();
+        applied.addProperty("rights", result.rights); //$NON-NLS-1$
+        applied.addProperty("templates", result.templates); //$NON-NLS-1$
+        applied.addProperty("roleProperties", result.roleProperties); //$NON-NLS-1$
+        return ToolResult.success()
+            .put(McpKeys.ACTION, VAL_MODIFIED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put(KEY_APPLIED, applied)
+            .put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, "Modified role " + normFqn + " (rights: " + result.rights //$NON-NLS-1$ //$NON-NLS-2$
+                + ", templates: " + result.templates + ", roleProperties: " + result.roleProperties //$NON-NLS-1$ //$NON-NLS-2$
+                + ")") //$NON-NLS-1$
             .toJson();
     }
 
