@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetMetadataObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetModuleStructureTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetObjectsByTagsTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetOutgoingStructuresTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetPlatformDocumentationTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProblemSummaryTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProfilingResultsTool;
@@ -180,6 +181,7 @@ public final class BuiltInToolRegistrar
         registry.register(new SearchInCodeTool());
         registry.register(new ReadMethodSourceTool());
         registry.register(new GetMethodCallHierarchyTool());
+        registry.register(new GetOutgoingStructuresTool());
         registry.register(new GoToDefinitionTool());
         registry.register(new GetSymbolInfoTool());
         registry.register(new GetFormLayoutSnapshotTool());

@@ -2052,6 +2052,71 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "For each outgoing qualified call in a BSL module (or one method), report the top-level literal keys of the Structure passed as its first argument (local .Insert keys plus a one-level same-module seed/template helper). Best-effort, literal keys only. Full parameters and examples: call get_tool_guide('get_outgoing_structures').",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "description": "Max records. Default: 100, max: 500",
+          "type": "integer"
+        },
+        "method": {
+          "description": "Optional method name (case-insensitive) to scope to one method; omit to scan the whole module",
+          "type": "string"
+        },
+        "modulePath": {
+          "description": "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name (required)",
+          "type": "string"
+        },
+        "qualifier": {
+          "description": "Optional call-qualifier filter: keep only calls whose <var> in <var>.Method(...) matches this by prefix or equality (case-insensitive)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "modulePath"
+      ],
+      "type": "object"
+    },
+    "name": "get_outgoing_structures",
+    "outputSchema": {
+      "properties": {
+        "structureCount": {
+          "description": "Number of records emitted",
+          "type": "integer"
+        },
+        "structures": {
+          "description": "One record per outgoing qualified call, each with the collected literal keys",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "truncated": {
+          "description": "True when the record cap was hit",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Look up 1C:Enterprise platform documentation for built-in types (ValueTable, Array, Structure) and global built-in functions, including their methods, properties, constructors and events. Use when you need the exact platform API signature rather than configuration metadata. Full parameters and examples: call get_tool_guide('get_platform_documentation').",
     "inputSchema": {
       "properties": {
