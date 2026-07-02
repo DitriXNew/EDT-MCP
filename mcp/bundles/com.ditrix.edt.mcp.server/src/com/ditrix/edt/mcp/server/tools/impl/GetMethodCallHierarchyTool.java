@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -54,6 +55,9 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * those and match each invocation to this exact method via its resolved AST feature entries
  * (with a call-qualifier fallback when the resolver has not populated them). Callees are
  * collected by walking the target method's own AST.
+ * <p>
+ * The aggregated {@code direction='outgoing'} mode is a clean-room implementation inspired by the
+ * idea behind edt-bridge's {@code edt_outgoing_calls} tool (Apache-2.0); no source was copied.
  */
 public class GetMethodCallHierarchyTool implements IMcpTool
 {
@@ -62,11 +66,34 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     /** Input param: name of the procedure/function to analyze. */
     private static final String KEY_METHOD_NAME = "methodName"; //$NON-NLS-1$
 
-    /** Input param: hierarchy direction ('callers' or 'callees'). */
+    /** Input param: hierarchy direction ('callers', 'callees' or 'outgoing'). */
     private static final String KEY_DIRECTION = "direction"; //$NON-NLS-1$
 
     /** Direction value: callers (who calls this method). */
     private static final String KEY_CALLERS = "callers"; //$NON-NLS-1$
+
+    /** Direction value: aggregated outgoing calls (distinct call targets). */
+    private static final String KEY_OUTGOING = "outgoing"; //$NON-NLS-1$
+
+    /** Input param: literal call-qualifier prefix that flags a call as an external service API. */
+    private static final String KEY_EXT_API_PREFIX = "extApiPrefix"; //$NON-NLS-1$
+
+    /**
+     * Default {@link #KEY_EXT_API_PREFIX} value: the Cyrillic 1C region name that conventionally
+     * marks a module's service programming interface ("ProgrammnyyInterfeysServisa"). Encoded via
+     * {@code \\uXXXX} escapes per project rule #7 (never a raw UTF-8 literal in source).
+     * Package-visible so the headless unit tests can assert the default without a UTF-8 literal.
+     */
+    static final String DEFAULT_EXT_API_PREFIX =
+        "\u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043d\u044b\u0439" //$NON-NLS-1$
+        + "\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441" //$NON-NLS-1$
+        + "\u0421\u0435\u0440\u0432\u0438\u0441\u0430"; //$NON-NLS-1$
+
+    /** Qualifier token for an unqualified local call (methodAccess is a StaticFeatureAccess). */
+    private static final String QUALIFIER_LOCAL = "(local)"; //$NON-NLS-1$
+
+    /** Qualifier token for a chained/expression call whose source is not a StaticFeatureAccess. */
+    private static final String QUALIFIER_EXPR = "(expr)"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -92,10 +119,19 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             .stringProperty(McpKeys.MODULE_PATH,
                 "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)", true) //$NON-NLS-1$
             .stringProperty(KEY_METHOD_NAME,
-                "Name of the procedure/function (case-insensitive, required)", true) //$NON-NLS-1$
+                "Name of the procedure/function (case-insensitive). " //$NON-NLS-1$
+                + "Required for direction 'callers'/'callees'; optional for 'outgoing' " //$NON-NLS-1$
+                + "(omit to aggregate the whole module).", false) //$NON-NLS-1$
             .enumProperty(KEY_DIRECTION,
-                "'callers' (default) or 'callees'", //$NON-NLS-1$
-                KEY_CALLERS, "callees") //$NON-NLS-1$
+                "'callers' (default) = who calls this method; 'callees' = what this method calls; " //$NON-NLS-1$
+                + "'outgoing' = aggregated distinct call targets (module-wide when methodName omitted)", //$NON-NLS-1$
+                KEY_CALLERS, "callees", KEY_OUTGOING) //$NON-NLS-1$
+            .stringProperty(KEY_EXT_API_PREFIX,
+                "For direction 'outgoing': literal call-qualifier prefix (case-insensitive) that " //$NON-NLS-1$
+                + "flags a target as an external service API. Default: the 1C region name " //$NON-NLS-1$
+                + "'\u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043d\u044b\u0439" //$NON-NLS-1$
+                + "\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441" //$NON-NLS-1$
+                + "\u0421\u0435\u0440\u0432\u0438\u0441\u0430'.") //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT,
                 "Max results. Default: 100, max: 500") //$NON-NLS-1$
             .build();
@@ -117,6 +153,11 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             return "call-hierarchy-" + methodName.toLowerCase() + //$NON-NLS-1$
                    "-" + (direction != null ? direction : KEY_CALLERS) + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
+        // Module-wide outgoing scope has no method name; keep a distinct, descriptive file name.
+        if (direction != null && KEY_OUTGOING.equalsIgnoreCase(direction))
+        {
+            return "call-hierarchy-outgoing.md"; //$NON-NLS-1$
+        }
         return "call-hierarchy.md"; //$NON-NLS-1$
     }
 
@@ -127,9 +168,12 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         String methodName = JsonUtils.extractStringArgument(params, KEY_METHOD_NAME);
         String direction = JsonUtils.extractStringArgument(params, KEY_DIRECTION);
+        String extApiPrefix = JsonUtils.extractStringArgument(params, KEY_EXT_API_PREFIX);
         int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, 100);
 
-        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, McpKeys.MODULE_PATH, KEY_METHOD_NAME);
+        // methodName is optional (only required for callers/callees); require it manually below
+        // after we have parsed and validated direction, so the guard can honour 'outgoing'.
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, McpKeys.MODULE_PATH);
         if (err != null)
         {
             return err;
@@ -141,9 +185,21 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         direction = direction.toLowerCase();
 
-        if (!KEY_CALLERS.equals(direction) && !"callees".equals(direction)) //$NON-NLS-1$
+        if (!KEY_CALLERS.equals(direction) && !"callees".equals(direction) //$NON-NLS-1$
+            && !KEY_OUTGOING.equals(direction))
         {
-            return ToolResult.error("direction must be 'callers' or 'callees'").toJson(); //$NON-NLS-1$
+            return ToolResult.error("direction must be 'callers', 'callees' or 'outgoing'").toJson(); //$NON-NLS-1$
+        }
+
+        if ((methodName == null || methodName.trim().isEmpty()) && !KEY_OUTGOING.equals(direction))
+        {
+            return ToolResult.error("methodName is required for callers/callees" //$NON-NLS-1$
+                + ". Use get_module_structure to list the module's procedures and functions.").toJson(); //$NON-NLS-1$
+        }
+
+        if (extApiPrefix == null || extApiPrefix.isEmpty())
+        {
+            extApiPrefix = DEFAULT_EXT_API_PREFIX;
         }
 
         limit = Pagination.clampLimit(limit, 500);
@@ -151,13 +207,18 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         AtomicReference<String> resultRef = new AtomicReference<>();
         final String dir = direction;
         final int maxResults = limit;
+        final String prefix = extApiPrefix;
 
         Display display = PlatformUI.getWorkbench().getDisplay();
         display.syncExec(() -> {
             try
             {
                 String result;
-                if (KEY_CALLERS.equals(dir))
+                if (KEY_OUTGOING.equals(dir))
+                {
+                    result = findOutgoing(projectName, modulePath, methodName, prefix, maxResults);
+                }
+                else if (KEY_CALLERS.equals(dir))
                 {
                     result = findCallers(projectName, modulePath, methodName, maxResults);
                 }
@@ -501,6 +562,64 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     }
 
     /**
+     * Classifies an invocation's method access into the qualifier token used to aggregate outgoing
+     * calls. Pinned semantics (guarded against NPE / ClassCastException):
+     * <ul>
+     * <li>an unqualified local call ({@code methodAccess} is a {@link StaticFeatureAccess}) →
+     * {@code "(local)"};</li>
+     * <li>a {@link DynamicFeatureAccess} whose {@code getSource()} is a {@link StaticFeatureAccess}
+     * → that source's name (the qualifying object, e.g. {@code CommonModule});</li>
+     * <li>a {@link DynamicFeatureAccess} whose source is a chained/other expression → {@code "(expr)"}.
+     * </li>
+     * </ul>
+     * A {@code null} or unrecognized access yields {@code "(expr)"}.
+     *
+     * @param methodAccess the invocation's method access node (may be {@code null})
+     * @return the qualifier token, never {@code null}
+     */
+    static String qualifierKey(EObject methodAccess)
+    {
+        if (methodAccess instanceof StaticFeatureAccess)
+        {
+            return QUALIFIER_LOCAL;
+        }
+        if (methodAccess instanceof DynamicFeatureAccess)
+        {
+            Expression source = ((DynamicFeatureAccess)methodAccess).getSource();
+            if (source instanceof StaticFeatureAccess)
+            {
+                String name = ((StaticFeatureAccess)source).getName();
+                return name != null ? name : QUALIFIER_EXPR;
+            }
+            return QUALIFIER_EXPR;
+        }
+        return QUALIFIER_EXPR;
+    }
+
+    /**
+     * True when a call qualifier flags an external service API, i.e. the resolved qualifier token
+     * starts (case-insensitively) with {@code prefix}. This is a literal text match on the call
+     * qualifier itself, not a resolved-module lookup. The synthetic tokens {@code "(local)"} and
+     * {@code "(expr)"} never match (they cannot start with a real region name).
+     *
+     * @param qualifier the resolved qualifier token (from {@link #qualifierKey(EObject)})
+     * @param prefix the external-API prefix to test against
+     * @return true when the qualifier begins with the prefix (case-insensitive)
+     */
+    static boolean isExtApi(String qualifier, String prefix)
+    {
+        if (qualifier == null || prefix == null || prefix.isEmpty())
+        {
+            return false;
+        }
+        if (QUALIFIER_LOCAL.equals(qualifier) || QUALIFIER_EXPR.equals(qualifier))
+        {
+            return false;
+        }
+        return qualifier.toLowerCase().startsWith(prefix.toLowerCase());
+    }
+
+    /**
      * Finds all callees from the specified method by traversing its AST.
      */
     private String findCallees(String projectName, String modulePath, String methodName, int limit)
@@ -724,6 +843,167 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         return sb.toString();
     }
 
+    // ========== Outgoing (aggregated targets) ==========
+
+    /**
+     * Aggregates the distinct outgoing call targets of a scope. When {@code methodName} is given the
+     * scope is that method's AST (mirroring {@link #findCallees}); when it is omitted the scope is
+     * the whole module's AST (mirroring the invocation walk of {@link #findCallers} /
+     * {@link #scanCandidateInvocations}). Each {@link Invocation} is classified via
+     * {@link #qualifierKey(EObject)} and aggregated by {@code qualifier + "." + method} into a
+     * first-seen-ordered map: {@code count} is the number of call sites and {@code firstLine} is the
+     * smallest start line across those sites.
+     *
+     * @param projectName the EDT project
+     * @param modulePath the source-relative module path
+     * @param methodName the scoping method name, or {@code null}/blank for the whole module
+     * @param extApiPrefix the literal external-API qualifier prefix (case-insensitive)
+     * @param limit the maximum number of distinct rows to render
+     * @return the rendered Markdown, or a {@link ToolResult#error} JSON string on failure
+     */
+    private String findOutgoing(String projectName, String modulePath, String methodName,
+        String extApiPrefix, int limit)
+    {
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+        }
+        IProject project = ctx.project();
+
+        Module module = BslModuleUtils.loadModule(project, modulePath);
+        if (module == null)
+        {
+            return ToolResult.error("Could not load EMF model for " + modulePath + //$NON-NLS-1$
+                   ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details.").toJson(); //$NON-NLS-1$
+        }
+
+        boolean scoped = methodName != null && !methodName.trim().isEmpty();
+        EObject scope;
+        if (scoped)
+        {
+            Method method = BslModuleUtils.findMethod(module, methodName);
+            if (method == null)
+            {
+                return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
+            }
+            scope = method;
+        }
+        else
+        {
+            scope = module;
+        }
+
+        // First-seen-ordered aggregation keyed by qualifier + "." + method.
+        Map<String, OutgoingTarget> targets = new LinkedHashMap<>();
+
+        try
+        {
+            for (Iterator<EObject> iter = scope.eAllContents(); iter.hasNext();)
+            {
+                EObject obj = iter.next();
+                if (!(obj instanceof Invocation))
+                {
+                    continue;
+                }
+                Invocation inv = (Invocation)obj;
+                // Reuse the frozen resolveInvocationName (it re-derives the method access from the
+                // Invocation) rather than a duplicate name-resolver; classify the qualifier separately.
+                String method = resolveInvocationName(inv);
+                if (method == null || method.isEmpty())
+                {
+                    continue;
+                }
+                String qualifier = qualifierKey(inv.getMethodAccess());
+                int line = BslModuleUtils.getStartLine(inv);
+
+                String key = qualifier + "." + method; //$NON-NLS-1$
+                OutgoingTarget target = targets.get(key);
+                if (target == null)
+                {
+                    target = new OutgoingTarget();
+                    target.qualifier = qualifier;
+                    target.method = method;
+                    target.count = 0;
+                    target.firstLine = line;
+                    target.extApi = isExtApi(qualifier, extApiPrefix);
+                    targets.put(key, target);
+                }
+                target.count++;
+                // firstLine = min getStartLine across the call sites of this target.
+                target.firstLine = Math.min(target.firstLine, line);
+            }
+        }
+        catch (Exception e)
+        {
+            // Per-file parse failure must never abort the aggregation; log and continue with what
+            // was collected so far (mirrors the candidate-scan resilience of findCallers).
+            Activator.logWarning("Failed to walk module for outgoing calls " + modulePath //$NON-NLS-1$
+                + ": " + e.getMessage()); //$NON-NLS-1$
+        }
+
+        return formatOutgoingOutput(modulePath, scoped ? methodName : null,
+            new ArrayList<>(targets.values()), limit);
+    }
+
+    /**
+     * Renders the aggregated outgoing-call targets as Markdown. The heading names the module and,
+     * only when the scope is a single method, appends {@code " :: <method>"}. Distinct rows are
+     * clamped to {@code limit}; the total-distinct count and truncation notice are computed against
+     * the full set before clamping.
+     *
+     * @param modulePath the analyzed module path
+     * @param methodName the scoping method name, or {@code null} for a module-wide scope
+     * @param targets the aggregated distinct targets in first-seen order
+     * @param limit the maximum number of rows to render
+     * @return the rendered Markdown
+     */
+    private String formatOutgoingOutput(String modulePath, String methodName,
+        List<OutgoingTarget> targets, int limit)
+    {
+        int totalDistinct = targets.size();
+        int shown = Math.min(totalDistinct, limit);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Outgoing Calls: ").append(modulePath); //$NON-NLS-1$
+        if (methodName != null && !methodName.isEmpty())
+        {
+            sb.append(" :: ").append(methodName); //$NON-NLS-1$
+        }
+        sb.append("\n\n"); //$NON-NLS-1$
+        sb.append("**Direction:** Outgoing calls (aggregated targets)\n"); //$NON-NLS-1$
+        sb.append("**Total distinct targets:** ").append(totalDistinct); //$NON-NLS-1$
+        sb.append(Pagination.truncationNotice(shown, totalDistinct));
+        sb.append("\n\n"); //$NON-NLS-1$
+
+        if (targets.isEmpty())
+        {
+            sb.append("No outgoing calls found.\n"); //$NON-NLS-1$
+            return sb.toString();
+        }
+
+        sb.append("| Qualifier | Method | Count | First line | ExtAPI |\n"); //$NON-NLS-1$
+        sb.append("|-----------|--------|-------|------------|--------|\n"); //$NON-NLS-1$
+
+        int rendered = 0;
+        for (OutgoingTarget target : targets)
+        {
+            if (rendered >= shown)
+            {
+                break;
+            }
+            rendered++;
+            sb.append("| ").append(MarkdownUtils.escapeForTable(target.qualifier)); //$NON-NLS-1$
+            sb.append(" | ").append(MarkdownUtils.escapeForTable(target.method)); //$NON-NLS-1$
+            sb.append(" | ").append(MarkdownUtils.escapeForTable(String.valueOf(target.count))); //$NON-NLS-1$
+            sb.append(" | ").append(MarkdownUtils.escapeForTable(String.valueOf(target.firstLine))); //$NON-NLS-1$
+            sb.append(" | ").append(MarkdownUtils.escapeForTable(target.extApi ? "yes" : "-")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            sb.append(" |\n"); //$NON-NLS-1$
+        }
+
+        return sb.toString();
+    }
+
     // ========== Data structures ==========
 
     private static class CallerInfo
@@ -739,5 +1019,18 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         String calledMethodName;
         int line;
         String callCode;
+    }
+
+    /**
+     * One aggregated outgoing-call target: a distinct {@code qualifier.method} pair with the number
+     * of call sites and the smallest start line across them.
+     */
+    private static class OutgoingTarget
+    {
+        String qualifier;
+        String method;
+        int count;
+        int firstLine;
+        boolean extApi;
     }
 }

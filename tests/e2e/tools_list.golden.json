@@ -1878,11 +1878,16 @@
     "inputSchema": {
       "properties": {
         "direction": {
-          "description": "'callers' (default) or 'callees'",
+          "description": "'callers' (default) = who calls this method; 'callees' = what this method calls; 'outgoing' = aggregated distinct call targets (module-wide when methodName omitted)",
           "enum": [
             "callers",
-            "callees"
+            "callees",
+            "outgoing"
           ],
+          "type": "string"
+        },
+        "extApiPrefix": {
+          "description": "For direction 'outgoing': literal call-qualifier prefix (case-insensitive) that flags a target as an external service API. Default: the 1C region name 'ПрограммныйИнтерфейсСервиса'.",
           "type": "string"
         },
         "limit": {
@@ -1890,7 +1895,7 @@
           "type": "integer"
         },
         "methodName": {
-          "description": "Name of the procedure/function (case-insensitive, required)",
+          "description": "Name of the procedure/function (case-insensitive). Required for direction 'callers'/'callees'; optional for 'outgoing' (omit to aggregate the whole module).",
           "type": "string"
         },
         "modulePath": {
@@ -1904,8 +1909,7 @@
       },
       "required": [
         "projectName",
-        "modulePath",
-        "methodName"
+        "modulePath"
       ],
       "type": "object"
     },
