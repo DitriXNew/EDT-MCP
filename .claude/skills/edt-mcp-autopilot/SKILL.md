@@ -82,9 +82,10 @@ in `references/review-checklist.md`.
 
 ## Phases 5–6 — Build
 
-Run the build workflow (parallel developers over the file-disjoint slices → a 3–4 reviewer loop
-that re-runs until clean, sending problems back to fixers each round, with a max-round
-safeguard that escalates instead of spinning):
+Run the build workflow (parallel developers over the file-disjoint slices → a review loop where
+**each round both COMPILES + runs the unit tests (the build gate) AND applies 3–4 reviewers**;
+build failures and review findings both go to fixers, and a round is "clean" only when the build
+is green AND no findings remain — with a max-round safeguard that escalates instead of spinning):
 
 ```
 Workflow({
@@ -94,10 +95,20 @@ Workflow({
     spec: <spec from discover>,
     devPartition: <devPartition from discover>,
     reviewChecklist: "<contents of references/review-checklist.md>",
-    maxRounds: 4
+    maxRounds: 4,
+    buildCommand: "<the project build + unit-test command, WITH the machine's JDK17/maven — e.g.
+                    bash source/compile.sh --java-home <..> --maven-home <..>>"
   }
 })
 ```
+
+> **Always pass `buildCommand`.** Reviewers read the diff but cannot compile — so an unverified
+> API or a broken test churns rounds forever until a real build settles it. The build gate makes
+> the compiler the arbiter *inside* the loop (it reads the surefire reports and feeds failing
+> tests to the fixers as blockers). Take the exact command from the project context / CLAUDE.md
+> (it is machine-specific, so it lives in `args`, not in the release-clean script). If you ever
+> see the loop "reviewing and fixing the same thing round after round", that is the symptom of a
+> missing/failing build gate — check `reviewLog[].buildOk`.
 
 It returns `{ changedFiles, reviewLog, openProblems, rounds, clean }`. If `clean` is false after
 `maxRounds`, treat the remaining `openProblems` as an escalation (Phase 4 gate). Record the
@@ -107,12 +118,18 @@ review outcome in `.claude/work/<slug>/review-log.md`.
 > commit at the end. If two slices must touch the same file, re-partition or run that slice with
 > `isolation:'worktree'` and merge.
 
-## Phase 7 — Build + unit tests
+## Phase 7 — Build + unit tests (final confirmation)
 
-Run the project build + unit tests (delegate to `edt-mcp-build-test`). This is the real safety
-net — it catches missing `throws`, ratchet failures (unit `XxxToolTest`, schema/execute parity)
-and golden drift that reviewers miss. **Red → back to Phase 5/6** with the failures as the brief.
-Green → continue. If a tool's wire surface changed, regenerate the golden and review the diff.
+Run the project build + unit tests yourself (delegate to `edt-mcp-build-test`). With `buildCommand`
+set, the review loop already compiled + tested each round, so when it returned `clean: true` this
+is a fast confirmation on your own deterministic build (it should pass first try). It is still the
+real safety net — it catches missing `throws`, ratchet failures (unit `XxxToolTest`, schema/execute
+parity) and golden drift. **Red → back to Phase 5/6** with the failures as the brief. Green →
+continue. If a tool's wire surface changed, regenerate the golden and review the diff.
+
+> If the loop hit `maxRounds` still red (or you did NOT pass `buildCommand`), do NOT keep spawning
+> review rounds — **stop the workflow and run the build yourself**; the compiler settles what the
+> reviewers were guessing at, and you fix the concrete failures directly.
 
 ## Phase 8 — Live stand scenarios + operator gate
 
