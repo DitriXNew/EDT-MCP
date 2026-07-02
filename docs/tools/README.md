@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**73 tools.**
+**74 tools.**
 
 ## Core
 
@@ -50,6 +50,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`find_references`](find_references.md) | Find every place a metadata object is used: BSL code modules (with line numbers), other metadata, forms, roles, subsystems, etc. Pass the object FQN; the typ… |
 | [`get_content_assist`](get_content_assist.md) | Get code-completion proposals at a 1-based line/column in a BSL module - the members, globals and variables valid at that caret (e.g. after a '.'). May retur… |
 | [`get_method_call_hierarchy`](get_method_call_hierarchy.md) | Find a BSL method's call hierarchy: who calls it (callers, default) or what it calls (callees), via semantic AST analysis that resolves ru/en spellings (unli… |
+| [`get_outgoing_structures`](get_outgoing_structures.md) | For each outgoing qualified call in a BSL module (or one method), report the top-level literal keys of the Structure passed as its first argument (local .Ins… |
 | [`get_symbol_info`](get_symbol_info.md) | Get type/hover info about a symbol at a position in a BSL module. Returns inferred types, signatures, and documentation. |
 | [`go_to_definition`](go_to_definition.md) | Go to the definition of a symbol (the inverse of find_references): a qualified method 'ModuleName.MethodName', a bare 'MethodName' (also pass modulePath), or… |
 | [`read_method_source`](read_method_source.md) | Read a specific procedure/function from a BSL module by name. Returns source code with metadata. Lists available methods if not found. Use this for one metho… |
