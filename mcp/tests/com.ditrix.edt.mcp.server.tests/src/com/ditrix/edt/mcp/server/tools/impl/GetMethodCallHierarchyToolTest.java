@@ -54,6 +54,19 @@ public class GetMethodCallHierarchyToolTest
     }
 
     @Test
+    public void testAggregationKeyIsCaseInsensitive()
+    {
+        // BSL identifiers are case-insensitive: Module.Method and module.method aggregate as one target.
+        assertEquals(GetMethodCallHierarchyTool.aggregationKey("MyModule", "DoWork"), //$NON-NLS-1$ //$NON-NLS-2$
+            GetMethodCallHierarchyTool.aggregationKey("mymodule", "dowork")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Distinct qualifiers or methods still map to distinct keys.
+        assertFalse(GetMethodCallHierarchyTool.aggregationKey("A", "X") //$NON-NLS-1$ //$NON-NLS-2$
+            .equals(GetMethodCallHierarchyTool.aggregationKey("B", "X"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(GetMethodCallHierarchyTool.aggregationKey("A", "X") //$NON-NLS-1$ //$NON-NLS-2$
+            .equals(GetMethodCallHierarchyTool.aggregationKey("A", "Y"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testResponseTypeMarkdown()
     {
         assertEquals(ResponseType.MARKDOWN, new GetMethodCallHierarchyTool().getResponseType());

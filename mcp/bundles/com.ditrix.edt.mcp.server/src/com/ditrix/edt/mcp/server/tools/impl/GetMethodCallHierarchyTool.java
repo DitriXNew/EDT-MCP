@@ -620,6 +620,20 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     }
 
     /**
+     * The case-insensitive aggregation key for an outgoing target. BSL identifiers are
+     * case-insensitive, so {@code Module.Method} and {@code module.method} fold to the same target
+     * (the first-seen spelling is kept for display). Package-visible for headless unit tests.
+     *
+     * @param qualifier the qualifier token
+     * @param method the called method name
+     * @return the lower-cased {@code qualifier.method} key (Locale.ROOT)
+     */
+    static String aggregationKey(String qualifier, String method)
+    {
+        return (qualifier + "." + method).toLowerCase(java.util.Locale.ROOT); //$NON-NLS-1$
+    }
+
+    /**
      * Finds all callees from the specified method by traversing its AST.
      */
     private String findCallees(String projectName, String modulePath, String methodName, int limit)
@@ -917,7 +931,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 String qualifier = qualifierKey(inv.getMethodAccess());
                 int line = BslModuleUtils.getStartLine(inv);
 
-                String key = qualifier + "." + method; //$NON-NLS-1$
+                String key = aggregationKey(qualifier, method);
                 OutgoingTarget target = targets.get(key);
                 if (target == null)
                 {
@@ -930,8 +944,13 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                     targets.put(key, target);
                 }
                 target.count++;
-                // firstLine = min getStartLine across the call sites of this target.
-                target.firstLine = Math.min(target.firstLine, line);
+                // firstLine = smallest POSITIVE start line across the call sites. getStartLine() returns
+                // 0 when a node has no line info; 0 must not win the min (it renders as '-', like
+                // callers/callees), so only positive lines lower firstLine.
+                if (line > 0 && (target.firstLine <= 0 || line < target.firstLine))
+                {
+                    target.firstLine = line;
+                }
             }
         }
         catch (Exception e)
@@ -996,7 +1015,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             sb.append("| ").append(MarkdownUtils.escapeForTable(target.qualifier)); //$NON-NLS-1$
             sb.append(" | ").append(MarkdownUtils.escapeForTable(target.method)); //$NON-NLS-1$
             sb.append(" | ").append(MarkdownUtils.escapeForTable(String.valueOf(target.count))); //$NON-NLS-1$
-            sb.append(" | ").append(MarkdownUtils.escapeForTable(String.valueOf(target.firstLine))); //$NON-NLS-1$
+            sb.append(" | ").append(target.firstLine > 0 ? String.valueOf(target.firstLine) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
             sb.append(" | ").append(MarkdownUtils.escapeForTable(target.extApi ? "yes" : "-")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             sb.append(" |\n"); //$NON-NLS-1$
         }
