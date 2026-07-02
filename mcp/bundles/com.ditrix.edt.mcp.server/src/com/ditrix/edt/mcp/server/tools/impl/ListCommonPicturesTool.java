@@ -234,10 +234,13 @@ public class ListCommonPicturesTool implements IMcpTool
                 {
                     info.variants = reader.listVariants(picture);
                 }
-                catch (Exception e) // NOSONAR one unreadable Picture.zip degrades to "no variants", never aborts the listing
+                catch (Exception e) // NOSONAR one unreadable Picture.zip is surfaced per-picture, never aborts the listing
                 {
                     Activator.logError("Could not read variants of common picture " + info.name, e); //$NON-NLS-1$
                     info.variants = null;
+                    // Surface the failure in the report (this tool is meant to FIND picture problems) —
+                    // do not mask a corrupt/unreadable Picture.zip as an ordinary single-image picture.
+                    info.error = e.getMessage() != null ? e.getMessage() : e.toString();
                 }
             }
             pictures.add(info);
@@ -316,6 +319,14 @@ public class ListCommonPicturesTool implements IMcpTool
         }
         sb.append("\n\n"); //$NON-NLS-1$
 
+        if (info.error != null)
+        {
+            // A read failure is a real problem to flag, NOT a plain single-image picture.
+            sb.append("**Could not read this picture's Picture.zip:** ") //$NON-NLS-1$
+                .append(MarkdownUtils.escapeForTable(info.error)).append("\n\n"); //$NON-NLS-1$
+            return;
+        }
+
         if (info.variants == null || info.variants.isEmpty())
         {
             sb.append("No multi-variant Picture.zip (single-image picture, or its Picture.zip is empty); " //$NON-NLS-1$
@@ -369,5 +380,7 @@ public class ListCommonPicturesTool implements IMcpTool
         String name;
         String synonym;
         List<CommonPictureContentReader.PictureVariantInfo> variants;
+        /** Set when this picture's Picture.zip could not be read (surfaced in the report). */
+        String error;
     }
 }

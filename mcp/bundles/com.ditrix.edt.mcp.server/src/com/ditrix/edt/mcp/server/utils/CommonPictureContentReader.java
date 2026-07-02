@@ -9,7 +9,9 @@ package com.ditrix.edt.mcp.server.utils;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -179,8 +181,23 @@ public final class CommonPictureContentReader
         {
             return null;
         }
-        List<String> names = variantNames(content);
-        String selected = selectVariantName(names, variant.trim());
+        String selector = variant.trim();
+        String selected;
+        if (VARIANT_BEST.equalsIgnoreCase(selector))
+        {
+            // 'best' = the densest RASTER variant by explicit screen-density rank (NOT entry order);
+            // fall back to the first entry for an SVG-only picture.
+            selected = selectBestRasterName(content);
+            if (selected == null)
+            {
+                List<String> names = variantNames(content);
+                selected = names.isEmpty() ? null : names.get(0);
+            }
+        }
+        else
+        {
+            selected = selectVariantName(variantNames(content), selector);
+        }
         if (selected == null)
         {
             return null;
@@ -188,9 +205,50 @@ public final class CommonPictureContentReader
         byte[] png = decodeToPng(content, selected);
         if (png == null)
         {
-            return null;
+            // The entry EXISTS but could not be decoded (unsupported/corrupt content). Distinguish this
+            // from an unknown variant (which returns null) so the caller reports it accurately.
+            throw new IOException("Could not decode variant '" + selected //$NON-NLS-1$
+                + "' of the CommonPicture (unsupported or corrupt content)."); //$NON-NLS-1$
         }
         return new PngResult(selected, CONTENT_TYPE_PNG, png.length, Base64.getEncoder().encodeToString(png));
+    }
+
+    /**
+     * Selects the densest RASTER variant by explicit screen-density rank, so {@code "best"} does not
+     * depend on the manifest/zip entry order. SVG and manifest entries are skipped; the highest
+     * {@link PictureVariantScreenDensity} ordinal wins, ties break on the larger raw size then
+     * first-seen. Returns {@code null} when the picture has no raster variant (e.g. SVG-only).
+     *
+     * @param content the zip content
+     * @return the densest raster entry name, or {@code null}
+     */
+    private static String selectBestRasterName(IZipPictureContent content)
+    {
+        String bestName = null;
+        int bestRank = Integer.MIN_VALUE;
+        long bestSize = -1L;
+        for (IZipPictureManifestEntry entry : content.getPictureEntries())
+        {
+            if (entry == null)
+            {
+                continue;
+            }
+            String name = entry.getName();
+            if (name == null || isManifestEntry(name) || isSvgName(name))
+            {
+                continue;
+            }
+            PictureVariantScreenDensity density = entry.getScreenDensity();
+            int rank = density != null ? density.ordinal() : -1;
+            long size = sizeOf(content, name);
+            if (rank > bestRank || (rank == bestRank && size > bestSize))
+            {
+                bestRank = rank;
+                bestSize = size;
+                bestName = name;
+            }
+        }
+        return bestName;
     }
 
     // ---------------------------------------------------------------------
@@ -250,16 +308,10 @@ public final class CommonPictureContentReader
      * it. That vector branch is the ONLY use of {@code com.e1c.g5.v8.dt.svg} in this
      * reader.
      * <p>
-     * <b>Target portability (2025.2 → 2026.1):</b> the 1-arg
-     * {@code SVGUtils.renderSvgToPng(InputStream)} exists only in
-     * {@code com.e1c.g5.v8.dt.svg 1.0.x} (the current 2025.2 target); the 2026.1 target
-     * ships {@code svg 2.0.x}, which removed it in favour of the 3-arg
-     * {@code renderSvgToPng(InputStream, boolean, String)}. The MANIFEST therefore pins
-     * the {@code com.e1c.g5.v8.dt.svg} import to {@code [1.0.0,2.0.0)} so a retarget
-     * fails loudly at build time instead of silently resolving 2.0.x and breaking this
-     * call. On the 2026.1 retarget this branch must be updated to the 3-arg form (pass
-     * {@code false, null} to keep the plain PNGTranscoder behaviour) and the import
-     * range widened.
+     * <b>Target portability (2025.2 AND 2026.1):</b> the SVG rasterizer signature differs by EDT
+     * version, so it is invoked reflectively via {@link #renderSvgToPngCompat(InputStream)} (2025.2's
+     * 1-arg {@code renderSvgToPng(InputStream)} or 2026.1's 3-arg form); the MANIFEST import spans
+     * both ranges ({@code com.e1c.g5.v8.dt.svg [1.0.0,3.0.0)}).
      *
      * @param content the zip content
      * @param name the entry name
@@ -283,15 +335,59 @@ public final class CommonPictureContentReader
         {
             return null;
         }
-        // Vector branch: SVGUtils 1.0.x, pinned in the MANIFEST (see this method's
-        // javadoc). Update to the 3-arg renderSvgToPng on the 2026.1 (svg 2.0.x) retarget.
-        try (InputStream svgIn = raw.get(); InputStream pngIn = SVGUtils.INSTANCE.renderSvgToPng(svgIn))
+        // Vector branch: rasterize via SVGUtils, called REFLECTIVELY so the reader works on both
+        // EDT targets (see renderSvgToPngCompat / this method's javadoc).
+        try (InputStream svgIn = raw.get())
         {
+            InputStream pngIn = renderSvgToPngCompat(svgIn);
             if (pngIn == null)
             {
                 return null;
             }
-            return readAll(pngIn);
+            try
+            {
+                return readAll(pngIn);
+            }
+            finally
+            {
+                pngIn.close();
+            }
+        }
+    }
+
+    /**
+     * Rasterizes an SVG stream to a PNG stream via {@link SVGUtils}, invoked REFLECTIVELY to stay
+     * portable across EDT targets: 2025.2 ({@code svg 1.0.x}) exposes
+     * {@code renderSvgToPng(InputStream)}; 2026.1 ({@code svg 2.0.x}) replaced it with
+     * {@code renderSvgToPng(InputStream, boolean, String)}. Whichever signature the running platform
+     * provides is called (the 3-arg form gets {@code false, null} to keep the plain PNGTranscoder
+     * behaviour). The MANIFEST import spans both ranges ({@code [1.0.0,3.0.0)}).
+     *
+     * @param svgIn the SVG input stream
+     * @return the PNG input stream, or {@code null} when neither signature is present
+     * @throws Exception on reflective invocation failure
+     */
+    private static InputStream renderSvgToPngCompat(InputStream svgIn) throws Exception
+    {
+        Object svgUtils = SVGUtils.INSTANCE;
+        Class<?> cls = svgUtils.getClass();
+        try
+        {
+            Method oneArg = cls.getMethod("renderSvgToPng", InputStream.class); //$NON-NLS-1$
+            return (InputStream)oneArg.invoke(svgUtils, svgIn);
+        }
+        catch (NoSuchMethodException e)
+        {
+            try
+            {
+                Method threeArg =
+                    cls.getMethod("renderSvgToPng", InputStream.class, boolean.class, String.class); //$NON-NLS-1$
+                return (InputStream)threeArg.invoke(svgUtils, svgIn, Boolean.FALSE, null);
+            }
+            catch (NoSuchMethodException e2)
+            {
+                return null;
+            }
         }
     }
 
