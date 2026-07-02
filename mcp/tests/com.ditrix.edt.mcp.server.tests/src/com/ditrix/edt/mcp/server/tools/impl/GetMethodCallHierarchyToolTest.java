@@ -384,15 +384,15 @@ public class GetMethodCallHierarchyToolTest
     }
 
     @Test
-    public void testResultFileNameEmptyDirectionIsAppendedVerbatim()
+    public void testResultFileNameBlankDirectionDefaultsToCallers()
     {
-        // The direction segment guards on null, NOT on emptiness: an explicitly empty
-        // direction is appended as-is (it does not fall back to "callers"). Pins the
-        // exact (direction != null ? direction : KEY_CALLERS) semantics.
+        // A blank (empty or whitespace-only) direction is normalized to null the same way
+        // execute() does, so the direction segment falls back to "callers" instead of
+        // leaking whitespace into the file name. Mirrors execute()'s defaulting.
         Map<String, String> params = new HashMap<>();
         params.put("methodName", "DoWork"); //$NON-NLS-1$ //$NON-NLS-2$
-        params.put("direction", ""); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("call-hierarchy-dowork-.md", //$NON-NLS-1$
+        params.put("direction", "   "); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("call-hierarchy-dowork-callers.md", //$NON-NLS-1$
             new GetMethodCallHierarchyTool().getResultFileName(params));
     }
 

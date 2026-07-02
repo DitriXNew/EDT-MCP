@@ -146,8 +146,10 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     @Override
     public String getResultFileName(Map<String, String> params)
     {
-        String methodName = JsonUtils.extractStringArgument(params, KEY_METHOD_NAME);
-        String direction = JsonUtils.extractStringArgument(params, KEY_DIRECTION);
+        // Normalize the same way execute() does so a padded value like " outgoing " yields the
+        // outgoing file name (not the generic fallback) and no whitespace leaks into the name.
+        String methodName = normalizeArg(JsonUtils.extractStringArgument(params, KEY_METHOD_NAME));
+        String direction = normalizeArg(JsonUtils.extractStringArgument(params, KEY_DIRECTION));
         if (methodName != null && !methodName.isEmpty())
         {
             return "call-hierarchy-" + methodName.toLowerCase() + //$NON-NLS-1$
@@ -161,14 +163,35 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         return "call-hierarchy.md"; //$NON-NLS-1$
     }
 
+    /**
+     * Trims a raw input argument and folds a blank result to {@code null} so a whitespace-only value
+     * is treated as absent. Shared by {@link #execute(Map)} and {@link #getResultFileName(Map)} so
+     * both see the same normalized {@code direction}/{@code methodName}. No-op for already-clean,
+     * non-null values.
+     *
+     * @param s the raw argument (may be {@code null})
+     * @return the trimmed value, or {@code null} when {@code s} is {@code null} or blank
+     */
+    private static String normalizeArg(String s)
+    {
+        if (s == null)
+        {
+            return null;
+        }
+        String t = s.trim();
+        return t.isEmpty() ? null : t;
+    }
+
     @Override
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
-        String methodName = JsonUtils.extractStringArgument(params, KEY_METHOD_NAME);
-        String direction = JsonUtils.extractStringArgument(params, KEY_DIRECTION);
-        String extApiPrefix = JsonUtils.extractStringArgument(params, KEY_EXT_API_PREFIX);
+        // Trim these three so a whitespace-only value is treated as absent (defaults to callers /
+        // whole-module scope / default prefix) and a padded value like " outgoing " still routes.
+        String methodName = normalizeArg(JsonUtils.extractStringArgument(params, KEY_METHOD_NAME));
+        String direction = normalizeArg(JsonUtils.extractStringArgument(params, KEY_DIRECTION));
+        String extApiPrefix = normalizeArg(JsonUtils.extractStringArgument(params, KEY_EXT_API_PREFIX));
         int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, 100);
 
         // methodName is optional (only required for callers/callees); require it manually below
@@ -616,7 +639,9 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         {
             return false;
         }
-        return qualifier.toLowerCase().startsWith(prefix.toLowerCase());
+        // Allocation-free, locale-independent case-insensitive prefix test. regionMatches returns
+        // false when qualifier is shorter than prefix, matching the old startsWith semantics.
+        return qualifier.regionMatches(true, 0, prefix, 0, prefix.length());
     }
 
     /**
