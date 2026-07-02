@@ -1350,6 +1350,63 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolves the picture by FQN 'CommonPicture.<Name>' (Russian token ОбщаяКартинка accepted). Omit 'variant' to get the inventory only (no image bytes); pass variant='best'/'svg'/an exact variant name to also get that variant decoded to PNG as base64. SVG variants are rasterized to PNG. Full parameters and examples: call get_tool_guide('export_common_picture').",
+    "inputSchema": {
+      "properties": {
+        "fqn": {
+          "description": "CommonPicture FQN, e.g. 'CommonPicture.МояКартинка' (Russian type token ОбщаяКартинка accepted). Required.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name (required).",
+          "type": "string"
+        },
+        "variant": {
+          "description": "Optional. Which variant to decode to PNG: 'best' (the best raster variant), 'svg' (the vector variant, rasterized), or an exact variant/entry name from the 'variants' list. Omit it to return the inventory only (no image bytes).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn"
+      ],
+      "type": "object"
+    },
+    "name": "export_common_picture",
+    "outputSchema": {
+      "properties": {
+        "fqn": {
+          "description": "The resolved CommonPicture FQN.",
+          "type": "string"
+        },
+        "selected": {
+          "description": "Present only when 'variant' was requested and resolved: the chosen variant decoded to PNG - name, contentType ('image/png'), sizeBytes and pngBase64.",
+          "type": "object"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "variants": {
+          "description": "All picture variants: each has name, dpi, theme, interfaceVariant, pictureDirection, template (boolean), glyphWidth, glyphHeight, contentType and sizeBytes. Nullable 1C enums are rendered as stable literals or '-'.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Export an EDT configuration project to XML files (EDT menu: Export -> Configuration to XML Files). Equivalent of 1C platform DumpConfigToFiles.",
     "inputSchema": {
       "properties": {
@@ -2603,6 +2660,36 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, picture direction, byte size) as a Markdown overview. Use it to see which pictures exist and to spot mixed-icon mistakes; no image bytes are returned - for the PNG of one picture use export_common_picture. Full parameters and examples: call get_tool_guide('list_common_pictures').",
+    "inputSchema": {
+      "properties": {
+        "language": {
+          "description": "Synonym language code, e.g. 'en'/'ru' (default: configuration default)",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max pictures listed (default from preferences: 100, max 1000)",
+          "type": "integer"
+        },
+        "projectName": {
+          "description": "EDT project name (required)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "list_common_pictures",
+    "outputSchema": null
   },
   {
     "annotations": {
