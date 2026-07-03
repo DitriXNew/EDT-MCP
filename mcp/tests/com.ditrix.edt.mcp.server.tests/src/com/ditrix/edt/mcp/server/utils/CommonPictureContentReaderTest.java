@@ -156,6 +156,36 @@ public class CommonPictureContentReaderTest
         assertNull(CommonPictureContentReader.selectVariantName(names, "nope.png")); //$NON-NLS-1$
     }
 
+    // --- candidateNames: the manifest/byte-entry case-mismatch fallback --------------------------
+    // The heart of the DPI-named-picture fix: a picture whose manifest.xml declares a variant
+    // "Picture.png" while the zip stores its bytes as "picture.png" (case mismatch) must still decode.
+    // candidateNames drives the case-tolerant byte lookup: exact name first (so a correctly-cased
+    // picture stays byte-identical), then the lower/upper-cased spellings.
+
+    @Test
+    public void candidateNamesProbesExactThenLowerThenUpper()
+    {
+        // The real ERP case: manifest "Picture.png" -> the "picture.png" lowercase spelling recovers the
+        // bytes. Exact is probed first (byte-identical for a correctly-cased entry), then lower, then upper.
+        List<String> candidates = CommonPictureContentReader.candidateNames("Picture.png"); //$NON-NLS-1$
+        assertEquals(Arrays.asList("Picture.png", "picture.png", "PICTURE.PNG"), candidates); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void candidateNamesDeduplicatesAlreadyLowercaseName()
+    {
+        // A correctly-cased lowercase entry (the common density scheme, e.g. "l.png") yields only the two
+        // distinct spellings, exact first - so the fallback never probes a spelling twice.
+        List<String> candidates = CommonPictureContentReader.candidateNames("100.png"); //$NON-NLS-1$
+        assertEquals(Arrays.asList("100.png", "100.PNG"), candidates); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void candidateNamesReturnsEmptyForNull()
+    {
+        assertTrue(CommonPictureContentReader.candidateNames(null).isEmpty());
+    }
+
     // --- selectVariantName: null/empty ------------------------------------
 
     @Test

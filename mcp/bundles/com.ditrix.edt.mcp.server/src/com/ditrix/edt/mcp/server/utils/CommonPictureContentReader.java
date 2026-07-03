@@ -21,6 +21,7 @@ import java.util.Optional;
 import javax.imageio.ImageIO;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.pictures.MdPictureManifestProvider;
@@ -220,9 +221,12 @@ public final class CommonPictureContentReader
         if (png == null)
         {
             // The entry EXISTS but could not be decoded (unsupported/corrupt content). Distinguish this
-            // from an unknown variant (which returns null) so the caller reports it accurately.
+            // from an unknown variant (which returns null) so the caller reports it accurately. Name the
+            // CommonPicture too (its programmatic name), so a failure in the workspace log identifies the
+            // exact picture and not merely the variant (e.g. the shared "Picture.png" entry name).
             throw new IOException("Could not decode variant '" + selected //$NON-NLS-1$
-                + "' of the CommonPicture (unsupported or corrupt content)."); //$NON-NLS-1$
+                + "' of CommonPicture " + pictureName(commonPicture) //$NON-NLS-1$
+                + " (unsupported or corrupt content)."); //$NON-NLS-1$
         }
         return new PngResult(selected, CONTENT_TYPE_PNG, png.length, Base64.getEncoder().encodeToString(png));
     }
@@ -572,10 +576,12 @@ public final class CommonPictureContentReader
         {
             // Prefer the zip API's own raster decode (getBufferedImageByName), preserving byte-identical
             // multi-variant behaviour; fall back to raw-bytes ImageIO/SVG when it declares an entry it will
-            // not itself decode.
+            // not itself decode. Both the raster and raw-bytes reads probe case-variant spellings so a
+            // manifest/byte-entry case mismatch (manifest "Picture.png" vs stored "picture.png") still
+            // decodes instead of throwing.
             if (!isSvgName(name))
             {
-                BufferedImage image = content.getBufferedImageByName(name);
+                BufferedImage image = bufferedImage(name);
                 if (image != null)
                 {
                     ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -584,6 +590,27 @@ public final class CommonPictureContentReader
                 }
             }
             return decodeBytesToPng(name, rawBytes(name));
+        }
+
+        /**
+         * Reads one entry's decoded raster image, tolerating a manifest/byte-entry case mismatch: it
+         * probes the enumerated name first, then its lower/upper-cased spellings (see
+         * {@link #candidateNames(String)}). Returns {@code null} when no spelling yields a decodable image.
+         *
+         * @param name the enumerated (manifest) variant name
+         * @return the decoded image, or {@code null} when none of the case spellings resolves
+         */
+        private BufferedImage bufferedImage(String name)
+        {
+            for (String candidate : candidateNames(name))
+            {
+                BufferedImage image = content.getBufferedImageByName(candidate);
+                if (image != null)
+                {
+                    return image;
+                }
+            }
+            return null;
         }
 
         /**
@@ -605,7 +632,9 @@ public final class CommonPictureContentReader
         }
 
         /**
-         * Reads one entry's raw bytes fully, or {@code null} when the entry cannot be read.
+         * Reads one entry's raw bytes fully, or {@code null} when the entry cannot be read. Tolerates a
+         * manifest/byte-entry case mismatch by probing case-variant spellings (see
+         * {@link #resolveInputStream(String)}).
          *
          * @param name the entry name
          * @return the raw bytes, or {@code null}
@@ -613,7 +642,7 @@ public final class CommonPictureContentReader
          */
         private byte[] rawBytes(String name) throws Exception
         {
-            Optional<ByteArrayInputStream> raw = content.getInputStreamByName(name);
+            Optional<ByteArrayInputStream> raw = resolveInputStream(name);
             if (!raw.isPresent())
             {
                 return null;
@@ -625,19 +654,45 @@ public final class CommonPictureContentReader
         }
 
         /**
-         * Returns the byte size of one entry's raw content, or {@code 0} when it cannot be read.
+         * Returns the byte size of one entry's raw content, or {@code 0} when it cannot be read. Tolerates
+         * a manifest/byte-entry case mismatch by probing case-variant spellings (see
+         * {@link #resolveInputStream(String)}).
          *
          * @param name the entry name
          * @return the size in bytes, or {@code 0}
          */
         private long sizeOf(String name)
         {
-            Optional<ByteArrayInputStream> raw = content.getInputStreamByName(name);
+            Optional<ByteArrayInputStream> raw = resolveInputStream(name);
             if (raw.isPresent())
             {
                 return raw.get().available();
             }
             return 0L;
+        }
+
+        /**
+         * Fetches an entry's raw byte stream, probing the enumerated name first and then its lower/upper-
+         * cased spellings ({@link #candidateNames(String)}). The zip content's
+         * {@code getInputStreamByName} is an exact, case-sensitive map lookup keyed by the ACTUAL byte-
+         * entry name, so this is what recovers the bytes of a picture whose {@code manifest.xml} declares
+         * a variant {@code "Picture.png"} while the zip stores it as {@code "picture.png"}. Returns the
+         * first spelling that yields bytes, else {@link Optional#empty()}.
+         *
+         * @param name the enumerated (manifest) variant name
+         * @return the byte stream of the first matching case spelling, or {@link Optional#empty()}
+         */
+        private Optional<ByteArrayInputStream> resolveInputStream(String name)
+        {
+            for (String candidate : candidateNames(name))
+            {
+                Optional<ByteArrayInputStream> raw = content.getInputStreamByName(candidate);
+                if (raw.isPresent())
+                {
+                    return raw;
+                }
+            }
+            return Optional.empty();
         }
     }
 
@@ -813,6 +868,41 @@ public final class CommonPictureContentReader
     }
 
     /**
+     * The ordered list of name spellings to probe when fetching an entry's raw bytes, tolerating a
+     * case mismatch between the {@code manifest.xml} variant name and the actual byte-entry name inside
+     * {@code Picture.zip}. The zip content's {@code getInputStreamByName}/{@code getBufferedImageByName}
+     * are an exact, case-sensitive map lookup keyed by the ACTUAL byte-entry name, whereas the enumerated
+     * variant name comes from the manifest — and real 1C configurations ship pictures whose manifest
+     * declares e.g. {@code "Picture.png"} while the zip stores the bytes as {@code "picture.png"} (seen
+     * in ERP common pictures with the DPI-percentage variant scheme {@code 85/100/.../400.png}). Probing
+     * the exact name first (so a correctly-cased picture stays byte-identical), then the lower/upper-cased
+     * forms, recovers those bytes. Distinct spellings only, in probe order; never {@code null}.
+     *
+     * @param name the enumerated (manifest) variant name, may be {@code null}
+     * @return the distinct case spellings to try, exact-first (empty when {@code name} is {@code null})
+     */
+    static List<String> candidateNames(String name)
+    {
+        List<String> candidates = new ArrayList<>(3);
+        if (name == null)
+        {
+            return candidates;
+        }
+        candidates.add(name);
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (!candidates.contains(lower))
+        {
+            candidates.add(lower);
+        }
+        String upper = name.toUpperCase(Locale.ROOT);
+        if (!candidates.contains(upper))
+        {
+            candidates.add(upper);
+        }
+        return candidates;
+    }
+
+    /**
      * Resolves a {@code variant} selector against the available entry names.
      * <ul>
      * <li>{@code "svg"} → the first SVG entry (or {@code null} when the picture has
@@ -857,6 +947,34 @@ public final class CommonPictureContentReader
             }
         }
         return null;
+    }
+
+    /**
+     * The programmatic name of a picture model object for diagnostics, read from its EMF {@code name}
+     * structural feature (present on {@code mdclass.CommonPicture}); {@code "<unknown>"} when the object
+     * is {@code null}, has no {@code name} feature, or the value is blank. Read via EMF reflection so the
+     * reader keeps its clean-room picture-API surface (no {@code mdclass} compile dependency) and works
+     * whether it is handed the {@code mcore.Picture} view or the concrete {@code CommonPicture}.
+     *
+     * @param object the picture model object (may be {@code null})
+     * @return the picture name, or {@code "<unknown>"} when it cannot be read
+     */
+    private static String pictureName(EObject object)
+    {
+        if (object == null)
+        {
+            return "<unknown>"; //$NON-NLS-1$
+        }
+        EStructuralFeature nameFeature = object.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
+        if (nameFeature != null)
+        {
+            Object value = object.eGet(nameFeature);
+            if (value instanceof String && !((String)value).trim().isEmpty())
+            {
+                return (String)value;
+            }
+        }
+        return "<unknown>"; //$NON-NLS-1$
     }
 
     /**

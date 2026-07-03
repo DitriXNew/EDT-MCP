@@ -347,8 +347,11 @@ public class ShowCommonPicturesHandler extends AbstractHandler
         }
         catch (Exception e) // NOSONAR one undecodable variant is logged and surfaced per-variant, never aborts the picture
         {
+            // Name the owning CommonPicture too, so a failure in the workspace log identifies the exact
+            // picture (not merely the shared variant/entry name, e.g. "Picture.png").
             Activator.logError("Could not decode variant " //$NON-NLS-1$
-                + (variant.name != null ? variant.name : "<unnamed>"), e); //$NON-NLS-1$
+                + (variant.name != null ? variant.name : "<unnamed>") //$NON-NLS-1$
+                + " of CommonPicture " + (picture.getName() != null ? picture.getName() : "<unnamed>"), e); //$NON-NLS-1$ //$NON-NLS-2$
             Variant thumb = new Variant();
             thumb.label = variant.name;
             thumb.base64Png = null;
