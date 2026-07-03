@@ -143,9 +143,37 @@ public final class RoleRightsReader
     {
         sb.append("## Rights matrix\n\n"); //$NON-NLS-1$
 
-        // Select the objects to render: in full mode every ObjectRights with any cell, otherwise only the
-        // objects that carry an authored (non-default) cell (an explicit SET/UNSET or an RLS). This is the
-        // eIsSet filter - a designer's untouched PROVIDED cell is the metamodel default and is noise.
+        MatrixSelection selection = selectMatrixObjects(description, full);
+        List<ObjectRights> selected = selection.selected;
+        if (selected.isEmpty())
+        {
+            sb.append(full ? "_(no rights)_\n\n" : "_(no non-default rights)_\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            return;
+        }
+
+        int total = selected.size();
+        int limit = full ? MAX_OBJECT_LIMIT : DEFAULT_OBJECT_LIMIT;
+        int from = full ? 0 : Math.max(0, offset);
+        from = Math.min(from, total);
+        int to = Math.min(from + limit, total);
+
+        sb.append("**Objects with non-default rights:** ").append(selection.totalWithAuthored); //$NON-NLS-1$
+        sb.append(matrixWindowNotice(from, to, total, full));
+        sb.append("\n\n"); //$NON-NLS-1$
+
+        sb.append(MarkdownUtils.tableHeader("Object", "Right", "Value")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        renderMatrixRows(sb, selected, from, to, full, language);
+        sb.append('\n');
+    }
+
+    /**
+     * Selects the {@link ObjectRights} to render and counts the objects carrying an authored cell. In
+     * {@code full} mode every object with any right cell is selected; otherwise only the objects that
+     * carry an authored (non-default) cell - an explicit {@code SET}/{@code UNSET} or an RLS. This is the
+     * eIsSet filter: a designer's untouched {@code PROVIDED} cell is the metamodel default and is noise.
+     */
+    private static MatrixSelection selectMatrixObjects(RoleDescription description, boolean full)
+    {
         List<ObjectRights> selected = new ArrayList<>();
         int totalWithAuthored = 0;
         for (ObjectRights objectRights : description.getRights())
@@ -160,33 +188,24 @@ public final class RoleRightsReader
                 selected.add(objectRights);
             }
         }
+        return new MatrixSelection(selected, totalWithAuthored);
+    }
 
-        if (selected.isEmpty())
-        {
-            sb.append(full ? "_(no rights)_\n\n" : "_(no non-default rights)_\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            return;
-        }
-
-        int total = selected.size();
-        int limit = full ? MAX_OBJECT_LIMIT : DEFAULT_OBJECT_LIMIT;
-        int from = full ? 0 : Math.max(0, offset);
-        from = Math.min(from, total);
-        int to = Math.min(from + limit, total);
-
-        sb.append("**Objects with non-default rights:** ").append(totalWithAuthored); //$NON-NLS-1$
-        sb.append(matrixWindowNotice(from, to, total, full));
-        sb.append("\n\n"); //$NON-NLS-1$
-
-        sb.append(MarkdownUtils.tableHeader("Object", "Right", "Value")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    /**
+     * Appends one matrix row per rendered cell for the selected objects in the {@code [from, to)} window.
+     * In the default (non-full) view the individual {@code PROVIDED} cells of an object that still
+     * qualifies (via another {@code SET}/{@code UNSET} cell or an RLS) are dropped so the matrix shows
+     * only what was authored; {@code full} mode keeps every cell.
+     */
+    private static void renderMatrixRows(StringBuilder sb, List<ObjectRights> selected, int from, int to,
+        boolean full, String language)
+    {
         for (int i = from; i < to; i++)
         {
             ObjectRights objectRights = selected.get(i);
             String objectFqn = objectFqnOf(objectRights.getObject());
             for (ObjectRight right : objectRights.getRights())
             {
-                // In the default (non-full) view, drop the individual PROVIDED cells of an object that
-                // still qualifies (via another SET/UNSET cell or an RLS) so the matrix shows only what was
-                // authored; full mode keeps every cell.
                 if (!full && !isNonDefault(right))
                 {
                     continue;
@@ -195,7 +214,19 @@ public final class RoleRightsReader
                     rightValueLabel(right.getValue())));
             }
         }
-        sb.append('\n');
+    }
+
+    /** The selected matrix objects plus the count of objects carrying an authored (non-default) cell. */
+    private static final class MatrixSelection
+    {
+        final List<ObjectRights> selected;
+        final int totalWithAuthored;
+
+        MatrixSelection(List<ObjectRights> selected, int totalWithAuthored)
+        {
+            this.selected = selected;
+            this.totalWithAuthored = totalWithAuthored;
+        }
     }
 
     /**
@@ -439,7 +470,8 @@ public final class RoleRightsReader
             {
                 DuallyNamedElement named = (DuallyNamedElement)field;
                 String preferred = safe(ru ? named.getNameRu() : named.getName());
-                names.add(preferred.isEmpty() ? safe(ru ? named.getName() : named.getNameRu()) : preferred);
+                String fallback = safe(ru ? named.getName() : named.getNameRu());
+                names.add(preferred.isEmpty() ? fallback : preferred);
             }
         }
         if (names.isEmpty())

@@ -181,7 +181,7 @@ public class ListCommonPicturesTool implements IMcpTool
         }
 
         // Model reads happen ONLY inside the BM read boundary (CLAUDE.md hard rule): enumerate the
-        // pictures and read each one's variants there. The reader touches the picture content API;
+        // pictures and read each one's variants there. The reader touches the picture content API; // NOSONAR explanatory comment, not commented-out code
         // the resolved model object is handed to it already inside this transaction.
         List<PictureInfo> pictures = BmTransactions.read(bmModel, "ListCommonPictures", (tx, monitor) -> //$NON-NLS-1$
             collectPictures(config, effectiveLanguage, limit));
@@ -236,7 +236,7 @@ public class ListCommonPicturesTool implements IMcpTool
             PictureInfo info = new PictureInfo();
             info.name = picture.getName();
             info.synonym = synonymForLanguage(picture, language);
-            // Read (decompress) variants ONLY for the pictures formatOutput will actually render;
+            // Read (decompress) variants ONLY for the pictures formatOutput will actually render; // NOSONAR explanatory comment, not commented-out code
             // pictures beyond `limit` count toward the Total but are not decompressed.
             if (reader != null && index < limit)
             {

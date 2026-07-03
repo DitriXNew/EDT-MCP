@@ -92,6 +92,8 @@ public final class FormElementWriter
     private static final String FEATURE_VIEW = "view"; //$NON-NLS-1$
     /** The form attribute's "use in edit mode" presentation flag (an {@code AdjustableBoolean}). */
     private static final String FEATURE_EDIT = "edit"; //$NON-NLS-1$
+    /** A FormField/column's edit-mode enum feature (Enter / EnterOnInput). */
+    private static final String FEATURE_EDIT_MODE = "editMode"; //$NON-NLS-1$
     /** The English programmatic Name of a managed object form's main attribute. */
     private static final String MAIN_ATTRIBUTE_NAME_EN = "Object"; //$NON-NLS-1$
     /** The dynamic-list ext-info EClass and its query-carrying features. */
@@ -1142,7 +1144,7 @@ public final class FormElementWriter
             EObject seededField = findItem(content, trimmed);
             if (seededField != null)
             {
-                setEnumFeature(seededField, "editMode", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$
+                setEnumFeature(seededField, FEATURE_EDIT_MODE, "EnterOnInput"); //$NON-NLS-1$
             }
         }
         if (!skipped.isEmpty())
@@ -2286,9 +2288,9 @@ public final class FormElementWriter
         }
         // The field binds to a form attribute by name. A DOTTED path binds to a SUB-attribute of the
         // head form attribute. Two heads are valid for a dotted path:
-        //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields
+        //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields // NOSONAR explanatory prose, not commented-out code
         //     (auto-filled by EDT - not a model attribute);
-        //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of
+        //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of // NOSONAR explanatory prose, not commented-out code
         //     the object type, like the designer's bound object fields.
         // Validate the head attribute, and require one of those two heads when a dotted path is used.
         int dot = attrName.indexOf('.');
@@ -2340,7 +2342,7 @@ public final class FormElementWriter
         setBooleanFeature(item, "showInHeader", true); //$NON-NLS-1$
         setBooleanFeature(item, "showInFooter", true); //$NON-NLS-1$
         setEnumFeature(item, "headerHorizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
-        setEnumFeature(item, "editMode", "Enter"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, FEATURE_EDIT_MODE, "Enter"); //$NON-NLS-1$
         EObject extInfo = singleReference(item, FEATURE_EXT_INFO);
         if (extInfo != null)
         {
@@ -2495,7 +2497,7 @@ public final class FormElementWriter
         setBooleanFeature(column, "showInHeader", true); //$NON-NLS-1$
         setBooleanFeature(column, "showInFooter", true); //$NON-NLS-1$
         setEnumFeature(column, "headerHorizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
-        setEnumFeature(column, "editMode", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(column, FEATURE_EDIT_MODE, "EnterOnInput"); //$NON-NLS-1$
         setExtInfoClassifier(formModel, column, ECLASS_INPUT_FIELD_EXT_INFO);
         EObject extInfo = singleReference(column, FEATURE_EXT_INFO);
         if (extInfo != null)

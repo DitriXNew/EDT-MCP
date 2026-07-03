@@ -108,7 +108,7 @@ public class ShowCommonPicturesHandler extends AbstractHandler
             return null;
         }
 
-        // Resolve the configuration on the UI thread only to resolve the synonym language once (cheap);
+        // Resolve the configuration on the UI thread only to resolve the synonym language once (cheap); // NOSONAR explanatory comment, not commented-out code
         // the heavy work is scheduled below and re-resolves the project/configuration fresh.
         ProjectContext.ConfigurationResult resolved = ProjectContext.of(project.getName()).resolveConfiguration();
         if (!resolved.ok())

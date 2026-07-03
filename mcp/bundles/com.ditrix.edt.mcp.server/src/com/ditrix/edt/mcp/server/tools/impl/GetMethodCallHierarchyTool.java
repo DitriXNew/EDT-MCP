@@ -95,6 +95,13 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     /** Qualifier token for a chained/expression call whose source is not a StaticFeatureAccess. */
     private static final String QUALIFIER_EXPR = "(expr)"; //$NON-NLS-1$
 
+    /**
+     * Explanatory suffix appended to the module-load-failure error. Shared by every direction so
+     * the message stays identical (deduplicated from three inline literals).
+     */
+    private static final String MODULE_LOAD_FAILURE_SUFFIX =
+        ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details."; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -182,6 +189,19 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         return t.isEmpty() ? null : t;
     }
 
+    /**
+     * Builds the identical "could not load the BSL AST for this module" error JSON shared by every
+     * direction. Names the failing module path and points at the EDT Error Log.
+     *
+     * @param modulePath the source-relative module path that failed to load
+     * @return the {@link ToolResult#error} JSON string
+     */
+    private static String moduleLoadFailure(String modulePath)
+    {
+        return ToolResult.error("Could not load EMF model for " + modulePath //$NON-NLS-1$
+            + MODULE_LOAD_FAILURE_SUFFIX).toJson();
+    }
+
     @Override
     public String execute(Map<String, String> params)
     {
@@ -202,11 +222,35 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             return err;
         }
 
+        // Normalize + validate direction/methodName/extApiPrefix; a non-null result is an error JSON.
+        RequestArgs request = new RequestArgs(direction, methodName, extApiPrefix, limit);
+        String validationError = validateRequest(request);
+        if (validationError != null)
+        {
+            return validationError;
+        }
+
+        return runOnDisplay(projectName, modulePath, request);
+    }
+
+    /**
+     * Normalizes {@code direction} (blank → callers, lower-cased) and validates it, applies the
+     * callers/callees methodName guard, defaults a blank {@code extApiPrefix} and clamps the limit.
+     * On success the normalized values are written back into {@code request}; on failure the ready
+     * error JSON is returned and {@code request} is left partially normalized (unused by the caller).
+     *
+     * @param request the mutable request holder to normalize in place
+     * @return {@code null} when the arguments are valid, otherwise the {@link ToolResult#error} JSON
+     */
+    private String validateRequest(RequestArgs request)
+    {
+        String direction = request.direction;
         if (direction == null || direction.isEmpty())
         {
             direction = KEY_CALLERS;
         }
         direction = direction.toLowerCase();
+        request.direction = direction;
 
         if (!KEY_CALLERS.equals(direction) && !"callees".equals(direction) //$NON-NLS-1$
             && !KEY_OUTGOING.equals(direction))
@@ -214,42 +258,39 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             return ToolResult.error("direction must be 'callers', 'callees' or 'outgoing'").toJson(); //$NON-NLS-1$
         }
 
-        if ((methodName == null || methodName.trim().isEmpty()) && !KEY_OUTGOING.equals(direction))
+        if ((request.methodName == null || request.methodName.trim().isEmpty())
+            && !KEY_OUTGOING.equals(direction))
         {
             return ToolResult.error("methodName is required for callers/callees" //$NON-NLS-1$
                 + ". Use get_module_structure to list the module's procedures and functions.").toJson(); //$NON-NLS-1$
         }
 
-        if (extApiPrefix == null || extApiPrefix.isEmpty())
+        if (request.extApiPrefix == null || request.extApiPrefix.isEmpty())
         {
-            extApiPrefix = DEFAULT_EXT_API_PREFIX;
+            request.extApiPrefix = DEFAULT_EXT_API_PREFIX;
         }
 
-        limit = Pagination.clampLimit(limit, 500);
+        request.limit = Pagination.clampLimit(request.limit, 500);
+        return null;
+    }
 
+    /**
+     * Runs the direction dispatch on the UI thread and returns its rendered result. All BSL model
+     * access happens inside {@link Display#syncExec} because it touches the shared EMF model.
+     *
+     * @param projectName the EDT project name (already validated as present)
+     * @param modulePath the source-relative module path (already validated as present)
+     * @param request the normalized/validated request arguments
+     * @return the rendered Markdown, or a {@link ToolResult#error} JSON string on failure
+     */
+    private String runOnDisplay(String projectName, String modulePath, RequestArgs request)
+    {
         AtomicReference<String> resultRef = new AtomicReference<>();
-        final String dir = direction;
-        final int maxResults = limit;
-        final String prefix = extApiPrefix;
-
         Display display = PlatformUI.getWorkbench().getDisplay();
         display.syncExec(() -> {
             try
             {
-                String result;
-                if (KEY_OUTGOING.equals(dir))
-                {
-                    result = findOutgoing(projectName, modulePath, methodName, prefix, maxResults);
-                }
-                else if (KEY_CALLERS.equals(dir))
-                {
-                    result = findCallers(projectName, modulePath, methodName, maxResults);
-                }
-                else
-                {
-                    result = findCallees(projectName, modulePath, methodName, maxResults);
-                }
-                resultRef.set(result);
+                resultRef.set(dispatch(projectName, modulePath, request));
             }
             catch (Exception e)
             {
@@ -257,8 +298,52 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
-
         return resultRef.get();
+    }
+
+    /**
+     * Routes a normalized request to the matching finder (outgoing / callers / callees). Must be
+     * called on the UI thread (see {@link #runOnDisplay}).
+     *
+     * @param projectName the EDT project name
+     * @param modulePath the source-relative module path
+     * @param request the normalized/validated request arguments
+     * @return the rendered result of the selected finder
+     */
+    private String dispatch(String projectName, String modulePath, RequestArgs request)
+    {
+        String dir = request.direction;
+        if (KEY_OUTGOING.equals(dir))
+        {
+            return findOutgoing(projectName, modulePath, request.methodName,
+                request.extApiPrefix, request.limit);
+        }
+        if (KEY_CALLERS.equals(dir))
+        {
+            return findCallers(projectName, modulePath, request.methodName, request.limit);
+        }
+        return findCallees(projectName, modulePath, request.methodName, request.limit);
+    }
+
+    /**
+     * Mutable holder for the normalized/validated request arguments, threaded from
+     * {@link #execute(Map)} through {@link #validateRequest} and {@link #dispatch}. Bundling them
+     * keeps the individual method signatures small without changing any value.
+     */
+    private static final class RequestArgs
+    {
+        String direction;
+        final String methodName;
+        String extApiPrefix;
+        int limit;
+
+        RequestArgs(String direction, String methodName, String extApiPrefix, int limit)
+        {
+            this.direction = direction;
+            this.methodName = methodName;
+            this.extApiPrefix = extApiPrefix;
+            this.limit = limit;
+        }
     }
 
     /**
@@ -282,8 +367,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
         {
-            return ToolResult.error("Could not load EMF model for " + modulePath + //$NON-NLS-1$
-                   ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details.").toJson(); //$NON-NLS-1$
+            return moduleLoadFailure(modulePath);
         }
 
         Method method = BslModuleUtils.findMethod(module, methodName);
@@ -673,8 +757,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
         {
-            return ToolResult.error("Could not load EMF model for " + modulePath + //$NON-NLS-1$
-                   ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details.").toJson(); //$NON-NLS-1$
+            return moduleLoadFailure(modulePath);
         }
 
         Method method = BslModuleUtils.findMethod(module, methodName);
@@ -913,8 +996,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Module module = BslModuleUtils.loadModule(project, modulePath);
         if (module == null)
         {
-            return ToolResult.error("Could not load EMF model for " + modulePath + //$NON-NLS-1$
-                   ". Call hierarchy requires BSL AST (EMF). Check EDT Error Log for details.").toJson(); //$NON-NLS-1$
+            return moduleLoadFailure(modulePath);
         }
 
         boolean scoped = methodName != null && !methodName.trim().isEmpty();
@@ -933,48 +1015,37 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             scope = module;
         }
 
+        Map<String, OutgoingTarget> targets = aggregateOutgoing(scope, extApiPrefix, modulePath);
+
+        return formatOutgoingOutput(modulePath, scoped ? methodName : null,
+            new ArrayList<>(targets.values()), limit);
+    }
+
+    /**
+     * Walks a scope's AST and aggregates every {@link Invocation} into distinct outgoing targets,
+     * keyed by {@code qualifier + "." + method} in first-seen order. A per-file parse failure never
+     * aborts the aggregation: it is logged and the targets collected so far are returned (mirroring
+     * the candidate-scan resilience of {@link #findCallers}). Extracted from {@link #findOutgoing}
+     * to keep that method's complexity in check.
+     *
+     * @param scope the AST root to walk (a single method or the whole module)
+     * @param extApiPrefix the literal external-API qualifier prefix (case-insensitive)
+     * @param modulePath the module path, used only for the failure log message
+     * @return the first-seen-ordered map of aggregated targets (possibly empty, never {@code null})
+     */
+    private Map<String, OutgoingTarget> aggregateOutgoing(EObject scope, String extApiPrefix,
+        String modulePath)
+    {
         // First-seen-ordered aggregation keyed by qualifier + "." + method.
         Map<String, OutgoingTarget> targets = new LinkedHashMap<>();
-
         try
         {
             for (Iterator<EObject> iter = scope.eAllContents(); iter.hasNext();)
             {
                 EObject obj = iter.next();
-                if (!(obj instanceof Invocation))
+                if (obj instanceof Invocation)
                 {
-                    continue;
-                }
-                Invocation inv = (Invocation)obj;
-                // Reuse the frozen resolveInvocationName (it re-derives the method access from the
-                // Invocation) rather than a duplicate name-resolver; classify the qualifier separately.
-                String method = resolveInvocationName(inv);
-                if (method == null || method.isEmpty())
-                {
-                    continue;
-                }
-                String qualifier = qualifierKey(inv.getMethodAccess());
-                int line = BslModuleUtils.getStartLine(inv);
-
-                String key = aggregationKey(qualifier, method);
-                OutgoingTarget target = targets.get(key);
-                if (target == null)
-                {
-                    target = new OutgoingTarget();
-                    target.qualifier = qualifier;
-                    target.method = method;
-                    target.count = 0;
-                    target.firstLine = line;
-                    target.extApi = isExtApi(qualifier, extApiPrefix);
-                    targets.put(key, target);
-                }
-                target.count++;
-                // firstLine = smallest POSITIVE start line across the call sites. getStartLine() returns
-                // 0 when a node has no line info; 0 must not win the min (it renders as '-', like
-                // callers/callees), so only positive lines lower firstLine.
-                if (line > 0 && (target.firstLine <= 0 || line < target.firstLine))
-                {
-                    target.firstLine = line;
+                    accumulateOutgoing((Invocation)obj, extApiPrefix, targets);
                 }
             }
         }
@@ -985,9 +1056,52 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             Activator.logWarning("Failed to walk module for outgoing calls " + modulePath //$NON-NLS-1$
                 + ": " + e.getMessage()); //$NON-NLS-1$
         }
+        return targets;
+    }
 
-        return formatOutgoingOutput(modulePath, scoped ? methodName : null,
-            new ArrayList<>(targets.values()), limit);
+    /**
+     * Aggregates a single {@link Invocation} into the shared {@code targets} map: resolves the called
+     * method name (skipping non-invocations / unnamed accesses), classifies the qualifier, then bumps
+     * the matching {@link OutgoingTarget}'s count and shrinks its {@code firstLine} to the smallest
+     * positive start line seen. Extracted from {@link #findOutgoing} to flatten its aggregation loop.
+     *
+     * @param inv the invocation to fold in
+     * @param extApiPrefix the literal external-API qualifier prefix (case-insensitive)
+     * @param targets the first-seen-ordered accumulator (appended to / updated, never reassigned)
+     */
+    private void accumulateOutgoing(Invocation inv, String extApiPrefix,
+        Map<String, OutgoingTarget> targets)
+    {
+        // Reuse the frozen resolveInvocationName (it re-derives the method access from the
+        // Invocation) rather than a duplicate name-resolver; classify the qualifier separately.
+        String method = resolveInvocationName(inv);
+        if (method == null || method.isEmpty())
+        {
+            return;
+        }
+        String qualifier = qualifierKey(inv.getMethodAccess());
+        int line = BslModuleUtils.getStartLine(inv);
+
+        String key = aggregationKey(qualifier, method);
+        OutgoingTarget target = targets.get(key);
+        if (target == null)
+        {
+            target = new OutgoingTarget();
+            target.qualifier = qualifier;
+            target.method = method;
+            target.count = 0;
+            target.firstLine = line;
+            target.extApi = isExtApi(qualifier, extApiPrefix);
+            targets.put(key, target);
+        }
+        target.count++;
+        // firstLine = smallest POSITIVE start line across the call sites. getStartLine() returns
+        // 0 when a node has no line info; 0 must not win the min (it renders as '-', like
+        // callers/callees), so only positive lines lower firstLine.
+        if (line > 0 && (target.firstLine <= 0 || line < target.firstLine))
+        {
+            target.firstLine = line;
+        }
     }
 
     /**

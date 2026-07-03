@@ -192,7 +192,7 @@ public class ExportCommonPictureTool implements IMcpTool
                     + "to find the exact name.").toJson(); //$NON-NLS-1$
             }
             // Guard the resolved type. The resolver already keys off the bilingual CommonPicture
-            // type token, so a non-picture object cannot reach here through a CommonPicture FQN;
+            // type token, so a non-picture object cannot reach here through a CommonPicture FQN; // NOSONAR explanatory comment, not commented-out code
             // this defensive check keeps the error clear if that ever changes.
             String eClassName = node.object.eClass().getName();
             if (!MetadataTypeUtils.MetadataTypeInfo.COMMON_PICTURE.getEnglishSingular()

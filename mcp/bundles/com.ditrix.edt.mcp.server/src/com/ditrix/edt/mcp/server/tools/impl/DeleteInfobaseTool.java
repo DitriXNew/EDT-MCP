@@ -77,6 +77,10 @@ public class DeleteInfobaseTool implements IMcpTool
     /** Infobase application type ID. */
     private static final String INFOBASE_APP_TYPE = "com.e1c.g5.dt.applications.type.infobase"; //$NON-NLS-1$
 
+    /** Consent-subtitle fragment appended when deleteDatabaseFiles=true (irreversible file deletion). */
+    private static final String CONSENT_DELETE_FILES_SUFFIX =
+        " and may delete its database files from disk (irreversible)."; //$NON-NLS-1$
+
     /** Background-Job timeout for the standalone-server deletion (stop + remove). */
     private static final long DELETE_TIMEOUT_SECONDS = 120;
 
@@ -253,7 +257,7 @@ public class DeleteInfobaseTool implements IMcpTool
         String declined = checkDestructiveConsent(ibPlan.resolvedName, "This dissociates infobase '" //$NON-NLS-1$
             + ibPlan.resolvedName + "' from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
             + (deleteRegistration ? " and deregisters it from the EDT infobases list" : "") //$NON-NLS-1$ //$NON-NLS-2$
-            + (deleteDatabaseFiles ? " and may delete its database files from disk (irreversible)." : ".")); //$NON-NLS-1$ //$NON-NLS-2$
+            + (deleteDatabaseFiles ? CONSENT_DELETE_FILES_SUFFIX : ".")); //$NON-NLS-1$
         if (declined != null)
         {
             return declined;
@@ -789,7 +793,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // is mutated.
         String declined = checkDestructiveConsent(resolvedName, "This deletes standalone server '" //$NON-NLS-1$
             + resolvedName + "' (stops it, removes the WST server and its config folder)" //$NON-NLS-1$
-            + (deleteDatabaseFiles ? " and may delete its database files from disk (irreversible)." : ".")); //$NON-NLS-1$ //$NON-NLS-2$
+            + (deleteDatabaseFiles ? CONSENT_DELETE_FILES_SUFFIX : ".")); //$NON-NLS-1$
         if (declined != null)
         {
             return declined;

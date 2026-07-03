@@ -70,6 +70,9 @@ public final class CommonPicturesGalleryRenderer
     /** The best-thumbnail selector understood by {@link CommonPictureContentReader#exportPng}. */
     private static final String VARIANT_BEST = "best"; //$NON-NLS-1$
 
+    /** Placeholder used in log messages when a picture/variant has no name. */
+    private static final String UNNAMED = "<unnamed>"; //$NON-NLS-1$
+
     private CommonPicturesGalleryRenderer()
     {
         // Static seam.
@@ -293,7 +296,7 @@ public final class CommonPicturesGalleryRenderer
         catch (Exception e) // NOSONAR a corrupt densest raster only drops the inline 'best' thumbnail
         {
             Activator.logError("Could not decode the 'best' thumbnail of common picture " //$NON-NLS-1$
-                + (entry.name != null ? entry.name : "<unnamed>"), e); //$NON-NLS-1$
+                + (entry.name != null ? entry.name : UNNAMED), e);
         }
 
         try
@@ -309,7 +312,7 @@ public final class CommonPicturesGalleryRenderer
         catch (Exception e) // NOSONAR one unreadable/corrupt Picture.zip is surfaced per-picture, never aborts the page
         {
             Activator.logError("Could not read variants of common picture " //$NON-NLS-1$
-                + (entry.name != null ? entry.name : "<unnamed>"), e); //$NON-NLS-1$
+                + (entry.name != null ? entry.name : UNNAMED), e);
             entry.error = e.getMessage() != null ? e.getMessage() : e.toString();
         }
         return entry;
@@ -336,8 +339,8 @@ public final class CommonPicturesGalleryRenderer
         catch (Exception e) // NOSONAR one undecodable variant is logged and surfaced per-variant, never aborts the picture
         {
             Activator.logError("Could not decode variant " //$NON-NLS-1$
-                + (variant.name != null ? variant.name : "<unnamed>") //$NON-NLS-1$
-                + " of CommonPicture " + (picture.getName() != null ? picture.getName() : "<unnamed>"), e); //$NON-NLS-1$ //$NON-NLS-2$
+                + (variant.name != null ? variant.name : UNNAMED)
+                + " of CommonPicture " + (picture.getName() != null ? picture.getName() : UNNAMED), e); //$NON-NLS-1$
             Variant thumb = new Variant();
             thumb.label = variant.name;
             thumb.base64Png = null;

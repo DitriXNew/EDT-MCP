@@ -100,6 +100,13 @@ public final class RoleRightsWriter
     private static final String OP_EDIT = "edit"; //$NON-NLS-1$
     private static final String OP_DELETE = "delete"; //$NON-NLS-1$
 
+    /** Wire (JSON payload) keys read from an entry - centralized so the apply and validate paths agree. */
+    private static final String KEY_OBJECT = "object"; //$NON-NLS-1$
+    private static final String KEY_RIGHT = "right"; //$NON-NLS-1$
+    private static final String KEY_VALUE = "value"; //$NON-NLS-1$
+    private static final String KEY_NAME = "name"; //$NON-NLS-1$
+    private static final String KEY_CONDITION = "condition"; //$NON-NLS-1$
+
     // ---- result -------------------------------------------------------------------------------
 
     /**
@@ -236,7 +243,7 @@ public final class RoleRightsWriter
         int applied = 0;
         for (JsonObject entry : rights)
         {
-            String objectFqn = str(entry.get("object")); //$NON-NLS-1$
+            String objectFqn = str(entry.get(KEY_OBJECT));
             MdObject targetMd = resolveObject(ctx.config, objectFqn);
             if (targetMd == null)
             {
@@ -244,7 +251,7 @@ public final class RoleRightsWriter
             }
             EObject target = targetMd;
 
-            String rightName = str(entry.get("right")); //$NON-NLS-1$
+            String rightName = str(entry.get(KEY_RIGHT));
             // The right is resolved by walking rightInfos.getRights(object) - a model read - so it runs
             // inside a read boundary; only the resolved Right handle (a task input) escapes.
             Right right = BmTransactions.read(ctx.model, "ResolveRight", //$NON-NLS-1$
@@ -255,7 +262,7 @@ public final class RoleRightsWriter
                     (tx, pm) -> rightNotFound(ctx.rightInfos, target, rightName, objectFqn)));
             }
 
-            RightValue value = parseRightValue(entry.get("value")); //$NON-NLS-1$
+            RightValue value = parseRightValue(entry.get(KEY_VALUE));
             setRightValue(ctx, target, right, value);
 
             String rls = str(entry.get("rls")); //$NON-NLS-1$
@@ -382,11 +389,11 @@ public final class RoleRightsWriter
         for (JsonObject entry : templates)
         {
             String op = templateOp(entry);
-            String name = str(entry.get("name")); //$NON-NLS-1$
-            String condition = str(entry.get("condition")); //$NON-NLS-1$
+            String name = str(entry.get(KEY_NAME));
+            String condition = str(entry.get(KEY_CONDITION));
             // Resolve the role description (and, for edit/delete, the named template) INSIDE a read
-            // boundary that re-fetches by bm id, so getTemplates() is never walked outside a boundary;
-            // only the handles the task consumes escape.
+            // boundary that re-fetches by bm id, so the template collection is never walked outside a
+            // boundary; only the handles the task consumes escape.
             IBmTask<?> task = BmTransactions.read(ctx.model, "ResolveTemplateTask", (tx, pm) -> //$NON-NLS-1$
             {
                 RoleDescription roleDescription = roleDescriptionInTx(tx, ctx.roleBmId);
@@ -816,17 +823,17 @@ public final class RoleRightsWriter
     /** Validates a single {@code rights[]} entry (object + right required, value recognizable). */
     static String validateRightsEntry(JsonObject entry)
     {
-        if (str(entry.get("object")) == null || str(entry.get("object")).isEmpty()) //$NON-NLS-1$ //$NON-NLS-2$
+        if (str(entry.get(KEY_OBJECT)) == null || str(entry.get(KEY_OBJECT)).isEmpty())
         {
             return ToolResult.error("Each 'rights' entry needs an 'object' FQN, e.g. " //$NON-NLS-1$
                 + "'Catalog.Products' (or the Russian 'Справочник.Товары').").toJson(); //$NON-NLS-1$
         }
-        if (str(entry.get("right")) == null || str(entry.get("right")).isEmpty()) //$NON-NLS-1$ //$NON-NLS-2$
+        if (str(entry.get(KEY_RIGHT)) == null || str(entry.get(KEY_RIGHT)).isEmpty())
         {
             return ToolResult.error("Each 'rights' entry needs a 'right' name, e.g. 'Read' / " //$NON-NLS-1$
                 + "'Update' (or the Russian 'Чтение' / 'Изменение').").toJson(); //$NON-NLS-1$
         }
-        if (!isValidRightValue(entry.get("value"))) //$NON-NLS-1$
+        if (!isValidRightValue(entry.get(KEY_VALUE)))
         {
             return ToolResult.error("The right 'value' must be 'set' / 'unset' / 'provided' or a " //$NON-NLS-1$
                 + "boolean (true = set, false = unset); default is 'set'.").toJson(); //$NON-NLS-1$
@@ -843,12 +850,12 @@ public final class RoleRightsWriter
             return ToolResult.error("Each 'templates' entry 'op' must be 'add', 'edit' or 'delete' " //$NON-NLS-1$
                 + "(default 'add'); got '" + op + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        if (str(entry.get("name")) == null || str(entry.get("name")).isEmpty()) //$NON-NLS-1$ //$NON-NLS-2$
+        if (str(entry.get(KEY_NAME)) == null || str(entry.get(KEY_NAME)).isEmpty())
         {
             return ToolResult.error("Each 'templates' entry needs a 'name'.").toJson(); //$NON-NLS-1$
         }
         if ((OP_ADD.equals(op) || OP_EDIT.equals(op))
-            && (str(entry.get("condition")) == null || str(entry.get("condition")).isEmpty())) //$NON-NLS-1$ //$NON-NLS-2$
+            && (str(entry.get(KEY_CONDITION)) == null || str(entry.get(KEY_CONDITION)).isEmpty()))
         {
             return ToolResult.error("A 'templates' " + op + " entry needs a 'condition' (the RLS " //$NON-NLS-1$ //$NON-NLS-2$
                 + "restriction text).").toJson(); //$NON-NLS-1$

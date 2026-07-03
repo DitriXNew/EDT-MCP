@@ -112,7 +112,9 @@ public final class CommonPicturesGalleryEditor extends EditorPart
      * @param query the (decoded) search query
      * @param page the requested 0-based page index
      */
-    private void reRender(String query, int page)
+    private void reRender(String query, int page) // NOSONAR S3398: kept on the editor (not the inner
+                                                  // interceptor) as it uses the outer instance's input
+                                                  // + applyRenderedPage callback; moving it in adds no value
     {
         String projectName = htmlInput.getProjectName();
         if (projectName == null || projectName.isEmpty())
@@ -216,13 +218,11 @@ public final class CommonPicturesGalleryEditor extends EditorPart
         {
             return URLDecoder.decode(text, StandardCharsets.UTF_8.name());
         }
-        catch (UnsupportedEncodingException e) // NOSONAR UTF-8 is always available; unreachable
+        catch (UnsupportedEncodingException | IllegalArgumentException e)
         {
-            return text;
-        }
-        catch (IllegalArgumentException e)
-        {
-            // A malformed %-escape: treat the raw text as the query rather than failing the nav.
+            // Both fall back to the raw text: UnsupportedEncodingException is unreachable (UTF-8 is
+            // always available); a malformed %-escape (IllegalArgumentException) is treated as the raw
+            // query rather than failing the nav.
             return text;
         }
     }

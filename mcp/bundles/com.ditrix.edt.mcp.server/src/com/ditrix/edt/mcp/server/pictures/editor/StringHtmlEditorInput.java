@@ -122,7 +122,8 @@ public final class StringHtmlEditorInput implements IEditorInput
     @Override
     public String getToolTipText()
     {
-        return title;
+        // The tooltip defaults to the tab name (there is no separate tooltip for this detached input).
+        return getName();
     }
 
     @Override

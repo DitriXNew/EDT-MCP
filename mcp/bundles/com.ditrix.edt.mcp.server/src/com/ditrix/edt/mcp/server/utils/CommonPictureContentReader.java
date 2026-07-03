@@ -200,7 +200,7 @@ public final class CommonPictureContentReader
         String selected;
         if (VARIANT_BEST.equalsIgnoreCase(selector))
         {
-            // 'best' = the densest RASTER variant by explicit screen-density rank (NOT entry order);
+            // 'best' = the densest RASTER variant by explicit screen-density rank (NOT entry order); // NOSONAR explanatory comment, not commented-out code
             // fall back to the first entry for an SVG-only picture (and the single synthetic entry of a
             // variant-less single-image picture).
             selected = content.selectBestRasterName();
@@ -329,12 +329,12 @@ public final class CommonPictureContentReader
     {
         if (raw == null || raw.length == 0)
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (not decodable/sentinel), not an empty array: decodeBytesToPng falls through to the SVG branch
         }
         BufferedImage image = ImageIO.read(new ByteArrayInputStream(raw));
         if (image == null)
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (not decodable/sentinel), not an empty array: decodeBytesToPng falls through to the SVG branch
         }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageIO.write(image, PNG_FORMAT, baos);
@@ -354,7 +354,7 @@ public final class CommonPictureContentReader
     {
         if (raw == null || raw.length == 0)
         {
-            return null;
+            return null; // NOSONAR null is a deliberate signal (not rasterizable/sentinel), not an empty array: exportPng reports a decode error on null
         }
         // Vector branch: rasterize via SVGUtils, called REFLECTIVELY so the reader works on both
         // EDT targets (see renderSvgToPngCompat / its javadoc).
@@ -363,7 +363,7 @@ public final class CommonPictureContentReader
             InputStream pngIn = renderSvgToPngCompat(svgIn);
             if (pngIn == null)
             {
-                return null;
+                return null; // NOSONAR null is a deliberate signal (not rasterizable/sentinel), not an empty array: exportPng reports a decode error on null
             }
             try
             {
@@ -646,7 +646,7 @@ public final class CommonPictureContentReader
             Optional<ByteArrayInputStream> raw = resolveInputStream(name);
             if (!raw.isPresent())
             {
-                return null;
+                return null; // NOSONAR null is a deliberate signal (entry not readable/sentinel), not an empty array
             }
             try (InputStream in = raw.get())
             {
@@ -727,7 +727,7 @@ public final class CommonPictureContentReader
         {
             PictureVariantInfo info = new PictureVariantInfo();
             info.name = name != null ? name : entryName();
-            // A single-image picture carries no per-variant dpi/theme/interface/direction bookkeeping;
+            // A single-image picture carries no per-variant dpi/theme/interface/direction bookkeeping; // NOSONAR explanatory comment, not commented-out code
             // report the neutral literal for each (matching the "-" the zip path uses for unset enums).
             info.dpi = NONE;
             info.theme = NONE;
@@ -807,7 +807,7 @@ public final class CommonPictureContentReader
             }
             catch (Exception e) // NOSONAR a size/name probe degrades to "unknown", never aborts the read
             {
-                return null;
+                return null; // NOSONAR null is a deliberate signal (unknown/unreadable/sentinel), not an empty array
             }
         }
     }

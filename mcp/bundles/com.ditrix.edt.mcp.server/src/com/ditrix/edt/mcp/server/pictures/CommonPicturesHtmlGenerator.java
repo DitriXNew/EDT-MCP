@@ -48,6 +48,9 @@ public final class CommonPicturesHtmlGenerator
     /** Newline used between emitted lines (LF for a deterministic, platform-independent document). */
     private static final String NL = "\n"; //$NON-NLS-1$
 
+    /** Closing {@code </div>} tag, emitted for every opened block wrapper. */
+    private static final String CLOSE_DIV = "</div>"; //$NON-NLS-1$
+
     /**
      * The custom URL scheme+path the Prev/Next/search controls navigate to. The SWT-Browser host
      * editor's {@code LocationListener} recognises this prefix, cancels the real navigation, parses
@@ -101,7 +104,7 @@ public final class CommonPicturesHtmlGenerator
         {
             appendCard(sb, entry);
         }
-        sb.append("</div>").append(NL); //$NON-NLS-1$
+        sb.append(CLOSE_DIV).append(NL);
 
         sb.append("</body>").append(NL); //$NON-NLS-1$
         sb.append("</html>").append(NL); //$NON-NLS-1$
@@ -125,7 +128,7 @@ public final class CommonPicturesHtmlGenerator
             .append(escapeHtml(query))
             .append("\" onkeydown=\"if(event.keyCode===13){edtmcpSearch();return false;}\">").append(NL); //$NON-NLS-1$
         sb.append("<button type=\"button\" onclick=\"edtmcpSearch()\">Найти</button>").append(NL); //$NON-NLS-1$
-        sb.append("</div>").append(NL); //$NON-NLS-1$
+        sb.append(CLOSE_DIV).append(NL);
         // encodeURIComponent runs in the Browser; the editor's LocationListener does the decode. A
         // search always resets to page 0.
         sb.append("<script>function edtmcpSearch(){") //$NON-NLS-1$
@@ -176,7 +179,7 @@ public final class CommonPicturesHtmlGenerator
         sb.append("<span class=\"pageinfo\">Страница ").append(pageIndex + 1).append(" из ") //$NON-NLS-1$ //$NON-NLS-2$
             .append(pageCount).append("</span>").append(NL); //$NON-NLS-1$
         appendPagerLink(sb, "next", "След ▶", query, pageIndex + 1, pageIndex < pageCount - 1); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("</div>").append(NL); //$NON-NLS-1$
+        sb.append(CLOSE_DIV).append(NL);
     }
 
     /**
@@ -293,12 +296,12 @@ public final class CommonPicturesHtmlGenerator
         {
             sb.append(" <span class=\"synonym\">(").append(escapeHtml(entry.synonym)).append(")</span>"); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        sb.append("</div>").append(NL); //$NON-NLS-1$
+        sb.append(CLOSE_DIV).append(NL);
 
         if (hasError)
         {
             sb.append("<div class=\"error\">Could not read this picture's Picture.zip: ") //$NON-NLS-1$
-                .append(escapeHtml(entry.error)).append("</div>").append(NL); //$NON-NLS-1$
+                .append(escapeHtml(entry.error)).append(CLOSE_DIV).append(NL);
         }
         else if (entry.variants == null || entry.variants.isEmpty())
         {
@@ -310,7 +313,7 @@ public final class CommonPicturesHtmlGenerator
             appendVariants(sb, entry.variants);
         }
 
-        sb.append("</div>").append(NL); //$NON-NLS-1$
+        sb.append(CLOSE_DIV).append(NL);
     }
 
     /**
@@ -333,7 +336,7 @@ public final class CommonPicturesHtmlGenerator
         // URI; the alt text is a 1C-derived label and is escaped.
         sb.append("<img src=\"").append(DATA_URI_PREFIX).append(best.base64Png) //$NON-NLS-1$
             .append("\" alt=\"").append(escapeHtml(safe(best.label))).append("\">").append(NL); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("</div>").append(NL); //$NON-NLS-1$
+        sb.append(CLOSE_DIV).append(NL);
     }
 
     /**
@@ -366,11 +369,11 @@ public final class CommonPicturesHtmlGenerator
             {
                 // A single variant that failed to decode: surfaced under its label, never aborts the card.
                 sb.append("<div class=\"variant-error\">").append(escapeHtml(variant.error)) //$NON-NLS-1$
-                    .append("</div>").append(NL); //$NON-NLS-1$
+                    .append(CLOSE_DIV).append(NL);
             }
             sb.append("</figure>").append(NL); //$NON-NLS-1$
         }
-        sb.append("</div>").append(NL); //$NON-NLS-1$
+        sb.append(CLOSE_DIV).append(NL);
     }
 
     /**
