@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.jface.dialogs.IDialogConstants;
+import org.eclipse.swt.SWTException;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 
@@ -264,7 +265,22 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         }
         else
         {
-            display.syncExec(openDialog);
+            // Shutdown race: the display was live when requireConsent checked it, but the workbench
+            // can close before this syncExec runs. A disposed display makes syncExec throw
+            // SWTException; rather than fail a destructive tool with that, fall back to the documented
+            // headless ALLOW (mirrors the neighbouring SWT auto-confirmer). See #222 review.
+            if (display.isDisposed())
+            {
+                return allowOnDisposedDisplay(toolName);
+            }
+            try
+            {
+                display.syncExec(openDialog);
+            }
+            catch (SWTException e) // NOSONAR a workbench shutdown mid-call disposes the display -> allow (headless fallback), never fail the tool
+            {
+                return allowOnDisposedDisplay(toolName);
+            }
         }
 
         int code = returnCode.get();
@@ -281,6 +297,21 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         }
         Activator.logInfo("Destructive-consent gate: user declined '" + toolName + "'."); //$NON-NLS-1$ //$NON-NLS-2$
         return ConsentDecision.REJECT;
+    }
+
+    /**
+     * The disposed-display fallback: the workbench closed between the live-display check in
+     * {@link #requireConsent} and the prompt, so there is no UI to ask — allow (the same policy as
+     * the headless / no-shell path), logging it, never failing the destructive tool. See #222.
+     *
+     * @param toolName the tool being gated
+     * @return {@link ConsentDecision#ALLOW}
+     */
+    private static ConsentDecision allowOnDisposedDisplay(String toolName)
+    {
+        Activator.logInfo("Destructive-consent gate: display disposed before/while prompting for '" //$NON-NLS-1$
+            + toolName + "'; allowing (headless fallback)."); //$NON-NLS-1$
+        return ConsentDecision.ALLOW;
     }
 
     /**
