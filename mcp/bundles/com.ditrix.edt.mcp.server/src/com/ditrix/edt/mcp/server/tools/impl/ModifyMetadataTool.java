@@ -25,6 +25,7 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.mcore.Value;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
@@ -37,6 +38,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
@@ -115,6 +117,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "(per-object right VALUES + optional per-field RLS restriction conditions), 'templates' " //$NON-NLS-1$
             + "(RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role " //$NON-NLS-1$
             + "booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. " //$NON-NLS-1$
+            + "For a COMMON ATTRIBUTE FQN ('CommonAttribute.Name'), attach / detach an owner object " //$NON-NLS-1$
+            + "with 'content' instead of 'properties': 'content'=[{op?:'add'|'remove' (default add), " //$NON-NLS-1$
+            + "metadata:'Catalog.X', use?:'Use'|'DontUse'|'Auto'}] adds an owner (idempotent; updates " //$NON-NLS-1$
+            + "its 'use' if already listed) or removes one by its metadata FQN. " //$NON-NLS-1$
             + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -153,6 +159,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 "ROLE only: the three role properties, as optional booleans {setForNewObjects, " //$NON-NLS-1$
                 + "setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags " //$NON-NLS-1$
                 + "are changed.") //$NON-NLS-1$
+            .objectArrayProperty("content", //$NON-NLS-1$
+                "COMMON ATTRIBUTE only: owners to attach / detach in the common attribute's content " //$NON-NLS-1$
+                + "list, as [{op?, metadata, use?}]. 'op' is 'add' (default) / 'remove'; 'metadata' is " //$NON-NLS-1$
+                + "the owner object FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары' - " //$NON-NLS-1$
+                + "only the type token is bilingual); 'use' (add only, default 'Use') is 'Use' / " //$NON-NLS-1$
+                + "'DontUse' / 'Auto'. Adding is idempotent (an already-listed owner has its 'use' " //$NON-NLS-1$
+                + "updated). Only valid for a CommonAttribute FQN; cannot be combined with " //$NON-NLS-1$
+                + "'properties'.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
                 + "title) and in the 'comment' property (default true). Matches the 1C standard " //$NON-NLS-1$
@@ -172,6 +186,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
                 + "rights change this is instead an object {rights, templates, roleProperties} with " //$NON-NLS-1$
                 + "the applied counts)") //$NON-NLS-1$
+            .objectProperty("content", "For a CommonAttribute content change: the counts object " //$NON-NLS-1$ //$NON-NLS-2$
+                + "{added, updated, removed} (how many owners were attached / had their 'use' updated / " //$NON-NLS-1$
+                + "detached)") //$NON-NLS-1$
             .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
@@ -204,11 +221,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean hasRolePayload =
             !rolePayloadRights.isEmpty() || !rolePayloadTemplates.isEmpty() || roleProperties != null;
 
-        if (properties.isEmpty() && !hasRolePayload)
+        // CommonAttribute content payload (content[]): dispatched when the resolved FQN is a
+        // CommonAttribute. When present, 'properties' is optional (the content list is edited through
+        // its own surface, not the generic property bag) - mirrors the Role rights[] precedent.
+        List<JsonObject> content = JsonUtils.extractObjectArray(params, "content"); //$NON-NLS-1$
+        boolean hasContentPayload = !content.isEmpty();
+
+        if (properties.isEmpty() && !hasRolePayload && !hasContentPayload)
         {
             return ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
                 + "set, e.g. [{name: 'comment', value: 'Goods'}]. For a Role FQN, provide 'rights', " //$NON-NLS-1$
-                + "'templates' or 'roleProperties' instead.").toJson(); //$NON-NLS-1$
+                + "'templates' or 'roleProperties' instead; for a CommonAttribute FQN, provide " //$NON-NLS-1$
+                + "'content' instead.").toJson(); //$NON-NLS-1$
         }
 
         // 'ё'->'е' normalization is applied at the parse step to every localized-string / free-text
@@ -231,6 +255,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
+            // A Role payload (rights / templates / roleProperties) or a CommonAttribute content
+            // payload addressed to a FORM-member FQN is refused here, BEFORE the form dispatch: a
+            // form member is neither a Role nor a CommonAttribute, so those siblings do not apply to
+            // it. Without this guard the form branch would apply only 'properties' (or nothing) and
+            // report success while the sibling payload vanished silently. Both siblings are rejected
+            // together to keep them symmetric.
+            if (hasRolePayload || hasContentPayload)
+            {
+                return ToolResult.error("'" + normFqn + "' addresses a FORM member, which cannot " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "take a Role payload ('rights' / 'templates' / 'roleProperties') or a " //$NON-NLS-1$
+                    + "CommonAttribute 'content' payload. 'rights' / 'templates' / 'roleProperties' " //$NON-NLS-1$
+                    + "are valid only for a Role.<Name> FQN, and 'content' only for a " //$NON-NLS-1$
+                    + "CommonAttribute.<Name> FQN. Use 'properties' to change a form member.").toJson(); //$NON-NLS-1$
+            }
             return modifyFormMember(ctx, normFqn, formRef, properties, normReport);
         }
 
@@ -273,6 +311,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("'rights' / 'templates' / 'roleProperties' are only valid for a " //$NON-NLS-1$
                 + "Role FQN; '" + normFqn + "' is a " + target.eClass().getName() + ". Use " //$NON-NLS-1$ //$NON-NLS-2$
                 + "'properties' for its generic properties, or address a Role.<Name>.").toJson(); //$NON-NLS-1$
+        }
+
+        // A COMMON ATTRIBUTE FQN carrying a content payload (content[]) is dispatched to the dedicated
+        // content writer: an owner is attached / detached through the content-list surface, not the
+        // generic property bag. The mutation goes through a BM write tx + a forceExport of the
+        // CommonAttribute FQN.
+        if (target instanceof CommonAttribute && hasContentPayload)
+        {
+            return modifyCommonAttributeContent(ctx, normFqn, (CommonAttribute)target, properties, content);
+        }
+
+        // A content payload addressed to a NON-CommonAttribute FQN is rejected here (it must not fall
+        // through to the generic property path, which - with an empty 'properties' - would apply nothing
+        // yet report a false success and silently drop the content payload).
+        if (hasContentPayload)
+        {
+            return ToolResult.error("'content' is only valid for a CommonAttribute FQN; '" + normFqn //$NON-NLS-1$
+                + "' is a " + target.eClass().getName() + ". Use 'properties' for its generic " //$NON-NLS-1$ //$NON-NLS-2$
+                + "properties, or address a CommonAttribute.<Name>.").toJson(); //$NON-NLS-1$
         }
 
         // Resolve the BM re-fetch strategy (mutation must re-fetch inside the write tx). Only TOP
@@ -580,6 +637,52 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted)
             .put(McpKeys.MESSAGE, "Modified role " + normFqn + " (rights: " + result.rights //$NON-NLS-1$ //$NON-NLS-2$
                 + ", templates: " + result.templates + ", roleProperties: " + result.roleProperties //$NON-NLS-1$ //$NON-NLS-2$
+                + ")") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * Modifies a COMMON ATTRIBUTE's content list (the {@code content[]} payload) via
+     * {@link CommonAttributeContentWriter}: attaches / detaches an owner object in the common
+     * attribute's {@code <content>} list. A common attribute's content is edited through this dedicated
+     * surface, not the generic property bag, so mixing the content payload with a generic
+     * {@code properties} change in the same call is refused (the same policy the Role rights / move /
+     * handler / command branches enforce). The writer mutates only through the BM write boundary; this
+     * branch then force-exports the single CommonAttribute TOP FQN OUTSIDE the writer, once, after the
+     * write has committed.
+     */
+    private String modifyCommonAttributeContent(ProjectContext ctx, String normFqn,
+        CommonAttribute commonAttribute, List<JsonObject> properties, List<JsonObject> content)
+    {
+        if (!properties.isEmpty())
+        {
+            return ToolResult.error("A common attribute content change ('content') cannot be combined " //$NON-NLS-1$
+                + "with a generic 'properties' change in one call. Set the common attribute's own " //$NON-NLS-1$
+                + "properties (comment / synonym) separately.").toJson(); //$NON-NLS-1$
+        }
+
+        CommonAttributeContentWriter.Result result =
+            CommonAttributeContentWriter.apply(ctx.project, ctx.config, commonAttribute, content);
+        if (result.hasError())
+        {
+            return result.error;
+        }
+
+        // The content list lives inside the CommonAttribute's own .mdo, so exporting the CommonAttribute
+        // TOP FQN once drains the change to disk.
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, normFqn);
+
+        JsonObject applied = new JsonObject();
+        applied.addProperty("added", result.added); //$NON-NLS-1$
+        applied.addProperty("updated", result.updated); //$NON-NLS-1$
+        applied.addProperty("removed", result.removed); //$NON-NLS-1$
+        return ToolResult.success()
+            .put(McpKeys.ACTION, VAL_MODIFIED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("content", applied) //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, "Modified common attribute " + normFqn + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
+                + result.added + ", updated: " + result.updated + ", removed: " + result.removed //$NON-NLS-1$ //$NON-NLS-2$
                 + ")") //$NON-NLS-1$
             .toJson();
     }

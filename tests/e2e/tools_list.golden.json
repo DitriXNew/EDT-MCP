@@ -2975,9 +2975,16 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
+    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. For a COMMON ATTRIBUTE FQN ('CommonAttribute.Name'), attach / detach an owner object with 'content' instead of 'properties': 'content'=[{op?:'add'|'remove' (default add), metadata:'Catalog.X', use?:'Use'|'DontUse'|'Auto'}] adds an owner (idempotent; updates its 'use' if already listed) or removes one by its metadata FQN. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
     "inputSchema": {
       "properties": {
+        "content": {
+          "description": "COMMON ATTRIBUTE only: owners to attach / detach in the common attribute's content list, as [{op?, metadata, use?}]. 'op' is 'add' (default) / 'remove'; 'metadata' is the owner object FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары' - only the type token is bilingual); 'use' (add only, default 'Use') is 'Use' / 'DontUse' / 'Auto'. Adding is idempotent (an already-listed owner has its 'use' updated). Only valid for a CommonAttribute FQN; cannot be combined with 'properties'.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
         "fqn": {
           "description": "Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or 'Catalog.Products.Attribute.Weight' (type / kind tokens may be English or Russian; the Name parts are the programmatic Name).",
           "type": "string"
@@ -3035,6 +3042,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "content": {
+          "description": "For a CommonAttribute content change: the counts object {added, updated, removed} (how many owners were attached / had their 'use' updated / detached)",
+          "type": "object"
         },
         "destination": {
           "description": "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. \"group 'Main' at index 1\"",

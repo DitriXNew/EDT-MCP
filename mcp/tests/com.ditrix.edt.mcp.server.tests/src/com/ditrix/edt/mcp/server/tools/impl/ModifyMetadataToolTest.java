@@ -21,6 +21,8 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 
@@ -166,6 +168,9 @@ public class ModifyMetadataToolTest
         // The ё->е normalization toggle must be declared (execute() reads it; schema parity).
         assertTrue("schema must declare the normalizeYo toggle", //$NON-NLS-1$
             schema.contains("\"normalizeYo\"")); //$NON-NLS-1$
+        // The CommonAttribute content payload must be declared (execute() reads it; schema parity).
+        assertTrue("schema must declare the content payload", //$NON-NLS-1$
+            schema.contains("\"content\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -280,5 +285,93 @@ public class ModifyMetadataToolTest
         String raw = "comment with \u0451"; //$NON-NLS-1$
         assertSame(raw, ModifyMetadataTool.normalizeStringPropertyValue("comment", raw, report)); //$NON-NLS-1$
         assertFalse(report.hasChanges());
+    }
+
+    // ===== CommonAttribute content payload (content[]) =====================================
+
+    @Test
+    public void testDescriptionAndGuideAdvertiseCommonAttributeContent()
+    {
+        // Attaching / detaching an owner in a CommonAttribute's content list is part of the tool
+        // surface, so the description and the guide must advertise the 'content' payload with its
+        // add/remove op and the 'use' values.
+        String desc = new ModifyMetadataTool().getDescription();
+        assertTrue("description should advertise the CommonAttribute content payload", //$NON-NLS-1$
+            desc.contains("CommonAttribute") && desc.contains("content")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String guide = new ModifyMetadataTool().getGuide();
+        assertNotNull(guide);
+        assertTrue("guide should explain the common attribute content payload", //$NON-NLS-1$
+            guide.contains("common attribute") && guide.contains("content")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide should show the add/remove op", //$NON-NLS-1$
+            guide.contains("remove")); //$NON-NLS-1$
+        assertTrue("guide should show the use values", guide.contains("DontUse")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresContentCounts()
+    {
+        // The success shape for a content change carries a 'content' counts object {added, updated,
+        // removed}; the output schema must declare it.
+        String outputSchema = new ModifyMetadataTool().getOutputSchema();
+        assertNotNull(outputSchema);
+        assertTrue("output schema must declare the content counts key", //$NON-NLS-1$
+            outputSchema.contains("\"content\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testContentPayloadNotSchemaRequired()
+    {
+        // Like the role payload, 'content' is a conditional alternative to 'properties' (enforced in
+        // execute(), not the schema's required array), so it must NOT be schema-required.
+        String schema = new ModifyMetadataTool().getInputSchema();
+        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        assertTrue(requiredIdx >= 0);
+        String tail = schema.substring(requiredIdx);
+        assertFalse("content must not be schema-required (properties is the alternative)", //$NON-NLS-1$
+            tail.contains("\"content\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testArgumentGuardHelpNamesContentAlternative()
+    {
+        // The Display-free argument guard (empty 'properties' AND no sibling payload) now names
+        // 'content' as the CommonAttribute alternative in its help text, so a caller who forgot the
+        // content payload is steered to it. The guard message is built inside executeOnUiThread (on
+        // a live workbench), so the wording is asserted via the guide + description surface here; the
+        // FQN-typed rejects - content on a non-CommonAttribute FQN, content mixed with properties, an
+        // empty content list on a CommonAttribute, and an unknown 'use' token - run inside
+        // executeOnUiThread and are covered by the writer unit tests and the E2E suite.
+        String guide = new ModifyMetadataTool().getGuide();
+        assertTrue("the CommonAttribute FQN alternative must be documented in the guide", //$NON-NLS-1$
+            guide.contains("CommonAttribute") && guide.contains("content")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCommonAttributeAndOwnerTypeTokensResolveBilingually()
+    {
+        // The bilingual ratchet: the content branch addresses a CommonAttribute FQN and resolves each
+        // owner FQN through the shared MetadataTypeUtils + MetadataNodeResolver pair, so both the
+        // English "CommonAttribute" token and the Russian "\u041e\u0431\u0449\u0438\u0439\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442" token must normalize to the
+        // SAME MetadataTypeInfo, and likewise the owner "Catalog" / "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a" tokens. This
+        // documents that modify_metadata accepts a "CommonAttribute.<Name>" FQN with a Russian owner
+        // FQN in 'content', without needing a live model. The resolve-by-Name path (programmatic Name
+        // inside a BM transaction) is exercised by the E2E suite.
+        // Escaped so the RU tokens survive a non-UTF-8 Tycho build (see CLAUDE.md hard don't #7).
+        String ruCommonAttribute =
+            "\u041e\u0431\u0449\u0438\u0439\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442"; // \u041e\u0431\u0449\u0438\u0439\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442 //$NON-NLS-1$
+        MetadataTypeInfo enCommonAttr = MetadataTypeUtils.resolve("CommonAttribute"); //$NON-NLS-1$
+        MetadataTypeInfo ruCommonAttr = MetadataTypeUtils.resolve(ruCommonAttribute);
+        assertNotNull("English CommonAttribute token must resolve", enCommonAttr); //$NON-NLS-1$
+        assertEquals("EN and RU CommonAttribute tokens must resolve to the same type", //$NON-NLS-1$
+            enCommonAttr, ruCommonAttr);
+        assertEquals(MetadataTypeInfo.COMMON_ATTRIBUTE, enCommonAttr);
+
+        String ruCatalog = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a"; // \u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a //$NON-NLS-1$
+        MetadataTypeInfo enCatalog = MetadataTypeUtils.resolve("Catalog"); //$NON-NLS-1$
+        MetadataTypeInfo ruCatalogInfo = MetadataTypeUtils.resolve(ruCatalog);
+        assertNotNull("English Catalog owner token must resolve", enCatalog); //$NON-NLS-1$
+        assertEquals("EN and RU Catalog owner tokens must resolve to the same type", //$NON-NLS-1$
+            enCatalog, ruCatalogInfo);
     }
 }

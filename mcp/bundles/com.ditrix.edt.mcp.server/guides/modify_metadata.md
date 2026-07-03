@@ -1,4 +1,4 @@
-Sets one or more properties of a metadata node addressed by a 1C full-name FQN (a top object or a member: attribute / tabular section / dimension / resource / enum value), then force-exports the owning top object to its `.mdo`. Replaces the former set_metadata_property (which set only Comment / Synonym); this tool sets any assignable scalar / boolean / integer / enum / synonym property. A ROLE FQN (`Role.<Name>`) is modified through a dedicated access-rights surface (`rights` / `templates` / `roleProperties`) instead of `properties` - see [Setting role access rights](#setting-role-access-rights).
+Sets one or more properties of a metadata node addressed by a 1C full-name FQN (a top object or a member: attribute / tabular section / dimension / resource / enum value), then force-exports the owning top object to its `.mdo`. Replaces the former set_metadata_property (which set only Comment / Synonym); this tool sets any assignable scalar / boolean / integer / enum / synonym property. A ROLE FQN (`Role.<Name>`) is modified through a dedicated access-rights surface (`rights` / `templates` / `roleProperties`) instead of `properties` - see [Setting role access rights](#setting-role-access-rights). A COMMON ATTRIBUTE FQN (`CommonAttribute.<Name>`) attaches / detaches owner objects through a dedicated `content` surface instead of `properties` - see [Setting a common attribute's content](#setting-a-common-attributes-content).
 
 ## Validation (errors are help)
 - A property that is NOT assignable on this node is rejected with the list of assignable properties - discover them with get_metadata_details(assignable:true).
@@ -7,7 +7,8 @@ Sets one or more properties of a metadata node addressed by a 1C full-name FQN (
 ## Parameter details
 - `projectName` (required) - EDT project name.
 - `fqn` (required) - full-name FQN of the node.
-- `properties` (required, EXCEPT for a Role FQN with a role payload) - array of `{name, value, language?}`. `name` is the property name; `value` the new value; `language` the CODE for a synonym (default: config default). It is optional (and cannot be combined with) the role `rights` / `templates` / `roleProperties` payload; see [Setting role access rights](#setting-role-access-rights).
+- `properties` (required, EXCEPT for a Role FQN with a role payload or a CommonAttribute FQN with a content payload) - array of `{name, value, language?}`. `name` is the property name; `value` the new value; `language` the CODE for a synonym (default: config default). It is optional (and cannot be combined with) the role `rights` / `templates` / `roleProperties` payload (see [Setting role access rights](#setting-role-access-rights)) or the common attribute `content` payload (see [Setting a common attribute's content](#setting-a-common-attributes-content)).
+- `content` (CommonAttribute FQN only) - array of `{op?, metadata, use?}` to attach / detach owner objects in the common attribute's content list; cannot be combined with `properties`. See [Setting a common attribute's content](#setting-a-common-attributes-content).
 - `normalizeYo` (optional, default true) - normalize the Russian letter `ё`->`е` / `Ё`->`Е` in localized-string values (synonym / title) and in the `comment` property (matches the 1C standard `mdo-ru-name-unallowed-letter`). Other free-text strings can be identifier-like (e.g. `XDTOPackage.namespace` is a URI) and always keep the supplied value. Set `false` to keep `ё` exactly as supplied everywhere. The result lists the rewritten properties under `normalized`.
 
 ## Not supported here
@@ -17,7 +18,7 @@ Sets one or more properties of a metadata node addressed by a 1C full-name FQN (
 The `type` property takes a STRUCTURED value `{types:[{kind, ...}]}`. Primitive kinds String / Number / Boolean / Date carry inline qualifiers (length; precision / scale / nonNegative; fractions = DateTime | Date | Time). A reference is `{kind:'Ref', ref:'Type.Name'}` (or `{kind:'CatalogRef', ref:'Name'}`). The list may mix several (a composite type).
 
 ## Setting an object reference
-A reference property to another metadata object is set by FQN: a SINGLE reference (e.g. `chartOfAccounts` on an AccountingRegister) takes `value:'Type.Name'`; a LIST reference (e.g. a Subsystem's `content`) takes `value:['Type.Name', ...]` and REPLACES the whole list (an empty array `[]` clears it). The target must be a top-level object whose type matches; get_metadata_details(assignable:true) shows the allowed target type. Structured content with per-item flags (e.g. a common attribute's content), and references whose target is a member (e.g. a default form), are not set here yet.
+A reference property to another metadata object is set by FQN: a SINGLE reference (e.g. `chartOfAccounts` on an AccountingRegister) takes `value:'Type.Name'`; a LIST reference (e.g. a Subsystem's `content`) takes `value:['Type.Name', ...]` and REPLACES the whole list (an empty array `[]` clears it). The target must be a top-level object whose type matches; get_metadata_details(assignable:true) shows the allowed target type. A common attribute's content (structured, with per-item `use` flags) is edited through the sibling `content` payload - see [Setting a common attribute's content](#setting-a-common-attributes-content); references whose target is a member (e.g. a default form) are not set here yet.
 
 ## Setting a StyleItem value (Color / Font)
 A StyleItem (created generically with create_metadata) has no value yet; set its `value` property to a STRUCTURED object with EITHER a `color` OR a `font` member (not both). The style item's `type` (Color / Font) is set automatically to match the value.
@@ -65,6 +66,16 @@ When the `fqn` is a **Role** (`Role.<Name>`) you set the role's ACCESS RIGHTS th
 
 An unknown right or a bad object FQN is a clean, actionable error (not-found + the valid list / a suggestion). Nothing is written unless the payload resolves.
 
+## Setting a common attribute's content
+A **common attribute** (`CommonAttribute.<Name>`) is a single attribute shared across many objects (e.g. an audit `Author` / `EditDate`, a data-separator). Which objects carry it - its OWNERS - live in the common attribute's `content` list, each with a per-owner `use` flag. You attach / detach an owner through the sibling `content` payload instead of `properties` - the content list is edited through its own surface, not the generic property bag. A content payload CANNOT be combined with a generic `properties` change in the same call (set the common attribute's own comment / synonym separately). The change goes through a BM write transaction and force-exports the `CommonAttribute.<Name>` `.mdo` to disk (no manual `clean_project` needed). Read a common attribute's current content with `get_metadata_details` on its FQN.
+
+- `content` - array of `{op?, metadata, use?}`:
+  - `op` (optional, default `add`) - `add` attaches (or updates) an owner; `remove` detaches one by its `metadata` FQN.
+  - `metadata` (required) - the owner object FQN, e.g. `Catalog.Products` or the Russian `Справочник.Товары` (only the type token is bilingual; the Name is the programmatic Name). It must exist and be a valid common-attribute owner kind; otherwise the entry is rejected with an actionable error.
+  - `use` (optional, `add` only, default `Use`) - the per-owner usage: `Use` / `DontUse` / `Auto`. Ignored for `remove`.
+
+Adding is IDEMPOTENT: attaching an owner that is already listed does not duplicate it - it updates that owner's `use` (counted under `updated` rather than `added`). Removing an owner that is not listed is a clean error. Nothing is written unless every entry resolves.
+
 ## Examples
 - Move a field into a group: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Field.Price', properties:[{name:'parent', value:'PriceGroup'}]}`
 - Move a button into the command bar: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Button.Print', properties:[{name:'parent', value:'AutoCommandBar'}]}`
@@ -91,9 +102,12 @@ An unknown right or a bad object FQN is a clean, actionable error (not-found + t
 - Add a per-field RLS restriction: `{projectName:'P', fqn:'Role.Sales', rights:[{object:'Catalog.Products', right:'Read', value:'set', rls:'WHERE Ref.Company = &Company', rlsFields:['Price', 'Cost']}]}`
 - Add an RLS restriction template: `{projectName:'P', fqn:'Role.Sales', templates:[{op:'add', name:'ByCompany', condition:'WHERE Company = &Company'}]}`
 - Set the role-wide flags: `{projectName:'P', fqn:'Role.Sales', roleProperties:{setForNewObjects:true, setForAttributesByDefault:false}}`
+- Attach an owner to a common attribute: `{projectName:'P', fqn:'CommonAttribute.Author', content:[{metadata:'Catalog.Products', use:'Use'}]}`
+- Attach several owners (bilingual FQN): `{projectName:'P', fqn:'CommonAttribute.Author', content:[{op:'add', metadata:'Document.Order'}, {op:'add', metadata:'Справочник.Товары', use:'Auto'}]}`
+- Detach an owner: `{projectName:'P', fqn:'CommonAttribute.Author', content:[{op:'remove', metadata:'Catalog.Products'}]}`
 
 ## Result
-JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, `persisted`, and (when the ё->е normalization rewrote anything) the list of `normalized` properties. A move additionally returns `destination` (where the moved item ended up, e.g. `group 'Main' at index 1`). For a ROLE rights change `applied` is instead a counts object `{rights, templates, roleProperties}` (how many of each were applied).
+JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, `persisted`, and (when the ё->е normalization rewrote anything) the list of `normalized` properties. A move additionally returns `destination` (where the moved item ended up, e.g. `group 'Main' at index 1`). For a ROLE rights change `applied` is instead a counts object `{rights, templates, roleProperties}` (how many of each were applied). For a COMMON ATTRIBUTE content change the result carries a `content` counts object `{added, updated, removed}` (how many owners were attached / had their `use` updated / detached).
 
 ## Reverting (no undo)
 There is no automatic undo: to revert a change, call modify_metadata again with the previous value (read the current value first with get_metadata_details). modify_metadata is intentionally NOT confirm-gated because it is reversible that way; only the destructive / high-blast-radius writes (delete_metadata, rename_metadata_object, update_database, delete_project) are gated with a confirm-preview.
