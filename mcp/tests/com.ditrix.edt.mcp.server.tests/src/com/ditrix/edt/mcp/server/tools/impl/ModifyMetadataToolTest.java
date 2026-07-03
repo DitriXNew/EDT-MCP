@@ -374,4 +374,137 @@ public class ModifyMetadataToolTest
         assertEquals("EN and RU Catalog owner tokens must resolve to the same type", //$NON-NLS-1$
             enCatalog, ruCatalogInfo);
     }
+
+    // ===== Membership content payload v2 (ExchangePlan / Catalog / Document) ================
+
+    @Test
+    public void testDescriptionAdvertisesAllFourMembershipKinds()
+    {
+        // The v2 content[] dispatch adds ExchangePlan content objects, Catalog owners and Document
+        // register records to the v1 CommonAttribute owners - all four kinds must be advertised in the
+        // description so a schema-driven client sees which FQNs accept a 'content' payload.
+        String desc = new ModifyMetadataTool().getDescription();
+        assertTrue("description should still advertise CommonAttribute content", //$NON-NLS-1$
+            desc.contains("CommonAttribute") && desc.contains("content")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should advertise ExchangePlan content", //$NON-NLS-1$
+            desc.contains("ExchangePlan")); //$NON-NLS-1$
+        assertTrue("description should advertise Catalog owners", desc.contains("Catalog")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should advertise Document register records", //$NON-NLS-1$
+            desc.contains("Document")); //$NON-NLS-1$
+        // The ExchangePlan per-entry flag is autoRecord (mapped Allow / Deny).
+        assertTrue("description should advertise the ExchangePlan autoRecord flag", //$NON-NLS-1$
+            desc.contains("autoRecord")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInputSchemaContentParamDocumentsAutoRecordAndKinds()
+    {
+        // The content param doc must declare the ExchangePlan 'autoRecord' field and name all four
+        // membership kinds (execute() dispatches on them; schema parity keeps the wire surface honest).
+        String schema = new ModifyMetadataTool().getInputSchema();
+        assertTrue("content param doc must mention autoRecord", schema.contains("autoRecord")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("content param doc must name ExchangePlan", schema.contains("ExchangePlan")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("content param doc must name Catalog", schema.contains("Catalog")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("content param doc must name Document", schema.contains("Document")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testGuideExplainsAllFourMembershipKinds()
+    {
+        // The guide's membership section must explain all four kinds and their per-entry flags, so a
+        // caller learns which FQN takes 'use' (CommonAttribute), which takes 'autoRecord'
+        // (ExchangePlan) and which are plain references (Catalog owners / Document register records).
+        String guide = new ModifyMetadataTool().getGuide();
+        assertNotNull(guide);
+        assertTrue("guide should explain ExchangePlan content", guide.contains("ExchangePlan")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide should explain Catalog owners", //$NON-NLS-1$
+            guide.contains("Catalog") && guide.contains("owner")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide should explain Document register records", //$NON-NLS-1$
+            guide.contains("Document") && guide.contains("register record")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide should show the ExchangePlan autoRecord flag", //$NON-NLS-1$
+            guide.contains("autoRecord")); //$NON-NLS-1$
+        // The Allow / Deny tokens for autoRecord are documented.
+        assertTrue("guide should show the autoRecord Allow token", guide.contains("Allow")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide should show the autoRecord Deny token", guide.contains("Deny")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testGuideDocumentsPlainRefCountsShape()
+    {
+        // A plain-reference membership change (Catalog owners / Document register records) has no
+        // per-entry flag, so its counts shape is {added, removed} (no 'updated') - the guide's Result
+        // section must document that distinction from the wrapper kinds.
+        String guide = new ModifyMetadataTool().getGuide();
+        assertTrue("guide should document the {added, removed} counts for plain-reference lists", //$NON-NLS-1$
+            guide.contains("added, removed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExchangePlanTypeTokenResolvesBilingually()
+    {
+        // The v2 content branch addresses an ExchangePlan FQN; both the English "ExchangePlan" token
+        // and the Russian "\u041f\u043b\u0430\u043d\u041e\u0431\u043c\u0435\u043d\u0430" token must normalize to the SAME MetadataTypeInfo through the shared
+        // MetadataTypeUtils resolver (the resolve-by-Name path is exercised by the E2E suite).
+        // Escaped so the RU token survives a non-UTF-8 Tycho build (see CLAUDE.md hard don't #7).
+        String ruExchangePlan =
+            "\u041f\u043b\u0430\u043d\u041e\u0431\u043c\u0435\u043d\u0430"; // \u041f\u043b\u0430\u043d\u041e\u0431\u043c\u0435\u043d\u0430 //$NON-NLS-1$
+        MetadataTypeInfo enExchangePlan = MetadataTypeUtils.resolve("ExchangePlan"); //$NON-NLS-1$
+        MetadataTypeInfo ruExchangePlanInfo = MetadataTypeUtils.resolve(ruExchangePlan);
+        assertNotNull("English ExchangePlan token must resolve", enExchangePlan); //$NON-NLS-1$
+        assertEquals("EN and RU ExchangePlan tokens must resolve to the same type", //$NON-NLS-1$
+            enExchangePlan, ruExchangePlanInfo);
+        assertEquals(MetadataTypeInfo.EXCHANGE_PLAN, enExchangePlan);
+    }
+
+    @Test
+    public void testDocumentTypeTokenResolvesBilingually()
+    {
+        // The v2 content branch addresses a Document FQN (its register records); both the English
+        // "Document" token and the Russian "\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442" token must resolve to the SAME MetadataTypeInfo.
+        String ruDocument =
+            "\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442"; // \u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442 //$NON-NLS-1$
+        MetadataTypeInfo enDocument = MetadataTypeUtils.resolve("Document"); //$NON-NLS-1$
+        MetadataTypeInfo ruDocumentInfo = MetadataTypeUtils.resolve(ruDocument);
+        assertNotNull("English Document token must resolve", enDocument); //$NON-NLS-1$
+        assertEquals("EN and RU Document tokens must resolve to the same type", //$NON-NLS-1$
+            enDocument, ruDocumentInfo);
+        assertEquals(MetadataTypeInfo.DOCUMENT, enDocument);
+    }
+
+    @Test
+    public void testCatalogTypeTokenResolvesBilinguallyForOwners()
+    {
+        // The v2 content branch also addresses a Catalog FQN for its OWNERS list (distinct from a
+        // Catalog used as a CommonAttribute owner); the same bilingual token pair must resolve to the
+        // same type, and it must be the CATALOG literal.
+        String ruCatalog =
+            "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a"; // \u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a //$NON-NLS-1$
+        MetadataTypeInfo enCatalog = MetadataTypeUtils.resolve("Catalog"); //$NON-NLS-1$
+        MetadataTypeInfo ruCatalogInfo = MetadataTypeUtils.resolve(ruCatalog);
+        assertNotNull("English Catalog token must resolve", enCatalog); //$NON-NLS-1$
+        assertEquals("EN and RU Catalog tokens must resolve to the same type", //$NON-NLS-1$
+            enCatalog, ruCatalogInfo);
+        assertEquals(MetadataTypeInfo.CATALOG, enCatalog);
+    }
+
+    @Test
+    public void testContentPayloadDispatchSurfaceIsDocumentedForNegativeCases()
+    {
+        // The FQN-typed rejects for the v2 content dispatch - a content payload on an UNSUPPORTED kind
+        // (rejected listing CommonAttribute / ExchangePlan / Catalog / Document), a wrong REF kind for
+        // the target list (a non-CatalogOwner / non-BasicRegister), and content MIXED with a generic
+        // 'properties' change - all run inside executeOnUiThread on a live workbench (like the v1
+        // CommonAttribute rejects), so they are covered by the writer unit tests and the E2E suite. The
+        // surface here asserts the four supported kinds are documented so a rejected caller is steered
+        // to the right FQN kind.
+        String desc = new ModifyMetadataTool().getDescription();
+        assertTrue("all four content kinds must be named on the surface", //$NON-NLS-1$
+            desc.contains("CommonAttribute") && desc.contains("ExchangePlan") //$NON-NLS-1$ //$NON-NLS-2$
+                && desc.contains("Catalog") && desc.contains("Document")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The no-mixing policy (a content payload CANNOT be combined with a generic properties change)
+        // is documented in the guide's shared membership section for every kind.
+        String guide = new ModifyMetadataTool().getGuide();
+        assertTrue("the no-mixing-with-properties policy must be documented", //$NON-NLS-1$
+            guide.contains("CANNOT be combined with a generic")); //$NON-NLS-1$
+    }
 }

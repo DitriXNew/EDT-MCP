@@ -25,8 +25,11 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.mcore.Value;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
@@ -42,6 +45,7 @@ import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
+import com.ditrix.edt.mcp.server.utils.ExchangePlanContentWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
@@ -51,6 +55,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferenceMembershipWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.google.gson.JsonElement;
@@ -117,10 +122,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "(per-object right VALUES + optional per-field RLS restriction conditions), 'templates' " //$NON-NLS-1$
             + "(RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role " //$NON-NLS-1$
             + "booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. " //$NON-NLS-1$
-            + "For a COMMON ATTRIBUTE FQN ('CommonAttribute.Name'), attach / detach an owner object " //$NON-NLS-1$
-            + "with 'content' instead of 'properties': 'content'=[{op?:'add'|'remove' (default add), " //$NON-NLS-1$
-            + "metadata:'Catalog.X', use?:'Use'|'DontUse'|'Auto'}] adds an owner (idempotent; updates " //$NON-NLS-1$
-            + "its 'use' if already listed) or removes one by its metadata FQN. " //$NON-NLS-1$
+            + "Edit a structured membership LIST with 'content' instead of 'properties', dispatched by " //$NON-NLS-1$
+            + "the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's " //$NON-NLS-1$
+            + "content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name') or a " //$NON-NLS-1$
+            + "DOCUMENT's register records / движения ('Document.Name'). 'content'=[{op?:'add'|'remove' " //$NON-NLS-1$
+            + "(default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or " //$NON-NLS-1$
+            + "removes one by its metadata FQN; a CommonAttribute entry takes 'use' " //$NON-NLS-1$
+            + "('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and " //$NON-NLS-1$
+            + "a Catalog owner / Document register record is a plain reference (no flag). " //$NON-NLS-1$
             + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -160,13 +169,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags " //$NON-NLS-1$
                 + "are changed.") //$NON-NLS-1$
             .objectArrayProperty("content", //$NON-NLS-1$
-                "COMMON ATTRIBUTE only: owners to attach / detach in the common attribute's content " //$NON-NLS-1$
-                + "list, as [{op?, metadata, use?}]. 'op' is 'add' (default) / 'remove'; 'metadata' is " //$NON-NLS-1$
-                + "the owner object FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары' - " //$NON-NLS-1$
-                + "only the type token is bilingual); 'use' (add only, default 'Use') is 'Use' / " //$NON-NLS-1$
-                + "'DontUse' / 'Auto'. Adding is idempotent (an already-listed owner has its 'use' " //$NON-NLS-1$
-                + "updated). Only valid for a CommonAttribute FQN; cannot be combined with " //$NON-NLS-1$
-                + "'properties'.") //$NON-NLS-1$
+                "Members to attach / detach in a structured membership list, dispatched by the FQN's " //$NON-NLS-1$
+                + "kind (a COMMON ATTRIBUTE's owners, an EXCHANGE PLAN's content objects, a CATALOG's " //$NON-NLS-1$
+                + "owners, a DOCUMENT's register records), as [{op?, metadata, use?, autoRecord?}]. 'op' " //$NON-NLS-1$
+                + "is 'add' (default) / 'remove'; 'metadata' is the member object FQN (e.g. " //$NON-NLS-1$
+                + "'Catalog.Products' or the Russian 'Справочник.Товары' - only the type token is " //$NON-NLS-1$
+                + "bilingual). 'use' (CommonAttribute only, add only, default 'Use') is 'Use' / " //$NON-NLS-1$
+                + "'DontUse' / 'Auto'; 'autoRecord' (ExchangePlan only, add only) is 'Allow' / 'Deny' " //$NON-NLS-1$
+                + "(omit to keep the platform default). A Catalog owner and a Document register record " //$NON-NLS-1$
+                + "are plain references (no flag). Adding is idempotent (a re-added CommonAttribute owner " //$NON-NLS-1$
+                + "has its 'use' updated, a re-added ExchangePlan object its 'autoRecord'; a re-added " //$NON-NLS-1$
+                + "plain reference is a no-op). Valid only for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
+                + "Catalog / Document FQN; cannot be combined with 'properties'.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
                 + "title) and in the 'comment' property (default true). Matches the 1C standard " //$NON-NLS-1$
@@ -186,9 +200,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
                 + "rights change this is instead an object {rights, templates, roleProperties} with " //$NON-NLS-1$
                 + "the applied counts)") //$NON-NLS-1$
-            .objectProperty("content", "For a CommonAttribute content change: the counts object " //$NON-NLS-1$ //$NON-NLS-2$
-                + "{added, updated, removed} (how many owners were attached / had their 'use' updated / " //$NON-NLS-1$
-                + "detached)") //$NON-NLS-1$
+            .objectProperty("content", "For a membership-list content change: the counts object. A " //$NON-NLS-1$ //$NON-NLS-2$
+                + "CommonAttribute / ExchangePlan change reports {added, updated, removed} (members " //$NON-NLS-1$
+                + "attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a " //$NON-NLS-1$
+                + "Catalog owners / Document register records change (a plain reference list, no " //$NON-NLS-1$
+                + "per-entry flag) reports {added, removed}") //$NON-NLS-1$
             .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
@@ -221,9 +237,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean hasRolePayload =
             !rolePayloadRights.isEmpty() || !rolePayloadTemplates.isEmpty() || roleProperties != null;
 
-        // CommonAttribute content payload (content[]): dispatched when the resolved FQN is a
-        // CommonAttribute. When present, 'properties' is optional (the content list is edited through
-        // its own surface, not the generic property bag) - mirrors the Role rights[] precedent.
+        // Membership content payload (content[]): one generic list dispatched by the resolved FQN's
+        // kind (a CommonAttribute's / a Catalog's owners, an ExchangePlan's content objects, a
+        // Document's register records). When present, 'properties' is optional (the membership list is
+        // edited through its own surface, not the generic property bag) - mirrors the Role rights[]
+        // precedent.
         List<JsonObject> content = JsonUtils.extractObjectArray(params, "content"); //$NON-NLS-1$
         boolean hasContentPayload = !content.isEmpty();
 
@@ -231,8 +249,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
                 + "set, e.g. [{name: 'comment', value: 'Goods'}]. For a Role FQN, provide 'rights', " //$NON-NLS-1$
-                + "'templates' or 'roleProperties' instead; for a CommonAttribute FQN, provide " //$NON-NLS-1$
-                + "'content' instead.").toJson(); //$NON-NLS-1$
+                + "'templates' or 'roleProperties' instead; for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
+                + "Catalog / Document FQN, provide 'content' instead.").toJson(); //$NON-NLS-1$
         }
 
         // 'ё'->'е' normalization is applied at the parse step to every localized-string / free-text
@@ -255,19 +273,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
-            // A Role payload (rights / templates / roleProperties) or a CommonAttribute content
-            // payload addressed to a FORM-member FQN is refused here, BEFORE the form dispatch: a
-            // form member is neither a Role nor a CommonAttribute, so those siblings do not apply to
-            // it. Without this guard the form branch would apply only 'properties' (or nothing) and
-            // report success while the sibling payload vanished silently. Both siblings are rejected
-            // together to keep them symmetric.
+            // A Role payload (rights / templates / roleProperties) or a membership 'content' payload
+            // addressed to a FORM-member FQN is refused here, BEFORE the form dispatch: a form member
+            // is neither a Role nor a membership-list owner (CommonAttribute / ExchangePlan / Catalog /
+            // Document), so those siblings do not apply to it. Without this guard the form branch would
+            // apply only 'properties' (or nothing) and report success while the sibling payload
+            // vanished silently. Both siblings are rejected together to keep them symmetric.
             if (hasRolePayload || hasContentPayload)
             {
                 return ToolResult.error("'" + normFqn + "' addresses a FORM member, which cannot " //$NON-NLS-1$ //$NON-NLS-2$
                     + "take a Role payload ('rights' / 'templates' / 'roleProperties') or a " //$NON-NLS-1$
-                    + "CommonAttribute 'content' payload. 'rights' / 'templates' / 'roleProperties' " //$NON-NLS-1$
+                    + "membership 'content' payload. 'rights' / 'templates' / 'roleProperties' " //$NON-NLS-1$
                     + "are valid only for a Role.<Name> FQN, and 'content' only for a " //$NON-NLS-1$
-                    + "CommonAttribute.<Name> FQN. Use 'properties' to change a form member.").toJson(); //$NON-NLS-1$
+                    + "CommonAttribute / ExchangePlan / Catalog / Document FQN. Use 'properties' to " //$NON-NLS-1$
+                    + "change a form member.").toJson(); //$NON-NLS-1$
             }
             return modifyFormMember(ctx, normFqn, formRef, properties, normReport);
         }
@@ -313,23 +332,41 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "'properties' for its generic properties, or address a Role.<Name>.").toJson(); //$NON-NLS-1$
         }
 
-        // A COMMON ATTRIBUTE FQN carrying a content payload (content[]) is dispatched to the dedicated
-        // content writer: an owner is attached / detached through the content-list surface, not the
-        // generic property bag. The mutation goes through a BM write tx + a forceExport of the
-        // CommonAttribute FQN.
-        if (target instanceof CommonAttribute && hasContentPayload)
-        {
-            return modifyCommonAttributeContent(ctx, normFqn, (CommonAttribute)target, properties, content);
-        }
-
-        // A content payload addressed to a NON-CommonAttribute FQN is rejected here (it must not fall
-        // through to the generic property path, which - with an empty 'properties' - would apply nothing
-        // yet report a false success and silently drop the content payload).
+        // A FQN carrying a content payload (content[]) is dispatched by the resolved object's KIND to its
+        // dedicated membership writer: a member of that kind's structured list (a common attribute's
+        // owner, an exchange plan's content object, a catalog's owner, a document's register record) is
+        // attached / detached through the list surface, not the generic property bag. Each mutation goes
+        // through a BM write tx + a single forceExport of the resolved TOP FQN. Every branch refuses
+        // mixing the content payload with a generic 'properties' change (the same policy the Role rights
+        // branch enforces).
         if (hasContentPayload)
         {
-            return ToolResult.error("'content' is only valid for a CommonAttribute FQN; '" + normFqn //$NON-NLS-1$
-                + "' is a " + target.eClass().getName() + ". Use 'properties' for its generic " //$NON-NLS-1$ //$NON-NLS-2$
-                + "properties, or address a CommonAttribute.<Name>.").toJson(); //$NON-NLS-1$
+            if (target instanceof CommonAttribute)
+            {
+                return modifyCommonAttributeContent(ctx, normFqn, (CommonAttribute)target, properties,
+                    content);
+            }
+            if (target instanceof ExchangePlan)
+            {
+                return modifyExchangePlanContent(ctx, normFqn, (ExchangePlan)target, properties, content);
+            }
+            if (target instanceof Catalog)
+            {
+                return modifyCatalogOwners(ctx, normFqn, (Catalog)target, properties, content);
+            }
+            if (target instanceof Document)
+            {
+                return modifyDocumentRegisterRecords(ctx, normFqn, (Document)target, properties, content);
+            }
+
+            // A content payload addressed to a FQN of an unsupported kind is rejected here (it must not
+            // fall through to the generic property path, which - with an empty 'properties' - would apply
+            // nothing yet report a false success and silently drop the content payload).
+            return ToolResult.error("'content' is only valid for a CommonAttribute, ExchangePlan, " //$NON-NLS-1$
+                + "Catalog or Document FQN; '" + normFqn + "' is a " + target.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Use 'properties' for its generic properties, or address a CommonAttribute.<Name> " //$NON-NLS-1$
+                + "(owners), ExchangePlan.<Name> (content objects), Catalog.<Name> (owners) or " //$NON-NLS-1$
+                + "Document.<Name> (register records).").toJson(); //$NON-NLS-1$
         }
 
         // Resolve the BM re-fetch strategy (mutation must re-fetch inside the write tx). Only TOP
@@ -684,6 +721,144 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(McpKeys.MESSAGE, "Modified common attribute " + normFqn + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
                 + result.added + ", updated: " + result.updated + ", removed: " + result.removed //$NON-NLS-1$ //$NON-NLS-2$
                 + ")") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * Modifies an EXCHANGE PLAN's content list (the {@code content[]} payload) via
+     * {@link ExchangePlanContentWriter}: attaches / detaches an MdObject in the exchange plan's
+     * {@code <content>} list, optionally with a per-object {@code autoRecord} (Allow / Deny) flag. An
+     * exchange plan's content is edited through this dedicated surface, not the generic property bag, so
+     * mixing the content payload with a generic {@code properties} change in the same call is refused
+     * (the same policy the Role rights / CommonAttribute content branches enforce). The writer mutates
+     * only through the BM write boundary; this branch then force-exports the single ExchangePlan TOP FQN
+     * OUTSIDE the writer, once, after the write has committed.
+     */
+    private String modifyExchangePlanContent(ProjectContext ctx, String normFqn,
+        ExchangePlan exchangePlan, List<JsonObject> properties, List<JsonObject> content)
+    {
+        if (!properties.isEmpty())
+        {
+            return ToolResult.error("An exchange plan content change ('content') cannot be combined " //$NON-NLS-1$
+                + "with a generic 'properties' change in one call. Set the exchange plan's own " //$NON-NLS-1$
+                + "properties (comment / synonym) separately.").toJson(); //$NON-NLS-1$
+        }
+
+        ExchangePlanContentWriter.Result result =
+            ExchangePlanContentWriter.apply(ctx.project, ctx.config, exchangePlan, content);
+        if (result.hasError())
+        {
+            return result.error;
+        }
+
+        // The content list lives inside the ExchangePlan's own .mdo, so exporting the ExchangePlan TOP
+        // FQN once drains the change to disk.
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, normFqn);
+
+        JsonObject applied = new JsonObject();
+        applied.addProperty("added", result.added); //$NON-NLS-1$
+        applied.addProperty("updated", result.updated); //$NON-NLS-1$
+        applied.addProperty("removed", result.removed); //$NON-NLS-1$
+        return ToolResult.success()
+            .put(McpKeys.ACTION, VAL_MODIFIED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("content", applied) //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, "Modified exchange plan " + normFqn + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
+                + result.added + ", updated: " + result.updated + ", removed: " + result.removed //$NON-NLS-1$ //$NON-NLS-2$
+                + ")") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * Modifies a CATALOG's owners list (the {@code content[]} payload) via
+     * {@link ReferenceMembershipWriter} with {@link ReferenceMembershipWriter.Kind#CATALOG_OWNERS}:
+     * attaches / detaches an owner object (a PLAIN reference, no per-entry flag) in the catalog's
+     * {@code <owners>} list. A catalog's owners are edited through this dedicated surface, not the
+     * generic property bag, so mixing the content payload with a generic {@code properties} change in
+     * the same call is refused (the same policy the Role rights / CommonAttribute content branches
+     * enforce). The writer mutates only through the BM write boundary; this branch then force-exports
+     * the single Catalog TOP FQN OUTSIDE the writer, once, after the write has committed.
+     */
+    private String modifyCatalogOwners(ProjectContext ctx, String normFqn, Catalog catalog,
+        List<JsonObject> properties, List<JsonObject> content)
+    {
+        if (!properties.isEmpty())
+        {
+            return ToolResult.error("A catalog owners change ('content') cannot be combined with a " //$NON-NLS-1$
+                + "generic 'properties' change in one call. Set the catalog's own properties " //$NON-NLS-1$
+                + "(comment / synonym) separately.").toJson(); //$NON-NLS-1$
+        }
+
+        ReferenceMembershipWriter.Result result = ReferenceMembershipWriter.apply(ctx.project, ctx.config,
+            catalog, content, ReferenceMembershipWriter.Kind.CATALOG_OWNERS);
+        if (result.hasError())
+        {
+            return result.error;
+        }
+
+        // The owners list lives inside the Catalog's own .mdo, so exporting the Catalog TOP FQN once
+        // drains the change to disk.
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, normFqn);
+
+        return buildMembershipResult(normFqn, "catalog", "owners", result, persisted); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Modifies a DOCUMENT's register records list / движения (the {@code content[]} payload) via
+     * {@link ReferenceMembershipWriter} with
+     * {@link ReferenceMembershipWriter.Kind#DOCUMENT_REGISTER_RECORDS}: attaches / detaches a register
+     * (a PLAIN reference, no per-entry flag) in the document's {@code <registerRecords>} list. A
+     * document's register records are edited through this dedicated surface, not the generic property
+     * bag, so mixing the content payload with a generic {@code properties} change in the same call is
+     * refused (the same policy the Role rights / CommonAttribute content branches enforce). The writer
+     * mutates only through the BM write boundary; this branch then force-exports the single Document TOP
+     * FQN OUTSIDE the writer, once, after the write has committed.
+     */
+    private String modifyDocumentRegisterRecords(ProjectContext ctx, String normFqn, Document document,
+        List<JsonObject> properties, List<JsonObject> content)
+    {
+        if (!properties.isEmpty())
+        {
+            return ToolResult.error("A document register records change ('content') cannot be combined " //$NON-NLS-1$
+                + "with a generic 'properties' change in one call. Set the document's own properties " //$NON-NLS-1$
+                + "(comment / synonym) separately.").toJson(); //$NON-NLS-1$
+        }
+
+        ReferenceMembershipWriter.Result result = ReferenceMembershipWriter.apply(ctx.project, ctx.config,
+            document, content, ReferenceMembershipWriter.Kind.DOCUMENT_REGISTER_RECORDS);
+        if (result.hasError())
+        {
+            return result.error;
+        }
+
+        // The register records list lives inside the Document's own .mdo, so exporting the Document TOP
+        // FQN once drains the change to disk.
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, normFqn);
+
+        return buildMembershipResult(normFqn, "document", "register records", result, persisted); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Builds the success JSON for a plain-reference membership change (Catalog owners / Document
+     * register records) applied via {@link ReferenceMembershipWriter}: the {@code content} counts object
+     * ({@code added} / {@code removed}; a plain reference list has no per-entry flag, so there is no
+     * {@code updated}) plus {@code persisted} and a confirmation message. Pure helper shared by
+     * {@link #modifyCatalogOwners} and {@link #modifyDocumentRegisterRecords}.
+     */
+    private static String buildMembershipResult(String normFqn, String kindNoun, String listNoun,
+        ReferenceMembershipWriter.Result result, boolean persisted)
+    {
+        JsonObject applied = new JsonObject();
+        applied.addProperty("added", result.added); //$NON-NLS-1$
+        applied.addProperty("removed", result.removed); //$NON-NLS-1$
+        return ToolResult.success()
+            .put(McpKeys.ACTION, VAL_MODIFIED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("content", applied) //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, "Modified " + kindNoun + " " + normFqn + " " + listNoun + " (added: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                + result.added + ", removed: " + result.removed + ")") //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
     }
 
