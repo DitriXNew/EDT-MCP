@@ -503,7 +503,10 @@ def test_create_form_object_generate_content_seeds_main_object_attribute():
     assert r.structured.get("kind") == "Form", "kind must be Form: %r" % (r.structured,)
     assert r.structured.get("generateContent") is True, \
         "the create must echo generateContent=true: %r" % (r.structured,)
-    poll_diff_contains(form, ctx="the seeded form must land on disk")
+    # Poll for a Form.form CONTENT marker (the seeded Object attribute), NOT just the form name: the
+    # name lands in the Catalog.mdo form list BEFORE the .form file is exported, so polling on the name
+    # races the async .form write and read_disk below can hit a missing file under e2e write-load.
+    poll_diff_contains("<name>Object</name>", ctx="the seeded form's .form content must land on disk")
 
     # The seeded main Object attribute must serialize with its designer flags + the object value type.
     form_xml = read_disk(form_rel)
