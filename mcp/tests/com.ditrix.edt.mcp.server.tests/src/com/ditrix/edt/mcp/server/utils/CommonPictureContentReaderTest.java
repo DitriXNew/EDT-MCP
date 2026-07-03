@@ -8,12 +8,18 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import javax.imageio.ImageIO;
 
 import org.junit.Test;
 
@@ -159,5 +165,62 @@ public class CommonPictureContentReaderTest
         assertNull(CommonPictureContentReader.selectVariantName(null, "best")); //$NON-NLS-1$
         assertNull(CommonPictureContentReader.selectVariantName(Arrays.asList("mdpi.png"), null)); //$NON-NLS-1$
         assertNull(CommonPictureContentReader.selectVariantName(Arrays.asList("mdpi.png"), "   ")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // --- rasterBytesToPng: the single-image / loose-PNG ImageIO fallback ---------------------------
+    // This is the heart of the single-image fix: a variant-less picture's loose Picture.png is decoded
+    // from its RAW bytes via ImageIO (the zip API's getBufferedImageByName does not decode it). These
+    // tests exercise that raw-bytes path with no model / picture-jar dependency.
+
+    @Test
+    public void rasterBytesToPngDecodesARealPng() throws Exception
+    {
+        // A genuine 2x2 PNG (built in-memory, exactly like a loose single-image Picture.png) round-trips
+        // through the ImageIO raster fallback to a decodable PNG.
+        byte[] pngBytes = buildTinyPng();
+        byte[] out = CommonPictureContentReader.rasterBytesToPng(pngBytes);
+        assertNotNull("A real PNG's raw bytes must decode via the ImageIO fallback", out); //$NON-NLS-1$
+        assertNotNull("The re-encoded bytes must themselves be a readable image", //$NON-NLS-1$
+            ImageIO.read(new java.io.ByteArrayInputStream(out)));
+    }
+
+    @Test
+    public void rasterBytesToPngReturnsNullForNonImageBytes()
+    {
+        // Non-image bytes (e.g. an SVG's XML) are NOT decodable by ImageIO -> null, so the caller can
+        // route to the SVG rasterizer instead of mis-reporting a decode.
+        byte[] svgish = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>".getBytes(StandardCharsets.UTF_8); //$NON-NLS-1$
+        try
+        {
+            assertNull(CommonPictureContentReader.rasterBytesToPng(svgish));
+        }
+        catch (Exception e)
+        {
+            throw new AssertionError("rasterBytesToPng must return null (not throw) for non-image bytes", e); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void rasterBytesToPngReturnsNullForNullOrEmpty() throws Exception
+    {
+        assertNull(CommonPictureContentReader.rasterBytesToPng(null));
+        assertNull(CommonPictureContentReader.rasterBytesToPng(new byte[0]));
+    }
+
+    /**
+     * Builds a tiny valid PNG in memory (no test resource file), standing in for a loose single-image
+     * {@code Picture.png}.
+     *
+     * @return the PNG bytes
+     * @throws Exception on an ImageIO failure
+     */
+    private static byte[] buildTinyPng() throws Exception
+    {
+        BufferedImage img = new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB);
+        img.setRGB(0, 0, 0xFF112233);
+        img.setRGB(1, 1, 0xFF445566);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", baos); //$NON-NLS-1$
+        return baos.toByteArray();
     }
 }

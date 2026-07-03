@@ -314,9 +314,9 @@ public class ListCommonPicturesTool implements IMcpTool
     }
 
     /**
-     * Appends one picture: a sub-heading (Name plus its synonym when present) and a variant table
-     * (or a note, for a picture with no multi-variant Picture.zip - an ordinary single-image
-     * picture, or one whose Picture.zip is empty/unreadable).
+     * Appends one picture: a sub-heading (Name plus its synonym when present) and a variant table. A
+     * variant-less single-image picture renders one synthetic {@code Picture.png} row; the empty-variant
+     * note is reached only for a picture with no readable image content at all.
      *
      * @param sb the buffer to append to
      * @param info the picture to render
@@ -340,8 +340,9 @@ public class ListCommonPicturesTool implements IMcpTool
 
         if (info.variants == null || info.variants.isEmpty())
         {
-            sb.append("No multi-variant Picture.zip (single-image picture, or its Picture.zip is empty); " //$NON-NLS-1$
-                + "export of single-image pictures is not yet supported.\n\n"); //$NON-NLS-1$
+            // A variant-less single-image picture now yields one synthetic 'Picture.png' variant, so this
+            // branch means the picture has no readable image content at all (an empty/unreadable container).
+            sb.append("No picture content (the picture has no readable image variants).\n\n"); //$NON-NLS-1$
             return;
         }
 

@@ -43,7 +43,8 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
- * Handler for the "Show Common Pictures Overview..." command, contributed to the context menu of the
+ * Handler for the common-pictures preview command (Russian menu label "Просмотр общих картинок
+ * (превью)..."), contributed to the context menu of the
  * "Common Pictures" (CommonPictures) folder node in the 1C metadata Navigator. It renders every
  * {@link CommonPicture} of the selected project's configuration, with per-variant base64 PNG
  * thumbnails, into a single {@link CommonPicturesGalleryEditor} so a developer can visually spot
@@ -87,8 +88,12 @@ public class ShowCommonPicturesHandler extends AbstractHandler
     /** The editor id registered in {@code plugin.xml} against {@code CommonPicturesGalleryEditor}. */
     private static final String GALLERY_EDITOR_ID = "com.ditrix.edt.mcp.server.pictures.galleryEditor"; //$NON-NLS-1$
 
-    /** Editor tab title / part-name prefix; the configuration name is appended. English surface. */
-    private static final String EDITOR_TITLE_PREFIX = "Common Pictures: "; //$NON-NLS-1$
+    /**
+     * Editor tab title / part-name prefix; the configuration name is appended. Russian surface so the
+     * gallery tab reads naturally in a Russian EDT (this is UI chrome shown to the developer, not an
+     * English-only MCP tool surface).
+     */
+    private static final String EDITOR_TITLE_PREFIX = "Общие картинки: "; //$NON-NLS-1$
 
     /**
      * Upper bound on pictures whose {@code Picture.zip} is decompressed for thumbnails. Pictures beyond
@@ -184,8 +189,9 @@ public class ShowCommonPicturesHandler extends AbstractHandler
      * Collects the detached per-picture data inside a {@code BmTransactions.read} boundary: enumerates
      * the configuration's CommonPictures, and for each one up to {@link #PAGINATION_CAP} reads its best
      * thumbnail plus every variant thumbnail through the shared {@link CommonPictureContentReader}. One
-     * broken picture is captured as a per-entry error (never aborts the page); a picture with no
-     * variants yields an empty variant list (rendered as a "No variants" note). Nothing here holds a
+     * broken picture is captured as a per-entry error (never aborts the page); a variant-less single-image
+     * picture yields one synthetic {@code Picture.png} variant, so the "No variants" note only shows for a
+     * picture with no readable image content at all. Nothing here holds a
      * live {@code EObject}, so the result is safe to format after the transaction closes.
      *
      * @param project the workspace project owning the configuration
@@ -268,13 +274,14 @@ public class ShowCommonPicturesHandler extends AbstractHandler
     /**
      * Builds one detached {@link PicturePageEntry} from a common picture: its programmatic name and the
      * chosen-language synonym, its best inline thumbnail, and one thumbnail per variant. A picture whose
-     * {@code Picture.zip} cannot be read is captured as a per-entry error and never aborts the page; a
-     * picture with no multi-variant content yields an empty variant list ("No variants").
+     * content cannot be read is captured as a per-entry error and never aborts the page; a variant-less
+     * single-image picture yields one synthetic {@code Picture.png} variant (so it renders its image, not
+     * the "No variants" note).
      * <p>
      * The frozen Q4 decision (one 'best' inline thumbnail per picture) is honoured via the dedicated
      * {@link PicturePageEntry#best} field, which the generator renders in its own prominent {@code .best}
-     * block above the per-variant strip. A picture with no multi-variant {@code Picture.zip} leaves
-     * {@code best} {@code null} (the generator then renders no inline preview).
+     * block above the per-variant strip. A single-image picture's synthetic {@code Picture.png} is its
+     * 'best' thumbnail; only a picture with no readable content at all leaves {@code best} {@code null}.
      *
      * @param reader the shared content reader, or {@code null} when it could not be constructed
      * @param picture the common picture (read inside the open transaction)
@@ -297,9 +304,10 @@ public class ShowCommonPicturesHandler extends AbstractHandler
 
         try
         {
-            // 'best' inline thumbnail (densest raster; falls back to the first entry for an SVG-only
-            // picture). Rendered as the dedicated prominent .best block above the variant strip per the
-            // frozen Q4 decision; a null result (no multi-variant Picture.zip) renders nothing.
+            // 'best' inline thumbnail (densest raster; the single synthetic Picture.png for a variant-less
+            // single-image picture; falls back to the first entry for an SVG-only picture). Rendered as the
+            // dedicated prominent .best block above the variant strip per the frozen Q4 decision; a null
+            // result (a picture with no readable content) renders nothing.
             entry.best = toThumb(VARIANT_BEST, reader.exportPng(picture, VARIANT_BEST));
 
             // One thumbnail per variant so mismatched icons within one Picture.zip are visible.

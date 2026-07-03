@@ -607,7 +607,7 @@
       <command
             categoryId="com.ditrix.edt.mcp.server.pictures.category"
             id="com.ditrix.edt.mcp.server.pictures.showGallery"
-            name="Show Common Pictures Overview..."
+            name="Просмотр общих картинок (превью)..."
             description="Open a preview gallery of every CommonPicture and its per-variant thumbnails">
       </command>
    </extension>
@@ -626,7 +626,7 @@
             locationURI="popup:com._1c.g5.v8.dt.navigator.ui.navigator.popup?after=group.edit">
          <command
                commandId="com.ditrix.edt.mcp.server.pictures.showGallery"
-               label="Show Common Pictures Overview..."
+               label="Просмотр общих картинок (превью)..."
                style="push">
             <visibleWhen checkEnabled="true"/>
          </command>

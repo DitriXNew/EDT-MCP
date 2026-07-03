@@ -20,7 +20,7 @@ List a 1C configuration's CommonPicture objects together with the raster/vector 
 - `PictureDirection` - the layout direction the variant is for (e.g. left-to-right / right-to-left), or `-`.
 - `Size` - the byte size of the variant's entry inside the Picture.zip.
 
-A picture with no multi-variant `Picture.zip` renders a note instead of a table. This is the common case of an ordinary **single-image** CommonPicture (one raster image, no variant container) - it is a valid picture, **not** a corrupt one. This slice reads only the multi-variant `Picture.zip`, so a single-image picture shows no variants here and cannot be exported by `export_common_picture` yet; single-image export is a documented follow-up.
+An ordinary **single-image** CommonPicture (one raster/vector image, no variant container - its image is stored as a loose `Picture.png`/`.svg` next to the `.mdo`) renders a one-row table with a single `Picture.png` (or `Picture.svg`) variant and `-` for every variant column; it can be exported by `export_common_picture` like any other picture. A note (instead of a table) appears only for a picture with no readable image content at all.
 
 ## Examples
 - Everything: `{projectName: "MyProject"}`.
