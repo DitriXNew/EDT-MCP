@@ -115,8 +115,10 @@ def test_exchange_plan_content_add_idempotent_update_remove():
     ucounts = _content_counts(upd, "exchange-plan re-add")
     assert ucounts.get("added") == 0 and ucounts.get("updated") == 1, \
         "a re-add of a listed member must UPDATE (not add) its autoRecord: %r" % (upd.structured,)
-    poll_diff_contains("<autoRecord>Deny</autoRecord>",
-                       ctx="the re-add must flip autoRecord to Deny on disk")
+    # 'Deny' is the AutoRegistrationChanges EMF default, so flipping Allow->Deny writes NO
+    # <autoRecord> element (EMF omits a default value) -> the Allow flag DISAPPEARS from disk.
+    poll_disk_lacks(_plan_mdo(plan), "<autoRecord>Allow</autoRecord>",
+                    ctx="updating to the default autoRecord=Deny drops the Allow flag from the .mdo")
     assert _details_text(plan_fqn).count("ExchangePlanContentItem") == 1, \
         "the idempotent re-add must NOT duplicate the member"
 
@@ -203,7 +205,7 @@ def test_catalog_owners_add_idempotent_remove():
     assert_ok(add, "attach the owner to the subordinate catalog")
     counts = _content_counts(add, "catalog owners add")
     assert counts.get("added") == 1, "exactly one owner must be added: %r" % (add.structured,)
-    assert counts.get("removed") == 0 and counts.get("updated") == 0, \
+    assert counts.get("removed") == 0 and counts.get("updated", 0) == 0, \
         "a fresh owner add must not remove / update: %r" % (add.structured,)
     # ON-DISK: the owner FQN lands in the subordinate catalog's <owners> block.
     poll_diff_contains("<owners>%s</owners>" % owner_fqn,
@@ -216,7 +218,7 @@ def test_catalog_owners_add_idempotent_remove():
     })
     assert_ok(again, "re-add the same owner (idempotent)")
     acounts = _content_counts(again, "catalog owners re-add")
-    assert acounts.get("added") == 0 and acounts.get("removed") == 0 and acounts.get("updated") == 0, \
+    assert acounts.get("added") == 0 and acounts.get("removed") == 0 and acounts.get("updated", 0) == 0, \
         "a flagless re-add of a listed owner must be a pure no-op: %r" % (again.structured,)
 
     # (3) REMOVE -> the owner is detached.
@@ -298,7 +300,7 @@ def test_document_register_records_add_idempotent_remove():
     assert_ok(add, "attach the register to the document's registerRecords")
     counts = _content_counts(add, "document registerRecords add")
     assert counts.get("added") == 1, "exactly one register must be added: %r" % (add.structured,)
-    assert counts.get("removed") == 0 and counts.get("updated") == 0, \
+    assert counts.get("removed") == 0 and counts.get("updated", 0) == 0, \
         "a fresh register add must not remove / update: %r" % (add.structured,)
     # ON-DISK: the register FQN lands in the document's <registerRecords> block.
     poll_diff_contains("<registerRecords>%s</registerRecords>" % reg_fqn,
@@ -311,7 +313,7 @@ def test_document_register_records_add_idempotent_remove():
     })
     assert_ok(again, "re-add the same register (idempotent)")
     acounts = _content_counts(again, "document registerRecords re-add")
-    assert acounts.get("added") == 0 and acounts.get("removed") == 0 and acounts.get("updated") == 0, \
+    assert acounts.get("added") == 0 and acounts.get("removed") == 0 and acounts.get("updated", 0) == 0, \
         "a flagless re-add of a listed register must be a pure no-op: %r" % (again.structured,)
 
     # (3) REMOVE -> the register record is detached.

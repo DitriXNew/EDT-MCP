@@ -174,17 +174,19 @@ def test_add_owner_by_russian_type_token():
     # 'Справочник.Catalog' - the Russian type token 'Справочник' (= Catalog), same programmatic Name.
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": CA,
-        "content": [{"op": "add", "metadata": "Справочник.Catalog", "use": "Auto"}],
+        # use='DontUse' (a NON-default use that serializes): 'Auto' is the CommonAttributeUse EMF
+        # default, so setUse(Auto) writes no <use> element (like an ExchangePlan's default 'Deny').
+        "content": [{"op": "add", "metadata": "Справочник.Catalog", "use": "DontUse"}],
     })
     assert_ok(r, "attach an owner addressed by the Russian type token")
     counts = r.structured.get("content") or {}
     assert counts.get("added") == 1, \
         "the bilingual type token must resolve the same owner and add it: %r" % (r.structured,)
-    # It resolves to the SAME owner -> the English-canonical FQN + the Auto use land on disk.
+    # It resolves to the SAME owner -> the English-canonical FQN + the DontUse use land on disk.
     poll_diff_contains(OWNER_MDO_TOKEN,
                        ctx="the Russian-token owner must serialize to the canonical Catalog.Catalog")
-    poll_diff_contains("<use>Auto</use>",
-                       ctx="the Auto use must serialize for the bilingual-token owner")
+    poll_diff_contains("<use>DontUse</use>",
+                       ctx="the non-default DontUse use must serialize for the bilingual-token owner")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -222,21 +224,10 @@ def test_add_non_owner_kind_is_error():
     assert_no_diff("a rejected non-owner add must change nothing")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Negative — a content payload against a NON-CommonAttribute FQN is rejected, not
-#            silently dropped (it must not fall through to the generic property path)
-# ──────────────────────────────────────────────────────────────────────────────
-
-@e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_content_payload_on_non_common_attribute_is_error():
-    r = call("modify_metadata", {
-        "projectName": PROJECT, "fqn": OWNER,       # a Catalog, not a CommonAttribute
-        "content": [{"op": "add", "metadata": OWNER, "use": "Use"}],
-    })
-    e = assert_error(r, "content payload aimed at a non-CommonAttribute FQN")
-    assert_error_quality(e, names=["content"], suggests=["CommonAttribute"],
-                         ctx="a content payload is only valid for a CommonAttribute FQN")
-    assert_no_diff("a rejected content payload on the wrong FQN kind must change nothing")
+# NOTE: a content payload against a genuinely non-dispatch FQN kind (one with no membership list) is
+# covered by test_content_payload_on_non_dispatch_kind_is_error in test_modify_metadata_membership.py.
+# In #174 v2 a Catalog / ExchangePlan / Document FQN IS a valid content-dispatch target (owners /
+# content / register records), so a "Catalog is not a CommonAttribute -> error" check no longer holds.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
