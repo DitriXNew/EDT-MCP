@@ -37,6 +37,9 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
@@ -299,6 +302,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return prepErr;
         }
 
+        // Ask the human before RETYPING an attribute (the destructive case): the preview is built from
+        // the already-prepared changes, so a benign edit never prompts. On REJECT the tool returns the
+        // error and mutates nothing; the gate itself is a no-op headless / when env or preference allows.
+        String consentErr = consentForTypeChanges(normFqn, changes);
+        if (consentErr != null)
+        {
+            return consentErr;
+        }
+
         // The top object that owns the node's .mdo file.
         final String topFqn = topFqn(normFqn);
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
@@ -393,6 +405,82 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             applied.add(change.featureName());
         }
         return applied;
+    }
+
+    /**
+     * Runs the destructive-consent gate for a modify BEFORE the mutation, but ONLY when at least one
+     * prepared change RETYPES data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set): retyping an
+     * attribute can drop stored values on the next database update, so it is the destructive case a plain
+     * property edit is not. A benign change list skips the gate entirely (no prompt, byte-identical path).
+     *
+     * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
+     * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
+     * the preview. Returns a ready JSON error ({@code "Operation declined by user"}) when the human
+     * REJECTS - the caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
+     */
+    private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
+    {
+        List<String> retyped = new ArrayList<>();
+        for (PreparedChange change : changes)
+        {
+            if (change.isTypeChange())
+            {
+                retyped.add(change.featureName());
+            }
+        }
+        if (retyped.isEmpty())
+        {
+            return null;
+        }
+        ConsentPreview preview = new ConsentPreview(
+            "Change the data type of " + normFqn, //$NON-NLS-1$
+            "Retyping stored data can drop existing values on the next database update.", //$NON-NLS-1$
+            retyped.size(), retyped);
+        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview) == ConsentDecision.REJECT)
+        {
+            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Runs the destructive-consent gate for a FORM member modify BEFORE the write transaction, but ONLY
+     * when it retypes a form ATTRIBUTE (a {@code type} / {@code valueType} property on an Attribute ref).
+     * Scoped to the ATTRIBUTE kind (like the dynamic-list-query branch) so a decoration's benign enum
+     * {@code type} never prompts, and run here - not inside the tx callback - because the gate may block
+     * on a UI dialog and a transaction must not be held open across it. Returns a ready JSON error
+     * ({@code "Operation declined by user"}) on REJECT, or {@code null} to proceed.
+     */
+    private static String consentForFormTypeChange(String normFqn, FormElementWriter.FormMemberRef ref,
+        List<JsonObject> properties)
+    {
+        if (FormElementWriter.kindForToken(ref.kindToken) != FormElementWriter.Kind.ATTRIBUTE)
+        {
+            return null;
+        }
+        boolean retype = false;
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if ("type".equalsIgnoreCase(name) || "valueType".equalsIgnoreCase(name)) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                retype = true;
+                break;
+            }
+        }
+        if (!retype)
+        {
+            return null;
+        }
+        ConsentPreview preview = new ConsentPreview(
+            "Change the data type of " + normFqn, //$NON-NLS-1$
+            "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
+            1, java.util.Collections.singletonList("valueType")); //$NON-NLS-1$
+        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview) == ConsentDecision.REJECT)
+        {
+            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**
@@ -647,6 +735,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
         MdNameNormalizer.Report normReport)
     {
+        // Retyping a form ATTRIBUTE ('type' / 'valueType') is the destructive case for a form member -
+        // ask the human BEFORE opening the write transaction (never block while a tx is held). A benign
+        // property edit, and any 'type' feature on a non-attribute member (a decoration's enum 'type'),
+        // do NOT prompt: the gate is scoped to a form attribute's data type, mirroring the ATTRIBUTE
+        // guard the dynamic-list-query branch uses.
+        String formConsentErr = consentForFormTypeChange(normFqn, ref, properties);
+        if (formConsentErr != null)
+        {
+            return formConsentErr;
+        }
+
         Configuration config = ctx.config;
         IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
         IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
@@ -1584,7 +1683,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        out.add(PreparedChange.scalar(info.feature, tr.typeDescription));
+        out.add(PreparedChange.typeDescription(info.feature, tr.typeDescription));
         return null;
     }
 
@@ -1768,10 +1867,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         private final List<Long> referenceBmIds;
         /** For a STYLE_VALUE: the sibling `type` feature + StyleElementType; {@code null} otherwise. */
         private final StyleBinding styleBinding;
+        /**
+         * {@code true} for a {@code TYPE_DESCRIPTION} change (the object's / attribute's {@code type} /
+         * form-attribute {@code valueType}). This is the destructive case the consent gate prompts on:
+         * retyping data can drop stored values on a database update. Every benign change is {@code false}.
+         */
+        private final boolean typeChange;
 
         private PreparedChange(EStructuralFeature feature, Kind kind, Object scalarValue,
             String language, String localizedValue, List<Long> referenceBmIds,
-            StyleBinding styleBinding)
+            StyleBinding styleBinding, boolean typeChange)
         {
             this.feature = feature;
             this.kind = kind;
@@ -1780,28 +1885,39 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             this.localizedValue = localizedValue;
             this.referenceBmIds = referenceBmIds;
             this.styleBinding = styleBinding;
+            this.typeChange = typeChange;
         }
 
         static PreparedChange scalar(EStructuralFeature feature, Object value)
         {
-            return new PreparedChange(feature, Kind.SCALAR, value, null, null, null, null);
+            return new PreparedChange(feature, Kind.SCALAR, value, null, null, null, null, false);
+        }
+
+        /**
+         * A {@code TYPE_DESCRIPTION} change: a scalar set of a freshly-built (detached) type description,
+         * flagged {@link #typeChange} so the caller can route it through the destructive-consent gate
+         * (retyping data is the destructive case a plain property edit is not).
+         */
+        static PreparedChange typeDescription(EStructuralFeature feature, Object typeDescription)
+        {
+            return new PreparedChange(feature, Kind.SCALAR, typeDescription, null, null, null, null, true);
         }
 
         static PreparedChange localized(EStructuralFeature feature, String language, String value)
         {
-            return new PreparedChange(feature, Kind.LOCALIZED, null, language, value, null, null);
+            return new PreparedChange(feature, Kind.LOCALIZED, null, language, value, null, null, false);
         }
 
         static PreparedChange reference(EStructuralFeature feature, long targetBmId)
         {
             return new PreparedChange(feature, Kind.REFERENCE, null, null, null,
-                java.util.Collections.singletonList(targetBmId), null);
+                java.util.Collections.singletonList(targetBmId), null, false);
         }
 
         static PreparedChange manyReference(EStructuralFeature feature, List<Long> targetBmIds)
         {
             return new PreparedChange(feature, Kind.MANY_REFERENCE, null, null, null, targetBmIds,
-                null);
+                null, false);
         }
 
         /**
@@ -1814,12 +1930,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             Value styleValue, StyleElementType type)
         {
             return new PreparedChange(valueFeature, Kind.STYLE_VALUE, styleValue, null, null, null,
-                new StyleBinding(typeFeature, type));
+                new StyleBinding(typeFeature, type), false);
         }
 
         String featureName()
         {
             return feature.getName();
+        }
+
+        /** Whether this change retypes data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set). */
+        boolean isTypeChange()
+        {
+            return typeChange;
         }
 
         @SuppressWarnings("unchecked")

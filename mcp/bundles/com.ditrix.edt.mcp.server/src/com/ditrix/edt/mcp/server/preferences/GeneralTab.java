@@ -52,6 +52,7 @@ public class GeneralTab
     private Button plainTextCheck;
     private Button showTagsCheck;
     private Combo tagStyleCombo;
+    private Combo consentLevelCombo;
     private Combo updateCheckCombo;
     private Label statusLabel;
     private Button startButton;
@@ -65,6 +66,12 @@ public class GeneralTab
         {"All tags (suffix)", PreferenceConstants.TAGS_STYLE_SUFFIX}, //$NON-NLS-1$
         {"First tag only", PreferenceConstants.TAGS_STYLE_FIRST_TAG}, //$NON-NLS-1$
         {"Tag count", PreferenceConstants.TAGS_STYLE_COUNT} //$NON-NLS-1$
+    };
+
+    private static final String[][] CONSENT_LEVELS = {
+        {"Ask before each (default)", PreferenceConstants.CONSENT_LEVEL_ASK_ALWAYS}, //$NON-NLS-1$
+        {"Allow all without asking", PreferenceConstants.CONSENT_LEVEL_ALLOW_ALL}, //$NON-NLS-1$
+        {"Ask, except allowed tools", PreferenceConstants.CONSENT_LEVEL_PER_TOOL} //$NON-NLS-1$
     };
 
     private static final String[][] UPDATE_INTERVALS = {
@@ -87,6 +94,7 @@ public class GeneralTab
         createServerSection();
         createLimitsSection();
         createTagsSection();
+        createConsentSection();
         createUpdateSection();
         createServerControlSection();
     }
@@ -200,6 +208,35 @@ public class GeneralTab
         }
         tagStyleCombo.select(styleIndex);
         tagStyleCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
+        createLabel(""); //$NON-NLS-1$
+    }
+
+    private void createConsentSection()
+    {
+        // Separator
+        Label separator = new Label(composite, SWT.HORIZONTAL | SWT.SEPARATOR);
+        GridData sepGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        sepGd.horizontalSpan = 3;
+        sepGd.verticalIndent = 5;
+        separator.setLayoutData(sepGd);
+
+        // Destructive operations consent level
+        createLabel("Destructive operations:"); //$NON-NLS-1$
+        consentLevelCombo = new Combo(composite, SWT.DROP_DOWN | SWT.READ_ONLY);
+        consentLevelCombo.setToolTipText(
+            "Ask the human for consent before a destructive MCP write (delete, rename, update database)."); //$NON-NLS-1$
+        String currentLevel = store.getString(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_LEVEL);
+        int levelIndex = 0;
+        for (int i = 0; i < CONSENT_LEVELS.length; i++)
+        {
+            consentLevelCombo.add(CONSENT_LEVELS[i][0]);
+            if (CONSENT_LEVELS[i][1].equals(currentLevel))
+            {
+                levelIndex = i;
+            }
+        }
+        consentLevelCombo.select(levelIndex);
+        consentLevelCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
         createLabel(""); //$NON-NLS-1$
     }
 
@@ -412,6 +449,12 @@ public class GeneralTab
         {
             store.setValue(PreferenceConstants.PREF_UPDATE_CHECK_INTERVAL, UPDATE_INTERVALS[intervalIdx][1]);
         }
+
+        int consentIdx = consentLevelCombo.getSelectionIndex();
+        if (consentIdx >= 0 && consentIdx < CONSENT_LEVELS.length)
+        {
+            store.setValue(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_LEVEL, CONSENT_LEVELS[consentIdx][1]);
+        }
     }
 
     /**
@@ -446,6 +489,16 @@ public class GeneralTab
                 break;
             }
         }
+
+        // Find index for default consent level
+        for (int i = 0; i < CONSENT_LEVELS.length; i++)
+        {
+            if (CONSENT_LEVELS[i][1].equals(PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_LEVEL))
+            {
+                consentLevelCombo.select(i);
+                break;
+            }
+        }
     }
 
     /**
@@ -454,6 +507,21 @@ public class GeneralTab
     public int getPort()
     {
         return portSpinner.getSelection();
+    }
+
+    /**
+     * Returns the consent level currently SELECTED in the combo (the pending, not-yet-committed
+     * value), so a sibling tab can react to the user's choice before {@link #performOk()} persists
+     * it. Falls back to {@link ConsentSettingsService.Level#ASK_ALWAYS} when nothing is selected.
+     */
+    public ConsentSettingsService.Level getPendingConsentLevel()
+    {
+        int idx = consentLevelCombo.getSelectionIndex();
+        if (idx >= 0 && idx < CONSENT_LEVELS.length)
+        {
+            return ConsentSettingsService.Level.fromPreferenceValue(CONSENT_LEVELS[idx][1]);
+        }
+        return ConsentSettingsService.Level.ASK_ALWAYS;
     }
 
     private void updateStatusLabel()

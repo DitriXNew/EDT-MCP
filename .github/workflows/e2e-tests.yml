@@ -280,6 +280,11 @@ jobs:
           echo "edt_log=$LOG" >> "$GITHUB_ENV"
           export EDT_MCP_AUTO_START=true
           export EDT_MCP_PORT="$MCP_PORT"
+          # Destructive-consent gate bypass for automation: the e2e harness is HTTP-only and cannot set
+          # a server preference, so the bypass lives on the EDT PROCESS. Without it the destructive e2e
+          # tests (delete_metadata / rename_metadata_object / delete_project / delete_infobase /
+          # update_database / a type-change modify_metadata) would HANG forever on the default ASK dialog.
+          export EDT_MCP_DESTRUCTIVE_CONSENT=allow
           export EDT_MCP_IMPORT_PROJECTS="$GITHUB_WORKSPACE/tests/TestConfiguration:$GITHUB_WORKSPACE/tests/tests"
           echo "[edt] importing: $EDT_MCP_IMPORT_PROJECTS"
           # EDT runs Apache Ignite (BM store) which on JDK 17 needs java.nio/sun.nio.ch opened

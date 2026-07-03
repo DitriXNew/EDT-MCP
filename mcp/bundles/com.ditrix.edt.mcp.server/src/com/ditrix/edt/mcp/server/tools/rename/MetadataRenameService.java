@@ -46,6 +46,8 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -1677,6 +1679,25 @@ public class MetadataRenameService
     private String performRename(String objectFqn, String newName,
         Collection<IRefactoring> refactorings, java.util.Set<Integer> disableIndices)
     {
+        // Destructive-operation consent gate: the LAST check before the cascade rename mutates the
+        // model (rewriting every reference across BSL, forms and metadata). Built from the refactorings
+        // the tool already resolved; on ALLOW the behaviour is byte-identical, on REJECT nothing is
+        // mutated. This runs inside the tool's UI-thread syncExec scope, so the dialog (when armed)
+        // opens directly. Headless / env-bypass / non-ASK never block.
+        ConsentPreview preview = new ConsentPreview("Rename metadata object", //$NON-NLS-1$
+            "This renames '" + objectFqn + "' to '" + newName //$NON-NLS-1$ //$NON-NLS-2$
+                + "' and cascades the change across all references in BSL code, forms and metadata.", //$NON-NLS-1$
+            countRefactoringItems(refactorings), collectRefactoringTitles(refactorings));
+        // The tool NAME literal is intentionally inlined here (matching the frozen value in
+        // DestructiveConsentGate.GATED_TOOLS, asserted by DestructiveConsentGateTest) rather than
+        // read from RenameMetadataObjectTool.NAME, so this domain service in tools.rename does not
+        // take a reverse dependency on the tool adapter in tools.impl.
+        if (DestructiveConsentGate.getInstance().requireConsent("rename_metadata_object", preview) //$NON-NLS-1$
+            == DestructiveConsentGate.ConsentDecision.REJECT)
+        {
+            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+        }
+
         // Apply disableIndices by traversing items and their native changes
         if (!disableIndices.isEmpty())
         {
@@ -1701,6 +1722,42 @@ public class MetadataRenameService
         }
 
         return renderExecutedReport(objectFqn, newName, disableIndices, performed, errors);
+    }
+
+    /**
+     * Totals the refactoring items across the collection for the consent preview's count (how many
+     * change groups the rename will apply). Pure; tolerant of a null {@code getItems()}.
+     */
+    private static int countRefactoringItems(Collection<IRefactoring> refactorings)
+    {
+        int total = 0;
+        for (IRefactoring refactoring : refactorings)
+        {
+            Collection<IRefactoringItem> items = refactoring.getItems();
+            if (items != null)
+            {
+                total += items.size();
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Collects the refactoring titles for the consent preview's top-names list (each refactoring is one
+     * rename group, e.g. the base configuration plus any extension). Pure; skips null/blank titles.
+     */
+    private static List<String> collectRefactoringTitles(Collection<IRefactoring> refactorings)
+    {
+        List<String> titles = new ArrayList<>();
+        for (IRefactoring refactoring : refactorings)
+        {
+            String title = refactoring.getTitle();
+            if (title != null && !title.isEmpty())
+            {
+                titles.add(title);
+            }
+        }
+        return titles;
     }
 
     /**

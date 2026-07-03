@@ -32,6 +32,8 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.IApplication;
@@ -246,6 +248,17 @@ public class DeleteInfobaseTool implements IMcpTool
                 deleteRegistration, deleteDatabaseFiles, ibPlan.dbDir, ibPlan.dbSharedWithOthers);
         }
 
+        // Destructive-operation consent gate: the LAST check before the infobase is dissociated /
+        // deregistered / its files removed. On REJECT nothing is mutated.
+        String declined = checkDestructiveConsent(ibPlan.resolvedName, "This dissociates infobase '" //$NON-NLS-1$
+            + ibPlan.resolvedName + "' from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            + (deleteRegistration ? " and deregisters it from the EDT infobases list" : "") //$NON-NLS-1$ //$NON-NLS-2$
+            + (deleteDatabaseFiles ? " and may delete its database files from disk (irreversible)." : ".")); //$NON-NLS-1$ //$NON-NLS-2$
+        if (declined != null)
+        {
+            return declined;
+        }
+
         return performFileInfobaseDeletion(projectName, project, assocManager, ibManager,
             deleteDatabaseFiles, ibPlan);
     }
@@ -378,6 +391,29 @@ public class DeleteInfobaseTool implements IMcpTool
                     return buildDeregisterFailedResult(id, deleteDatabaseFiles, e);
                 }
             }
+        }
+        return null;
+    }
+
+    /**
+     * Destructive-operation consent gate shared by both deletion paths (file infobase + standalone
+     * server): builds a {@link ConsentPreview} naming the single target and asks
+     * {@link DestructiveConsentGate}. Returns the ready {@code "Operation declined by user"} error JSON
+     * on REJECT (the caller returns it and mutates nothing), or {@code null} on ALLOW to continue.
+     * Headless / env-bypass / non-ASK never block. This is the LAST check before the deletion.
+     *
+     * @param targetName the resolved infobase / server display name (the single top-name)
+     * @param subtitle a human-readable description of what will be removed
+     * @return the decline error JSON on REJECT, or {@code null} on ALLOW
+     */
+    private static String checkDestructiveConsent(String targetName, String subtitle)
+    {
+        ConsentPreview preview = new ConsentPreview("Delete infobase", subtitle, 1, //$NON-NLS-1$
+            java.util.Collections.singletonList(targetName));
+        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview)
+            == DestructiveConsentGate.ConsentDecision.REJECT)
+        {
+            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
         }
         return null;
     }
@@ -746,6 +782,17 @@ public class DeleteInfobaseTool implements IMcpTool
         if (preview != null)
         {
             return preview;
+        }
+
+        // Destructive-operation consent gate: the LAST check before the standalone server is stopped /
+        // removed (run on the request thread, before the deletion Job is scheduled). On REJECT nothing
+        // is mutated.
+        String declined = checkDestructiveConsent(resolvedName, "This deletes standalone server '" //$NON-NLS-1$
+            + resolvedName + "' (stops it, removes the WST server and its config folder)" //$NON-NLS-1$
+            + (deleteDatabaseFiles ? " and may delete its database files from disk (irreversible)." : ".")); //$NON-NLS-1$ //$NON-NLS-2$
+        if (declined != null)
+        {
+            return declined;
         }
 
         // Capture how many applications currently carry this id, so the read-back can confirm THIS

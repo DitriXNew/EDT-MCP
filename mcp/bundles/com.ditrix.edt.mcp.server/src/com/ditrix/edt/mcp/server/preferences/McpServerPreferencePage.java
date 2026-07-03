@@ -69,6 +69,9 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
         CTabItem toolsItem = new CTabItem(tabFolder, SWT.NONE);
         toolsItem.setText("Tools"); //$NON-NLS-1$
         toolsTab = new ToolsTab(tabFolder);
+        // Link so the per-tool destructive-consent checkbox reflects the PENDING level chosen on the
+        // General tab (before Apply), not just the persisted value.
+        toolsTab.setGeneralTab(generalTab);
         toolsItem.setControl(toolsTab.getControl());
 
         // Select the first tab

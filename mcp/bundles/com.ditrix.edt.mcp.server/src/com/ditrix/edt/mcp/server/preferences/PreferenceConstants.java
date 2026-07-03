@@ -105,6 +105,36 @@ public final class PreferenceConstants
     /** Default auth token (empty = authentication disabled) */
     public static final String DEFAULT_AUTH_TOKEN = ""; //$NON-NLS-1$
 
+    // === Destructive-operation consent preferences ===
+
+    /**
+     * Consent level for destructive MCP write operations. One of the level tokens
+     * below; controls whether the human is asked for consent before a destructive
+     * write (see {@code DestructiveConsentGate}).
+     */
+    public static final String PREF_DESTRUCTIVE_CONSENT_LEVEL = "mcpDestructiveConsentLevel"; //$NON-NLS-1$
+
+    /** Consent level: always ask for consent before any destructive write (default). */
+    public static final String CONSENT_LEVEL_ASK_ALWAYS = "ask_always"; //$NON-NLS-1$
+
+    /** Consent level: allow every destructive write without asking. */
+    public static final String CONSENT_LEVEL_ALLOW_ALL = "allow_all"; //$NON-NLS-1$
+
+    /** Consent level: ask, except for tools explicitly allowed in {@link #PREF_DESTRUCTIVE_ALLOWED_TOOLS}. */
+    public static final String CONSENT_LEVEL_PER_TOOL = "per_tool"; //$NON-NLS-1$
+
+    /** Default consent level: always ask. */
+    public static final String DEFAULT_DESTRUCTIVE_CONSENT_LEVEL = CONSENT_LEVEL_ASK_ALWAYS;
+
+    /**
+     * Comma-separated list of tool names allowed to run destructively without consent
+     * at the {@link #CONSENT_LEVEL_PER_TOOL} level (cloned from {@link #PREF_DISABLED_TOOLS}).
+     */
+    public static final String PREF_DESTRUCTIVE_ALLOWED_TOOLS = "mcpDestructiveAllowedTools"; //$NON-NLS-1$
+
+    /** Default: no tools allowed without consent (empty string). */
+    public static final String DEFAULT_DESTRUCTIVE_ALLOWED_TOOLS = ""; //$NON-NLS-1$
+
     private PreferenceConstants()
     {
         // Utility class

@@ -49,6 +49,12 @@ public class PreferenceInitializer extends AbstractPreferenceInitializer
         store.setDefault(PreferenceConstants.PREF_AUTH_TOKEN,
             PreferenceConstants.DEFAULT_AUTH_TOKEN);
 
+        // Destructive-operation consent (default: always ask)
+        store.setDefault(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_LEVEL,
+            PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_LEVEL);
+        store.setDefault(PreferenceConstants.PREF_DESTRUCTIVE_ALLOWED_TOOLS,
+            PreferenceConstants.DEFAULT_DESTRUCTIVE_ALLOWED_TOOLS);
+
         // Per-tool parameter defaults
         ToolParameterSettings.getInstance().initializeDefaults(store);
     }
