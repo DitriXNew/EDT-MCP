@@ -237,6 +237,33 @@ public class CommonPictureContentReaderTest
         assertNull(CommonPictureContentReader.rasterBytesToPng(new byte[0]));
     }
 
+    // --- looksLikeSvg: single-image SVG-vs-corrupt detection by content signature (#224 review) ---
+
+    @Test
+    public void looksLikeSvgDetectsSvgBySignature()
+    {
+        assertTrue(CommonPictureContentReader.looksLikeSvg(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>".getBytes(StandardCharsets.UTF_8))); //$NON-NLS-1$
+        // With an <?xml prolog / leading whitespace before the <svg root.
+        assertTrue(CommonPictureContentReader.looksLikeSvg(
+            "\n<?xml version=\"1.0\"?>\n<SVG width=\"16\"></SVG>".getBytes(StandardCharsets.UTF_8))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void looksLikeSvgRejectsRasterAndCorruptBytes() throws Exception
+    {
+        assertFalse(CommonPictureContentReader.looksLikeSvg(buildTinyPng())); // a real PNG
+        assertFalse(CommonPictureContentReader.looksLikeSvg(new byte[] {0x00, 0x01, (byte)0xFF, 0x42})); // corrupt raster
+        assertFalse(CommonPictureContentReader.looksLikeSvg("<html><body>not svg</body></html>".getBytes(StandardCharsets.UTF_8))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void looksLikeSvgNullOrEmptyIsFalse()
+    {
+        assertFalse(CommonPictureContentReader.looksLikeSvg(null));
+        assertFalse(CommonPictureContentReader.looksLikeSvg(new byte[0]));
+    }
+
     /**
      * Builds a tiny valid PNG in memory (no test resource file), standing in for a loose single-image
      * {@code Picture.png}.

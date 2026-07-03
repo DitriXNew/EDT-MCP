@@ -283,13 +283,24 @@ public final class CommonPicturesGalleryRenderer
             return entry;
         }
 
+        // 'best' inline thumbnail (densest raster / the synthetic Picture.png for a single-image
+        // picture) in its OWN try/catch: a corrupt/undecodable densest raster must drop ONLY the
+        // inline 'best' thumbnail, NOT hide the picture's other (decodable) variants below. (#224 review)
         try
         {
-            // 'best' inline thumbnail (densest raster / the synthetic Picture.png for a single-image
-            // picture). A null result (a picture with no readable content) renders nothing.
             entry.best = toThumb(VARIANT_BEST, reader.exportPng(picture, VARIANT_BEST));
+        }
+        catch (Exception e) // NOSONAR a corrupt densest raster only drops the inline 'best' thumbnail
+        {
+            Activator.logError("Could not decode the 'best' thumbnail of common picture " //$NON-NLS-1$
+                + (entry.name != null ? entry.name : "<unnamed>"), e); //$NON-NLS-1$
+        }
 
-            // One thumbnail per variant so mismatched icons within one Picture.zip are visible.
+        try
+        {
+            // One thumbnail per variant so mismatched icons within one Picture.zip are visible; each
+            // variant degrades on its own (toVariantThumb). Only listVariants itself failing (a truly
+            // unreadable Picture.zip) marks the whole picture as an error.
             for (PictureVariantInfo variant : reader.listVariants(picture))
             {
                 entry.variants.add(toVariantThumb(reader, picture, variant));

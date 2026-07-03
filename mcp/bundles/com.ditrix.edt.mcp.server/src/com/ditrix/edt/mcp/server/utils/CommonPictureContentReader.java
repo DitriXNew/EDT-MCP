@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -754,30 +755,19 @@ public final class CommonPictureContentReader
         }
 
         /**
-         * The synthetic entry name: {@link #SINGLE_IMAGE_ENTRY_SVG} when the loose image decodes as SVG
-         * (i.e. {@link ImageIO} cannot read it), else {@link #SINGLE_IMAGE_ENTRY_PNG}.
+         * The synthetic entry name: {@link #SINGLE_IMAGE_ENTRY_SVG} when the loose image looks like an
+         * SVG by content signature ({@link #looksLikeSvg}), else {@link #SINGLE_IMAGE_ENTRY_PNG} (a
+         * raster — or a corrupt/unreadable image, which then surfaces as a decode error, NOT as SVG).
          *
          * @return the synthetic entry name
          */
         private String entryName()
         {
-            byte[] raw = rawBytesQuietly();
-            if (raw != null && raw.length > 0)
-            {
-                try
-                {
-                    if (ImageIO.read(new ByteArrayInputStream(raw)) == null)
-                    {
-                        // ImageIO cannot decode it -> treat as the vector (SVG) single image.
-                        return SINGLE_IMAGE_ENTRY_SVG;
-                    }
-                }
-                catch (IOException e) // NOSONAR an undecodable probe just falls through to the SVG name
-                {
-                    return SINGLE_IMAGE_ENTRY_SVG;
-                }
-            }
-            return SINGLE_IMAGE_ENTRY_PNG;
+            // Distinguish a vector single-image (SVG) from a raster by CONTENT signature, not by
+            // "ImageIO could not read it": a corrupt / empty / unsupported raster ALSO fails ImageIO
+            // and must keep the Picture.png name so it is reported as corrupt (via decodeToPng ->
+            // "Could not decode …") rather than mis-routed to the SVG rasterizer. (#224 review)
+            return looksLikeSvg(rawBytesQuietly()) ? SINGLE_IMAGE_ENTRY_SVG : SINGLE_IMAGE_ENTRY_PNG;
         }
 
         /**
@@ -865,6 +855,27 @@ public final class CommonPictureContentReader
     static boolean isSvgName(String name)
     {
         return name != null && name.toLowerCase(Locale.ROOT).endsWith(SVG_SUFFIX);
+    }
+
+    /**
+     * Sniffs whether raw image bytes are an SVG, by CONTENT signature: an {@code <svg} tag in the
+     * head (after any {@code <?xml} prolog / BOM / comments / doctype). Used to tell a vector
+     * single-image apart from a raster that {@link ImageIO} merely failed to decode — a corrupt or
+     * unsupported raster does NOT contain {@code <svg} and so is kept as a raster (reported as a
+     * decode error), not mis-handled as SVG. Null/empty → {@code false}.
+     *
+     * @param raw the raw image bytes, may be {@code null}
+     * @return {@code true} when the head contains an {@code <svg} tag
+     */
+    static boolean looksLikeSvg(byte[] raw)
+    {
+        if (raw == null || raw.length == 0)
+        {
+            return false;
+        }
+        int len = Math.min(raw.length, 1024);
+        String head = new String(raw, 0, len, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+        return head.contains("<svg"); //$NON-NLS-1$
     }
 
     /**
