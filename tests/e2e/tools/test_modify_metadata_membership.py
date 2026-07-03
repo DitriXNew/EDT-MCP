@@ -38,6 +38,7 @@ from harness import (
     tree_snapshot,
     poll_diff_contains,
     poll_disk_lacks,
+    read_disk,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
@@ -119,8 +120,11 @@ def test_exchange_plan_content_add_idempotent_update_remove():
     # <autoRecord> element (EMF omits a default value) -> the Allow flag DISAPPEARS from disk.
     poll_disk_lacks(_plan_mdo(plan), "<autoRecord>Allow</autoRecord>",
                     ctx="updating to the default autoRecord=Deny drops the Allow flag from the .mdo")
-    assert _details_text(plan_fqn).count("ExchangePlanContentItem") == 1, \
-        "the idempotent re-add must NOT duplicate the member"
+    # No duplicate ROW: exactly one content item references the member on disk (a robust XML-tag
+    # count; the reflective get_metadata_details renders the EMF type name more than once per item).
+    # The added==0 count above already proves the re-add created no new item; this pins it on disk.
+    assert read_disk(_plan_mdo(plan)).count("<mdObject>%s</mdObject>" % member_fqn) == 1, \
+        "the idempotent re-add must NOT duplicate the member on disk"
 
     # (3) REMOVE -> the member is detached from the content.
     rem = call("modify_metadata", {
