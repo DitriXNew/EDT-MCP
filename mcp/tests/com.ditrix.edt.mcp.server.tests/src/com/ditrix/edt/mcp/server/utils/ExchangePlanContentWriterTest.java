@@ -15,6 +15,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.AutoRegistrationChanges;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com.google.gson.JsonObject;
 
 /**
@@ -120,6 +121,66 @@ public class ExchangePlanContentWriterTest
         assertNull(ExchangePlanContentWriter.mapAutoRecord("Maybe")); //$NON-NLS-1$
         assertNull(ExchangePlanContentWriter.mapAutoRecord("Auto")); //$NON-NLS-1$
         assertNull(ExchangePlanContentWriter.mapAutoRecord("Use")); //$NON-NLS-1$
+    }
+
+    // ---- isExchangePlanContentMember (the content member-kind allow-list) -------------------
+
+    @Test
+    public void testExchangePlanContentMemberAcceptsDataBearingKinds()
+    {
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(MdClassPackage.Literals.CONSTANT));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(MdClassPackage.Literals.CATALOG));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(MdClassPackage.Literals.DOCUMENT));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(MdClassPackage.Literals.SEQUENCE));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.CHART_OF_ACCOUNTS));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.INFORMATION_REGISTER));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.ACCUMULATION_REGISTER));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.ACCOUNTING_REGISTER));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.CALCULATION_REGISTER));
+        // Recalculation IS a valid content member per EDT's own picker (even though it is a nested,
+        // non-top object); the kind-check must therefore accept it - the load-bearing "IN" point.
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.RECALCULATION));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.BUSINESS_PROCESS));
+        assertTrue(ExchangePlanContentWriter.isExchangePlanContentMember(MdClassPackage.Literals.TASK));
+    }
+
+    @Test
+    public void testExchangePlanContentMemberRejectsNonDataBearingKinds()
+    {
+        // ExchangePlan + DocumentJournal extend BasicDbObject (so a marker-interface test would wrongly
+        // ACCEPT them) but are NOT valid exchange-plan content per EDT's own picker - the load-bearing
+        // "OUT" points that distinguish the correct set.
+        assertFalse(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.EXCHANGE_PLAN));
+        assertFalse(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.DOCUMENT_JOURNAL));
+        assertFalse(ExchangePlanContentWriter.isExchangePlanContentMember(MdClassPackage.Literals.ROLE));
+        assertFalse(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.COMMON_MODULE));
+        assertFalse(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.SUBSYSTEM));
+        assertFalse(ExchangePlanContentWriter.isExchangePlanContentMember(MdClassPackage.Literals.REPORT));
+        // No plain FORM EClass exists in MdClassPackage; COMMON_FORM is the EClass of a top-level
+        // Form.X metadata object and is likewise not valid exchange-plan content.
+        assertFalse(ExchangePlanContentWriter.isExchangePlanContentMember(
+            MdClassPackage.Literals.COMMON_FORM));
+    }
+
+    @Test
+    public void testExchangePlanContentMemberRejectsNull()
+    {
+        assertFalse(ExchangePlanContentWriter.isExchangePlanContentMember(null));
     }
 
     // ---- bilingual object-FQN normalization (via the shared MetadataTypeUtils) --------------

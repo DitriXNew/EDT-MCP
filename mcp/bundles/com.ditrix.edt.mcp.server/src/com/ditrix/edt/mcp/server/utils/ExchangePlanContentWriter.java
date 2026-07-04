@@ -9,9 +9,11 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EEnum;
 import org.eclipse.emf.ecore.EEnumLiteral;
 
@@ -49,8 +51,9 @@ import com.google.gson.JsonObject;
  *
  * <p>The whole payload is validated UP FRONT, BEFORE the write transaction (op recognized; a metadata
  * FQN required; the object resolves via the shared bilingual
- * {@link MetadataNodeResolver#resolveExisting}; for an add, when supplied, the {@code autoRecord} token
- * maps to a literal), so a shape / resolution error leaves NOTHING written. The mutation then runs
+ * {@link MetadataNodeResolver#resolveExisting}; the object's {@link org.eclipse.emf.ecore.EClass EClass}
+ * passes {@link #isExchangePlanContentMember}; for an add, when supplied, the {@code autoRecord} token
+ * maps to a literal), so a shape / resolution / kind error leaves NOTHING written. The mutation then runs
  * entirely inside a single {@link BmTransactions#write write} boundary on the re-fetched exchange plan,
  * with every content object re-fetched from the IN-TRANSACTION model by its captured BM id (a content
  * object is a TOP object, so {@code tx.getObjectById(bmGetId())} is used - NEVER {@code eContainer()},
@@ -355,9 +358,10 @@ public final class ExchangePlanContentWriter
     /**
      * Validates + resolves a single {@code content[]} entry up front (BEFORE the tx): the op is
      * recognized (default {@code add}), a metadata FQN is present, the object resolves via the shared
-     * bilingual {@link MetadataNodeResolver#resolveExisting}, and (for an add, when supplied) the
-     * {@code autoRecord} token maps to a literal. Returns a ready {@link PlannedEntry} or a ready JSON
-     * error.
+     * bilingual {@link MetadataNodeResolver#resolveExisting}, the object's {@link EClass} is a legal
+     * exchange-plan content member ({@link #isExchangePlanContentMember}), and (for an add, when
+     * supplied) the {@code autoRecord} token maps to a literal. Returns a ready {@link PlannedEntry} or a
+     * ready JSON error.
      */
     private static EntryPlan planEntry(Configuration config, JsonObject entry)
     {
@@ -384,6 +388,13 @@ public final class ExchangePlanContentWriter
             return EntryPlan.failed(objectNotFound(config, fqn));
         }
         MdObject mdObject = node.object;
+        if (!isExchangePlanContentMember(mdObject.eClass()))
+        {
+            return EntryPlan.failed(ToolResult.error("'" + fqn + "' (" + mdObject.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + ") cannot be a member of an exchange plan's content. Only data-bearing objects " //$NON-NLS-1$
+                + "(e.g. Catalog / Document / InformationRegister / Constant / BusinessProcess) are " //$NON-NLS-1$
+                + "valid content.").toJson()); //$NON-NLS-1$
+        }
 
         AutoRegistrationChanges autoRecord = null;
         if (!OP_REMOVE.equals(op))
@@ -411,6 +422,55 @@ public final class ExchangePlanContentWriter
     }
 
     // ---- pure helpers (unit-testable) ---------------------------------------------------------
+
+    /**
+     * The metadata object kinds that may be a member of an {@link ExchangePlan}'s content, as an
+     * immutable set of {@link MdClassPackage.Literals} EClasses matched by identity. This replicates
+     * EDT's own exchange-plan content picker
+     * ({@code EXCHANGE_PLAN_CONTENT__SUBTREE_INDUCER} in a UI bundle the headless server must NOT depend
+     * on), so what the {@code content[]} branch accepts matches exactly what the EDT designer permits.
+     *
+     * <p>The set is authoritative, not heuristic: {@link MdClassPackage.Literals#CONSTANT Constant},
+     * {@link MdClassPackage.Literals#SEQUENCE Sequence} and
+     * {@link MdClassPackage.Literals#RECALCULATION Recalculation} are direct {@code MdObject}s (not
+     * {@code BasicDbObject}s), so a marker-interface union would wrongly DROP them; conversely
+     * {@link MdClassPackage.Literals#EXCHANGE_PLAN ExchangePlan} and
+     * {@link MdClassPackage.Literals#DOCUMENT_JOURNAL DocumentJournal} extend {@code BasicDbObject} and
+     * so would be wrongly ACCEPTED. Hence an explicit identity set rather than an {@code instanceof}
+     * test.</p>
+     */
+    private static final Set<EClass> EXCHANGE_PLAN_CONTENT_MEMBER_CLASSES = Set.of(
+        MdClassPackage.Literals.CONSTANT,
+        MdClassPackage.Literals.CATALOG,
+        MdClassPackage.Literals.DOCUMENT,
+        MdClassPackage.Literals.SEQUENCE,
+        MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES,
+        MdClassPackage.Literals.CHART_OF_ACCOUNTS,
+        MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES,
+        MdClassPackage.Literals.INFORMATION_REGISTER,
+        MdClassPackage.Literals.ACCUMULATION_REGISTER,
+        MdClassPackage.Literals.ACCOUNTING_REGISTER,
+        MdClassPackage.Literals.CALCULATION_REGISTER,
+        MdClassPackage.Literals.RECALCULATION,
+        MdClassPackage.Literals.BUSINESS_PROCESS,
+        MdClassPackage.Literals.TASK);
+
+    /**
+     * Whether the given metadata {@link EClass} may be a member of an {@link ExchangePlan}'s content -
+     * an identity lookup in {@link #EXCHANGE_PLAN_CONTENT_MEMBER_CLASSES} (EDT's own content picker set,
+     * replicated). Pure and side-effect-free so it is used as the up-front reject predicate in
+     * {@link #planEntry} (BEFORE any transaction), symmetric with the sibling membership writers'
+     * kind guards.
+     *
+     * @param eClass the resolved object's {@link EClass} (may be {@code null})
+     * @return {@code true} when the class is one of the data-bearing exchange-plan content kinds
+     */
+    static boolean isExchangePlanContentMember(EClass eClass)
+    {
+        // Null-guarded: the backing Set.of(...) is null-hostile (contains(null) throws), and a null
+        // class is simply "not a member".
+        return eClass != null && EXCHANGE_PLAN_CONTENT_MEMBER_CLASSES.contains(eClass);
+    }
 
     /** Normalizes a content op token to {@code add} / {@code remove}; default {@code add}. */
     static String contentOp(JsonObject entry)

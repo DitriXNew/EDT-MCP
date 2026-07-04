@@ -165,6 +165,28 @@ def test_exchange_plan_content_russian_token():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_exchange_plan_content_reject_non_member_kind():
+    # A CommonModule is not a data-bearing object - it cannot be a member of an exchange plan's
+    # content (only Catalog / Document / InformationRegister / Constant / BusinessProcess & co. are
+    # valid content, mirroring EDT's own content picker). The reject must name the bad FQN and NOT
+    # write anything. The exchange plan is seeded; the reject is a kind failure so nothing is added
+    # on top of the seeding.
+    plan = "E2EXPContentBad"
+    plan_fqn = "ExchangePlan." + plan
+    not_member = "CommonModule.OK"      # a fixture common module - not a valid content member
+    _create_ok(plan_fqn, "seed the exchange plan")
+    before = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": plan_fqn,
+        "content": [{"op": "add", "metadata": not_member}],
+    })
+    e = assert_error(r, "add an object that is not a valid exchange plan content member")
+    assert_error_quality(e, names=[not_member], suggests=["exchange plan"],
+                         ctx="a non-content-member is rejected with the object named + an exchange plan hint")
+    assert_tree_unchanged(before, "a rejected non-member add must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_content_payload_on_non_dispatch_kind_is_error():
     # A content payload aimed at an FQN kind that has NO membership list (an InformationRegister is
     # neither a CommonAttribute nor an ExchangePlan/Catalog/Document) must be a clean, actionable
