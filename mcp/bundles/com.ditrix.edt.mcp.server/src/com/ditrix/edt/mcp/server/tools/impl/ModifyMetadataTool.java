@@ -2243,7 +2243,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
          */
         private final boolean typeChange;
 
-        private PreparedChange(EStructuralFeature feature, Kind kind, Object scalarValue,
+        private PreparedChange(EStructuralFeature feature, Kind kind, Object scalarValue, // NOSONAR cohesive discriminated-union payload, one field per Kind (already reduced by StyleBinding); a further param-object would fragment it
             String language, String localizedValue, List<Long> referenceBmIds,
             StyleBinding styleBinding, boolean typeChange)
         {

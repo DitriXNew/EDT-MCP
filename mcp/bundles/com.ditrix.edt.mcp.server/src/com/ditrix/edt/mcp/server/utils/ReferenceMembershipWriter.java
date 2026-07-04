@@ -15,6 +15,7 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicRegister;
@@ -231,7 +232,7 @@ public final class ReferenceMembershipWriter
         }
 
         // Validate + resolve every entry up front so nothing is mutated on a shape / resolution error.
-        List<PlannedEntry> plan = new ArrayList<>();
+        List<PlannedEntry> plan = new ArrayList<>(); // NOSONAR plan is read inside the write lambda (capture)
         for (JsonObject entry : content)
         {
             EntryPlan resolved = planEntry(config, entry, kind);
@@ -265,30 +266,9 @@ public final class ReferenceMembershipWriter
                 int removed = 0;
                 for (PlannedEntry planned : plan)
                 {
-                    Object refObj = tx.getObjectById(planned.refBmId);
-                    if (!(refObj instanceof MdObject))
-                    {
-                        throw new ContentWriteException(ToolResult.error("The " + kind.memberLabel //$NON-NLS-1$
-                            + " '" + planned.fqn //$NON-NLS-1$
-                            + "' could not be resolved inside the transaction.").toJson()); //$NON-NLS-1$
-                    }
-                    MdObject ref = (MdObject)refObj;
-                    if (planned.remove)
-                    {
-                        if (!removeRef(kind, topInTx, ref))
-                        {
-                            throw new ContentWriteException(ToolResult.error("The " + kind.memberLabel //$NON-NLS-1$
-                                + " '" + planned.fqn + "' is not in the " + kind.memberLabel //$NON-NLS-1$ //$NON-NLS-2$
-                                + " list of '" + topInTx.getName() //$NON-NLS-1$
-                                + "'; nothing to remove. Read the current list with " //$NON-NLS-1$
-                                + "get_metadata_details on the object FQN.").toJson()); //$NON-NLS-1$
-                        }
-                        removed++;
-                    }
-                    else if (addRef(kind, topInTx, ref))
-                    {
-                        added++;
-                    }
+                    int[] delta = applyPlannedEntry(kind, tx, topInTx, planned);
+                    added += delta[0];
+                    removed += delta[1];
                 }
                 return Result.ok(added, removed);
             });
@@ -307,6 +287,44 @@ public final class ReferenceMembershipWriter
     }
 
     // ---- mutation (inside the write boundary) -------------------------------------------------
+
+    /**
+     * Applies a single validated {@link PlannedEntry} to the in-transaction top object: re-fetches the
+     * referenced member by its stable BM id, then either removes it from the kind's list (a remove that
+     * finds nothing is a clean error that rolls the whole write back) or appends it idempotently via
+     * {@link #addRef}. MUST run inside the write boundary.
+     *
+     * @return a two-slot delta {@code [added, removed]}
+     */
+    private static int[] applyPlannedEntry(Kind kind, IBmTransaction tx, MdObject topInTx,
+        PlannedEntry planned)
+    {
+        Object refObj = tx.getObjectById(planned.refBmId);
+        if (!(refObj instanceof MdObject))
+        {
+            throw new ContentWriteException(ToolResult.error("The " + kind.memberLabel //$NON-NLS-1$
+                + " '" + planned.fqn //$NON-NLS-1$
+                + "' could not be resolved inside the transaction.").toJson()); //$NON-NLS-1$
+        }
+        MdObject ref = (MdObject)refObj;
+        if (planned.remove)
+        {
+            if (!removeRef(kind, topInTx, ref))
+            {
+                throw new ContentWriteException(ToolResult.error("The " + kind.memberLabel //$NON-NLS-1$
+                    + " '" + planned.fqn + "' is not in the " + kind.memberLabel //$NON-NLS-1$ //$NON-NLS-2$
+                    + " list of '" + topInTx.getName() //$NON-NLS-1$
+                    + "'; nothing to remove. Read the current list with " //$NON-NLS-1$
+                    + "get_metadata_details on the object FQN.").toJson()); //$NON-NLS-1$
+            }
+            return new int[] {0, 1};
+        }
+        if (addRef(kind, topInTx, ref))
+        {
+            return new int[] {1, 0};
+        }
+        return new int[] {0, 0};
+    }
 
     /**
      * Appends a reference to the kind's list if it is not already present by identity (idempotent). MUST

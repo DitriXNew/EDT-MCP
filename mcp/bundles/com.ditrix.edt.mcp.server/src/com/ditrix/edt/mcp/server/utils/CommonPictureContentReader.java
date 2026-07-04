@@ -417,9 +417,9 @@ public final class CommonPictureContentReader
      *
      * @param svgIn the SVG input stream
      * @return the PNG input stream, or {@code null} when neither signature is present
-     * @throws Exception on reflective invocation failure
+     * @throws ReflectiveOperationException on reflective invocation failure
      */
-    private static InputStream renderSvgToPngCompat(InputStream svgIn) throws Exception
+    private static InputStream renderSvgToPngCompat(InputStream svgIn) throws ReflectiveOperationException
     {
         Object svgUtils = SVGUtils.INSTANCE;
         Class<?> cls = svgUtils.getClass();
@@ -481,7 +481,7 @@ public final class CommonPictureContentReader
          * @return the PNG bytes, or {@code null} when the entry cannot be decoded
          * @throws Exception on I/O or reflective failure
          */
-        byte[] decodeToPng(String name) throws Exception;
+        byte[] decodeToPng(String name) throws Exception; // NOSONAR aggregates I/O (IOException) and reflective (ReflectiveOperationException) checked failures across both PictureContent implementations; caught at the tool boundary
     }
 
     /**
@@ -556,11 +556,9 @@ public final class CommonPictureContentReader
             List<RasterCandidate> candidates = new ArrayList<>();
             for (IZipPictureManifestEntry entry : content.getPictureEntries())
             {
-                if (entry == null)
-                {
-                    continue;
-                }
-                String name = entry.getName();
+                // Single early-exit guard (S135): fold the null-entry check into a null-safe name read so
+                // one continue filters absent/manifest/SVG entries while keeping the guard-clause style.
+                String name = entry == null ? null : entry.getName();
                 if (name == null || isManifestEntry(name) || isSvgName(name))
                 {
                     continue;
@@ -993,9 +991,9 @@ public final class CommonPictureContentReader
      *
      * @param in the stream (closed by the caller)
      * @return the bytes
-     * @throws Exception on I/O failure
+     * @throws IOException on I/O failure
      */
-    private static byte[] readAll(InputStream in) throws Exception
+    private static byte[] readAll(InputStream in) throws IOException
     {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];

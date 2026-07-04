@@ -1135,16 +1135,18 @@ public final class FormElementWriter
             if (fieldError != null)
             {
                 skipped.add(trimmed);
-                continue;
             }
-            // The designer's object-form wizard creates these bound object fields with editMode
-            // "EnterOnInput" (the table-column path already uses it), whereas createField's default
-            // "Enter" is for a manually-created standalone field. Re-set the just-created field
-            // (named after the attribute) for byte-parity with the designer. Issue #208.
-            EObject seededField = findItem(content, trimmed);
-            if (seededField != null)
+            else
             {
-                setEnumFeature(seededField, FEATURE_EDIT_MODE, "EnterOnInput"); //$NON-NLS-1$
+                // The designer's object-form wizard creates these bound object fields with editMode
+                // "EnterOnInput" (the table-column path already uses it), whereas createField's default
+                // "Enter" is for a manually-created standalone field. Re-set the just-created field
+                // (named after the attribute) for byte-parity with the designer. Issue #208.
+                EObject seededField = findItem(content, trimmed);
+                if (seededField != null)
+                {
+                    setEnumFeature(seededField, FEATURE_EDIT_MODE, "EnterOnInput"); //$NON-NLS-1$
+                }
             }
         }
         if (!skipped.isEmpty())
