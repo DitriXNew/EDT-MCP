@@ -92,6 +92,36 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Error message prefix for an unresolved form FQN. */
     private static final String ERR_FORM_NOT_FOUND_PREFIX = "Form not found for '"; //$NON-NLS-1$
 
+    /** Payload / output key: the ROLE rights array. */
+    private static final String KEY_RIGHTS = "rights"; //$NON-NLS-1$
+
+    /** Payload / output key: the ROLE RLS templates array. */
+    private static final String KEY_TEMPLATES = "templates"; //$NON-NLS-1$
+
+    /** Payload / output key: the ROLE properties object. */
+    private static final String KEY_ROLE_PROPERTIES = "roleProperties"; //$NON-NLS-1$
+
+    /** Payload / output key: the membership content array / counts object. */
+    private static final String KEY_CONTENT = "content"; //$NON-NLS-1$
+
+    /** Output count key: members attached. */
+    private static final String KEY_ADDED = "added"; //$NON-NLS-1$
+
+    /** Output count key: members detached. */
+    private static final String KEY_REMOVED = "removed"; //$NON-NLS-1$
+
+    /** The form attribute's value-type feature / property alias. */
+    private static final String PROP_VALUE_TYPE = "valueType"; //$NON-NLS-1$
+
+    /** Confirmation-message prefix for a completed modify. */
+    private static final String MSG_MODIFIED_PREFIX = "Modified "; //$NON-NLS-1$
+
+    /** Error-message fragment between an FQN and its EClass name (e.g. "'X' is a Catalog"). */
+    private static final String MSG_IS_A = "' is a "; //$NON-NLS-1$
+
+    /** Confirmation-message fragment before a removed count. */
+    private static final String MSG_REMOVED_COUNT = ", removed: "; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -151,7 +181,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "value; 'language' is the code for a synonym (default: config default). Required " //$NON-NLS-1$
                 + "unless the FQN is a Role and a role payload (rights / templates / roleProperties) " //$NON-NLS-1$
                 + "is given.") //$NON-NLS-1$
-            .objectArrayProperty("rights", //$NON-NLS-1$
+            .objectArrayProperty(KEY_RIGHTS,
                 "ROLE only: per-object access rights to set, as [{object, right, value?, rls?, " //$NON-NLS-1$
                 + "rlsFields?}]. 'object' is a metadata FQN (e.g. 'Catalog.Products' or the Russian " //$NON-NLS-1$
                 + "'Справочник.Товары'); 'right' is a bilingual right name (e.g. 'Read'/'Чтение', " //$NON-NLS-1$
@@ -160,15 +190,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "optional Row-Level-Security restriction condition (1C query text); 'rlsFields' is " //$NON-NLS-1$
                 + "an optional array of field names the RLS applies to (omit / empty = whole-object " //$NON-NLS-1$
                 + "restriction).") //$NON-NLS-1$
-            .objectArrayProperty("templates", //$NON-NLS-1$
+            .objectArrayProperty(KEY_TEMPLATES,
                 "ROLE only: RLS restriction templates to change, as [{op?, name, condition?}]. 'op' is " //$NON-NLS-1$
                 + "'add' (default) / 'edit' / 'delete'; 'name' is the template name; 'condition' is " //$NON-NLS-1$
                 + "the RLS restriction text (required for add/edit).") //$NON-NLS-1$
-            .objectProperty("roleProperties", //$NON-NLS-1$
+            .objectProperty(KEY_ROLE_PROPERTIES,
                 "ROLE only: the three role properties, as optional booleans {setForNewObjects, " //$NON-NLS-1$
                 + "setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags " //$NON-NLS-1$
                 + "are changed.") //$NON-NLS-1$
-            .objectArrayProperty("content", //$NON-NLS-1$
+            .objectArrayProperty(KEY_CONTENT,
                 "Members to attach / detach in a structured membership list, dispatched by the FQN's " //$NON-NLS-1$
                 + "kind (a COMMON ATTRIBUTE's owners, an EXCHANGE PLAN's content objects, a CATALOG's " //$NON-NLS-1$
                 + "owners, a DOCUMENT's register records), as [{op?, metadata, use?, autoRecord?}]. 'op' " //$NON-NLS-1$
@@ -200,7 +230,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
                 + "rights change this is instead an object {rights, templates, roleProperties} with " //$NON-NLS-1$
                 + "the applied counts)") //$NON-NLS-1$
-            .objectProperty("content", "For a membership-list content change: the counts object. A " //$NON-NLS-1$ //$NON-NLS-2$
+            .objectProperty(KEY_CONTENT, "For a membership-list content change: the counts object. A " //$NON-NLS-1$
                 + "CommonAttribute / ExchangePlan change reports {added, updated, removed} (members " //$NON-NLS-1$
                 + "attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a " //$NON-NLS-1$
                 + "Catalog owners / Document register records change (a plain reference list, no " //$NON-NLS-1$
@@ -231,8 +261,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Role payload (rights[] / templates[] / roleProperties): dispatched when the resolved FQN is a
         // Role. When present, 'properties' is optional (a role is modified through the rights surface,
         // not the generic property bag).
-        List<JsonObject> rolePayloadRights = JsonUtils.extractObjectArray(params, "rights"); //$NON-NLS-1$
-        List<JsonObject> rolePayloadTemplates = JsonUtils.extractObjectArray(params, "templates"); //$NON-NLS-1$
+        List<JsonObject> rolePayloadRights = JsonUtils.extractObjectArray(params, KEY_RIGHTS);
+        List<JsonObject> rolePayloadTemplates = JsonUtils.extractObjectArray(params, KEY_TEMPLATES);
         JsonObject roleProperties = parseRolePropertiesArg(params);
         boolean hasRolePayload =
             !rolePayloadRights.isEmpty() || !rolePayloadTemplates.isEmpty() || roleProperties != null;
@@ -242,7 +272,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Document's register records). When present, 'properties' is optional (the membership list is
         // edited through its own surface, not the generic property bag) - mirrors the Role rights[]
         // precedent.
-        List<JsonObject> content = JsonUtils.extractObjectArray(params, "content"); //$NON-NLS-1$
+        List<JsonObject> content = JsonUtils.extractObjectArray(params, KEY_CONTENT);
         boolean hasContentPayload = !content.isEmpty();
 
         if (properties.isEmpty() && !hasRolePayload && !hasContentPayload)
@@ -267,28 +297,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
 
-        // A FQN that addresses a FORM member (item / attribute / command) is handled by a dedicated
+        // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
         // branch: form members live on the editable Form content model (a cross-model hop), not the
-        // mdclass tree. The validation + change pipeline (prepare / PreparedChange) is reused as-is.
+        // mdclass tree. A Role / content payload addressed to a form member is refused there.
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
-            // A Role payload (rights / templates / roleProperties) or a membership 'content' payload
-            // addressed to a FORM-member FQN is refused here, BEFORE the form dispatch: a form member
-            // is neither a Role nor a membership-list owner (CommonAttribute / ExchangePlan / Catalog /
-            // Document), so those siblings do not apply to it. Without this guard the form branch would
-            // apply only 'properties' (or nothing) and report success while the sibling payload
-            // vanished silently. Both siblings are rejected together to keep them symmetric.
-            if (hasRolePayload || hasContentPayload)
-            {
-                return ToolResult.error("'" + normFqn + "' addresses a FORM member, which cannot " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "take a Role payload ('rights' / 'templates' / 'roleProperties') or a " //$NON-NLS-1$
-                    + "membership 'content' payload. 'rights' / 'templates' / 'roleProperties' " //$NON-NLS-1$
-                    + "are valid only for a Role.<Name> FQN, and 'content' only for a " //$NON-NLS-1$
-                    + "CommonAttribute / ExchangePlan / Catalog / Document FQN. Use 'properties' to " //$NON-NLS-1$
-                    + "change a form member.").toJson(); //$NON-NLS-1$
-            }
-            return modifyFormMember(ctx, normFqn, formRef, properties, normReport);
+            return dispatchFormMember(ctx, normFqn, formRef, properties, normReport, hasRolePayload,
+                hasContentPayload);
         }
 
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
@@ -313,61 +329,136 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MdObject target = node.object;
 
         // A ROLE FQN carrying a role payload (rights / templates / roleProperties) is dispatched to the
-        // dedicated rights writer: a role is modified through its access-rights surface, not the generic
-        // property bag. The mutation goes through the EDT-native rights tasks + a forceExport of the
-        // Role FQN (draining the sibling Rights.rights sub-resource).
+        // rights writer; the same payload on a NON-Role FQN is refused. Returns null only when there is
+        // no role payload, so the content / generic property path below still runs.
+        String rolePayloadResult = dispatchRolePayload(ctx, normFqn, target, properties,
+            rolePayloadRights, rolePayloadTemplates, roleProperties, hasRolePayload);
+        if (rolePayloadResult != null)
+        {
+            return rolePayloadResult;
+        }
+
+        // A FQN carrying a content payload (content[]) is dispatched by the resolved object's KIND to
+        // its dedicated membership writer (or refused for an unsupported kind); the branch always
+        // returns.
+        if (hasContentPayload)
+        {
+            return dispatchContentPayload(ctx, normFqn, target, properties, content);
+        }
+
+        // The remaining case: a generic 'properties' change applied through the BM write boundary.
+        return applyGenericPropertyChanges(ctx, projectName, normFqn, node, target, properties,
+            normReport);
+    }
+
+    /**
+     * Dispatches a FORM-member FQN (item / attribute / command): the member lives on the editable Form
+     * content model (a cross-model hop), not the mdclass tree, and the validation + change pipeline is
+     * reused as-is. A Role payload ('rights' / 'templates' / 'roleProperties') or a membership 'content'
+     * payload addressed to a FORM-member FQN is refused here, BEFORE the form dispatch: a form member is
+     * neither a Role nor a membership-list owner (CommonAttribute / ExchangePlan / Catalog / Document),
+     * so those siblings do not apply to it. Without this guard the form branch would apply only
+     * 'properties' (or nothing) and report success while the sibling payload vanished silently. Both
+     * siblings are rejected together to keep them symmetric. Extracted verbatim from
+     * {@link #executeOnUiThread}.
+     */
+    private String dispatchFormMember(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormMemberRef formRef, List<JsonObject> properties,
+        MdNameNormalizer.Report normReport, boolean hasRolePayload, boolean hasContentPayload)
+    {
+        if (hasRolePayload || hasContentPayload)
+        {
+            return ToolResult.error("'" + normFqn + "' addresses a FORM member, which cannot " //$NON-NLS-1$ //$NON-NLS-2$
+                + "take a Role payload ('rights' / 'templates' / 'roleProperties') or a " //$NON-NLS-1$
+                + "membership 'content' payload. 'rights' / 'templates' / 'roleProperties' " //$NON-NLS-1$
+                + "are valid only for a Role.<Name> FQN, and 'content' only for a " //$NON-NLS-1$
+                + "CommonAttribute / ExchangePlan / Catalog / Document FQN. Use 'properties' to " //$NON-NLS-1$
+                + "change a form member.").toJson(); //$NON-NLS-1$
+        }
+        return modifyFormMember(ctx, normFqn, formRef, properties, normReport);
+    }
+
+    /**
+     * Dispatches a ROLE payload ('rights' / 'templates' / 'roleProperties'): a Role FQN carrying the
+     * payload goes to {@link #modifyRoleRights} (the access-rights surface, not the generic property
+     * bag; the mutation runs through the EDT-native rights tasks + a forceExport draining the sibling
+     * Rights.rights sub-resource); the same payload on a NON-Role FQN is refused (it must not fall
+     * through to the generic property path, which - with an empty 'properties' - would apply nothing yet
+     * report a false success and silently drop the payload). Returns {@code null} when there is NO role
+     * payload, so the caller continues to the content / generic path. Extracted verbatim from
+     * {@link #executeOnUiThread}.
+     */
+    private String dispatchRolePayload(ProjectContext ctx, String normFqn, MdObject target,
+        List<JsonObject> properties, List<JsonObject> rolePayloadRights,
+        List<JsonObject> rolePayloadTemplates, JsonObject roleProperties, boolean hasRolePayload)
+    {
         if (target instanceof Role && hasRolePayload)
         {
             return modifyRoleRights(ctx, normFqn, (Role)target, properties, rolePayloadRights,
                 rolePayloadTemplates, roleProperties);
         }
-
-        // A role payload addressed to a NON-Role FQN is rejected here (it must not fall through to the
-        // generic property path, which - with an empty 'properties' - would apply nothing yet report a
-        // false success and silently drop the rights / templates / roleProperties payload).
         if (hasRolePayload)
         {
             return ToolResult.error("'rights' / 'templates' / 'roleProperties' are only valid for a " //$NON-NLS-1$
-                + "Role FQN; '" + normFqn + "' is a " + target.eClass().getName() + ". Use " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Role FQN; '" + normFqn + MSG_IS_A + target.eClass().getName() + ". Use " //$NON-NLS-1$ //$NON-NLS-2$
                 + "'properties' for its generic properties, or address a Role.<Name>.").toJson(); //$NON-NLS-1$
         }
+        return null;
+    }
 
-        // A FQN carrying a content payload (content[]) is dispatched by the resolved object's KIND to its
-        // dedicated membership writer: a member of that kind's structured list (a common attribute's
-        // owner, an exchange plan's content object, a catalog's owner, a document's register record) is
-        // attached / detached through the list surface, not the generic property bag. Each mutation goes
-        // through a BM write tx + a single forceExport of the resolved TOP FQN. Every branch refuses
-        // mixing the content payload with a generic 'properties' change (the same policy the Role rights
-        // branch enforces).
-        if (hasContentPayload)
+    /**
+     * Dispatches a content payload (content[]) by the resolved object's KIND to its dedicated membership
+     * writer: a member of that kind's structured list (a common attribute's owner, an exchange plan's
+     * content object, a catalog's owner, a document's register record) is attached / detached through
+     * the list surface, not the generic property bag. Each per-kind writer runs a BM write tx + a single
+     * forceExport of the resolved TOP FQN and refuses mixing the content payload with a generic
+     * 'properties' change (the same policy the Role rights branch enforces). A content payload addressed
+     * to an unsupported kind is refused here (it must not fall through to the generic property path,
+     * which - with an empty 'properties' - would apply nothing yet report a false success and silently
+     * drop the content payload). Extracted verbatim from {@link #executeOnUiThread} (entered only when a
+     * content payload is present).
+     */
+    private String dispatchContentPayload(ProjectContext ctx, String normFqn, MdObject target,
+        List<JsonObject> properties, List<JsonObject> content)
+    {
+        if (target instanceof CommonAttribute)
         {
-            if (target instanceof CommonAttribute)
-            {
-                return modifyCommonAttributeContent(ctx, normFqn, (CommonAttribute)target, properties,
-                    content);
-            }
-            if (target instanceof ExchangePlan)
-            {
-                return modifyExchangePlanContent(ctx, normFqn, (ExchangePlan)target, properties, content);
-            }
-            if (target instanceof Catalog)
-            {
-                return modifyCatalogOwners(ctx, normFqn, (Catalog)target, properties, content);
-            }
-            if (target instanceof Document)
-            {
-                return modifyDocumentRegisterRecords(ctx, normFqn, (Document)target, properties, content);
-            }
-
-            // A content payload addressed to a FQN of an unsupported kind is rejected here (it must not
-            // fall through to the generic property path, which - with an empty 'properties' - would apply
-            // nothing yet report a false success and silently drop the content payload).
-            return ToolResult.error("'content' is only valid for a CommonAttribute, ExchangePlan, " //$NON-NLS-1$
-                + "Catalog or Document FQN; '" + normFqn + "' is a " + target.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
-                + ". Use 'properties' for its generic properties, or address a CommonAttribute.<Name> " //$NON-NLS-1$
-                + "(owners), ExchangePlan.<Name> (content objects), Catalog.<Name> (owners) or " //$NON-NLS-1$
-                + "Document.<Name> (register records).").toJson(); //$NON-NLS-1$
+            return modifyCommonAttributeContent(ctx, normFqn, (CommonAttribute)target, properties,
+                content);
         }
+        if (target instanceof ExchangePlan)
+        {
+            return modifyExchangePlanContent(ctx, normFqn, (ExchangePlan)target, properties, content);
+        }
+        if (target instanceof Catalog)
+        {
+            return modifyCatalogOwners(ctx, normFqn, (Catalog)target, properties, content);
+        }
+        if (target instanceof Document)
+        {
+            return modifyDocumentRegisterRecords(ctx, normFqn, (Document)target, properties, content);
+        }
+        return ToolResult.error("'content' is only valid for a CommonAttribute, ExchangePlan, " //$NON-NLS-1$
+            + "Catalog or Document FQN; '" + normFqn + MSG_IS_A + target.eClass().getName() //$NON-NLS-1$
+            + ". Use 'properties' for its generic properties, or address a CommonAttribute.<Name> " //$NON-NLS-1$
+            + "(owners), ExchangePlan.<Name> (content objects), Catalog.<Name> (owners) or " //$NON-NLS-1$
+            + "Document.<Name> (register records).").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Applies a generic 'properties' change to the resolved node through the BM write boundary (the
+     * remaining case once the form / role / content branches are ruled out): resolves the BM re-fetch
+     * strategy and the platform version, validates + prepares every change (fail fast, no partial
+     * mutation), runs the destructive-consent gate for a retype, then applies the changes inside ONE BM
+     * write transaction and force-exports the TOP object. Extracted verbatim from
+     * {@link #executeOnUiThread}; the reject conditions, the consent-gate call and the force-export are
+     * unchanged.
+     */
+    private String applyGenericPropertyChanges(ProjectContext ctx, String projectName, String normFqn,
+        MetadataNodeResolver.MetadataNode node, MdObject target, List<JsonObject> properties,
+        MdNameNormalizer.Report normReport)
+    {
+        Configuration config = ctx.config;
 
         // Resolve the BM re-fetch strategy (mutation must re-fetch inside the write tx). Only TOP
         // objects are re-fetchable by bmId, so for a member we re-fetch the TOP object and
@@ -556,7 +647,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         for (JsonObject prop : properties)
         {
             String name = asString(prop.get("name")); //$NON-NLS-1$
-            if ("type".equalsIgnoreCase(name) || "valueType".equalsIgnoreCase(name)) //$NON-NLS-1$ //$NON-NLS-2$
+            if ("type".equalsIgnoreCase(name) || PROP_VALUE_TYPE.equalsIgnoreCase(name)) //$NON-NLS-1$
             {
                 retype = true;
                 break;
@@ -569,7 +660,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         ConsentPreview preview = new ConsentPreview(
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
-            1, java.util.Collections.singletonList("valueType")); //$NON-NLS-1$
+            1, java.util.Collections.singletonList(PROP_VALUE_TYPE));
         if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview) == ConsentDecision.REJECT)
         {
             return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
@@ -592,7 +683,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted);
         normReport.addTo(result);
         return result
-            .put(McpKeys.MESSAGE, "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
     }
 
@@ -604,7 +695,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private static JsonObject parseRolePropertiesArg(Map<String, String> params)
     {
-        String raw = params.get("roleProperties"); //$NON-NLS-1$
+        String raw = params.get(KEY_ROLE_PROPERTIES);
         if (raw == null || raw.trim().isEmpty())
         {
             return null;
@@ -664,9 +755,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean persisted = exported && rightsFqn != null;
 
         JsonObject applied = new JsonObject();
-        applied.addProperty("rights", result.rights); //$NON-NLS-1$
-        applied.addProperty("templates", result.templates); //$NON-NLS-1$
-        applied.addProperty("roleProperties", result.roleProperties); //$NON-NLS-1$
+        applied.addProperty(KEY_RIGHTS, result.rights);
+        applied.addProperty(KEY_TEMPLATES, result.templates);
+        applied.addProperty(KEY_ROLE_PROPERTIES, result.roleProperties);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -710,16 +801,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, normFqn);
 
         JsonObject applied = new JsonObject();
-        applied.addProperty("added", result.added); //$NON-NLS-1$
+        applied.addProperty(KEY_ADDED, result.added);
         applied.addProperty("updated", result.updated); //$NON-NLS-1$
-        applied.addProperty("removed", result.removed); //$NON-NLS-1$
+        applied.addProperty(KEY_REMOVED, result.removed);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("content", applied) //$NON-NLS-1$
+            .put(KEY_CONTENT, applied)
             .put(KEY_PERSISTED, persisted)
             .put(McpKeys.MESSAGE, "Modified common attribute " + normFqn + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
-                + result.added + ", updated: " + result.updated + ", removed: " + result.removed //$NON-NLS-1$ //$NON-NLS-2$
+                + result.added + ", updated: " + result.updated + MSG_REMOVED_COUNT + result.removed //$NON-NLS-1$
                 + ")") //$NON-NLS-1$
             .toJson();
     }
@@ -756,16 +847,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, normFqn);
 
         JsonObject applied = new JsonObject();
-        applied.addProperty("added", result.added); //$NON-NLS-1$
+        applied.addProperty(KEY_ADDED, result.added);
         applied.addProperty("updated", result.updated); //$NON-NLS-1$
-        applied.addProperty("removed", result.removed); //$NON-NLS-1$
+        applied.addProperty(KEY_REMOVED, result.removed);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("content", applied) //$NON-NLS-1$
+            .put(KEY_CONTENT, applied)
             .put(KEY_PERSISTED, persisted)
             .put(McpKeys.MESSAGE, "Modified exchange plan " + normFqn + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
-                + result.added + ", updated: " + result.updated + ", removed: " + result.removed //$NON-NLS-1$ //$NON-NLS-2$
+                + result.added + ", updated: " + result.updated + MSG_REMOVED_COUNT + result.removed //$NON-NLS-1$
                 + ")") //$NON-NLS-1$
             .toJson();
     }
@@ -850,15 +941,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         ReferenceMembershipWriter.Result result, boolean persisted)
     {
         JsonObject applied = new JsonObject();
-        applied.addProperty("added", result.added); //$NON-NLS-1$
-        applied.addProperty("removed", result.removed); //$NON-NLS-1$
+        applied.addProperty(KEY_ADDED, result.added);
+        applied.addProperty(KEY_REMOVED, result.removed);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
-            .put("content", applied) //$NON-NLS-1$
+            .put(KEY_CONTENT, applied)
             .put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified " + kindNoun + " " + normFqn + " " + listNoun + " (added: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                + result.added + ", removed: " + result.removed + ")") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + kindNoun + " " + normFqn + " " + listNoun + " (added: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + result.added + MSG_REMOVED_COUNT + result.removed + ")") //$NON-NLS-1$
             .toJson();
     }
 
@@ -1083,7 +1174,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted);
         normReport.addTo(result);
         return result
-            .put(McpKeys.MESSAGE, "Modified " + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
     }
 
@@ -1815,10 +1906,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String name = asString(prop.get("name")); //$NON-NLS-1$
         if ("type".equalsIgnoreCase(name) //$NON-NLS-1$
             && member.eClass().getEStructuralFeature("type") == null //$NON-NLS-1$
-            && member.eClass().getEStructuralFeature("valueType") != null) //$NON-NLS-1$
+            && member.eClass().getEStructuralFeature(PROP_VALUE_TYPE) != null)
         {
             JsonObject copy = prop.deepCopy();
-            copy.addProperty("name", "valueType"); //$NON-NLS-1$ //$NON-NLS-2$
+            copy.addProperty("name", PROP_VALUE_TYPE); //$NON-NLS-1$
             return copy;
         }
         return prop;
@@ -2093,7 +2184,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         EClass targetType = ((EReference)feature).getEReferenceType();
         if (targetType != null && !targetType.isSuperTypeOf(target.eClass()))
         {
-            return ToolResult.error("'" + fqn + "' is a " + target.eClass().getName() + " but '" + prop //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ToolResult.error("'" + fqn + MSG_IS_A + target.eClass().getName() + " but '" + prop //$NON-NLS-1$ //$NON-NLS-2$
                 + "' requires a " + targetType.getName() + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;

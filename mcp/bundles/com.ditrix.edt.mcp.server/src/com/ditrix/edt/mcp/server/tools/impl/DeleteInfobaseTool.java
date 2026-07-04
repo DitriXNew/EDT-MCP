@@ -81,6 +81,9 @@ public class DeleteInfobaseTool implements IMcpTool
     private static final String CONSENT_DELETE_FILES_SUFFIX =
         " and may delete its database files from disk (irreversible)."; //$NON-NLS-1$
 
+    /** Message fragment joining an infobase/server name to its owning project name. */
+    private static final String MSG_FROM_PROJECT = "' from project '"; //$NON-NLS-1$
+
     /** Background-Job timeout for the standalone-server deletion (stop + remove). */
     private static final long DELETE_TIMEOUT_SECONDS = 120;
 
@@ -255,7 +258,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // Destructive-operation consent gate: the LAST check before the infobase is dissociated /
         // deregistered / its files removed. On REJECT nothing is mutated.
         String declined = checkDestructiveConsent(ibPlan.resolvedName, "This dissociates infobase '" //$NON-NLS-1$
-            + ibPlan.resolvedName + "' from project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            + ibPlan.resolvedName + MSG_FROM_PROJECT + projectName + "'" //$NON-NLS-1$
             + (deleteRegistration ? " and deregisters it from the EDT infobases list" : "") //$NON-NLS-1$ //$NON-NLS-2$
             + (deleteDatabaseFiles ? CONSENT_DELETE_FILES_SUFFIX : ".")); //$NON-NLS-1$
         if (declined != null)
@@ -332,7 +335,7 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             Activator.logError("delete_infobase: dissociate failed", e); //$NON-NLS-1$
             return ToolResult.error("Failed to dissociate infobase '" + id.resolvedName //$NON-NLS-1$
-                + "' from project '" + projectName + "': " + e.getMessage()).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                + MSG_FROM_PROJECT + projectName + "': " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
 
         // Step 2: optionally deregister from the global EDT infobases list. A non-null result is the
@@ -579,7 +582,7 @@ public class DeleteInfobaseTool implements IMcpTool
             .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, deleteRegistration)
             .put(McpKeys.MESSAGE, "PREVIEW: this would dissociate infobase '" + id.resolvedName //$NON-NLS-1$
-                + "' from project '" + id.projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + MSG_FROM_PROJECT + id.projectName + "'" //$NON-NLS-1$
                 + (deleteRegistration
                     ? " AND deregister it from the EDT infobases list" //$NON-NLS-1$
                     : " (EDT infobases list entry kept)") //$NON-NLS-1$
