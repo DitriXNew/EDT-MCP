@@ -243,7 +243,7 @@ jobs:
           path: ${{ runner.temp }}/edt/eclipse
           key: ${{ steps.edtcache.outputs.key }}
 
-      - name: "EDT setup 7/8 · overlay MCP plugin [ALWAYS — fresh, local p2, no edt.1c.ru]"
+      - name: "EDT setup 7/8 · overlay MCP plugin [ALWAYS — fresh, local p2 + EDT repo]"
         shell: bash
         run: |
           set -uxo pipefail
@@ -255,9 +255,14 @@ jobs:
           ok=0
           for attempt in 1 2; do
             echo "[edt] plugin overlay attempt $attempt/2 ..."
+            # $EDT_P2 MUST be in the overlay repo list: the director re-resolves the EDT platform
+            # bundles here, and without the full EDT metadata it cannot pick a consistent
+            # servlet-api / jetty wiring for dt.html -> activedocument.ui (a felix uses-constraint
+            # conflict once the cached base carries a newer EDT point-release). The retry covers
+            # the rate-limited edt.1c.ru re-contact.
             if "$ECLIPSE/eclipse" -nosplash -consoleLog \
                 -application org.eclipse.equinox.p2.director \
-                -repository "$LOCAL_REPO,$ECLIPSE_P2,$ORBIT_P2,$ORBIT_SIMREL_P2" \
+                -repository "$LOCAL_REPO,$EDT_P2,$ECLIPSE_P2,$ORBIT_P2,$ORBIT_SIMREL_P2" \
                 -installIU "com.ditrix.edt.mcp.server.feature.feature.group" \
                 -destination "$ECLIPSE" \
                 -profileProperties org.eclipse.update.install.features=true \

@@ -176,16 +176,18 @@ runs:
         LOCAL_REPO="file://$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"
         ls "$GITHUB_WORKSPACE/${{ inputs.plugin-repo }}"/content.* >/dev/null 2>&1 \
           || { echo "ERROR: plugin p2 repository not found at ${{ inputs.plugin-repo }} (no content.* metadata) — build it first (mvn in mcp/)"; exit 1; }
-        # Install the MCP plugin feature into the (possibly cached) EDT base. The plugin's
-        # EDT dependencies are already in the base profile, so only the LOCAL plugin repo +
-        # the non-rate-limited Eclipse/Orbit repos are passed — edt.1c.ru is deliberately NOT
-        # contacted here, so a cache HIT run never touches the rate-limited upstream.
+        # Install the MCP plugin feature into the (possibly cached) EDT base. The EDT p2 repo
+        # (edt-p2) MUST be passed alongside the local plugin repo + Eclipse/Orbit: the director
+        # RE-RESOLVES the EDT platform bundles at overlay time, and without the full EDT metadata
+        # it cannot pick a consistent servlet-api / jetty wiring for dt.html -> activedocument.ui
+        # (a felix uses-constraint conflict once the cached base carries a newer EDT point-release).
+        # The 2-attempt retry below covers the rate-limited edt.1c.ru re-contact.
         ok=0
         for attempt in 1 2; do
           echo "[setup-edt] plugin overlay p2 director attempt $attempt/2 ..."
           if "$ECLIPSE/eclipse" -nosplash -consoleLog \
               -application org.eclipse.equinox.p2.director \
-              -repository "$LOCAL_REPO,${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }}" \
+              -repository "$LOCAL_REPO,${{ inputs.edt-p2 }},${{ inputs.eclipse-p2 }},${{ inputs.orbit-p2 }},${{ inputs.orbit-simrel-p2 }}" \
               -installIU "com.ditrix.edt.mcp.server.feature.feature.group" \
               -destination "$ECLIPSE" \
               -profileProperties org.eclipse.update.install.features=true \
