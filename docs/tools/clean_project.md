@@ -1,6 +1,6 @@
 # clean_project
 
-Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. Full rebuild of the ENTIRE configuration — slow on large projects. For a single externally-edited object prefer revalidate_objects([FQN]).
+Clean EDT project and trigger full revalidation. Direction: DISK -> MODEL - re-imports the on-disk src/ .mdo files into the in-memory model. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. Full rebuild of the ENTIRE configuration — slow on large projects. Discards UNSAVED in-memory model edits (they are recomputed from disk); save pending changes first. For a single externally-edited object prefer revalidate_objects([FQN]). Reverse direction (MODEL -> DISK, write the model out to .mdo) is resync_to_disk. Full parameters and examples: call get_tool_guide('clean_project').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -9,6 +9,8 @@ Clean EDT project and trigger full revalidation. Refreshes files from disk, clea
 
 ## Guide
 Force EDT to fully rebuild and re-validate a project: refreshes its files from disk, drops every existing validation marker, re-imports the model, and BLOCKS until EDT has finished recomputing derived data. Use it to recover from a stuck or stale validation state.
+
+**Direction: DISK -> MODEL** - it re-imports the on-disk `src/` `.mdo` files into the in-memory EDT model. The reverse tool (MODEL -> DISK, writing the in-memory model out to `.mdo` files) is `resync_to_disk`.
 
 ## When to use
 - Validation looks wrong or stale: markers don't match the code, already-fixed errors still linger, or a project is stuck "building".

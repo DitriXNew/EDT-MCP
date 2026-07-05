@@ -1,5 +1,8 @@
 Bulk re-synchronize the in-memory EDT model to the on-disk `src/` `.mdo` files, and report (optionally remove) dangling/orphaned references in `Configuration.mdo`. Use it to fix `update_database` / XML-import failures that complain about missing object files or "lost reference" warnings, when the BM model and disk have drifted apart.
 
+- **Direction: MODEL -> DISK** - it writes the in-memory model out to the `src/` `.mdo` files.
+- **Paired tool:** `clean_project` is the reverse, **DISK -> MODEL** - it rebuilds the model from disk and DISCARDS any unsaved in-memory model edits. Save (or resync) pending model changes before running `clean_project`.
+
 ## When to use
 - `update_database` or `import_configuration_from_xml` fails with "object file does not exist - /Subsystems/X.mdo; /Roles/Y.mdo; ..." - the object lives in the model and in `Configuration.mdo` but has no `.mdo` on disk.
 - `get_project_errors` shows `md-reference-intergrity` warnings like "a lost reference is set in field X at position N" - `Configuration.mdo` still registers an object whose body was lost (a dangling/orphaned entry that `delete_metadata` cannot remove, because there is no object to delete).
@@ -14,7 +17,8 @@ Bulk re-synchronize the in-memory EDT model to the on-disk `src/` `.mdo` files, 
 ## Parameter details
 - `projectName` (required) - the EDT project to re-synchronize.
 - `cleanDanglingReferences` (default `false` - report-only) - set `true` to REMOVE the dangling/orphaned proxy entries from `Configuration.mdo`. Destructive: rewrites `Configuration.mdo`. The default run only reports them (`danglingFound` + `danglingDetails`) and changes nothing.
-- `fullExport` (default `false`) - set `true` to force-export EVERY metadata top object's `.mdo` instead of only the missing subset. Heavier (the export runs on the UI thread); use it for a deliberate full disk refresh.
+- `fullExport` (default `false`) - set `true` to force-export EVERY metadata top object's `.mdo` instead of only the missing subset. Heavier (the export runs on the UI thread); use it for a deliberate full disk refresh. Because it re-writes every `.mdo` from the model, it OVERWRITES any on-disk edits, so it must be confirmed with `overwriteDiskEdits=true`.
+- `overwriteDiskEdits` (default `false`) - required confirmation for `fullExport=true`: force-exporting every `.mdo` from the in-memory model OVERWRITES any on-disk edits. `fullExport=true` is rejected with an error unless this is `true`. Ignored when `fullExport=false` (the default missing-only resync only writes the absent files).
 - `revalidate` (default `false`) - after the export, run a full clean build so stale validation markers refresh. Heavier; leave off for a fast run.
 
 ## What you get
