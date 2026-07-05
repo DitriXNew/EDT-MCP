@@ -69,10 +69,12 @@ import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
  *
  * <h2>Unattended-safety</h2>
  * The dump loop runs in a background {@link Job} (never on the JSON-RPC / UI thread)
- * with a bounded timeout. The always-on {@link InfobaseAuthDialogSuppressor} and the
- * armed {@link LaunchUpdateDialogAutoConfirmer} keep any blocking EDT/1C modal from
- * hanging the call. Per-object success/failure is captured honestly: the response lists
- * each object's output path on success or its error on failure, and {@code success} is
+ * with a bounded timeout. The {@link InfobaseAuthDialogSuppressor} (auth-dialog auto-cancel
+ * is activity-scoped since #230; this tool joins its Job synchronously inside the dispatch,
+ * so it stays in scope) and the armed {@link LaunchUpdateDialogAutoConfirmer} keep any
+ * blocking EDT/1C modal from hanging the call. Per-object success/failure is captured
+ * honestly: the response lists each object's output path on success or its error on
+ * failure, and {@code success} is
  * {@code false} when any object failed.
  *
  * <p>The dumper resolution, the per-object output file name and the {@code .epf}/{@code
@@ -477,9 +479,11 @@ public class BuildExternalObjectsTool implements IMcpTool
 
     /**
      * Runs the per-object dump loop in a background {@link Job} with a bounded timeout, the
-     * always-on auth-dialog suppressor ensured and the launch update/restructure auto-confirmer
-     * armed, so the unattended call never blocks on an EDT/1C modal. Captures per-object
-     * success/failure honestly and builds the JSON response.
+     * auth-dialog suppressor filter installed and the launch update/restructure auto-confirmer
+     * armed, so the unattended call never blocks on an EDT/1C modal. Auth-dialog auto-cancel is
+     * now activity-scoped (#230); this build joins its {@link Job} synchronously inside the tool
+     * dispatch, so IN_FLIGHT stays &gt; 0 and the auth modal raised by the dump Job is still
+     * auto-cancelled. Captures per-object success/failure honestly and builds the JSON response.
      *
      * @param bc the resolved build context
      * @return the JSON response
@@ -495,8 +499,10 @@ public class BuildExternalObjectsTool implements IMcpTool
             return buildResponse(bc, new ArrayList<>(), System.currentTimeMillis() - buildStartMs);
         }
 
-        // Ensure the always-on auth-dialog suppressor is installed (it auto-cancels the
-        // "Configure Infobase access Settings" modal raised by EDT background jobs).
+        // Ensure the auth-dialog suppressor filter is installed. Auth-dialog auto-cancel is now
+        // activity-scoped (#230); this build runs synchronously inside the tool dispatch (the Job
+        // is joined below), so IN_FLIGHT stays > 0 and the "Configure Infobase access Settings"
+        // modal raised by the build's background Job is still auto-cancelled.
         InfobaseAuthDialogSuppressor.ensureInstalled();
 
         // Synchronized: the Job thread appends while the calling thread may snapshot it on timeout.

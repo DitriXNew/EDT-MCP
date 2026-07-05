@@ -52,9 +52,17 @@ JSON with `success`, `project`, `applicationId`, `applicationName`, the stored `
 set_infobase_credentials  launchConfigurationName="ERP - thin client"  user="Admin"  password="secret"
 ```
 
+## Storing credentials from the EDT GUI (when MCP is idle)
+
+You do not have to use this tool. When the **MCP server is idle**, you can open EDT's built-in **"Configure Infobase access"** dialog by hand (the same dialog the configurator uses) and enter the user / password there. EDT stores them in its encrypted **Secure Storage** — the leak-free path — and `update_database` / `debug_launch` pick them up exactly as if you had called this tool. This works because the auto-cancel below is **activity-scoped**: it fires only while an MCP tool is running, so a human configuring credentials between agent runs is never interrupted.
+
+## Auto-cancel of the login dialog (unattended safety)
+
+While an MCP tool is in flight (plus a short grace window for the asynchronous read-back that follows a tool), the server **auto-cancels** the "Configure Infobase access Settings" login dialog so an unattended call never blocks on it — the operation instead fails fast with a hint back to this tool. This auto-cancel is **on by default** and **activity-scoped** — it is NOT always-on, so an idle server leaves the GUI dialog usable (see above). To turn it off — e.g. to debug the login flow interactively — set **`EDT_MCP_SUPPRESS_AUTH_DIALOG=false`** (also `0` / `no`) on the EDT process before launch; any other value, or leaving it unset, keeps auto-cancel enabled.
+
 ## Gotchas
 
-- **The user must exist in the infobase.** Storing credentials for a user that does not exist makes the next connect fail authentication (the MCP server auto-cancels the resulting dialog and the operation fails fast with a hint back to this tool). Add the user first, then set credentials.
+- **The user must exist in the infobase.** Storing credentials for a user that does not exist makes the next connect fail authentication (while a tool is running the MCP server auto-cancels the resulting dialog — see the auto-cancel note above — and the operation fails fast with a hint back to this tool). Add the user first, then set credentials.
 - **`create_infobase` can store credentials too** (its `user`/`password`/`access` parameters) — handy with `mode='register'` (the existing base already has users). For a brand-new `mode='create'` base there are no users yet, so set credentials only after adding a matching user.
 - **Wrong password / wrong user** → `update_database`/`debug_launch` fail fast with "the infobase requires authentication — set the connection credentials with set_infobase_credentials" instead of hanging.
 - These are connection credentials, not a permission grant: the user's rights inside the infobase are unchanged.

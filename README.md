@@ -604,6 +604,29 @@ it overrides the preference and lets every gated operation proceed without a dia
 e2e suite uses). When there is no active workbench window (a headless server), the gate never blocks
 either. The dialog only ever appears on a live UI session at the *Ask* level.
 
+### Infobase authentication dialog
+
+When a target infobase has a **user list**, connecting to it during `update_database` or `debug_launch`
+can raise 1C's blocking **"Configure Infobase access Settings"** login dialog. To keep unattended MCP
+calls from hanging on it, the server **auto-cancels that dialog while a tool is running** — the
+MCP-triggered connect fails fast with a hint to `set_infobase_credentials` instead of blocking forever
+(issue #194). Store the credentials once with `set_infobase_credentials` and the connect no longer
+needs the dialog.
+
+The auto-cancel is **activity-scoped**: it fires only while an MCP tool is in flight (plus a short grace
+window for the asynchronous read-back that follows a tool). So when the **MCP server is idle**, you can
+open EDT's **"Configure Infobase access"** dialog **by hand in the GUI** and use it normally — the
+credentials you enter are stored into EDT's encrypted **Secure Storage** (the leak-free path), exactly
+as the configurator does it. Only dialogs raised by MCP activity are cancelled; a human configuring
+credentials between agent runs is never interrupted. (The Secure-Storage password-hint dialog stays
+suppressed unconditionally — it is internal and never human-configured.)
+
+**Automation / CI bypass.** The auto-cancel is **on by default**. To turn it **off** — e.g. to debug the
+login flow interactively, or on a stand where you want the prompt to appear even during MCP calls — set
+the environment variable **`EDT_MCP_SUPPRESS_AUTH_DIALOG=false`** (also `0` / `no`) on the EDT process
+before launch. Any other value — or leaving it unset — keeps auto-cancel enabled, so an unattended run
+never regresses into a hang.
+
 ## Metadata Tags
 
 Organize your metadata objects with custom tags for easier navigation and filtering.
