@@ -147,7 +147,7 @@ public final class ExchangePlanContentWriter
         }
 
         // Validate + resolve every entry up front so nothing is mutated on a shape / resolution error.
-        List<PlannedEntry> plan = new ArrayList<>();
+        List<PlannedEntry> plan = new ArrayList<>(); // NOSONAR plan is read inside the write lambda (capture)
         for (JsonObject entry : content)
         {
             EntryPlan resolved = planEntry(config, entry);
@@ -180,30 +180,10 @@ public final class ExchangePlanContentWriter
                 int removed = 0;
                 for (PlannedEntry planned : plan)
                 {
-                    MdObject mdObject = resolveObjectInTx(tx, planned.objectBmId);
-                    if (mdObject == null)
-                    {
-                        throw new ContentWriteException(ToolResult.error("Object '" + planned.fqn //$NON-NLS-1$
-                            + "' could not be resolved inside the transaction.").toJson()); //$NON-NLS-1$
-                    }
-                    if (planned.remove)
-                    {
-                        if (removeObject(inTx, mdObject) == 0)
-                        {
-                            throw new ContentWriteException(ToolResult.error("Object '" + planned.fqn //$NON-NLS-1$
-                                + "' is not in the content list of exchange plan '" //$NON-NLS-1$
-                                + inTx.getName() + "'; nothing to remove. Read the current content " //$NON-NLS-1$
-                                + "with get_metadata_details on the exchange plan FQN.").toJson()); //$NON-NLS-1$
-                        }
-                        removed++;
-                    }
-                    else
-                    {
-                        int[] delta = addObject(inTx, mdObject, planned.autoRecord, services.factory,
-                            services.version);
-                        added += delta[0];
-                        updated += delta[1];
-                    }
+                    int[] delta = applyPlannedEntry(tx, inTx, planned, services);
+                    added += delta[0];
+                    updated += delta[1];
+                    removed += delta[2];
                 }
                 return Result.ok(added, updated, removed);
             });
@@ -222,6 +202,38 @@ public final class ExchangePlanContentWriter
     }
 
     // ---- mutation (inside the write boundary) -------------------------------------------------
+
+    /**
+     * Applies a single validated {@link PlannedEntry} to the in-transaction exchange plan: re-fetches the
+     * object by its stable BM id, then either removes it from the content (a remove that finds nothing is
+     * a clean error that rolls the whole write back) or adds / updates it via {@link #addObject}. MUST run
+     * inside the write boundary.
+     *
+     * @return a three-slot delta {@code [added, updated, removed]}
+     */
+    private static int[] applyPlannedEntry(IBmTransaction tx, ExchangePlan inTx, PlannedEntry planned,
+        Services services)
+    {
+        MdObject mdObject = resolveObjectInTx(tx, planned.objectBmId);
+        if (mdObject == null)
+        {
+            throw new ContentWriteException(ToolResult.error("Object '" + planned.fqn //$NON-NLS-1$
+                + "' could not be resolved inside the transaction.").toJson()); //$NON-NLS-1$
+        }
+        if (planned.remove)
+        {
+            if (removeObject(inTx, mdObject) == 0)
+            {
+                throw new ContentWriteException(ToolResult.error("Object '" + planned.fqn //$NON-NLS-1$
+                    + "' is not in the content list of exchange plan '" //$NON-NLS-1$
+                    + inTx.getName() + "'; nothing to remove. Read the current content " //$NON-NLS-1$
+                    + "with get_metadata_details on the exchange plan FQN.").toJson()); //$NON-NLS-1$
+            }
+            return new int[] {0, 0, 1};
+        }
+        int[] delta = addObject(inTx, mdObject, planned.autoRecord, services.factory, services.version);
+        return new int[] {delta[0], delta[1], 0};
+    }
 
     /**
      * Adds an object to the content, or updates its {@code autoRecord} when already present. Scans

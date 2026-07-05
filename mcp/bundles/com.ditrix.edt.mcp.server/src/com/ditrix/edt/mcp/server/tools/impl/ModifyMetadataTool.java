@@ -388,7 +388,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * payload, so the caller continues to the content / generic path. Extracted verbatim from
      * {@link #executeOnUiThread}.
      */
-    private String dispatchRolePayload(ProjectContext ctx, String normFqn, MdObject target,
+    private String dispatchRolePayload(ProjectContext ctx, String normFqn, MdObject target, // NOSONAR cohesive role-payload dispatch helper extracted verbatim; the rights/templates/properties params forward as-is to modifyRoleRights
         List<JsonObject> properties, List<JsonObject> rolePayloadRights,
         List<JsonObject> rolePayloadTemplates, JsonObject roleProperties, boolean hasRolePayload)
     {

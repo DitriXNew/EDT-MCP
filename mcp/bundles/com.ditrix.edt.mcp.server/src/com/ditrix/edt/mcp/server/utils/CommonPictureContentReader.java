@@ -350,7 +350,7 @@ public final class CommonPictureContentReader
      * @return the PNG bytes, or {@code null} when {@code raw} is {@code null}/empty or not rasterizable
      * @throws Exception on an I/O or reflective failure
      */
-    private static byte[] svgBytesToPng(byte[] raw) throws Exception
+    private static byte[] svgBytesToPng(byte[] raw) throws Exception // NOSONAR aggregates reflective/IO/SVG-render checked exceptions handled at the tool boundary
     {
         if (raw == null || raw.length == 0)
         {
@@ -639,7 +639,7 @@ public final class CommonPictureContentReader
          * @return the raw bytes, or {@code null}
          * @throws Exception on I/O failure
          */
-        private byte[] rawBytes(String name) throws Exception
+        private byte[] rawBytes(String name) throws Exception // NOSONAR aggregates reflective/IO/model checked exceptions handled at the tool boundary
         {
             Optional<ByteArrayInputStream> raw = resolveInputStream(name);
             if (!raw.isPresent())
