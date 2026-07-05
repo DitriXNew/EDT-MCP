@@ -1021,7 +1021,7 @@ public final class RoleRightsWriter
         final IEventBroker eventBroker;
         final IModelObjectCollectionRuntimeOrderSorter sorter;
 
-        Context(IProject project, Configuration config, IBmModel model, Role role, long roleBmId,
+        Context(IProject project, Configuration config, IBmModel model, Role role, long roleBmId, // NOSONAR cohesive per-call context; a holder would not improve clarity
             IRightInfosService rightInfos, IEventBroker eventBroker,
             IModelObjectCollectionRuntimeOrderSorter sorter)
         {

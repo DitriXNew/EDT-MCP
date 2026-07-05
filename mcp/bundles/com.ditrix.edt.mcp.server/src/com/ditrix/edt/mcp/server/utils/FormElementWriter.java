@@ -1135,16 +1135,18 @@ public final class FormElementWriter
             if (fieldError != null)
             {
                 skipped.add(trimmed);
-                continue;
             }
-            // The designer's object-form wizard creates these bound object fields with editMode
-            // "EnterOnInput" (the table-column path already uses it), whereas createField's default
-            // "Enter" is for a manually-created standalone field. Re-set the just-created field
-            // (named after the attribute) for byte-parity with the designer. Issue #208.
-            EObject seededField = findItem(content, trimmed);
-            if (seededField != null)
+            else
             {
-                setEnumFeature(seededField, FEATURE_EDIT_MODE, "EnterOnInput"); //$NON-NLS-1$
+                // The designer's object-form wizard creates these bound object fields with editMode
+                // "EnterOnInput" (the table-column path already uses it), whereas createField's default
+                // "Enter" is for a manually-created standalone field. Re-set the just-created field
+                // (named after the attribute) for byte-parity with the designer. Issue #208.
+                EObject seededField = findItem(content, trimmed);
+                if (seededField != null)
+                {
+                    setEnumFeature(seededField, FEATURE_EDIT_MODE, "EnterOnInput"); //$NON-NLS-1$
+                }
             }
         }
         if (!skipped.isEmpty())
@@ -2289,7 +2291,7 @@ public final class FormElementWriter
         // The field binds to a form attribute by name. A DOTTED path binds to a SUB-attribute of the
         // head form attribute. Two heads are valid for a dotted path:
         //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields // NOSONAR explanatory prose, not commented-out code
-        //     (auto-filled by EDT - not a model attribute);
+        //     (auto-filled by EDT - not a model attribute); // NOSONAR explanatory prose, not commented-out code
         //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of // NOSONAR explanatory prose, not commented-out code
         //     the object type, like the designer's bound object fields.
         // Validate the head attribute, and require one of those two heads when a dotted path is used.
