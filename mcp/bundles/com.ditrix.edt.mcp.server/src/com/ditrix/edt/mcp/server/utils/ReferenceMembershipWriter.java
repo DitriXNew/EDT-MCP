@@ -9,10 +9,14 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -23,7 +27,9 @@ import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogOwner;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.google.gson.JsonElement;
@@ -36,12 +42,15 @@ import com.google.gson.JsonObject;
  * <ul>
  * <li>{@link Catalog#getOwners() Catalog.owners} - the catalog's owner objects ({@link CatalogOwner});</li>
  * <li>{@link Document#getRegisterRecords() Document.registerRecords} - the document's register records /
- * движения ({@link BasicRegister}).</li>
+ * движения ({@link BasicRegister});</li>
+ * <li>{@link Subsystem#getContent() Subsystem.content} - the objects that belong to the subsystem (any
+ * top-level configuration object except a {@link Subsystem}, which nests via
+ * {@link Subsystem#getSubsystems()}).</li>
  * </ul>
- * A single generic algorithm serves both lists; the two only differ by the {@link Kind} descriptor
- * (which {@link EList} the top object exposes, which reference interface a member must implement, and
- * the English label / hint used in messages). Any {@code use} / {@code autoRecord} field on an entry is
- * IGNORED for these kinds - the list is plain references.
+ * A single generic algorithm serves every list; the kinds only differ by the {@link Kind} descriptor
+ * (which {@link EList} the top object exposes, which membership predicate a resolved object must satisfy,
+ * and the English label / hint used in messages). Any {@code use} / {@code autoRecord} field on an entry
+ * is IGNORED for these kinds - the list is plain references.
  *
  * <p>Each {@code content[]} entry is {@code {op?:"add"|"remove" (default add), metadata:"<FQN>"}}. The
  * whole payload is validated UP FRONT, BEFORE the write transaction (op recognized; a metadata FQN
@@ -73,39 +82,53 @@ public final class ReferenceMembershipWriter
     // ---- kinds --------------------------------------------------------------------------------
 
     /**
-     * The two plain reference-membership lists this writer serves. Each carries the {@link EList}
-     * accessor on the owning top object, the reference interface a member must implement, and the
+     * The plain reference-membership lists this writer serves. Each carries the {@link EList}
+     * accessor on the owning top object, the {@link Predicate} a resolved member must satisfy, and the
      * English label / hint used in validation and error messages. The list element type is
-     * {@link MdObject} (both {@link CatalogOwner} and {@link BasicRegister} are {@code MdObject}s), so a
-     * single generic mutation works over either list.
+     * {@link MdObject} ({@link CatalogOwner}, {@link BasicRegister} and every legal subsystem-content
+     * object are {@code MdObject}s), so a single generic mutation works over any list.
      */
     public enum Kind
     {
         /** {@link Catalog#getOwners()} - the catalog's owner objects. */
-        CATALOG_OWNERS(top -> asMdObjectList(((Catalog)top).getOwners()), CatalogOwner.class, "owner", //$NON-NLS-1$
+        CATALOG_OWNERS(top -> asMdObjectList(((Catalog)top).getOwners()), CatalogOwner.class::isInstance, "owner", //$NON-NLS-1$
             "must be a catalog owner (a Catalog / ChartOfCharacteristicTypes / ChartOfAccounts / " //$NON-NLS-1$
                 + "ChartOfCalculationTypes / ExchangePlan)"), //$NON-NLS-1$
 
         /** {@link Document#getRegisterRecords()} - the document's register records (движения). */
         DOCUMENT_REGISTER_RECORDS(top -> asMdObjectList(((Document)top).getRegisterRecords()),
-            BasicRegister.class, "register record", //$NON-NLS-1$
+            BasicRegister.class::isInstance, "register record", //$NON-NLS-1$
             "must be a register (InformationRegister / AccumulationRegister / AccountingRegister / " //$NON-NLS-1$
-                + "CalculationRegister)"); //$NON-NLS-1$
+                + "CalculationRegister)"), //$NON-NLS-1$
+
+        /**
+         * {@link Subsystem#getContent()} - the top-level configuration objects that belong to the
+         * subsystem. A member may be any object from the broad {@link #SUBSYSTEM_CONTENT_MEMBER_CLASSES}
+         * allow-list, but NEVER a {@link Subsystem} (a nested subsystem is a child of
+         * {@link Subsystem#getSubsystems()}, not a content member) - that exclusion is a hard rule
+         * independent of the allow-list.
+         */
+        SUBSYSTEM_CONTENT(top -> asMdObjectList(((Subsystem)top).getContent()),
+            ReferenceMembershipWriter::isSubsystemContentMember, "content object", //$NON-NLS-1$
+            "must be a top-level configuration object that can belong to a subsystem (a Constant / " //$NON-NLS-1$
+                + "Catalog / Document / Enum / Report / DataProcessor / register / CommonModule / Role / " //$NON-NLS-1$
+                + "etc.), not a Subsystem (a nested subsystem is added through the parent subsystem's own " //$NON-NLS-1$
+                + "Subsystems list, not its content)"); //$NON-NLS-1$
 
         /** Accessor of the top object's plain reference list (returns the LIVE {@link EList}). */
         private final Function<MdObject, EList<MdObject>> listAccessor;
-        /** The interface a resolved member must implement to be a legal element of this list. */
-        private final Class<?> requiredInterface;
+        /** The predicate a resolved member must satisfy to be a legal element of this list. */
+        private final Predicate<Object> memberPredicate;
         /** A short English noun for a member of this list (e.g. {@code owner}), for messages. */
         private final String memberLabel;
         /** A full English "must be a ..." clause naming the valid member kinds, for reject messages. */
         private final String requiredKindHint;
 
-        Kind(Function<MdObject, EList<MdObject>> listAccessor, Class<?> requiredInterface, String memberLabel,
-            String requiredKindHint)
+        Kind(Function<MdObject, EList<MdObject>> listAccessor, Predicate<Object> memberPredicate,
+            String memberLabel, String requiredKindHint)
         {
             this.listAccessor = listAccessor;
-            this.requiredInterface = requiredInterface;
+            this.memberPredicate = memberPredicate;
             this.memberLabel = memberLabel;
             this.requiredKindHint = requiredKindHint;
         }
@@ -117,16 +140,18 @@ public final class ReferenceMembershipWriter
         }
 
         /**
-         * Whether the given resolved object is a legal member of this list (implements the kind's
-         * required reference interface). This is the up-front reject predicate: a non-matching object
-         * (e.g. an {@code Enum} FQN for {@link #CATALOG_OWNERS}) is rejected before any mutation.
+         * Whether the given resolved object is a legal member of this list (satisfies the kind's
+         * membership predicate). This is the up-front reject predicate: a non-matching object
+         * (e.g. an {@code Enum} FQN for {@link #CATALOG_OWNERS}, or a {@link Subsystem} for
+         * {@link #SUBSYSTEM_CONTENT}) is rejected before any mutation. A {@code null} candidate is never
+         * a member (every predicate here is null-safe).
          *
          * @param candidate the resolved object (may be {@code null})
-         * @return {@code true} when {@code candidate} implements the required interface
+         * @return {@code true} when {@code candidate} satisfies the kind's membership predicate
          */
         boolean accepts(Object candidate)
         {
-            return requiredInterface.isInstance(candidate);
+            return memberPredicate.test(candidate);
         }
 
         /** The English noun for a member of this list (e.g. {@code owner}), for messages and tests. */
@@ -216,7 +241,8 @@ public final class ReferenceMembershipWriter
      * @param project the workspace project owning the top object
      * @param config the configuration (for bilingual reference resolution)
      * @param top the resolved top object (a {@link Catalog} for {@link Kind#CATALOG_OWNERS}, a
-     *            {@link Document} for {@link Kind#DOCUMENT_REGISTER_RECORDS})
+     *            {@link Document} for {@link Kind#DOCUMENT_REGISTER_RECORDS}, a {@link Subsystem} for
+     *            {@link Kind#SUBSYSTEM_CONTENT})
      * @param content the parsed {@code content[]} entries (must not be empty)
      * @param kind which plain reference list to write
      * @return a {@link Result} - check {@link Result#hasError()} first
@@ -430,8 +456,8 @@ public final class ReferenceMembershipWriter
     /**
      * Validates + resolves a single {@code content[]} entry up front (BEFORE the tx): the op is
      * recognized (default {@code add}), a metadata FQN is present, the reference resolves via the shared
-     * bilingual {@link MetadataNodeResolver#resolveExisting}, and the resolved object implements the
-     * kind's required reference interface. Any {@code use} / {@code autoRecord} field is ignored for
+     * bilingual {@link MetadataNodeResolver#resolveExisting}, and the resolved object satisfies the
+     * kind's membership predicate. Any {@code use} / {@code autoRecord} field is ignored for
      * these kinds. Returns a ready {@link PlannedEntry} or a ready JSON error.
      */
     private static EntryPlan planEntry(Configuration config, JsonObject entry, Kind kind)
@@ -482,6 +508,77 @@ public final class ReferenceMembershipWriter
             return OP_ADD;
         }
         return op.trim().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * The top-level configuration object kinds that may be a member of a {@link Subsystem}'s content, as
+     * an immutable set of {@link MdClassPackage.Literals} EClasses matched by identity. This is a broad,
+     * documented allow-list of the top-level objects a subsystem may reference; the headless server must
+     * NOT depend on EDT's UI-bundle subsystem picker, so the allowed kinds are enumerated explicitly
+     * (mirroring the sibling {@link ExchangePlanContentWriter} precedent). It is deliberately extensible:
+     * a missing valid kind is a trivial one-line follow-up. {@link MdClassPackage.Literals#SUBSYSTEM
+     * Subsystem} is intentionally ABSENT - a nested subsystem is a child of
+     * {@link Subsystem#getSubsystems()}, not a content member - but that exclusion is ALSO enforced as a
+     * hard rule in {@link #isSubsystemContentMember} so it holds even if this set were ever changed.
+     */
+    private static final Set<EClass> SUBSYSTEM_CONTENT_MEMBER_CLASSES = Set.of(
+        MdClassPackage.Literals.CONSTANT,
+        MdClassPackage.Literals.CATALOG,
+        MdClassPackage.Literals.DOCUMENT,
+        MdClassPackage.Literals.DOCUMENT_JOURNAL,
+        MdClassPackage.Literals.ENUM,
+        MdClassPackage.Literals.REPORT,
+        MdClassPackage.Literals.DATA_PROCESSOR,
+        MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES,
+        MdClassPackage.Literals.CHART_OF_ACCOUNTS,
+        MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES,
+        MdClassPackage.Literals.INFORMATION_REGISTER,
+        MdClassPackage.Literals.ACCUMULATION_REGISTER,
+        MdClassPackage.Literals.ACCOUNTING_REGISTER,
+        MdClassPackage.Literals.CALCULATION_REGISTER,
+        MdClassPackage.Literals.BUSINESS_PROCESS,
+        MdClassPackage.Literals.TASK,
+        MdClassPackage.Literals.EXCHANGE_PLAN,
+        MdClassPackage.Literals.COMMON_MODULE,
+        MdClassPackage.Literals.COMMON_FORM,
+        MdClassPackage.Literals.COMMON_COMMAND,
+        MdClassPackage.Literals.COMMON_ATTRIBUTE,
+        MdClassPackage.Literals.COMMON_PICTURE,
+        MdClassPackage.Literals.COMMON_TEMPLATE,
+        MdClassPackage.Literals.WEB_SERVICE,
+        MdClassPackage.Literals.HTTP_SERVICE,
+        MdClassPackage.Literals.WS_REFERENCE,
+        MdClassPackage.Literals.FILTER_CRITERION,
+        MdClassPackage.Literals.SETTINGS_STORAGE,
+        MdClassPackage.Literals.SEQUENCE,
+        MdClassPackage.Literals.SCHEDULED_JOB,
+        MdClassPackage.Literals.FUNCTIONAL_OPTION,
+        MdClassPackage.Literals.DEFINED_TYPE,
+        MdClassPackage.Literals.ROLE,
+        MdClassPackage.Literals.SESSION_PARAMETER,
+        MdClassPackage.Literals.EVENT_SUBSCRIPTION);
+
+    /**
+     * Whether the given resolved object is a legal member of a {@link Subsystem}'s content: it is an
+     * {@link EObject} whose {@link EClass} is in the {@link #SUBSYSTEM_CONTENT_MEMBER_CLASSES} allow-list
+     * AND it is NOT a {@link Subsystem}. The {@link Subsystem}-self exclusion is a HARD rule applied
+     * independently of the allow-list (a nested subsystem is added via the parent's
+     * {@link Subsystem#getSubsystems()} list, never its content). Pure, null-safe and side-effect-free so
+     * it serves as the up-front reject predicate for {@link Kind#SUBSYSTEM_CONTENT}, symmetric with the
+     * sibling kinds' {@code instanceof} guards.
+     *
+     * @param candidate the resolved object (may be {@code null})
+     * @return {@code true} when {@code candidate} is an allow-listed non-Subsystem content object
+     */
+    static boolean isSubsystemContentMember(Object candidate)
+    {
+        // Hard exclusion of Subsystem is independent of the allow-list (which already omits it).
+        if (!(candidate instanceof EObject) || candidate instanceof Subsystem)
+        {
+            return false;
+        }
+        // The backing Set.of(...) is null-hostile, but a live EObject's eClass() is never null.
+        return SUBSYSTEM_CONTENT_MEMBER_CLASSES.contains(((EObject)candidate).eClass());
     }
 
     // ---- error builders (actionable) ----------------------------------------------------------

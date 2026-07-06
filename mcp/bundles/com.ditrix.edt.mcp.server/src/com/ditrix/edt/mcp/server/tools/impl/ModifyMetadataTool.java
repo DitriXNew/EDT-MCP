@@ -33,6 +33,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -58,6 +59,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferenceMembershipWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -154,12 +156,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. " //$NON-NLS-1$
             + "Edit a structured membership LIST with 'content' instead of 'properties', dispatched by " //$NON-NLS-1$
             + "the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's " //$NON-NLS-1$
-            + "content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name') or a " //$NON-NLS-1$
-            + "DOCUMENT's register records / движения ('Document.Name'). 'content'=[{op?:'add'|'remove' " //$NON-NLS-1$
+            + "content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a " //$NON-NLS-1$
+            + "DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content " //$NON-NLS-1$
+            + "objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). " //$NON-NLS-1$
+            + "'content'=[{op?:'add'|'remove' " //$NON-NLS-1$
             + "(default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or " //$NON-NLS-1$
             + "removes one by its metadata FQN; a CommonAttribute entry takes 'use' " //$NON-NLS-1$
             + "('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and " //$NON-NLS-1$
-            + "a Catalog owner / Document register record is a plain reference (no flag). " //$NON-NLS-1$
+            + "a Catalog owner / Document register record / Subsystem content object is a plain " //$NON-NLS-1$
+            + "reference (no flag). " //$NON-NLS-1$
             + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -201,16 +206,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .objectArrayProperty(KEY_CONTENT,
                 "Members to attach / detach in a structured membership list, dispatched by the FQN's " //$NON-NLS-1$
                 + "kind (a COMMON ATTRIBUTE's owners, an EXCHANGE PLAN's content objects, a CATALOG's " //$NON-NLS-1$
-                + "owners, a DOCUMENT's register records), as [{op?, metadata, use?, autoRecord?}]. 'op' " //$NON-NLS-1$
+                + "owners, a DOCUMENT's register records, a SUBSYSTEM's content objects), as [{op?, " //$NON-NLS-1$
+                + "metadata, use?, autoRecord?}]. 'op' " //$NON-NLS-1$
                 + "is 'add' (default) / 'remove'; 'metadata' is the member object FQN (e.g. " //$NON-NLS-1$
                 + "'Catalog.Products' or the Russian 'Справочник.Товары' - only the type token is " //$NON-NLS-1$
                 + "bilingual). 'use' (CommonAttribute only, add only, default 'Use') is 'Use' / " //$NON-NLS-1$
                 + "'DontUse' / 'Auto'; 'autoRecord' (ExchangePlan only, add only) is 'Allow' / 'Deny' " //$NON-NLS-1$
-                + "(omit to keep the platform default). A Catalog owner and a Document register record " //$NON-NLS-1$
-                + "are plain references (no flag). Adding is idempotent (a re-added CommonAttribute owner " //$NON-NLS-1$
+                + "(omit to keep the platform default). A Catalog owner, a Document register record and " //$NON-NLS-1$
+                + "a Subsystem content object are plain references (no flag). Adding is idempotent (a " //$NON-NLS-1$
+                + "re-added CommonAttribute owner " //$NON-NLS-1$
                 + "has its 'use' updated, a re-added ExchangePlan object its 'autoRecord'; a re-added " //$NON-NLS-1$
                 + "plain reference is a no-op). Valid only for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
-                + "Catalog / Document FQN; cannot be combined with 'properties'.") //$NON-NLS-1$
+                + "Catalog / Document / Subsystem FQN (a Subsystem FQN may be nested); cannot be " //$NON-NLS-1$
+                + "combined with 'properties'.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
                 + "title) and in the 'comment' property (default true). Matches the 1C standard " //$NON-NLS-1$
@@ -233,8 +241,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .objectProperty(KEY_CONTENT, "For a membership-list content change: the counts object. A " //$NON-NLS-1$
                 + "CommonAttribute / ExchangePlan change reports {added, updated, removed} (members " //$NON-NLS-1$
                 + "attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a " //$NON-NLS-1$
-                + "Catalog owners / Document register records change (a plain reference list, no " //$NON-NLS-1$
-                + "per-entry flag) reports {added, removed}") //$NON-NLS-1$
+                + "Catalog owners / Document register records / Subsystem content change (a plain " //$NON-NLS-1$
+                + "reference list, no per-entry flag) reports {added, removed}") //$NON-NLS-1$
             .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
@@ -280,7 +288,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
                 + "set, e.g. [{name: 'comment', value: 'Goods'}]. For a Role FQN, provide 'rights', " //$NON-NLS-1$
                 + "'templates' or 'roleProperties' instead; for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
-                + "Catalog / Document FQN, provide 'content' instead.").toJson(); //$NON-NLS-1$
+                + "Catalog / Document / Subsystem FQN, provide 'content' instead.").toJson(); //$NON-NLS-1$
         }
 
         // 'ё'->'е' normalization is applied at the parse step to every localized-string / free-text
@@ -305,6 +313,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return dispatchFormMember(ctx, normFqn, formRef, properties, normReport, hasRolePayload,
                 hasContentPayload);
+        }
+
+        // A SUBSYSTEM-content payload (content[] on a Subsystem FQN, possibly NESTED - e.g.
+        // 'Subsystem.Sales.Subsystem.Orders') is dispatched EARLY, before the generic single-segment
+        // resolver below: a subsystem's content list is edited through its own membership surface, and
+        // the shared SubsystemUtils.resolveByFqn is the only resolver that walks a nested (and bilingual)
+        // subsystem path. Scoped to a content payload so a subsystem FQN carrying only 'properties' still
+        // takes the normal generic-property path below (its 'content' generic property still REPLACES the
+        // whole list; the content[] payload here ADDS / REMOVES one member).
+        if (hasContentPayload && SubsystemUtils.isSubsystemTypeToken(firstToken(normFqn)))
+        {
+            Subsystem subsystem = SubsystemUtils.resolveByFqn(config, normFqn);
+            if (subsystem == null)
+            {
+                return ToolResult.error("Subsystem not found: " + fqn + ". Use 'Subsystem.Name' for a " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "top subsystem or 'Subsystem.Parent.Subsystem.Child' for a nested one (the type " //$NON-NLS-1$
+                    + "token may be English or Russian). Use get_metadata_objects or list_subsystems to " //$NON-NLS-1$
+                    + "find an FQN.").toJson(); //$NON-NLS-1$
+            }
+            return modifySubsystemContent(ctx, normFqn, subsystem, properties, content, hasRolePayload);
         }
 
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
@@ -372,8 +400,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "take a Role payload ('rights' / 'templates' / 'roleProperties') or a " //$NON-NLS-1$
                 + "membership 'content' payload. 'rights' / 'templates' / 'roleProperties' " //$NON-NLS-1$
                 + "are valid only for a Role.<Name> FQN, and 'content' only for a " //$NON-NLS-1$
-                + "CommonAttribute / ExchangePlan / Catalog / Document FQN. Use 'properties' to " //$NON-NLS-1$
-                + "change a form member.").toJson(); //$NON-NLS-1$
+                + "CommonAttribute / ExchangePlan / Catalog / Document / Subsystem FQN. Use " //$NON-NLS-1$
+                + "'properties' to change a form member.").toJson(); //$NON-NLS-1$
         }
         return modifyFormMember(ctx, normFqn, formRef, properties, normReport);
     }
@@ -439,10 +467,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return modifyDocumentRegisterRecords(ctx, normFqn, (Document)target, properties, content);
         }
         return ToolResult.error("'content' is only valid for a CommonAttribute, ExchangePlan, " //$NON-NLS-1$
-            + "Catalog or Document FQN; '" + normFqn + MSG_IS_A + target.eClass().getName() //$NON-NLS-1$
+            + "Catalog, Document or Subsystem FQN; '" + normFqn + MSG_IS_A + target.eClass().getName() //$NON-NLS-1$
             + ". Use 'properties' for its generic properties, or address a CommonAttribute.<Name> " //$NON-NLS-1$
-            + "(owners), ExchangePlan.<Name> (content objects), Catalog.<Name> (owners) or " //$NON-NLS-1$
-            + "Document.<Name> (register records).").toJson(); //$NON-NLS-1$
+            + "(owners), ExchangePlan.<Name> (content objects), Catalog.<Name> (owners), " //$NON-NLS-1$
+            + "Document.<Name> (register records) or Subsystem.<Name> (content objects).").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -931,11 +959,114 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Modifies a SUBSYSTEM's content list (the {@code content[]} payload) via
+     * {@link ReferenceMembershipWriter} with {@link ReferenceMembershipWriter.Kind#SUBSYSTEM_CONTENT}:
+     * attaches / detaches a top-level configuration object (a PLAIN reference, no per-entry flag) in the
+     * subsystem's {@code <content>} list. A subsystem's content is edited through this dedicated surface,
+     * not the generic property bag (the generic {@code content} property REPLACES the whole list; this
+     * ADDS / REMOVES one member idempotently), so mixing the content payload with a generic
+     * {@code properties} change - or with a Role payload ({@code rights} / {@code templates} /
+     * {@code roleProperties}, which is valid only for a Role FQN) - in the same call is refused (the same
+     * policy the Role rights / CommonAttribute content / Catalog owners branches enforce, so a sibling
+     * payload is never silently dropped while the tool reports success). The writer mutates only through
+     * the BM write boundary; this branch then force-exports the Subsystem's OWN top-object FQN OUTSIDE the
+     * writer, once, after the write has committed.
+     *
+     * <p>The export target is derived from the RESOLVED subsystem's OWN BM identity
+     * ({@code bmGetFqn()}), NOT the caller-supplied {@code normFqn}:
+     * {@link MetadataTypeUtils#normalizeFqn} canonicalizes only the LEADING type token, so a nested
+     * subsystem addressed with a Russian type token in a non-leading segment (e.g.
+     * {@code Subsystem.Sales.Подсистема.Orders}) resolves + writes correctly in memory yet yields a
+     * non-canonical FQN that {@code forceExport} - keyed by the all-English canonical FQN
+     * ({@code Subsystem.Sales.Subsystem.Orders}) - cannot match, silently discarding the committed change
+     * on the next refresh. Reading the resolved subsystem's own {@code bmGetFqn()} yields that canonical
+     * English-token FQN regardless of how the caller addressed it (English or Russian, top-level or
+     * nested).</p>
+     *
+     * <p>A subsystem - top-level OR nested - is ALWAYS its own BM top object: {@code Subsystem.getSubsystems()}
+     * is a plain REFERENCE list (not a containment list) and the parent link is the settable
+     * {@code parentSubsystem} reference, so every subsystem is the root of its own resource with its own
+     * {@code .mdo} (a nested child at {@code src/Subsystems/<Parent>/Subsystems/<Child>/<Child>.mdo}) and its
+     * own canonical FQN. The content change lives in that same {@code .mdo}, so force-exporting the
+     * subsystem's own FQN drains it - a nested child's OWN file, not an ancestor's. The
+     * {@code bmIsTop()} guard makes this fail LOUD (an honest error, nothing written) in the
+     * model-invariant-violating event a subsystem were ever NOT a top object, so {@code persisted} is never
+     * a false {@code true} over an ancestor {@code .mdo} while the child's own file goes unwritten
+     * ({@code bmGetFqn()} is legal only on a top object).</p>
+     */
+    private String modifySubsystemContent(ProjectContext ctx, String normFqn, Subsystem subsystem,
+        List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload)
+    {
+        // A Role payload on a Subsystem FQN is refused before anything is applied (a Subsystem is not a
+        // Role), mirroring dispatchRolePayload: the sibling payload must never be silently dropped while
+        // the content change reports success.
+        if (hasRolePayload)
+        {
+            return ToolResult.error("'rights' / 'templates' / 'roleProperties' are only valid for a " //$NON-NLS-1$
+                + "Role FQN; '" + normFqn + MSG_IS_A + subsystem.eClass().getName() + ". Use " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'content' to edit the subsystem's content objects, or address a Role.<Name>.").toJson(); //$NON-NLS-1$
+        }
+        if (!properties.isEmpty())
+        {
+            return ToolResult.error("A subsystem content change ('content') cannot be combined with a " //$NON-NLS-1$
+                + "generic 'properties' change in one call. Set the subsystem's own properties " //$NON-NLS-1$
+                + "(comment / synonym) separately.").toJson(); //$NON-NLS-1$
+        }
+
+        // The resolved subsystem's OWN canonical (all-English) FQN is the force-export key. A subsystem -
+        // top-level OR nested - is ALWAYS its own BM top object: Subsystem.getSubsystems() is a plain
+        // REFERENCE list (NOT containment) and the parent link is the settable parentSubsystem reference,
+        // so every subsystem is the root of its own resource with its own .mdo and its own canonical FQN,
+        // where its content change lives. Reading bmGetFqn() on the subsystem itself - rather than reusing
+        // normFqn, which normalizeFqn canonicalizes only in its leading token - keeps a nested subsystem
+        // addressed with a Russian type token in a non-leading segment exportable (otherwise forceExport
+        // cannot match the mixed-language FQN and the committed change is never drained to the .mdo).
+        // Captured up front (a safe BM identity read), before the write transaction, mirroring how
+        // ReferenceMembershipWriter.apply captures bmGetId(). The bmIsTop() guard makes this fail LOUD - an
+        // honest error, nothing written - in the impossible event a subsystem were ever NOT a top object,
+        // so persisted is never a false true over an ancestor .mdo while the child's own file goes
+        // unwritten (bmGetFqn() is legal only on a top object).
+        IBmObject subsystemBm = (IBmObject)subsystem;
+        if (!subsystemBm.bmIsTop())
+        {
+            return ToolResult.error("Cannot resolve the on-disk file to export for subsystem '" //$NON-NLS-1$
+                + normFqn + "': it is not an independent top-level metadata object. A subsystem is always " //$NON-NLS-1$
+                + "its own object, so this should not happen; report it with the subsystem FQN.").toJson(); //$NON-NLS-1$
+        }
+        String exportFqn = subsystemBm.bmGetFqn();
+
+        ReferenceMembershipWriter.Result result = ReferenceMembershipWriter.apply(ctx.project, ctx.config,
+            subsystem, content, ReferenceMembershipWriter.Kind.SUBSYSTEM_CONTENT);
+        if (result.hasError())
+        {
+            return result.error;
+        }
+
+        // The content list lives inside the Subsystem's own .mdo (a nested subsystem has its own .mdo),
+        // so exporting the resolved subsystem's canonical top-object FQN once drains the change to disk.
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqn);
+
+        return buildMembershipResult(normFqn, "subsystem", "content", result, persisted); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The first dot-delimited token of an FQN (its type token, e.g. {@code Subsystem} in
+     * {@code Subsystem.Sales.Subsystem.Orders}), or the whole string when there is no dot. Pure helper
+     * used to scope the early subsystem-content path by its type token, before the generic resolver runs.
+     */
+    private static String firstToken(String normFqn)
+    {
+        int dot = normFqn.indexOf('.');
+        return dot < 0 ? normFqn : normFqn.substring(0, dot);
+    }
+
+    /**
      * Builds the success JSON for a plain-reference membership change (Catalog owners / Document
-     * register records) applied via {@link ReferenceMembershipWriter}: the {@code content} counts object
-     * ({@code added} / {@code removed}; a plain reference list has no per-entry flag, so there is no
-     * {@code updated}) plus {@code persisted} and a confirmation message. Pure helper shared by
-     * {@link #modifyCatalogOwners} and {@link #modifyDocumentRegisterRecords}.
+     * register records / Subsystem content) applied via {@link ReferenceMembershipWriter}: the
+     * {@code content} counts object ({@code added} / {@code removed}; a plain reference list has no
+     * per-entry flag, so there is no {@code updated}) plus {@code persisted} and a confirmation message.
+     * Pure helper shared by {@link #modifyCatalogOwners}, {@link #modifyDocumentRegisterRecords} and
+     * {@link #modifySubsystemContent}.
      */
     private static String buildMembershipResult(String normFqn, String kindNoun, String listNoun,
         ReferenceMembershipWriter.Result result, boolean persisted)
