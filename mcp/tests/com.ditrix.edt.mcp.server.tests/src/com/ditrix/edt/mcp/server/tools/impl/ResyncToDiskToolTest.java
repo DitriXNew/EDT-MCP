@@ -105,11 +105,24 @@ public class ResyncToDiskToolTest
             schema.contains("\"cleanDanglingReferences\"")); //$NON-NLS-1$
         assertTrue("schema must declare the fullExport toggle", //$NON-NLS-1$
             schema.contains("\"fullExport\"")); //$NON-NLS-1$
+        assertTrue("schema must declare the overwriteDiskEdits confirm toggle", //$NON-NLS-1$
+            schema.contains("\"overwriteDiskEdits\"")); //$NON-NLS-1$
         assertTrue("schema must declare the revalidate toggle", //$NON-NLS-1$
             schema.contains("\"revalidate\"")); //$NON-NLS-1$
         // projectName is the only required parameter.
         assertTrue("projectName must be required", //$NON-NLS-1$
             schema.contains("\"required\"") && schema.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testInputSchemaDeclaresTheOverwriteDiskEditsConfirmGuard()
+    {
+        // The fullExport confirm guard reads overwriteDiskEdits in executeOnUiThread, so it MUST be
+        // declared in getInputSchema() (ToolContractConsistencyTest) - else it is invisible to
+        // schema-driven clients and lowerCamelCase-checked.
+        String schema = new ResyncToDiskTool().getInputSchema();
+        assertTrue("schema must declare the overwriteDiskEdits confirm guard read in execute()", //$NON-NLS-1$
+            schema.contains("\"overwriteDiskEdits\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -243,6 +256,45 @@ public class ResyncToDiskToolTest
         List<String> all = Arrays.asList("Catalog.A", "Document.C"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("fullExport=true must export all even with an empty missing set", //$NON-NLS-1$
             all, ResyncToDiskTool.selectExportFqns(true, all, Collections.emptyList()));
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // fullExportGuardError: the fullExport confirm guard. A fullExport re-serializes EVERY .mdo from
+    // the in-memory model and would overwrite on-disk edits, so it must be confirmed with
+    // overwriteDiskEdits=true. The guard is a pure, pre-BM early return (unattended-safe) and ONLY
+    // gates fullExport - the default missing-only resync and cleanDanglingReferences paths pass
+    // fullExport=false and are never blocked.
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    public void testFullExportGuardRejectsUnconfirmedFullExport()
+    {
+        // fullExport=true without overwriteDiskEdits=true must be rejected before any BM read.
+        String guardError = ResyncToDiskTool.fullExportGuardError(true, false);
+        assertNotNull("an unconfirmed fullExport must be rejected", guardError); //$NON-NLS-1$
+        assertTrue("the rejection must be a JSON error envelope", //$NON-NLS-1$
+            guardError.contains("\"error\"")); //$NON-NLS-1$
+        assertTrue("the error must name the overwriteDiskEdits confirmation to unblock", //$NON-NLS-1$
+            guardError.contains("overwriteDiskEdits")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFullExportGuardAllowsConfirmedFullExport()
+    {
+        // fullExport=true WITH overwriteDiskEdits=true is the confirmed full refresh: no error.
+        assertNull("a confirmed fullExport must pass the guard", //$NON-NLS-1$
+            ResyncToDiskTool.fullExportGuardError(true, true));
+    }
+
+    @Test
+    public void testFullExportGuardDoesNotGateTheDefaultResync()
+    {
+        // The default missing-only resync (fullExport=false) is never gated, regardless of the
+        // overwriteDiskEdits value - the guard only concerns the full export.
+        assertNull("the default missing-only resync must never be gated", //$NON-NLS-1$
+            ResyncToDiskTool.fullExportGuardError(false, false));
+        assertNull("overwriteDiskEdits is ignored when fullExport=false", //$NON-NLS-1$
+            ResyncToDiskTool.fullExportGuardError(false, true));
     }
 
     // ---------------------------------------------------------------------------------------------

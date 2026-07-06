@@ -121,6 +121,9 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     /** Param: opt-in flag to force-export every top object instead of the missing subset. */
     private static final String KEY_FULL_EXPORT = "fullExport"; //$NON-NLS-1$
 
+    /** Param: required confirmation that a {@code fullExport} may overwrite on-disk edits. */
+    private static final String KEY_OVERWRITE_DISK_EDITS = "overwriteDiskEdits"; //$NON-NLS-1$
+
     /** Param: opt-in flag to schedule a full project revalidation after the export. */
     private static final String KEY_REVALIDATE = "revalidate"; //$NON-NLS-1$
 
@@ -151,12 +154,15 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     public String getDescription()
     {
         return "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files " //$NON-NLS-1$
-            + "and report BM-to-disk desync. Walks EVERY top metadata object of the " //$NON-NLS-1$
+            + "and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to " //$NON-NLS-1$
+            + "src/); the reverse is clean_project, which rebuilds MODEL <- DISK and DISCARDS " //$NON-NLS-1$
+            + "any unsaved in-memory model edits. Walks EVERY top metadata object of the " //$NON-NLS-1$
             + "configuration (all kinds), reports the objects whose .mdo is missing on disk " //$NON-NLS-1$
             + "(missingBefore), and force-exports that missing subset so the files are " //$NON-NLS-1$
-            + "restored (fullExport=true re-exports every object instead). Fixes 'object " //$NON-NLS-1$
-            + "file does not exist' failures from update_database / XML import caused by an " //$NON-NLS-1$
-            + "accumulated desync. Dangling/orphaned references in Configuration.mdo " //$NON-NLS-1$
+            + "restored (fullExport=true re-exports every object instead - requires " //$NON-NLS-1$
+            + "overwriteDiskEdits=true to confirm, as it overwrites on-disk edits). Fixes " //$NON-NLS-1$
+            + "'object file does not exist' failures from update_database / XML import caused " //$NON-NLS-1$
+            + "by an accumulated desync. Dangling/orphaned references in Configuration.mdo " //$NON-NLS-1$
             + "(unresolved proxies shown by get_project_errors as md-reference-intergrity " //$NON-NLS-1$
             + "'lost reference' warnings that block update_database / XML import) are " //$NON-NLS-1$
             + "REPORTED by default (danglingFound + danglingDetails); set " //$NON-NLS-1$
@@ -182,6 +188,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                 "When true, force-export EVERY metadata top object's .mdo (a full disk refresh; " //$NON-NLS-1$
                     + "slow on a large configuration - the export runs on the UI thread). " //$NON-NLS-1$
                     + "Default: false - export only the objects whose .mdo is missing on disk.") //$NON-NLS-1$
+            .booleanProperty(KEY_OVERWRITE_DISK_EDITS,
+                "Required confirmation for fullExport=true: force-exporting every .mdo from the " //$NON-NLS-1$
+                    + "in-memory model OVERWRITES any on-disk edits. Default: false - fullExport is " //$NON-NLS-1$
+                    + "rejected unless this is true. Ignored when fullExport=false.") //$NON-NLS-1$
             .booleanProperty(KEY_REVALIDATE,
                 "When true, schedule a full project revalidation (clean build) after the export so " //$NON-NLS-1$
                     + "stale markers refresh. Default: false (export only).") //$NON-NLS-1$
@@ -231,6 +241,17 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // Default FALSE: only the objects whose .mdo is actually missing are exported; // NOSONAR explanatory comment, not commented-out code
         // true re-exports everything (a full disk refresh, slow on the UI thread).
         boolean fullExport = JsonUtils.extractBooleanArgument(params, KEY_FULL_EXPORT, false);
+        // Default FALSE: fullExport re-exports EVERY .mdo from the in-memory model and would
+        // overwrite any on-disk edits, so it must be confirmed with overwriteDiskEdits=true.
+        boolean overwriteDiskEdits = JsonUtils.extractBooleanArgument(params, KEY_OVERWRITE_DISK_EDITS, false);
+        // Guard is an early-return BEFORE any BM read (unattended-safe): an unconfirmed fullExport
+        // is rejected without touching the model. Only gates fullExport - the default missing-only
+        // resync and cleanDanglingReferences paths are unaffected.
+        String guardError = fullExportGuardError(fullExport, overwriteDiskEdits);
+        if (guardError != null)
+        {
+            return guardError;
+        }
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -367,6 +388,34 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                 Activator.logError("Error revalidating after resync_to_disk: " + projectName, e); //$NON-NLS-1$
                 return unwrapCauseMessage(e);
             }
+        }
+        return null;
+    }
+
+    /**
+     * The confirm guard for {@code fullExport}: a full export re-serializes EVERY
+     * {@code .mdo} from the in-memory model and would OVERWRITE any edits made
+     * directly on disk, so it must be explicitly confirmed with
+     * {@code overwriteDiskEdits=true}. Returns the JSON error to short-circuit
+     * {@link #executeOnUiThread} with when a {@code fullExport} was requested without
+     * that confirmation, otherwise {@code null} (the call proceeds).
+     * <p>
+     * Pure and package-private so the gate can be unit-tested headlessly. It is a
+     * pre-BM early return, so an unconfirmed {@code fullExport} never touches the
+     * model (unattended-safe). Only {@code fullExport} is gated: the default
+     * missing-only resync and the {@code cleanDanglingReferences} path both pass
+     * {@code fullExport=false} and are never blocked.
+     *
+     * @param fullExport whether a full export of every top object was requested
+     * @param overwriteDiskEdits whether the caller confirmed overwriting on-disk edits
+     * @return the JSON error when the guard rejects, otherwise {@code null}
+     */
+    static String fullExportGuardError(boolean fullExport, boolean overwriteDiskEdits)
+    {
+        if (fullExport && !overwriteDiskEdits)
+        {
+            return ToolResult.error("fullExport=true re-exports EVERY .mdo from the in-memory model and " //$NON-NLS-1$
+                + "would overwrite on-disk edits; pass overwriteDiskEdits=true to confirm.").toJson(); //$NON-NLS-1$
         }
         return null;
     }

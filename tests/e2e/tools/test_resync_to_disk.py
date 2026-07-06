@@ -181,12 +181,16 @@ def test_full_export_reexports_every_top_object():
     echoed back, and — because the fixture is in-sync — the re-export rewrites the SAME
     bytes, so the committed tree still must not change.
 
+    fullExport=true would overwrite on-disk edits, so it is gated behind the
+    overwriteDiskEdits confirm (see test_full_export_without_confirm_is_rejected); this
+    happy path passes overwriteDiskEdits=true to clear the guard.
+
     Mutation thinking: a fullExport that silently stayed on the subset path would
     report objectsExported==0 here; an export that produced different bytes for an
     unchanged model would fail assert_no_diff."""
     wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
-    r = call("resync_to_disk", {"projectName": PROJECT, "fullExport": True})
-    assert_ok(r, "resync_to_disk fullExport=true")
+    r = call("resync_to_disk", {"projectName": PROJECT, "fullExport": True, "overwriteDiskEdits": True})
+    assert_ok(r, "resync_to_disk fullExport=true overwriteDiskEdits=true")
 
     sc = _success_envelope(r, "full-export resync")
     if sc.get("fullExport") is not True:
@@ -382,3 +386,24 @@ def test_nonexistent_project_errors_clearly():
     assert_error_quality(e, names=[bad], suggests=["list_projects"],
                          ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("a rejected call must not touch the project tree")
+
+
+@e2e_test(tool="resync_to_disk", kind="action")
+def test_full_export_without_confirm_is_rejected():
+    """fullExport=true WITHOUT overwriteDiskEdits must be rejected by the confirm guard:
+    force-exporting every .mdo from the in-memory model would overwrite on-disk edits, so
+    the destructive full re-export is gated behind an explicit overwriteDiskEdits=true (it
+    mirrors the cleanDanglingReferences opt-in / delete_project confirm early-return). The
+    guard fires BEFORE any BM read, so nothing is exported and the tree stays clean.
+
+    Mutation thinking: a tool that dropped the guard would run the full export here and
+    (on a project with on-disk edits) silently clobber them; the error must name
+    overwriteDiskEdits so the caller knows how to confirm, and assert_no_diff pins that the
+    rejected call wrote nothing."""
+    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    r = call("resync_to_disk", {"projectName": PROJECT, "fullExport": True})
+    e = assert_error(r, "fullExport=true without overwriteDiskEdits")
+    assert_error_quality(e, names=["overwriteDiskEdits"], suggests=["overwriteDiskEdits"],
+                         ctx="the fullExport guard names overwriteDiskEdits and tells the caller to confirm")
+    # The guard early-returns before the export, so a rejected fullExport must write nothing.
+    assert_no_diff("a fullExport rejected by the confirm guard must not touch the project tree")
