@@ -2935,11 +2935,24 @@ public final class FormElementWriter
             return null;
         }
         EObject existing = singleReference(element, FEATURE_EXT_INFO);
+        String classifierName = extInfoClassifierNameFor(element);
         if (existing != null)
         {
+            // A form group's `type` is authoritative: a live extInfo whose class no longer matches the
+            // group's current type is STALE (the type was changed via modify_metadata), so the
+            // type-derived class wins - the stale holder is re-resolved here and RECREATED by
+            // ensureExtInfo instead of being reused against the wrong type (#235 review: a separate
+            // `type` change previously left a stale extInfo the next call reused).
+            if (classifierName != null && !existing.eClass().getName().equals(classifierName))
+            {
+                EClass derived = formEClass(element, classifierName);
+                if (derived != null)
+                {
+                    return derived;
+                }
+            }
             return existing.eClass();
         }
-        String classifierName = extInfoClassifierNameFor(element);
         return classifierName != null ? formEClass(element, classifierName) : null;
     }
 
@@ -3005,17 +3018,23 @@ public final class FormElementWriter
             return null;
         }
         EObject existing = singleReference(element, FEATURE_EXT_INFO);
-        if (existing != null)
+        // resolveExtInfoEClass is type-authoritative: for a form group whose `type` was changed it
+        // returns the NEW type's extInfo class (not the stale live instance's), so a matching extInfo is
+        // REUSED verbatim (never clobbered) while a STALE one (class != the type-derived class) is
+        // recreated below - closing the #235-review gap where a separate `type` change left the old-type
+        // extInfo in place for the next call to reuse.
+        EClass extInfoClass = resolveExtInfoEClass(element);
+        if (existing != null
+            && (extInfoClass == null || existing.eClass().getName().equals(extInfoClass.getName())))
         {
             return existing;
         }
-        EClass extInfoClass = resolveExtInfoEClass(element);
         if (extInfoClass == null || extInfoClass.isAbstract() || extInfoClass.getEPackage() == null)
         {
-            return null;
+            return existing; // stale/empty but no better class resolvable - keep what is there (may be null)
         }
         EObject created = extInfoClass.getEPackage().getEFactoryInstance().create(extInfoClass);
-        element.eSet(feature, created);
+        element.eSet(feature, created); // fills an empty slot or replaces a stale (type-mismatched) holder
         return created;
     }
 

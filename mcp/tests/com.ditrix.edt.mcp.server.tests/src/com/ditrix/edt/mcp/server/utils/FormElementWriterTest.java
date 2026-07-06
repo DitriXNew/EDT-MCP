@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -796,6 +797,29 @@ public class FormElementWriterTest
         EObject ensured = FormElementWriter.ensureExtInfo(newForm(), group);
         assertSame(preset, ensured);
         assertEquals("Horizontal", literalOf(ensured, "group")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testEnsureExtInfoReplacesStaleExtInfoAfterTypeChange()
+    {
+        // #235 review: a form group whose `type` was changed via modify_metadata carries a STALE extInfo of
+        // the OLD type. The `type` is authoritative: resolveExtInfoEClass must report the NEW type's class,
+        // and ensureExtInfo must RECREATE the extInfo for the new type (not reuse the stale one) - so a
+        // later layout write lands on the correct holder instead of the wrong-type extInfo.
+        EObject form = newForm();
+        EObject group = newObject(MODEL.formGroup);
+        setLiteral(group, "type", "UsualGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject usual = FormElementWriter.ensureExtInfo(form, group);
+        assertEquals("UsualGroupExtInfo", usual.eClass().getName()); //$NON-NLS-1$
+        // Change the classifier: the UsualGroupExtInfo is now stale for a Pages group.
+        setLiteral(group, "type", "Pages"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the type is authoritative - resolveExtInfoEClass reports the NEW type's class", //$NON-NLS-1$
+            "PagesGroupExtInfo", FormElementWriter.resolveExtInfoEClass(group).getName()); //$NON-NLS-1$
+        EObject replaced = FormElementWriter.ensureExtInfo(form, group);
+        assertEquals("ensureExtInfo recreates the extInfo for the new type", //$NON-NLS-1$
+            "PagesGroupExtInfo", replaced.eClass().getName()); //$NON-NLS-1$
+        assertNotSame("the stale UsualGroupExtInfo must be replaced, not reused", usual, replaced); //$NON-NLS-1$
+        assertSame(replaced, group.eGet(feature(group, "extInfo"))); //$NON-NLS-1$
     }
 
     @Test

@@ -1608,21 +1608,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static FormHolder resolveFormHolder(EObject member, String propName)
     {
         EObject extInfo = extInfoOf(member);
-        PropertyInfo info = MetadataPropertyIntrospector.findFeature(member, extInfo, propName);
-        if (info == null && extInfo == null && propName != null && !propName.isEmpty())
+        // A form group whose live extInfo no longer matches its `type` is STALE (the type was changed):
+        // classify against the type-AUTHORITATIVE extInfo, not the stale holder, so a property is
+        // validated against the class ensureExtInfo will actually (re)create at apply time (#235 review).
+        EClass authoritative = FormElementWriter.resolveExtInfoEClass(member);
+        boolean stale = extInfo != null && authoritative != null
+            && !extInfo.eClass().getName().equals(authoritative.getName());
+        EObject classifyAgainst = stale ? null : extInfo;
+        PropertyInfo info = MetadataPropertyIntrospector.findFeature(member, classifyAgainst, propName);
+        if (info == null && classifyAgainst == null && propName != null && !propName.isEmpty()
+            && authoritative != null && !authoritative.isAbstract() && authoritative.getEPackage() != null)
         {
-            EClass extInfoEClass = FormElementWriter.resolveExtInfoEClass(member);
-            if (extInfoEClass != null && !extInfoEClass.isAbstract() && extInfoEClass.getEPackage() != null)
+            EObject probe = authoritative.getEPackage().getEFactoryInstance().create(authoritative);
+            PropertyInfo onProbe = MetadataPropertyIntrospector.findFeature(member, probe, propName);
+            if (onProbe != null && onProbe.onExtInfo)
             {
-                EObject probe = extInfoEClass.getEPackage().getEFactoryInstance().create(extInfoEClass);
-                PropertyInfo onProbe = MetadataPropertyIntrospector.findFeature(member, probe, propName);
-                if (onProbe != null && onProbe.onExtInfo)
-                {
-                    return new FormHolder(true, probe);
-                }
+                return new FormHolder(true, probe);
             }
         }
-        return new FormHolder(info != null && info.onExtInfo, extInfo);
+        return new FormHolder(info != null && info.onExtInfo, classifyAgainst);
     }
 
     /**

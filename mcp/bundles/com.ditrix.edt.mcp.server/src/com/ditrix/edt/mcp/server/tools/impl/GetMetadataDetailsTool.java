@@ -397,17 +397,25 @@ public class GetMetadataDetailsTool implements IMcpTool
         // allowed values, no Current) when the <extInfo> slot is empty, and to the single-arg
         // introspection for a plain mdclass object (no extInfo - byte-identical, mdclass view unchanged).
         EObject liveExtInfo = FormElementWriter.extInfoInstance(obj);
+        EClass extInfoEClass = FormElementWriter.resolveExtInfoEClass(obj); // type-authoritative
+        // Read Current values off the live instance ONLY when it MATCHES the type-derived class. A form
+        // group whose `type` was changed carries a STALE extInfo (class != the type-derived one); list the
+        // NEW type's props (kind + allowed, no Current) rather than the stale instance's, so the assignable
+        // view stays consistent with the group's current type (#235 review).
+        boolean liveMatches = liveExtInfo != null && extInfoEClass != null
+            && liveExtInfo.eClass().getName().equals(extInfoEClass.getName());
         Iterable<MetadataPropertyIntrospector.PropertyInfo> props;
-        if (liveExtInfo != null)
+        if (liveMatches)
         {
             props = MetadataPropertyIntrospector.introspect(obj, liveExtInfo);
         }
+        else if (extInfoEClass != null)
+        {
+            props = MetadataPropertyIntrospector.introspect(obj, extInfoEClass);
+        }
         else
         {
-            EClass extInfoEClass = FormElementWriter.resolveExtInfoEClass(obj);
-            props = extInfoEClass == null
-                ? MetadataPropertyIntrospector.introspect(obj)
-                : MetadataPropertyIntrospector.introspect(obj, extInfoEClass);
+            props = MetadataPropertyIntrospector.introspect(obj);
         }
         for (MetadataPropertyIntrospector.PropertyInfo p : props)
         {
