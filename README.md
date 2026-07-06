@@ -311,16 +311,18 @@ Add to `.claude.json` (in Windows `%USERPROFILE%\.claude.json`):
 
 ### Claude Desktop
 
-Add to `claude_desktop_config.json`:
+`claude_desktop_config.json` accepts only stdio servers (a `command`), not a direct `url`, so bridge the HTTP endpoint with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (requires [Node.js](https://nodejs.org/)):
 ```json
 {
   "mcpServers": {
     "EDT MCP Server": {
-      "url": "http://localhost:8765/mcp"
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:8765/mcp"]
     }
   }
 }
 ```
+> The **Settings → Connectors** ("custom connector") route needs an HTTPS server reachable from Anthropic's cloud, so a plain-HTTP `localhost` endpoint must go through the `mcp-remote` stdio bridge above. You *could* expose it over an HTTPS tunnel (ngrok / Cloudflare Tunnel) to use a connector — but this server can write code into your configuration and start a debugger, so putting it on the public internet is a serious security risk and is not recommended.
 
 ### Cline - extension for VSCode.
 
