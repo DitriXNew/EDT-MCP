@@ -33,6 +33,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetCheckDescriptionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetConfigurationPropertiesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetEventLogTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetFormLayoutSnapshotTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetFormScreenshotTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetMarkersTool;
@@ -130,6 +131,7 @@ public final class BuiltInToolRegistrar
         registry.register(new GetProblemSummaryTool());
         registry.register(new GetProjectErrorsTool());
         registry.register(new GetMarkersTool());
+        registry.register(new GetEventLogTool());
         registry.register(new GetCheckDescriptionTool());
         registry.register(new GetContentAssistTool());
         registry.register(new GetPlatformDocumentationTool());

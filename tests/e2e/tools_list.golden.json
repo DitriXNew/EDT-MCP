@@ -1742,6 +1742,146 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Read a 1C infobase event log WITHOUT a running 1C session by parsing the raw log files (legacy text ver 2.0: a 1Cv8.lgf dictionary + dated *.lgp partitions). High diagnostic value: errors, user actions, posting, authentication. Locate the log by projectName (+ optional applicationId from get_applications for a FILE infobase), or pass logDir directly for an offline copy or a SERVER-mode infobase. Filters: from/to period, user, event, eventContains, severity, commentContains, metadataContains, session; paginated (limit/offset/order). Returns infobase PII (user names, data presentations). Full parameters and examples: call get_tool_guide('get_event_log').",
+    "inputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Application id from get_applications, to pick ONE infobase when the project has several. Optional; ignored when logDir is given.",
+          "type": "string"
+        },
+        "commentContains": {
+          "description": "Case-insensitive substring match on the event comment.",
+          "type": "string"
+        },
+        "event": {
+          "description": "Filter by exact event id/name (e.g. _$Session$_.Authentication). Use eventContains for a substring match instead.",
+          "type": "string"
+        },
+        "eventContains": {
+          "description": "Case-insensitive substring match on the event name.",
+          "type": "string"
+        },
+        "from": {
+          "description": "Period lower bound, ISO-8601 (e.g. 2026-04-01 or 2026-04-01T09:00:00). Omit for no lower bound.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max events to return (default 100, max 1000).",
+          "type": "integer"
+        },
+        "logDir": {
+          "description": "Absolute path to a 1Cv8Log directory to read directly (an offline copy, or a SERVER-mode infobase whose cluster path is not model-derivable). Overrides projectName/applicationId resolution.",
+          "type": "string"
+        },
+        "metadataContains": {
+          "description": "Case-insensitive substring match on the metadata full name as stored in the log (e.g. Document.SalesOrder), not a localized synonym.",
+          "type": "string"
+        },
+        "offset": {
+          "description": "Number of matching events to skip before this page (pagination; default 0).",
+          "type": "integer"
+        },
+        "order": {
+          "description": "Result order by date: date_asc (oldest first, default) or date_desc (newest first).",
+          "enum": [
+            "date_asc",
+            "date_desc"
+          ],
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT configuration project whose infobase event log to read. Provide this (optionally with applicationId) OR logDir.",
+          "type": "string"
+        },
+        "session": {
+          "description": "Filter by session number.",
+          "type": "string"
+        },
+        "severity": {
+          "description": "Filter by severity. Accepts I/W/E/N, the English words Information/Warning/Error/Note, or their Russian equivalents. JSON array or comma-separated.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "Period upper bound, ISO-8601. Omit for no upper bound.",
+          "type": "string"
+        },
+        "user": {
+          "description": "Filter by user name(s) (exact). JSON array [\"Ivanov\"] or comma-separated.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "get_event_log",
+    "outputSchema": {
+      "properties": {
+        "events": {
+          "description": "The page of events: {date, severity, severityPresentation, user, computer, application, event, comment, metadata, metadataUuid, session, data}.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "format": {
+          "description": "The detected log format (e.g. text-2.0).",
+          "type": "string"
+        },
+        "infobaseType": {
+          "description": "How the log was located: FILE (resolved from the project), SERVER, or OVERRIDE (logDir).",
+          "type": "string"
+        },
+        "limit": {
+          "description": "The effective page size (after clamping to [1, max]).",
+          "type": "integer"
+        },
+        "matched": {
+          "description": "Total records matching the filters across scanned partitions.",
+          "type": "integer"
+        },
+        "offset": {
+          "description": "The offset applied.",
+          "type": "integer"
+        },
+        "resolvedLogDir": {
+          "description": "The 1Cv8Log directory that was actually read.",
+          "type": "string"
+        },
+        "returned": {
+          "description": "Number of events returned on this page.",
+          "type": "integer"
+        },
+        "scanned": {
+          "description": "Total records scanned before filtering.",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the read succeeded",
+          "type": "boolean"
+        },
+        "truncated": {
+          "description": "True if the scan hit its cap and stopped early (matched/scanned are lower bounds).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Return a YAML snapshot of a form's calculated WYSIWYG layout (bounds, element types, display properties) as text; use it to inspect or compare what a form actually renders. Requires EDT launched with -DnativeFormBufferedLayoutRender=true, else the result is blank (missing flag, not a bad call). Full parameters and examples: call get_tool_guide('get_form_layout_snapshot').",
     "inputSchema": {
       "properties": {
