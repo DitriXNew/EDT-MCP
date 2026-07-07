@@ -328,7 +328,7 @@ public class SpreadsheetTemplateWriterTest
     }
 
     @Test
-    public void testColumnWidthGrowsRowExtentForAuthoredRowHeight()
+    public void testAuthoredRowHeightGrowsRowExtent()
     {
         SpreadsheetDocument doc = newDocument();
         // The row-height path used to leave the row extent unset even though a row is authored: a row height

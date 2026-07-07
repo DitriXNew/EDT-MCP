@@ -135,13 +135,14 @@ public final class SpreadsheetTemplateWriter
     // ---- result -------------------------------------------------------------------------------
 
     /**
-     * The outcome of applying a {@code template} spec: either an actionable JSON-free {@link #error}
-     * message (an up-front validation failure - nothing was mutated) or the counts of what was applied.
+     * The outcome of applying a {@code template} spec: either an actionable {@link ToolResult#error} JSON
+     * string in {@link #error} (an up-front validation failure - nothing was mutated) or the counts of what
+     * was applied.
      * Exactly one of {@code error} / the counts is meaningful; check {@link #hasError()} first.
      */
     public static final class Result
     {
-        /** Non-null when the spec was rejected up front (nothing mutated): a ready message. */
+        /** Non-null when the spec was rejected up front (nothing mutated): a ready ToolResult.error JSON. */
         public final String error;
         /** Number of cells written (created or overwritten). */
         public final int cells;
