@@ -84,7 +84,7 @@ public class SetVariableToolTest
     public void testMissingValueIsRejected()
     {
         Map<String, String> params = new HashMap<>();
-        params.put("variableName", "МояПеременная"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("variableName", "\u041c\u043e\u044f\u041f\u0435\u0440\u0435\u043c\u0435\u043d\u043d\u0430\u044f"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new SetVariableTool().execute(params);
         assertTrue(result.contains("value is required")); //$NON-NLS-1$
     }
@@ -94,7 +94,7 @@ public class SetVariableToolTest
     {
         Map<String, String> params = new HashMap<>();
         params.put("frameRef", "999999"); //$NON-NLS-1$ //$NON-NLS-2$
-        params.put("variableName", "МояПеременная"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("variableName", "\u041c\u043e\u044f\u041f\u0435\u0440\u0435\u043c\u0435\u043d\u043d\u0430\u044f"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("value", "42"); //$NON-NLS-1$ //$NON-NLS-2$
         // frameRef > 0 but no suspended session: the shared DebugFrameResolver reads a
         // null frame from the in-memory registry and reports a stale frameRef before

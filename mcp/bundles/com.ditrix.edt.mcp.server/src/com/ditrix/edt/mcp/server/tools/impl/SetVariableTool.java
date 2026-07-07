@@ -97,7 +97,10 @@ public class SetVariableTool implements IMcpTool
             .stringProperty(KEY_VARIABLE_NAME,
                 "Name of the variable to set (dot-separated to reach a nested member)", true) //$NON-NLS-1$
             .stringProperty(KEY_VALUE,
-                "New value as a BSL literal/expression (e.g. 42, \"text\", True, Дата(2025,1,1))", true) //$NON-NLS-1$
+                // The example ends in Дата(2025,1,1), the BSL Date() constructor; the Cyrillic is escaped
+                // as unicode escapes because this description ships in tools/list (ASCII-safe under any tooling).
+                "New value as a BSL literal/expression (e.g. 42, \"text\", True, " //$NON-NLS-1$
+                    + "\u0414\u0430\u0442\u0430(2025,1,1))", true) //$NON-NLS-1$
             .build();
     }
 
