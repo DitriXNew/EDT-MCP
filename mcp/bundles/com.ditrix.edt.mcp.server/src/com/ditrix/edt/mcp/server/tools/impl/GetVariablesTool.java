@@ -77,6 +77,14 @@ public class GetVariablesTool implements IMcpTool
     }
 
     @Override
+    public boolean returnsInfobaseData()
+    {
+        // Frame variables are read straight from the running 1C infobase and may
+        // hold personal data (ФИО / СНИЛС / passport / ...): flag for PII redaction.
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         long frameRef = JsonUtils.extractLongArgument(params, "frameRef", -1L); //$NON-NLS-1$

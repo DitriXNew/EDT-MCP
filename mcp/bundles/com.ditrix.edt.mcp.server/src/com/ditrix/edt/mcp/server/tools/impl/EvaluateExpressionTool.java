@@ -92,6 +92,14 @@ public class EvaluateExpressionTool implements IMcpTool
     }
 
     @Override
+    public boolean returnsInfobaseData()
+    {
+        // An evaluated BSL expression returns a live value from the running 1C
+        // infobase and may hold personal data: flag for PII redaction.
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         long frameRef = JsonUtils.extractLongArgument(params, "frameRef", -1L); //$NON-NLS-1$

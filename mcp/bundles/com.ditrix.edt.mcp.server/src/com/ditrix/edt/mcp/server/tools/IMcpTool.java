@@ -101,7 +101,27 @@ public interface IMcpTool
     {
         return ResponseType.MARKDOWN;
     }
-    
+
+    /**
+     * Whether this tool's result can carry personal data read from a live 1C
+     * infobase (debug variables, evaluated expressions, suspended stack frames,
+     * and — once it lands — event-log entries), as opposed to EDT/workspace
+     * metadata. The single wire-serialization choke point runs the 152-FZ PII
+     * redactor ONLY on the result of a tool that returns {@code true} here; every
+     * other tool's output is passed through untouched.
+     * <p>
+     * The default is {@code false}: a tool returns configuration/workspace
+     * metadata, not live infobase data. This is a behavioral default only — it is
+     * NOT part of the {@code tools/list} surface (not serialized into
+     * {@code ToolInfo}), so overriding it never changes the tools/list golden.
+     *
+     * @return {@code true} if the tool may return infobase personal data
+     */
+    default boolean returnsInfobaseData()
+    {
+        return false;
+    }
+
     /**
      * Returns the result file name for EmbeddedResource URI.
      * Used when response type is MARKDOWN.

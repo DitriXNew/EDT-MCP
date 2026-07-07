@@ -135,6 +135,22 @@ public final class PreferenceConstants
     /** Default: no tools allowed without consent (empty string). */
     public static final String DEFAULT_DESTRUCTIVE_ALLOWED_TOOLS = ""; //$NON-NLS-1$
 
+    // === PII redaction (152-FZ) preferences ===
+
+    /**
+     * Master toggle for the 152-FZ PII redactor: when on, the result of every tool
+     * flagged {@code returnsInfobaseData()} is passed through the redactor before it
+     * leaves the server. The env kill-switch {@code EDT_MCP_PII_REDACTION}
+     * (on/off) overrides this store value (see {@code PiiRedactionSettings}).
+     */
+    public static final String PREF_PII_REDACTION_ENABLED = "mcpPiiRedactionEnabled"; //$NON-NLS-1$
+
+    /**
+     * Default: PII redaction OFF, so infobase tool output is byte-identical to a
+     * build without this feature until the user (or the env switch) turns it on.
+     */
+    public static final boolean DEFAULT_PII_REDACTION_ENABLED = false;
+
     private PreferenceConstants()
     {
         // Utility class

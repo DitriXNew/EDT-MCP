@@ -120,6 +120,14 @@ public class WaitForBreakTool implements IMcpTool
     }
 
     @Override
+    public boolean returnsInfobaseData()
+    {
+        // The suspended-thread snapshot exposes stack frames (and their source
+        // context) from the running 1C infobase: flag for PII redaction.
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
