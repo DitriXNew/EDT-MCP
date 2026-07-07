@@ -15,6 +15,8 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
@@ -27,6 +29,9 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
@@ -725,5 +730,163 @@ public class ModifyMetadataToolTest
         assertNull("a direct + extInfo batch without a type change must still be allowed", //$NON-NLS-1$
             ModifyMetadataTool.formTypeExtInfoComboError(group,
                 Arrays.asList(prop("visible", "true"), prop("group", "Horizontal")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    // ===== template spreadsheet-content payload dispatch guards (#245) =====================
+    //
+    // A `template` payload (SpreadsheetDocument cells / merges / areas) is only valid on a
+    // SpreadsheetDocument template FQN, is authored through its own surface, and must not be mixed with a
+    // generic properties / membership content / Role payload. The two tool-level guards behind that
+    // (templateOnlyForTemplateFqnError on a non-template FQN; templateMixError inside modifyTemplateContent)
+    // plus the parseTemplateArg reader are pure and covered here, mirroring the Role / content guard tests
+    // (firstNonHandlerRebindProperty). The live BM write + force-export is covered by the E2E suite.
+
+    @Test
+    public void testTemplatePayloadRefusedOnNonTemplateFqn()
+    {
+        // A `template` payload addressed to a NON-template FQN must be refused (not silently dropped while
+        // a generic / role / content branch reports success): the error names the offending FQN, the
+        // 'template' payload, what the FQN actually is, and points at the valid template FQN shapes.
+        String err = ModifyMetadataTool.templateOnlyForTemplateFqnError(
+            "Catalog.Goods", "is a Catalog"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a template payload on a non-template FQN must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the offending FQN", err.contains("Catalog.Goods")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the 'template' payload", err.contains("template")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must echo what the FQN actually is", err.contains("is a Catalog")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must point at the valid template FQN shape", //$NON-NLS-1$
+            err.contains("CommonTemplate")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTemplatePayloadMixRefused()
+    {
+        // A `template` payload combined with a generic 'properties' change is refused, naming both the
+        // template payload and the conflicting properties change.
+        String propsMix = ModifyMetadataTool.templateMixError(
+            Collections.singletonList(prop("comment", "Goods")), //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.<JsonObject> emptyList(), false);
+        assertNotNull("template + a generic properties change must be refused", propsMix); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", propsMix.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the template payload", propsMix.contains("template")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the conflicting properties change", //$NON-NLS-1$
+            propsMix.contains("properties")); //$NON-NLS-1$
+
+        // A `template` payload combined with a membership 'content' payload is refused, naming 'content'.
+        String contentMix = ModifyMetadataTool.templateMixError(
+            Collections.<JsonObject> emptyList(),
+            Collections.singletonList(prop("owner", "Catalog.Goods")), false); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("template + a membership content payload must be refused", contentMix); //$NON-NLS-1$
+        assertTrue("the refusal must name the conflicting content payload", //$NON-NLS-1$
+            contentMix.contains("content")); //$NON-NLS-1$
+
+        // A `template` payload combined with a Role payload is refused, naming the Role rights payload.
+        String roleMix = ModifyMetadataTool.templateMixError(
+            Collections.<JsonObject> emptyList(), Collections.<JsonObject> emptyList(), true);
+        assertNotNull("template + a Role payload must be refused", roleMix); //$NON-NLS-1$
+        assertTrue("the refusal must name the Role rights payload", //$NON-NLS-1$
+            roleMix.contains("Role") && roleMix.contains("rights")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A `template` payload standing alone is NOT a mix -> null, so the write proceeds.
+        assertNull("a lone template payload is not a mix", ModifyMetadataTool.templateMixError( //$NON-NLS-1$
+            Collections.<JsonObject> emptyList(), Collections.<JsonObject> emptyList(), false));
+    }
+
+    @Test
+    public void testParseTemplateArgHandlesAbsentBlankAndMalformed()
+    {
+        Map<String, String> params = new HashMap<>();
+        // Absent -> no payload, no error (the caller falls through to the other branches).
+        ModifyMetadataTool.TemplateArg absent = ModifyMetadataTool.parseTemplateArg(params);
+        assertNull("an absent 'template' arg carries no spec", absent.spec); //$NON-NLS-1$
+        assertNull("an absent 'template' arg carries no error", absent.error); //$NON-NLS-1$
+
+        // Blank / whitespace-only -> absent.
+        params.put("template", "   "); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.TemplateArg blank = ModifyMetadataTool.parseTemplateArg(params);
+        assertNull("a blank 'template' arg carries no spec", blank.spec); //$NON-NLS-1$
+        assertNull("a blank 'template' arg carries no error", blank.error); //$NON-NLS-1$
+
+        // Malformed JSON -> an actionable error, NOT a silent drop: 'template' is the sole surface for the
+        // feature, so a present-but-malformed value must be surfaced rather than dropped (which would let a
+        // stray 'properties' apply, or misreport 'properties is required').
+        params.put("template", "{not json"); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.TemplateArg malformed = ModifyMetadataTool.parseTemplateArg(params);
+        assertNull("a malformed 'template' arg yields no spec", malformed.spec); //$NON-NLS-1$
+        assertNotNull("a malformed 'template' arg must be an error, not a silent drop", //$NON-NLS-1$
+            malformed.error);
+        assertTrue("the refusal must be a ToolResult error json", //$NON-NLS-1$
+            malformed.error.contains("\"error\"")); //$NON-NLS-1$
+        assertTrue("the refusal must name the 'template' arg", malformed.error.contains("template")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A non-object JSON (an array) -> the same actionable error: the arg is a single spec object.
+        params.put("template", "[1,2,3]"); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.TemplateArg nonObject = ModifyMetadataTool.parseTemplateArg(params);
+        assertNull("a non-object 'template' arg yields no spec", nonObject.spec); //$NON-NLS-1$
+        assertNotNull("a non-object 'template' arg must be an error", nonObject.error); //$NON-NLS-1$
+
+        // A well-formed JSON object parses through (its members preserved, whitespace-trimmed).
+        params.put("template", "  {\"cells\":[]}  "); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.TemplateArg valid = ModifyMetadataTool.parseTemplateArg(params);
+        assertNull("a well-formed 'template' arg carries no error", valid.error); //$NON-NLS-1$
+        assertNotNull("a well-formed 'template' object must parse", valid.spec); //$NON-NLS-1$
+        assertTrue("the parsed object must carry its members", valid.spec.has("cells")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ===== template payload on a real BasicTemplate of the WRONG type is refused (#245) ============
+    //
+    // Only a SpreadsheetDocument template hosts cells; a text / binary-data / DCS / graphical template is
+    // refused UP FRONT (before any BM write) by nonSpreadsheetTemplateError, naming the template's ACTUAL
+    // type. This is the refusal the existing non-template-FQN / mix guards do NOT cover: the FQN resolves
+    // to a real BasicTemplate, but its type is wrong. Built headlessly from an in-memory MdClassFactory
+    // template (the resolve-by-FQN + BM write + assert_no_diff is the E2E suite's job).
+
+    private static BasicTemplate templateOfType(TemplateType type)
+    {
+        BasicTemplate template = MdClassFactory.eINSTANCE.createCommonTemplate();
+        template.setTemplateType(type);
+        return template;
+    }
+
+    @Test
+    public void testNonSpreadsheetTemplateRefusalNamesActualType()
+    {
+        // A Text template is the wrong kind for a `template` payload: refused, naming both the FQN and the
+        // template's ACTUAL type so the caller learns why the cells cannot be authored.
+        String fqn = "CommonTemplate.TextNote"; //$NON-NLS-1$
+        String err = ModifyMetadataTool.nonSpreadsheetTemplateError(
+            templateOfType(TemplateType.TEXT_DOCUMENT), fqn);
+        assertNotNull("a non-SpreadsheetDocument template must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the offending template FQN", err.contains(fqn)); //$NON-NLS-1$
+        assertTrue("the refusal must state it is not a SpreadsheetDocument template", //$NON-NLS-1$
+            err.contains("not a SpreadsheetDocument template")); //$NON-NLS-1$
+        // The actual type is named verbatim (its EMF literal name) - a regression that dropped the type
+        // from the message (or NPE'd resolving it) fails here.
+        assertTrue("the refusal must name the actual template type", //$NON-NLS-1$
+            err.contains(TemplateType.TEXT_DOCUMENT.getName()));
+    }
+
+    @Test
+    public void testNonSpreadsheetTemplateRefusalCoversEveryTypeAndAcceptsSpreadsheet()
+    {
+        // The ratchet across the whole TemplateType enum: ONLY a SpreadsheetDocument template is accepted
+        // (null -> the write proceeds); every other kind is refused naming its actual type. A guard that
+        // special-cased one type - or silently accepted a non-spreadsheet template - fails here.
+        for (TemplateType type : TemplateType.values())
+        {
+            String err = ModifyMetadataTool.nonSpreadsheetTemplateError(
+                templateOfType(type), "CommonTemplate.T"); //$NON-NLS-1$
+            if (type == TemplateType.SPREADSHEET_DOCUMENT)
+            {
+                assertNull("a SpreadsheetDocument template must be accepted (write may proceed)", err); //$NON-NLS-1$
+            }
+            else
+            {
+                assertNotNull("a " + type.getName() + " template must be refused", err); //$NON-NLS-1$ //$NON-NLS-2$
+                assertTrue("the refusal for " + type.getName() + " must name its actual type", //$NON-NLS-1$ //$NON-NLS-2$
+                    err.contains(type.getName()));
+            }
+        }
     }
 }
