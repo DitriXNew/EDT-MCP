@@ -73,6 +73,7 @@ import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
+import com.ditrix.edt.mcp.server.tools.impl.SetVariableTool;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
 import com.ditrix.edt.mcp.server.tools.impl.StepTool;
@@ -164,6 +165,7 @@ public final class BuiltInToolRegistrar
         registry.register(new ListBreakpointsTool());
         registry.register(new WaitForBreakTool());
         registry.register(new GetVariablesTool());
+        registry.register(new SetVariableTool());
         registry.register(new StepTool());
         registry.register(new ResumeTool());
         registry.register(new EvaluateExpressionTool());

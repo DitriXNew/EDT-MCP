@@ -3747,6 +3747,68 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Set a BSL variable's value in a suspended debug frame. WRITE/side-effect: EXECUTES the entered value as a BSL literal/expression live in the running 1C application, mutating the variable. Address the frame by frameRef from wait_for_break (preferred) or threadId+frameIndex; name the variable (dot-path for a nested member). Read current values with get_variables first; use evaluate_expression to compute without mutating.",
+    "inputSchema": {
+      "properties": {
+        "frameIndex": {
+          "description": "0-based frame index when using threadId",
+          "type": "integer"
+        },
+        "frameRef": {
+          "description": "Stable frame reference returned from wait_for_break (preferred)",
+          "type": "integer"
+        },
+        "threadId": {
+          "description": "Thread id (alternative to frameRef)",
+          "type": "integer"
+        },
+        "value": {
+          "description": "New value as a BSL literal/expression (e.g. 42, \"text\", True, Дата(2025,1,1))",
+          "type": "string"
+        },
+        "variableName": {
+          "description": "Name of the variable to set (dot-separated to reach a nested member)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "variableName",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "set_variable",
+    "outputSchema": {
+      "properties": {
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "type": {
+          "description": "BSL reference type name of the new value",
+          "type": "string"
+        },
+        "value": {
+          "description": "The variable's new value after the set (may be truncated)",
+          "type": "string"
+        },
+        "variableName": {
+          "description": "The variable that was set",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Start performance measurement on the active debug target. Enables line-level profiling: call counts and timing for every executed BSL line. Start-only and idempotent: if profiling is already active for this applicationId it stays on. Call stop_profiling to stop, then get_profiling_results to see which code was covered. Requires an active debug session (debug_launch or debug_yaxunit_tests).",
     "inputSchema": {
       "properties": {
