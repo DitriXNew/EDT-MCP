@@ -118,6 +118,9 @@ If your screenshots still come back blank after adding the flag, verify with `-v
 
 Go to **Window → Preferences → MCP Server**. The settings page has two tabs:
 
+> [!NOTE]
+> **Display language.** The settings page and the tag dialogs are bilingual (Russian / English) and follow the Eclipse/EDT display language — the same `-nl` launch argument (or OS locale) that localizes the rest of EDT. Launch EDT with `-nl ru` for Russian or `-nl en` for English; any other locale falls back to English. The MCP tool surface itself (tool names, descriptions and errors) stays English regardless, as it is the AI wire contract.
+
 #### General Tab
 
 - **Server Port**: HTTP port (default: 8765)

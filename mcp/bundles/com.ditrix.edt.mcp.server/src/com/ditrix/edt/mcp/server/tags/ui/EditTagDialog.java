@@ -58,7 +58,7 @@ public class EditTagDialog extends Dialog {
     @Override
     protected void configureShell(Shell newShell) {
         super.configureShell(newShell);
-        newShell.setText("Edit Tag");
+        newShell.setText(Messages.EditTagDialog_Title);
     }
     
     @Override
@@ -71,7 +71,7 @@ public class EditTagDialog extends Dialog {
         
         // Name
         Label nameLabel = new Label(container, SWT.NONE);
-        nameLabel.setText("Name:");
+        nameLabel.setText(Messages.EditTagDialog_NameLabel);
         
         nameText = new Text(container, SWT.BORDER);
         nameText.setText(tag.getName());
@@ -79,10 +79,10 @@ public class EditTagDialog extends Dialog {
         
         // Color
         Label colorLabel = new Label(container, SWT.NONE);
-        colorLabel.setText("Color:");
-        
+        colorLabel.setText(Messages.EditTagDialog_ColorLabel);
+
         colorButton = new Button(container, SWT.PUSH);
-        colorButton.setToolTipText("Select color");
+        colorButton.setToolTipText(Messages.EditTagDialog_SelectColorTooltip);
         updateColorButton();
         GridDataFactory.fillDefaults().span(2, 1).applyTo(colorButton);
         colorButton.addSelectionListener(new SelectionAdapter() {
@@ -100,7 +100,7 @@ public class EditTagDialog extends Dialog {
         
         // Description
         Label descLabel = new Label(container, SWT.NONE);
-        descLabel.setText("Description:");
+        descLabel.setText(Messages.EditTagDialog_DescriptionLabel);
         GridDataFactory.fillDefaults().align(SWT.BEGINNING, SWT.TOP).applyTo(descLabel);
         
         descriptionText = new Text(container, SWT.BORDER | SWT.MULTI | SWT.V_SCROLL | SWT.WRAP);

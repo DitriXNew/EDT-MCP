@@ -5,7 +5,7 @@
    <extension point="org.eclipse.ui.preferencePages">
       <page
             id="com.ditrix.edt.mcp.server.preferences"
-            name="MCP Server"
+            name="%mcpServerPreferencePage.name"
             class="com.ditrix.edt.mcp.server.preferences.McpServerPreferencePage">
       </page>
    </extension>
@@ -24,18 +24,18 @@
    <extension point="org.eclipse.ui.commands">
       <category
             id="com.ditrix.edt.mcp.server.tags.category"
-            name="Metadata Tags">
+            name="%tags.category.name">
       </category>
       <command
             categoryId="com.ditrix.edt.mcp.server.tags.category"
             id="com.ditrix.edt.mcp.server.tags.manageTags"
-            name="Manage Tags...">
+            name="%tags.manageTags.name">
       </command>
       <command
             categoryId="com.ditrix.edt.mcp.server.tags.category"
             id="com.ditrix.edt.mcp.server.tags.filterByTag"
-            name="Filter by Tag..."
-            description="Filter navigator by tags">
+            name="%tags.filterByTag.name"
+            description="%tags.filterByTag.description">
          <state
                class="org.eclipse.ui.handlers.RegistryToggleState:false"
                id="org.eclipse.ui.commands.toggleState">
@@ -45,31 +45,31 @@
       <command
             categoryId="com.ditrix.edt.mcp.server.tags.category"
             id="com.ditrix.edt.mcp.server.tags.toggleTag"
-            name="Toggle Tag by Index"
-            description="Toggle tag assignment by position (1-10)">
+            name="%tags.toggleTag.name"
+            description="%tags.toggleTag.description">
          <commandParameter
                id="com.ditrix.edt.mcp.server.tags.toggleTag.index"
-               name="Tag Index"
+               name="%tags.toggleTag.index.name"
                optional="false"/>
       </command>
       <!-- Navigator tree expansion commands -->
       <command
             categoryId="com.ditrix.edt.mcp.server.tags.category"
             id="com.ditrix.edt.mcp.server.expandAll"
-            name="Expand All"
-            description="Expand all nodes in the Navigator tree">
+            name="%expandAll.name"
+            description="%expandAll.description">
       </command>
       <command
             categoryId="com.ditrix.edt.mcp.server.tags.category"
             id="com.ditrix.edt.mcp.server.expandBelow"
-            name="Expand Below"
-            description="Expand all nodes below the selected element">
+            name="%expandBelow.name"
+            description="%expandBelow.description">
       </command>
       <command
             categoryId="com.ditrix.edt.mcp.server.tags.category"
             id="com.ditrix.edt.mcp.server.collapseAll"
-            name="Collapse All"
-            description="Collapse all nodes in the Navigator tree">
+            name="%collapseAll.name"
+            description="%collapseAll.description">
       </command>
    </extension>
    
@@ -227,29 +227,29 @@
          <command
                commandId="com.ditrix.edt.mcp.server.expandAll"
                icon="icons/expandall.png"
-               label="Expand All"
-               tooltip="Expand all nodes in the tree"
+               label="%expandAll.name"
+               tooltip="%expandAll.tooltip"
                style="push">
          </command>
          <command
                commandId="com.ditrix.edt.mcp.server.collapseAll"
                icon="icons/collapseall.png"
-               label="Collapse All"
-               tooltip="Collapse all nodes in the tree"
+               label="%collapseAll.name"
+               tooltip="%collapseAll.tooltip"
                style="push">
          </command>
          <command
                commandId="com.ditrix.edt.mcp.server.expandBelow"
                icon="icons/expandbelow.png"
-               label="Expand Below"
-               tooltip="Expand all nodes below the selected element"
+               label="%expandBelow.name"
+               tooltip="%expandBelow.description"
                style="push">
          </command>
          <command
                commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
                icon="icons/tag.png"
-               label="Filter by Tag"
-               tooltip="Filter navigator by tags"
+               label="%tags.filterByTag.label"
+               tooltip="%tags.filterByTag.description"
                style="toggle">
          </command>
          <command
@@ -268,7 +268,7 @@
          <command
                commandId="com.ditrix.edt.mcp.server.tags.filterByTag"
                icon="icons/tag.png"
-               label="Filter by Tag..."
+               label="%tags.filterByTag.name"
                style="toggle">
          </command>
       </menuContribution>
@@ -281,7 +281,7 @@
          <menu
                id="com.ditrix.edt.mcp.server.tags.menu"
                icon="icons/tag.png"
-               label="Tags">
+               label="%tags.menu.label">
             <!-- Dynamic tags list -->
             <dynamic
                   class="com.ditrix.edt.mcp.server.tags.ui.TagsMenuContribution"
@@ -290,7 +290,7 @@
             <!-- Manage Tags command at the bottom -->
             <command
                   commandId="com.ditrix.edt.mcp.server.tags.manageTags"
-                  label="Manage Tags..."
+                  label="%tags.manageTags.name"
                   style="push">
                <visibleWhen checkEnabled="false">
                   <with variable="selection">
@@ -310,10 +310,10 @@
       <decorator
             class="com.ditrix.edt.mcp.server.tags.ui.TagLabelDecorator"
             id="com.ditrix.edt.mcp.server.tags.decorator"
-            label="Metadata Tags Decorator"
+            label="%tags.decorator.label"
             lightweight="true"
             state="true">
-         <description>Shows tags assigned to metadata objects</description>
+         <description>%tags.decorator.description</description>
          <enablement>
             <objectClass name="org.eclipse.emf.ecore.EObject"/>
          </enablement>
@@ -324,17 +324,17 @@
    <extension point="org.eclipse.ui.views">
       <category
             id="com.ditrix.edt.mcp.server.tags.viewCategory"
-            name="MCP Server">
+            name="%tags.viewCategory.name">
       </category>
       <view
             id="com.ditrix.edt.mcp.server.tags.filterView"
-            name="Tag Filter"
+            name="%tags.filterView.name"
             icon="icons/tag.png"
             category="com.ditrix.edt.mcp.server.tags.viewCategory"
             class="com.ditrix.edt.mcp.server.tags.ui.TagFilterView"
             allowMultiple="false"
             restorable="true">
-         <description>Filter metadata objects by tags</description>
+         <description>%tags.filterView.description</description>
       </view>
    </extension>
    

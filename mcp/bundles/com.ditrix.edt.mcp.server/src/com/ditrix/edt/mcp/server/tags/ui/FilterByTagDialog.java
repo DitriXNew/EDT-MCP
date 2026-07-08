@@ -251,13 +251,13 @@ public class FilterByTagDialog extends SelectionDialog {
         
         // Name column
         TreeViewerColumn nameColumn = new TreeViewerColumn(treeViewer, SWT.NONE);
-        nameColumn.getColumn().setText("Name");
+        nameColumn.getColumn().setText(Messages.FilterByTagDialog_ColumnName);
         nameColumn.getColumn().setWidth(180);
         nameColumn.setLabelProvider(new TagNameLabelProvider());
         
         // Description column
         TreeViewerColumn descColumn = new TreeViewerColumn(treeViewer, SWT.NONE);
-        descColumn.getColumn().setText("Description");
+        descColumn.getColumn().setText(Messages.FilterByTagDialog_ColumnDescription);
         descColumn.getColumn().setWidth(200);
         descColumn.setLabelProvider(new TagDescriptionLabelProvider());
         
