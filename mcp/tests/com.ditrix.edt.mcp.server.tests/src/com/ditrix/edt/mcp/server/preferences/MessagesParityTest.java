@@ -89,12 +89,33 @@ public class MessagesParityTest
      * init: non-null and not the Eclipse NLS "missing message" placeholder (which would mean the
      * field is declared but absent from {@code messages.properties}).
      */
+    /** The NLS Messages classes whose fields must all resolve (both bundles this feature ships). */
+    private static final String[] MESSAGES_CLASSES = {
+        "com.ditrix.edt.mcp.server.preferences.Messages", //$NON-NLS-1$
+        "com.ditrix.edt.mcp.server.tags.ui.Messages" //$NON-NLS-1$
+    };
+
     @Test
-    public void testPreferencesMessagesFieldsResolve() throws ReflectiveOperationException
+    public void testMessagesFieldsResolve() throws ReflectiveOperationException
     {
-        // Reflective lookup (initialize=true runs the NLS static block) so the test compiles and
-        // yields a crisp failure if the Dev-A Messages class is missing at integration time.
-        Class<?> messages = Class.forName("com.ditrix.edt.mcp.server.preferences.Messages"); //$NON-NLS-1$
+        for (String className : MESSAGES_CLASSES)
+        {
+            assertMessagesClassResolves(className);
+        }
+    }
+
+    /**
+     * Every {@code public static String} field of the given NLS Messages class resolves after class init:
+     * non-null and not the Eclipse NLS "missing message" placeholder. A placeholder means the field is
+     * declared but has no key in the bundle's {@code messages.properties} — a runtime
+     * {@code MissingResourceException} the key-parity tests cannot catch, since a key absent from BOTH the
+     * EN and RU files still passes parity. The larger, heavily-edited {@code tags.ui.Messages} bundle gets
+     * the same guard as {@code preferences.Messages}.
+     */
+    private static void assertMessagesClassResolves(String className) throws ReflectiveOperationException
+    {
+        // initialize=true runs the NLS static block, so a field with no key resolves to the placeholder.
+        Class<?> messages = Class.forName(className);
 
         List<String> problems = new ArrayList<>();
         int fieldCount = 0;
@@ -116,8 +137,8 @@ public class MessagesParityTest
                 problems.add(field.getName() + " -> " + value); //$NON-NLS-1$
             }
         }
-        assertTrue("preferences.Messages must declare at least one NLS string field", fieldCount > 0); //$NON-NLS-1$
-        assertTrue("preferences.Messages fields that did not resolve to a message: " + problems, //$NON-NLS-1$
+        assertTrue(className + " must declare at least one NLS string field", fieldCount > 0); //$NON-NLS-1$
+        assertTrue(className + " fields that did not resolve to a message: " + problems, //$NON-NLS-1$
             problems.isEmpty());
     }
 
