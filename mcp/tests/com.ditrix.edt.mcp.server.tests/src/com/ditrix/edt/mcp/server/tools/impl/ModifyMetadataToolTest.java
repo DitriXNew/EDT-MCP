@@ -889,4 +889,111 @@ public class ModifyMetadataToolTest
             }
         }
     }
+
+    // ===== DCS (Report Data Composition Schema) payload dispatch guards (#241) =======================
+    //
+    // A `dcs` payload authors a report's Data Composition Schema; it is only valid on a Report FQN, is
+    // authored through its own surface, and must not be mixed with a generic properties / membership
+    // content / Role / template payload. The two tool-level guards behind that (dcsOnlyForReportFqnError
+    // on a non-Report FQN; dcsMixError at the dispatch site) plus the parseDcsArg reader are pure and
+    // covered here, mirroring the #245 template guard tests. The live BM write + force-export (the report
+    // -> DCS-template resolution + the .dcs drain) is covered by the E2E suite.
+
+    @Test
+    public void testDcsPayloadRefusedOnNonReportFqn()
+    {
+        // A `dcs` payload addressed to a NON-Report FQN must be refused (not silently dropped while a
+        // generic / role / content / template branch reports success): the error names the offending FQN,
+        // the 'dcs' payload, what the FQN actually is, and points at the valid Report FQN shape.
+        String err = ModifyMetadataTool.dcsOnlyForReportFqnError(
+            "Catalog.Goods", "is a Catalog"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a dcs payload on a non-Report FQN must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the offending FQN", err.contains("Catalog.Goods")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the 'dcs' payload", err.contains("dcs")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must echo what the FQN actually is", err.contains("is a Catalog")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must point at the valid Report FQN shape", //$NON-NLS-1$
+            err.contains("Report.<Name>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDcsPayloadMixRefused()
+    {
+        // A `dcs` payload combined with a generic 'properties' change is refused, naming both payloads.
+        String propsMix = ModifyMetadataTool.dcsMixError(
+            Collections.singletonList(prop("comment", "Sales")), //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.<JsonObject> emptyList(), false, false);
+        assertNotNull("dcs + a generic properties change must be refused", propsMix); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", propsMix.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the dcs payload", propsMix.contains("dcs")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the conflicting properties change", //$NON-NLS-1$
+            propsMix.contains("properties")); //$NON-NLS-1$
+
+        // A `dcs` payload combined with a membership 'content' payload is refused, naming 'content'.
+        String contentMix = ModifyMetadataTool.dcsMixError(
+            Collections.<JsonObject> emptyList(),
+            Collections.singletonList(prop("metadata", "Catalog.Goods")), false, false); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("dcs + a membership content payload must be refused", contentMix); //$NON-NLS-1$
+        assertTrue("the refusal must name the conflicting content payload", //$NON-NLS-1$
+            contentMix.contains("content")); //$NON-NLS-1$
+
+        // A `dcs` payload combined with a Role payload is refused, naming the Role rights payload.
+        String roleMix = ModifyMetadataTool.dcsMixError(
+            Collections.<JsonObject> emptyList(), Collections.<JsonObject> emptyList(), true, false);
+        assertNotNull("dcs + a Role payload must be refused", roleMix); //$NON-NLS-1$
+        assertTrue("the refusal must name the Role rights payload", //$NON-NLS-1$
+            roleMix.contains("Role") && roleMix.contains("rights")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A `dcs` payload combined with a `template` payload is refused, naming the template payload.
+        String templateMix = ModifyMetadataTool.dcsMixError(
+            Collections.<JsonObject> emptyList(), Collections.<JsonObject> emptyList(), false, true);
+        assertNotNull("dcs + a template payload must be refused", templateMix); //$NON-NLS-1$
+        assertTrue("the refusal must name the conflicting template payload", //$NON-NLS-1$
+            templateMix.contains("template")); //$NON-NLS-1$
+
+        // A `dcs` payload standing alone is NOT a mix -> null, so the write proceeds.
+        assertNull("a lone dcs payload is not a mix", ModifyMetadataTool.dcsMixError( //$NON-NLS-1$
+            Collections.<JsonObject> emptyList(), Collections.<JsonObject> emptyList(), false, false));
+    }
+
+    @Test
+    public void testParseDcsArgHandlesAbsentBlankAndMalformed()
+    {
+        Map<String, String> params = new HashMap<>();
+        // Absent -> no payload, no error (the caller falls through to the other branches).
+        ModifyMetadataTool.DcsArg absent = ModifyMetadataTool.parseDcsArg(params);
+        assertNull("an absent 'dcs' arg carries no spec", absent.spec); //$NON-NLS-1$
+        assertNull("an absent 'dcs' arg carries no error", absent.error); //$NON-NLS-1$
+
+        // Blank / whitespace-only -> absent.
+        params.put("dcs", "   "); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.DcsArg blank = ModifyMetadataTool.parseDcsArg(params);
+        assertNull("a blank 'dcs' arg carries no spec", blank.spec); //$NON-NLS-1$
+        assertNull("a blank 'dcs' arg carries no error", blank.error); //$NON-NLS-1$
+
+        // Malformed JSON -> an actionable error, NOT a silent drop: 'dcs' is the sole surface for the
+        // feature, so a present-but-malformed value must be surfaced rather than dropped (which would let a
+        // stray 'properties' apply, or misreport 'properties is required').
+        params.put("dcs", "{not json"); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.DcsArg malformed = ModifyMetadataTool.parseDcsArg(params);
+        assertNull("a malformed 'dcs' arg yields no spec", malformed.spec); //$NON-NLS-1$
+        assertNotNull("a malformed 'dcs' arg must be an error, not a silent drop", //$NON-NLS-1$
+            malformed.error);
+        assertTrue("the refusal must be a ToolResult error json", //$NON-NLS-1$
+            malformed.error.contains("\"error\"")); //$NON-NLS-1$
+        assertTrue("the refusal must name the 'dcs' arg", malformed.error.contains("dcs")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A non-object JSON (an array) -> the same actionable error: the arg is a single spec object.
+        params.put("dcs", "[1,2,3]"); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.DcsArg nonObject = ModifyMetadataTool.parseDcsArg(params);
+        assertNull("a non-object 'dcs' arg yields no spec", nonObject.spec); //$NON-NLS-1$
+        assertNotNull("a non-object 'dcs' arg must be an error", nonObject.error); //$NON-NLS-1$
+
+        // A well-formed JSON object parses through (its members preserved, whitespace-trimmed).
+        params.put("dcs", "  {\"dataSets\":[]}  "); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.DcsArg valid = ModifyMetadataTool.parseDcsArg(params);
+        assertNull("a well-formed 'dcs' arg carries no error", valid.error); //$NON-NLS-1$
+        assertNotNull("a well-formed 'dcs' object must parse", valid.spec); //$NON-NLS-1$
+        assertTrue("the parsed object must carry its members", valid.spec.has("dataSets")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

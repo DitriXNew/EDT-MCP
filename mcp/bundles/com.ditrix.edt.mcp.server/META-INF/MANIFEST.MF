@@ -105,4 +105,7 @@ Import-Package: com._1c.g5.v8.bm.common.collections,
  org.eclipse.ui.navigator,
  org.eclipse.xtext.resource,
  com._1c.g5.v8.dt.ql.resource,
- com._1c.g5.v8.dt.ql.dcs.resource
+ com._1c.g5.v8.dt.ql.dcs.resource,
+ com._1c.g5.v8.dt.dcs.model.schema,
+ com._1c.g5.v8.dt.dcs.model.core,
+ com._1c.g5.v8.dt.dcs.model.common
