@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "rules": [
+    { "enabled": true, "scope": "NAME", "countable": false, "representation": "[redacted]", "regex": "диагноз" },
+    { "enabled": true, "scope": "NAME", "countable": false, "representation": "[redacted]", "regex": "здоров" },
+    { "enabled": true, "scope": "NAME", "countable": false, "representation": "[redacted]", "regex": "болезн" },
+    { "enabled": true, "scope": "NAME", "countable": false, "representation": "[redacted]", "regex": "инвалид" },
+
+    { "enabled": true, "scope": "NAME", "countable": false, "representation": "[redacted]", "regex": "фото" },
+    { "enabled": true, "scope": "NAME", "countable": false, "representation": "[redacted]", "regex": "биометр" },
+    { "enabled": true, "scope": "NAME", "countable": false, "representation": "[redacted]", "regex": "отпечаток" },
+
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "снилс" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "паспорт" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "инн" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "фио" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "фамил" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "отчеств" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "адрес" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "телефон" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "почт" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "рожден" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "прописк" },
+    { "enabled": true, "scope": "NAME", "countable": true, "representation": "Физлицо", "regex": "email" },
+
+    { "enabled": true, "scope": "VALUE", "countable": true, "representation": "Физлицо", "regex": "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}" },
+    { "enabled": true, "scope": "VALUE", "countable": true, "representation": "Физлицо", "regex": "\\b\\d{3}-\\d{3}-\\d{3}\\s?\\d{2}\\b" },
+    { "enabled": true, "scope": "VALUE", "countable": true, "representation": "Физлицо", "regex": "\\b\\d{4}\\s\\d{6}\\b" },
+    { "enabled": true, "scope": "VALUE", "countable": true, "representation": "Физлицо", "regex": "(?:\\+7|8)[\\s\\-()]*\\d{3}[\\s\\-()]*\\d{3}[\\s\\-()]*\\d{2}[\\s\\-()]*\\d{2}\\b" },
+    { "enabled": true, "scope": "VALUE", "countable": true, "representation": "Физлицо", "regex": "\\b\\d{10}\\b|\\b\\d{12}\\b" }
+  ]
+}

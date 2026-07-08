@@ -54,7 +54,6 @@ public class GeneralTab
     private Button showTagsCheck;
     private Combo tagStyleCombo;
     private Combo consentLevelCombo;
-    private Button piiRedactionCheck;
     private Combo updateCheckCombo;
     private Label statusLabel;
     private Button startButton;
@@ -238,19 +237,8 @@ public class GeneralTab
         consentLevelCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
         createLabel(""); //$NON-NLS-1$
 
-        // PII redaction (152-FZ) master toggle. Off by default: infobase tool
-        // output stays byte-identical until the user (or the env switch) enables it.
-        piiRedactionCheck = new Button(composite, SWT.CHECK);
-        piiRedactionCheck.setText("Redact personal data (152-FZ) from infobase tool results"); //$NON-NLS-1$
-        piiRedactionCheck.setToolTipText(
-            "When enabled, results of tools that return infobase data (get_variables, " //$NON-NLS-1$
-            + "evaluate_expression, wait_for_break) are passed through a PII redactor " //$NON-NLS-1$
-            + "before leaving the server. The env variable EDT_MCP_PII_REDACTION " //$NON-NLS-1$
-            + "(on/off) overrides this setting for CI/unattended runs."); //$NON-NLS-1$
-        piiRedactionCheck.setSelection(store.getBoolean(PreferenceConstants.PREF_PII_REDACTION_ENABLED));
-        GridData piiGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        piiGd.horizontalSpan = 3;
-        piiRedactionCheck.setLayoutData(piiGd);
+        // The 152-FZ PII redaction master toggle lives on the dedicated Privacy tab
+        // (see PrivacyTab); it is not duplicated here.
     }
 
     private void createUpdateSection()
@@ -468,8 +456,6 @@ public class GeneralTab
         {
             store.setValue(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_LEVEL, CONSENT_LEVELS[consentIdx][1]);
         }
-
-        store.setValue(PreferenceConstants.PREF_PII_REDACTION_ENABLED, piiRedactionCheck.getSelection());
     }
 
     /**
@@ -514,8 +500,6 @@ public class GeneralTab
                 break;
             }
         }
-
-        piiRedactionCheck.setSelection(PreferenceConstants.DEFAULT_PII_REDACTION_ENABLED);
     }
 
     /**

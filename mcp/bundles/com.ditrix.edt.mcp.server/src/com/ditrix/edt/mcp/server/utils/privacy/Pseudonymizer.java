@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.utils.privacy;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Locale;
 
@@ -15,24 +17,40 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * Deterministic, non-reversible pseudonymiser for {@link Sensitivity#NORMAL}
- * personal data. Produces a short, stable token of the form {@code PREFIX#hex}
- * (the "natural person" prefix plus an 8-hex-digit HMAC-SHA256 suffix), so the SAME
- * input yields the SAME token within one JVM run without keeping any
- * token-to-value table. Special-category / biometric data is fully masked instead
- * (a stable token would still be a linkable identifier).
+ * Deterministic, non-reversible pseudonymiser driving how a {@link PiiRule} hit is
+ * rendered. It turns a matched value (or span) into the rule's token per its
+ * {@link PiiRule#isCountable()} flag:
+ * <ul>
+ * <li>countable &rarr; {@code representation + "#" + shortHmac} - a stable
+ * {@code PREFIX#hex} pseudonym (an 8-hex-digit HMAC-SHA256 suffix) so equal inputs map
+ * to the SAME token and stay correlatable, without keeping any token-to-value table;</li>
+ * <li>not countable &rarr; {@code representation} verbatim - a flat, non-linkable mask
+ * (e.g. {@link #MASK} for special-category / biometric data that must never be
+ * pseudonymised, since even a stable token would be a linkable identifier).</li>
+ * </ul>
  * <p>
- * The HMAC key is drawn once from {@link SecureRandom} at construction, i.e. once per
- * JVM run: tokens are stable within a run but NOT linkable across runs (a fresh key
- * each restart). The Cyrillic prefix is a unicode escape (project rule 7).
+ * The HMAC key is DERIVED from the caller-supplied {@code salt} (SHA-256 of its UTF-8
+ * bytes): two pseudonymisers built with the SAME non-blank salt produce identical
+ * tokens (stable across calls, restarts and stands), so an operator who configures a
+ * salt gets cross-run-linkable pseudonyms. A blank / {@code null} salt falls back to a
+ * fresh {@link SecureRandom} key PER INSTANCE - tokens are then stable only within the
+ * one pass that shares this instance and are unlinkable across passes. There is NO
+ * process-global random key: the engine constructs one pseudonymiser per redaction pass.
+ * <p>
+ * {@link #PREFIX} ("natural person") and {@link #MASK} are the canonical default
+ * representation stems reused by {@code pii-defaults.json} / {@code PiiRuleCodec}; the
+ * Cyrillic {@link #PREFIX} is a unicode escape (project rule 7).
  */
 public final class Pseudonymizer
 {
-    /** Token prefix for pseudonymised NORMAL data ("natural person"). */
-    static final String PREFIX = "\u0424\u0438\u0437\u043b\u0438\u0446\u043e";
+    /** Canonical token stem for ordinary pseudonymised data ("natural person", Fizlico). */
+    public static final String PREFIX = "\u0424\u0438\u0437\u043b\u0438\u0446\u043e"; //$NON-NLS-1$
 
-    /** Full mask for special-category / biometric data (never pseudonymised). */
-    public static final String MASK = "[redacted]";
+    /** Canonical flat mask for special-category / biometric data (never pseudonymised). */
+    public static final String MASK = "[redacted]"; //$NON-NLS-1$
+
+    /** Separator between a pseudonym stem and its short HMAC suffix. */
+    private static final String SUFFIX_SEPARATOR = "#"; //$NON-NLS-1$
 
     /** Cyrillic small letter YO (folded to IE during normalisation). */
     private static final char YO = '\u0451';
@@ -42,39 +60,59 @@ public final class Pseudonymizer
 
     private final byte[] key;
 
-    /** Creates a pseudonymiser with a fresh random per-run key. */
-    public Pseudonymizer()
+    /**
+     * Creates a pseudonymiser whose HMAC key is derived from {@code salt}.
+     *
+     * @param salt the pseudonym salt: a non-blank value derives a STABLE key (equal
+     *            salts &rarr; equal tokens); a {@code null} / blank value falls back to a
+     *            fresh per-instance {@link SecureRandom} key (tokens unlinkable across
+     *            instances)
+     */
+    public Pseudonymizer(String salt)
     {
-        this.key = randomKey();
-    }
-
-    private static byte[] randomKey()
-    {
-        byte[] k = new byte[32];
-        new SecureRandom().nextBytes(k);
-        return k;
+        this.key = deriveKey(salt);
     }
 
     /**
-     * Returns the redaction token for {@code value} at the given sensitivity:
-     * {@link #MASK} for full-mask classes, a stable {@code PREFIX#hex} pseudonym for
-     * {@link Sensitivity#NORMAL}, and the value unchanged for a {@code null} class.
+     * Derives a 32-byte HMAC key: {@code SHA-256(salt)} for a non-blank salt (stable),
+     * or a fresh {@link SecureRandom} block for a {@code null} / blank salt (per-instance).
+     */
+    private static byte[] deriveKey(String salt)
+    {
+        if (salt == null || salt.trim().isEmpty())
+        {
+            byte[] random = new byte[32];
+            new SecureRandom().nextBytes(random);
+            return random;
+        }
+        try
+        {
+            return MessageDigest.getInstance("SHA-256").digest(salt.getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        }
+        catch (NoSuchAlgorithmException e)
+        {
+            throw new IllegalStateException("SHA-256 unavailable", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Renders the redaction token for a matched value at a rule's settings.
      *
-     * @param sensitivity the value's sensitivity (may be {@code null})
-     * @param value the raw value
+     * @param representation the token stem (the pseudonym prefix, or the whole mask);
+     *            a {@code null} is treated as empty
+     * @param countable {@code true} to append a stable {@code #hmac} pseudonym suffix;
+     *            {@code false} to return {@code representation} verbatim (a flat mask)
+     * @param value the raw matched value (hashed only when {@code countable})
      * @return the token to emit in place of {@code value}
      */
-    public String token(Sensitivity sensitivity, String value)
+    public String token(String representation, boolean countable, String value)
     {
-        if (sensitivity == null)
+        String stem = representation != null ? representation : ""; //$NON-NLS-1$
+        if (!countable)
         {
-            return value;
+            return stem;
         }
-        if (sensitivity.isFullMask())
-        {
-            return MASK;
-        }
-        return PREFIX + "#" + shortHmac(normalize(value));
+        return stem + SUFFIX_SEPARATOR + shortHmac(normalize(value));
     }
 
     /**
@@ -88,7 +126,7 @@ public final class Pseudonymizer
     {
         if (v == null)
         {
-            return "";
+            return ""; //$NON-NLS-1$
         }
         String lower = v.trim().toLowerCase(Locale.ROOT).replace(YO, IE);
         StringBuilder sb = new StringBuilder(lower.length());
@@ -117,14 +155,14 @@ public final class Pseudonymizer
     {
         try
         {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(key, "HmacSHA256"));
+            Mac mac = Mac.getInstance("HmacSHA256"); //$NON-NLS-1$
+            mac.init(new SecretKeySpec(key, "HmacSHA256")); //$NON-NLS-1$
             byte[] h = mac.doFinal(normalized.getBytes(StandardCharsets.UTF_8));
-            return String.format("%02x%02x%02x%02x", h[0], h[1], h[2], h[3]);
+            return String.format("%02x%02x%02x%02x", h[0], h[1], h[2], h[3]); //$NON-NLS-1$
         }
         catch (GeneralSecurityException e)
         {
-            throw new IllegalStateException("HMAC-SHA256 unavailable", e);
+            throw new IllegalStateException("HMAC-SHA256 unavailable", e); //$NON-NLS-1$
         }
     }
 }

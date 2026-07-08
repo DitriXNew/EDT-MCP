@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.preferences;
 
+import com.ditrix.edt.mcp.server.utils.privacy.PiiRuleCodec;
+
 /**
  * Plugin preference constants.
  */
@@ -150,6 +152,38 @@ public final class PreferenceConstants
      * build without this feature until the user (or the env switch) turns it on.
      */
     public static final boolean DEFAULT_PII_REDACTION_ENABLED = false;
+
+    /**
+     * The user-configurable PII rule table, serialized as JSON. It replaces the old
+     * hard-coded detection: the attribute-name dictionary and the content-regex
+     * backstop are now driven by this table so an operator can add, remove or retune
+     * rules from the Privacy preferences panel without a rebuild. The value is parsed
+     * by {@code PiiRuleCodec}; {@link PiiRuleSettings} resolves it (with caching and a
+     * headless default fallback) for the redactor.
+     */
+    public static final String PREF_PII_RULES_JSON = "mcpPiiRules"; //$NON-NLS-1$
+
+    /**
+     * Default rule table: the bundled default rules serialized to JSON
+     * ({@link PiiRuleCodec#loadBundledDefaults()} re-encoded via {@code PiiRuleCodec.encode}),
+     * which reproduce the previous hard-coded
+     * 152-FZ detection. The packaged {@code pii-defaults.json} is the single source of
+     * truth; this constant is its serialized form so an untouched store, and a headless
+     * context with no store, both resolve to the same bundled rule set.
+     */
+    public static final String DEFAULT_PII_RULES_JSON =
+        PiiRuleCodec.encode(PiiRuleCodec.loadBundledDefaults());
+
+    /**
+     * Salt for the PII pseudonymiser HMAC. When non-empty, the pseudonym tokens become
+     * stable across server runs (deterministic key); the empty default keeps the
+     * per-run random key, so tokens are stable within a run but NOT linkable across
+     * runs. Resolved by {@link PiiRuleSettings#currentSalt()}.
+     */
+    public static final String PREF_PII_SALT = "mcpPiiSalt"; //$NON-NLS-1$
+
+    /** Default salt (empty): keep the per-run random pseudonymiser key. */
+    public static final String DEFAULT_PII_SALT = ""; //$NON-NLS-1$
 
     private PreferenceConstants()
     {
