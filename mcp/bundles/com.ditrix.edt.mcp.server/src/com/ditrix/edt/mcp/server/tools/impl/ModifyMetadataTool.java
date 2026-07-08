@@ -1327,7 +1327,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // attachTopObject, so contentResourceExportFqn(schema) yields null (bmIsTop()==false) and the sibling
         // .dcs would silently never drain (a #239-class false success). When it is not yet a top object, fall
         // through to setTemplate + generateExternalPropertyFqn + attachTopObject to (re-)attach it.
-        if (contentObj instanceof DataCompositionSchema && ((IBmObject)contentObj).bmIsTop())
+        if (contentObj instanceof DataCompositionSchema && contentObj instanceof IBmObject
+            && ((IBmObject)contentObj).bmIsTop())
         {
             return (DataCompositionSchema)contentObj;
         }

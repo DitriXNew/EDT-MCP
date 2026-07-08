@@ -241,6 +241,15 @@ public class DcsWriterTest
     }
 
     @Test
+    public void testQueryDataSetNeedsQuery()
+    {
+        Result r = DcsWriter.apply(newSchema(),
+            json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"query\"}]}"), null); //$NON-NLS-1$
+        assertTrue("a query data set without a query must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must point at 'query'", r.error.contains("query")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testNonQueryDataSetTypeIsError()
     {
         Result r = DcsWriter.apply(newSchema(),
@@ -256,7 +265,7 @@ public class DcsWriterTest
     public void testMissingFieldDataPathIsError()
     {
         Result r = DcsWriter.apply(newSchema(), json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"query\"," //$NON-NLS-1$
-            + "\"fields\":[{\"title\":\"X\"}]}]}"), null); //$NON-NLS-1$
+            + "\"query\":\"SELECT 1\",\"fields\":[{\"title\":\"X\"}]}]}"), null); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("a field without a dataPath must error", r.hasError()); //$NON-NLS-1$
         assertTrue("the error must mention 'dataPath'", r.error.contains("dataPath")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -277,7 +286,8 @@ public class DcsWriterTest
     public void testBadRolePeriodTypeIsError()
     {
         Result r = DcsWriter.apply(newSchema(), json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"query\"," //$NON-NLS-1$
-            + "\"fields\":[{\"dataPath\":\"A\",\"role\":{\"periodType\":\"Weekly\"}}]}]}"), null); //$NON-NLS-1$
+            + "\"query\":\"SELECT 1\",\"fields\":[{\"dataPath\":\"A\",\"role\":{\"periodType\":\"Weekly\"}}]}]}"), //$NON-NLS-1$ //$NON-NLS-2$
+            null);
         assertTrue("a bad periodType token must error", r.hasError()); //$NON-NLS-1$
         assertTrue("the error must name the offending token", r.error.contains("Weekly")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -286,7 +296,7 @@ public class DcsWriterTest
     public void testEmptyRoleIsError()
     {
         Result r = DcsWriter.apply(newSchema(), json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"query\"," //$NON-NLS-1$
-            + "\"fields\":[{\"dataPath\":\"A\",\"role\":{}}]}]}"), null); //$NON-NLS-1$
+            + "\"query\":\"SELECT 1\",\"fields\":[{\"dataPath\":\"A\",\"role\":{}}]}]}"), null); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("a role with no recognized flag must error", r.hasError()); //$NON-NLS-1$
     }
 

@@ -684,6 +684,10 @@ public final class DcsWriter
                 + "'. Object / union data sets are deferred to v2."; //$NON-NLS-1$
         }
         String query = nonEmptyString(entry, KEY_QUERY);
+        if (query == null)
+        {
+            return "A query data set (" + where + ") needs a non-empty 'query'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
         String dataSource = nonEmptyString(entry, KEY_DATA_SOURCE);
         Boolean autoFill = boolMember(entry, KEY_AUTO_FILL);
 
