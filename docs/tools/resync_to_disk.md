@@ -1,6 +1,6 @@
 # resync_to_disk
 
-Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Walks EVERY top metadata object of the configuration (all kinds), reports the objects whose .mdo is missing on disk (missingBefore), and force-exports that missing subset so the files are restored (fullExport=true re-exports every object instead). Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Dangling/orphaned references in Configuration.mdo (unresolved proxies shown by get_project_errors as md-reference-intergrity 'lost reference' warnings that block update_database / XML import) are REPORTED by default (danglingFound + danglingDetails); set cleanDanglingReferences=true to REMOVE them - destructive: rewrites Configuration.mdo. Full parameters and examples: call get_tool_guide('resync_to_disk').
+Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to src/); the reverse is clean_project, which rebuilds MODEL <- DISK and DISCARDS any unsaved in-memory model edits. Walks EVERY top metadata object of the configuration (all kinds), reports the objects whose .mdo is missing on disk (missingBefore), and force-exports that missing subset so the files are restored (fullExport=true re-exports every object instead - requires overwriteDiskEdits=true to confirm, as it overwrites on-disk edits). Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Dangling/orphaned references in Configuration.mdo (unresolved proxies shown by get_project_errors as md-reference-intergrity 'lost reference' warnings that block update_database / XML import) are REPORTED by default (danglingFound + danglingDetails); set cleanDanglingReferences=true to REMOVE them - destructive: rewrites Configuration.mdo. Full parameters and examples: call get_tool_guide('resync_to_disk').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -8,10 +8,14 @@ Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and re
 | projectName | yes | string | EDT project name (required). |
 | cleanDanglingReferences | — | boolean | When true, REMOVE dangling/orphaned references from Configuration.mdo - entries that register an object with no .mdo and no BM body (unresolved proxies), the source of md-reference-intergrity 'lost reference' warnings that block update_database / XML import. Destructive: rewrites Configuration.mdo. Default: false - only report danglingFound + danglingDetails without changing anything. |
 | fullExport | — | boolean | When true, force-export EVERY metadata top object's .mdo (a full disk refresh; slow on a large configuration - the export runs on the UI thread). Default: false - export only the objects whose .mdo is missing on disk. |
+| overwriteDiskEdits | — | boolean | Required confirmation for fullExport=true: force-exporting every .mdo from the in-memory model OVERWRITES any on-disk edits. Default: false - fullExport is rejected unless this is true. Ignored when fullExport=false. |
 | revalidate | — | boolean | When true, schedule a full project revalidation (clean build) after the export so stale markers refresh. Default: false (export only). |
 
 ## Guide
 Bulk re-synchronize the in-memory EDT model to the on-disk `src/` `.mdo` files, and report (optionally remove) dangling/orphaned references in `Configuration.mdo`. Use it to fix `update_database` / XML-import failures that complain about missing object files or "lost reference" warnings, when the BM model and disk have drifted apart.
+
+- **Direction: MODEL -> DISK** - it writes the in-memory model out to the `src/` `.mdo` files.
+- **Paired tool:** `clean_project` is the reverse, **DISK -> MODEL** - it rebuilds the model from disk and DISCARDS any unsaved in-memory model edits. Save (or resync) pending model changes before running `clean_project`.
 
 ## When to use
 - `update_database` or `import_configuration_from_xml` fails with "object file does not exist - /Subsystems/X.mdo; /Roles/Y.mdo; ..." - the object lives in the model and in `Configuration.mdo` but has no `.mdo` on disk.
@@ -27,7 +31,8 @@ Bulk re-synchronize the in-memory EDT model to the on-disk `src/` `.mdo` files, 
 ## Parameter details
 - `projectName` (required) - the EDT project to re-synchronize.
 - `cleanDanglingReferences` (default `false` - report-only) - set `true` to REMOVE the dangling/orphaned proxy entries from `Configuration.mdo`. Destructive: rewrites `Configuration.mdo`. The default run only reports them (`danglingFound` + `danglingDetails`) and changes nothing.
-- `fullExport` (default `false`) - set `true` to force-export EVERY metadata top object's `.mdo` instead of only the missing subset. Heavier (the export runs on the UI thread); use it for a deliberate full disk refresh.
+- `fullExport` (default `false`) - set `true` to force-export EVERY metadata top object's `.mdo` instead of only the missing subset. Heavier (the export runs on the UI thread); use it for a deliberate full disk refresh. Because it re-writes every `.mdo` from the model, it OVERWRITES any on-disk edits, so it must be confirmed with `overwriteDiskEdits=true`.
+- `overwriteDiskEdits` (default `false`) - required confirmation for `fullExport=true`: force-exporting every `.mdo` from the in-memory model OVERWRITES any on-disk edits. `fullExport=true` is rejected with an error unless this is `true`. Ignored when `fullExport=false` (the default missing-only resync only writes the absent files).
 - `revalidate` (default `false`) - after the export, run a full clean build so stale validation markers refresh. Heavier; leave off for a fast run.
 
 ## What you get

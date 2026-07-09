@@ -1,4 +1,4 @@
-Sets one or more properties of a metadata node addressed by a 1C full-name FQN (a top object or a member: attribute / tabular section / dimension / resource / enum value), then force-exports the owning top object to its `.mdo`. Replaces the former set_metadata_property (which set only Comment / Synonym); this tool sets any assignable scalar / boolean / integer / enum / synonym property.
+Sets one or more properties of a metadata node addressed by a 1C full-name FQN (a top object or a member: attribute / tabular section / dimension / resource / enum value), then force-exports the owning top object to its `.mdo`. Replaces the former set_metadata_property (which set only Comment / Synonym); this tool sets any assignable scalar / boolean / integer / enum / synonym property. A ROLE FQN (`Role.<Name>`) is modified through a dedicated access-rights surface (`rights` / `templates` / `roleProperties`) instead of `properties` - see [Setting role access rights](#setting-role-access-rights). A structured membership LIST is edited through a dedicated `content` surface instead of `properties`, dispatched by the FQN's kind - a COMMON ATTRIBUTE's owners (`CommonAttribute.<Name>`), an EXCHANGE PLAN's content objects (`ExchangePlan.<Name>`), a CATALOG's owners (`Catalog.<Name>`), a DOCUMENT's register records (`Document.<Name>`) or a SUBSYSTEM's content objects (`Subsystem.<Name>`, including a nested `Subsystem.<Parent>.Subsystem.<Child>`) - see [Editing a membership list (content)](#editing-a-membership-list-content). A SpreadsheetDocument (print form / макет) TEMPLATE's content is authored through a dedicated `template` surface instead of `properties`, on a template FQN (`CommonTemplate.<Name>` or an object-owned `<Type>.<Owner>.Template.<Name>`) - see [Authoring a spreadsheet template (template)](#authoring-a-spreadsheet-template-template). A REPORT's Data Composition Schema (схема компоновки данных / СКД / `.dcs`) is authored through a dedicated `dcs` surface instead of `properties`, on a Report FQN (`Report.<Name>`) - datasets (a query dataset with its query text + fields) and schema parameters - see [Authoring a data composition schema (dcs)](#authoring-a-data-composition-schema-dcs).
 
 ## Validation (errors are help)
 - A property that is NOT assignable on this node is rejected with the list of assignable properties - discover them with get_metadata_details(assignable:true).
@@ -7,7 +7,10 @@ Sets one or more properties of a metadata node addressed by a 1C full-name FQN (
 ## Parameter details
 - `projectName` (required) - EDT project name.
 - `fqn` (required) - full-name FQN of the node.
-- `properties` (required) - array of `{name, value, language?}`. `name` is the property name; `value` the new value; `language` the CODE for a synonym (default: config default).
+- `properties` (required, EXCEPT for a Role FQN with a role payload or a membership FQN with a content payload) - array of `{name, value, language?}`. `name` is the property name; `value` the new value; `language` the CODE for a synonym (default: config default). It is optional (and cannot be combined with) the role `rights` / `templates` / `roleProperties` payload (see [Setting role access rights](#setting-role-access-rights)) or the membership `content` payload (see [Editing a membership list (content)](#editing-a-membership-list-content)).
+- `content` (CommonAttribute / ExchangePlan / Catalog / Document / Subsystem FQN; a Subsystem FQN may be nested) - array of `{op?, metadata, use?, autoRecord?}` to attach / detach members in the resolved object's structured list (owners / content objects / register records); cannot be combined with `properties`. See [Editing a membership list (content)](#editing-a-membership-list-content).
+- `template` (SpreadsheetDocument template FQN only - `CommonTemplate.<Name>` or `<Type>.<Owner>.Template.<Name>`) - an object `{cells?, merges?, areas?, columnWidths?, rowHeights?}` authoring the template's spreadsheet content; cannot be combined with `properties` / `content` / a Role payload. See [Authoring a spreadsheet template (template)](#authoring-a-spreadsheet-template-template).
+- `dcs` (Report FQN only - `Report.<Name>`) - an object `{dataSources?, dataSets, parameters?}` authoring the report's Data Composition Schema (datasets + query text + fields + schema parameters); cannot be combined with `properties` / `content` / a Role / a `template` payload. See [Authoring a data composition schema (dcs)](#authoring-a-data-composition-schema-dcs).
 - `normalizeYo` (optional, default true) - normalize the Russian letter `ё`->`е` / `Ё`->`Е` in localized-string values (synonym / title) and in the `comment` property (matches the 1C standard `mdo-ru-name-unallowed-letter`). Other free-text strings can be identifier-like (e.g. `XDTOPackage.namespace` is a URI) and always keep the supplied value. Set `false` to keep `ё` exactly as supplied everywhere. The result lists the rewritten properties under `normalized`.
 
 ## Not supported here
@@ -17,7 +20,7 @@ Sets one or more properties of a metadata node addressed by a 1C full-name FQN (
 The `type` property takes a STRUCTURED value `{types:[{kind, ...}]}`. Primitive kinds String / Number / Boolean / Date carry inline qualifiers (length; precision / scale / nonNegative; fractions = DateTime | Date | Time). A reference is `{kind:'Ref', ref:'Type.Name'}` (or `{kind:'CatalogRef', ref:'Name'}`). The list may mix several (a composite type).
 
 ## Setting an object reference
-A reference property to another metadata object is set by FQN: a SINGLE reference (e.g. `chartOfAccounts` on an AccountingRegister) takes `value:'Type.Name'`; a LIST reference (e.g. a Subsystem's `content`) takes `value:['Type.Name', ...]` and REPLACES the whole list (an empty array `[]` clears it). The target must be a top-level object whose type matches; get_metadata_details(assignable:true) shows the allowed target type. Structured content with per-item flags (e.g. a common attribute's content), and references whose target is a member (e.g. a default form), are not set here yet.
+A reference property to another metadata object is set by FQN: a SINGLE reference (e.g. `chartOfAccounts` on an AccountingRegister) takes `value:'Type.Name'`; a LIST reference (e.g. a Subsystem's `content`) takes `value:['Type.Name', ...]` and REPLACES the whole list (an empty array `[]` clears it). The target must be a top-level object whose type matches; get_metadata_details(assignable:true) shows the allowed target type. A structured membership list (a common attribute's owners with a per-owner flag, an exchange plan's content objects with an optional autoRecord flag, a catalog's owners, a document's register records, a subsystem's content objects) is edited ADDITIVELY (add / remove ONE member, idempotent) through the sibling `content` payload - see [Editing a membership list (content)](#editing-a-membership-list-content); references whose target is a member (e.g. a default form) are not set here yet.
 
 ## Setting a StyleItem value (Color / Font)
 A StyleItem (created generically with create_metadata) has no value yet; set its `value` property to a STRUCTURED object with EITHER a `color` OR a `font` member (not both). The style item's `type` (Color / Font) is set automatically to match the value.
@@ -48,6 +51,85 @@ A list / choice form shows its rows through a **dynamic list** form attribute. T
 
 When the attribute is not yet a dynamic list it is converted: a `DynamicList` value type and a dynamic-list ext-info are created, the form's main attribute is set when it has none, and `autoFillAvailableFields` is turned on so EDT derives the available `<fields>` from the query - you do NOT author a DCS `<fields>` block. Create the bare attribute first (`create_metadata` with `...Form.ListForm.Attribute.List`), then set its query here. **Output a column** with `create_metadata` for a form Field bound to `dataPath` `List.<field>` (e.g. `List.Number`), where `<field>` is a query select field; the Field shows that query column in the list table. The query props are structural, so they cannot be combined with other property changes in one call (set the query first, then make other changes). A non-existent attribute or a malformed FQN is a clean error. The change force-exports the form's `Form.form` to disk; verify with get_project_errors (an invalid query is reported by the platform's dynamic-list validation). Property names are bilingual: ru `ТекстЗапроса` / `ПроизвольныйЗапрос` / `ОсновнаяТаблица`.
 
+## Setting role access rights
+When the `fqn` is a **Role** (`Role.<Name>`) you set the role's ACCESS RIGHTS through three sibling payload keys instead of `properties` - a role is modified through its rights surface, not the generic property bag. All three keys are optional; give any combination in one call. A role payload CANNOT be combined with a generic `properties` change in the same call (set the role's own comment / synonym separately). Read a role's current rights matrix, RLS restrictions and templates with `get_metadata_details` on the Role FQN. The change goes through the EDT-native rights tasks and force-exports `Role.<Name>` (draining the sibling `Rights.rights` sub-resource).
+
+- `rights` - array of `{object, right, value?, rls?, rlsFields?}` (per-object right VALUES + optional per-object Row-Level-Security):
+  - `object` (required) - the guarded metadata FQN, e.g. `Catalog.Products` or the Russian `Справочник.Товары` (only the type token is bilingual; the Name is the programmatic Name).
+  - `right` (required) - a bilingual right name, e.g. `Read` / `Чтение`, `Update` / `Изменение`, `Insert` / `Добавление`. An unknown right is rejected WITH the list of valid rights for that object type.
+  - `value` (optional, default `set`) - `set` (allowed) / `unset` (denied) / `provided` (default / inherited), or a boolean (`true`=set, `false`=unset).
+  - `rls` (optional) - a Row-Level-Security restriction condition (1C query text). Setting it adds (or edits, if one already exists for that object+right) the RLS restriction.
+  - `rlsFields` (optional) - an array of field names the RLS applies to; omit or leave empty for a WHOLE-OBJECT restriction. Field names are matched bilingually against the object's RLS field pool.
+- `templates` - array of `{op?, name, condition?}` (RLS restriction templates):
+  - `op` (optional, default `add`) - `add` / `edit` / `delete`.
+  - `name` (required) - the template name.
+  - `condition` (required for `add` / `edit`) - the RLS restriction text.
+- `roleProperties` - object of optional booleans `{setForNewObjects, setForAttributesByDefault, independentRightsOfChildObjects}` - the three role-wide flags. Only supplied flags are changed.
+
+An unknown right or a bad object FQN is a clean, actionable error (not-found + the valid list / a suggestion). Nothing is written unless the payload resolves.
+
+## Editing a membership list (content)
+Several metadata objects carry a structured MEMBERSHIP list - which objects they include or apply to. You edit that list through the sibling `content` payload instead of `properties`, dispatched by the resolved FQN's kind. The list is edited through its own surface, not the generic property bag, so a `content` payload CANNOT be combined with a generic `properties` change in the same call (set the object's own comment / synonym separately). The change goes through a BM write transaction and force-exports the addressed object's `.mdo` to disk once (no manual `clean_project` needed). Read the current list with `get_metadata_details` on the FQN.
+
+The five supported kinds:
+- **CommonAttribute** (`CommonAttribute.<Name>`) - a single attribute shared across many objects (an audit `Author` / `EditDate`, a data-separator). Its OWNERS live in the `content` list, each with a per-owner `use` flag (`Use` / `DontUse` / `Auto`, default `Use`).
+- **ExchangePlan** (`ExchangePlan.<Name>`) - the plan's CONTENT objects (which objects participate in the exchange), each with an optional `autoRecord` flag (`Allow` / `Deny`; omit to keep the platform default) that governs auto-registration of changes.
+- **Catalog** (`Catalog.<Name>`) - the catalog's OWNERS (a subordinate catalog is owned by one or more objects). A plain reference - no per-owner flag.
+- **Document** (`Document.<Name>`) - the document's REGISTER RECORDS / движения (the registers the document posts to). A plain reference - no per-record flag.
+- **Subsystem** (`Subsystem.<Name>`, or a NESTED `Subsystem.<Parent>.Subsystem.<Child>` - bilingual, so `Подсистема.<Name>` works too) - the subsystem's CONTENT objects (the metadata that belongs to this subsystem in the metadata tree). A plain reference - no flag. A member may be ANY top-level configuration object (a Constant, Catalog, Document, Report, DataProcessor, register, CommonModule, Role, ...) EXCEPT another Subsystem: subsystems nest through their own hierarchy, not through `content`. This additive path adds / removes ONE member and is idempotent (unlike setting the `content` PROPERTY, which replaces the whole list). The allow-list of valid member kinds is extensible - a missing kind is rejected with an actionable error naming the FQN and its kind.
+
+- `content` - array of `{op?, metadata, use?, autoRecord?}`:
+  - `op` (optional, default `add`) - `add` attaches (or updates) a member; `remove` detaches one by its `metadata` FQN.
+  - `metadata` (required) - the member object FQN, e.g. `Catalog.Products` or the Russian `Справочник.Товары` (only the type token is bilingual; the Name is the programmatic Name). It must exist and be a valid member kind for the target list; otherwise the entry is rejected with an actionable error (a CommonAttribute / Catalog owner, an ExchangePlan content object, a Document register - a `BasicRegister`: Information / Accumulation / Accounting / Calculation; a Subsystem content object - any top-level configuration object except another Subsystem).
+  - `use` (CommonAttribute only, optional, `add` only, default `Use`) - the per-owner usage: `Use` / `DontUse` / `Auto`. Ignored for `remove` and for the other kinds.
+  - `autoRecord` (ExchangePlan only, optional, `add` only) - `Allow` / `Deny`. Omit to keep the platform default. Ignored for `remove` and for the other kinds.
+
+Adding is IDEMPOTENT: attaching a member already listed does not duplicate it. For a CommonAttribute / ExchangePlan (a wrapper list with a per-entry flag) a re-add UPDATES that member's flag (`use` / `autoRecord`, counted under `updated` rather than `added`); for a Catalog owner / Document register record / Subsystem content object (a plain reference, no flag) a re-add is a no-op. Removing a member that is not listed is a clean error. Nothing is written unless every entry resolves. The result's `content` counts object is `{added, updated, removed}` for a CommonAttribute / ExchangePlan change and `{added, removed}` for a Catalog owners / Document register records / Subsystem content change.
+
+## Authoring a spreadsheet template (template)
+A **SpreadsheetDocument** template (a "Табличный документ" / print form / макет - the layout used for invoices, acts and printed reports) has its cell content authored through the `template` payload instead of `properties`, on a template FQN. Create the empty template OBJECT first with `create_metadata` (`CommonTemplate.<Name>` for a shared template, or `<Type>.<Owner>.Template.<Name>` for an object-owned one - e.g. `DataProcessor.Invoices.Template.Printout`); it is a SpreadsheetDocument template by default. Then fill its content here. Only a SpreadsheetDocument-typed template can be authored (a text / binary-data / DCS / graphical template is refused with its actual type). A `template` payload cannot be combined with `properties`, a membership `content` payload or a Role payload in the same call; a `template` payload on a non-template FQN is a clean, actionable error. The change goes through a BM write transaction and force-exports the template's `.mxlx` content to disk once (no manual `clean_project`). Render the result to a PNG with `get_template_screenshot` to visually verify it.
+
+The `template` object takes any of these arrays (all optional; omit an array to leave that aspect untouched):
+- `cells` - `[{row, col, text?, parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}]`:
+  - `row`, `col` (required) - the 0-based row and column index of the cell.
+  - `text` - a static text value shown in the cell. A cell is either `text` OR a `parameter`, not both.
+  - `parameter` - the name of a print-time PARAMETER (filled by BSL at output, e.g. via `ОбластьМакета.Параметры.<Name>`); the cell shows the parameter's value when the template is printed.
+  - `bold` - `true` to embolden the cell font.
+  - `fontSize` - the font size (points), a positive integer.
+  - `hAlign` - horizontal alignment: `Left` / `Center` / `Right` / `Auto` / `Width`.
+  - `vAlign` - vertical alignment: `Top` / `Center` / `Bottom`.
+  - `wrap` - `true` to word-wrap the cell text (otherwise a single line).
+  - Setting a cell OVERWRITES that `(row, col)` cell; the rest of the content is kept (authoring is additive per cell, not a whole-content replace).
+- `merges` - `[{fromRow, fromCol, toRow, toCol}]`: a merged rectangular cell range (0-based, inclusive).
+- `areas` - `[{name, fromRow, fromCol, toRow, toCol}]`: a NAMED area over a cell range, for programmatic `ПолучитьОбласть("<name>")` / `Вывести` output from BSL.
+- `columnWidths` - `[{col, width}]`: the width of a column (0-based index).
+- `rowHeights` - `[{row, height}]`: the height of a row (0-based index).
+
+A malformed entry (a bad alignment / placement token, a missing `row` / `col`, a non-positive size) is a clean error and nothing is written. The result carries a `template` counts object `{cells, merges, areas, columnWidths, rowHeights}` (how many of each were applied).
+
+## Authoring a data composition schema (dcs)
+A **Report** produces its output from a **Data Composition Schema** (схема компоновки данных / СКД - the `.dcs` resource): the datasets that supply the data (typically a query), each dataset's fields, and the schema parameters. That schema is authored through the `dcs` payload on a Report FQN (`Report.<Name>`), mirroring the `template` payload - it is its own surface, not the generic property bag. Create the Report first with `create_metadata` (`Report.<Name>`); a fresh report has no schema yet. The FIRST `dcs` write FINDS-OR-CREATES the report's main DCS template (its `.dcs` content resource) and fills it; later `dcs` writes update it. A `dcs` payload is valid ONLY on a Report FQN - on any other FQN it is a clean, actionable error naming the FQN (it must not fall through to the generic property path) - and it CANNOT be combined with a generic `properties`, a membership `content`, a Role or a `template` payload in the same call. The change goes through a BM write transaction and force-exports the schema so its `.dcs` content resource (at `src/Reports/<Name>/Templates/<Tpl>/Template.dcs`, beside the report's `.mdo`) drains to disk once (no manual `clean_project`). Verify with get_project_errors (an invalid query / schema is reported by the platform's DCS validation).
+
+The `dcs` object carries these members:
+- `dataSets` (required) - the schema's datasets. v1 authors a QUERY dataset: `[{name, type?, query, dataSource?, autoFillFields?, fields?}]`:
+  - `name` (required) - the dataset name (e.g. `DataSet1` / `НаборДанных1`).
+  - `type` (optional, default `query`) - the dataset kind; v1 supports `query`.
+  - `query` (required for a query dataset) - the 1C query text (keywords are bilingual), e.g. `SELECT Ref, Description FROM Catalog.Products` / `ВЫБРАТЬ Ссылка, Наименование ИЗ Справочник.Товары`. Parameters are referenced with `&<Name>`.
+  - `dataSource` (optional) - the name of the schema data source this dataset reads from; defaults to the schema's default local data source (created automatically when no `dataSources` are given).
+  - `autoFillFields` (optional, default true) - let the platform derive the dataset `<fields>` from the query. Keep it (and omit `fields`) for the common case; give `fields` explicitly to author titles / roles or a fixed field set.
+  - `fields` (optional) - explicit dataset fields `[{dataPath, name?, title?, role?}]`: `dataPath` (required) the field path used in settings; `name` (optional) the query field name (defaults to `dataPath`); `title` (optional) the presentation title (bilingual); `role` (optional) the field role.
+- `dataSources` (optional) - the schema data sources `[{name, type?}]`: `name` (required); `type` (optional) the data-source type (defaults to the local data source). Usually omitted - a default local data source is provided for the query datasets, and a dataset's `dataSource` binds to it.
+- `parameters` (optional) - the schema parameters `[{name, valueType?, title?, use?}]`:
+  - `name` (required) - the parameter name (e.g. `Period` / `Период`), referenced in a query as `&<Name>`.
+  - `valueType` (optional) - the parameter's value type, the SAME structured `{types:[{kind, ...}]}` shape as the `type` property (see [Setting the data type](#setting-the-data-type)).
+  - `title` (optional) - the presentation title (bilingual).
+  - `use` (optional) - the parameter's usage flag.
+
+### Deferred (v2, NOT authored yet)
+Calculated fields, total / resource fields, dataset LINKS (master-detail), and settings variants (groupings / filters / parameter values) are not authored by this version; they will follow on the same `dcs` surface. v1 yields a runnable report skeleton - datasets (a query dataset with its query text + fields) plus schema parameters.
+
+A malformed entry (a missing dataset `name` / `query`, a bad `valueType`) is a clean error and nothing is written. The result carries a `dcs` counts object summarizing how many data sources / datasets / fields / parameters were applied.
+
 ## Examples
 - Move a field into a group: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Field.Price', properties:[{name:'parent', value:'PriceGroup'}]}`
 - Move a button into the command bar: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Button.Print', properties:[{name:'parent', value:'AutoCommandBar'}]}`
@@ -68,9 +150,33 @@ When the attribute is not yet a dynamic list it is converted: a `DynamicList` va
 - Set a style item to a red color: `{projectName:'P', fqn:'StyleItem.MyColor', properties:[{name:'value', value:{color:{red:255, green:0, blue:0}}}]}`
 - Set a style item to the automatic color: `{projectName:'P', fqn:'StyleItem.MyColor', properties:[{name:'value', value:{color:'auto'}}]}`
 - Set a style item to a font: `{projectName:'P', fqn:'StyleItem.MyFont', properties:[{name:'value', value:{font:{faceName:'Arial', height:12, bold:true}}}]}`
+- Grant a role a right on an object: `{projectName:'P', fqn:'Role.FullAccess', rights:[{object:'Catalog.Products', right:'Read', value:'set'}]}`
+- Deny a right (bilingual right name): `{projectName:'P', fqn:'Role.FullAccess', rights:[{object:'Справочник.Товары', right:'Изменение', value:'unset'}]}`
+- Add a whole-object RLS restriction: `{projectName:'P', fqn:'Role.Sales', rights:[{object:'Catalog.Products', right:'Read', value:'set', rls:'WHERE Ref.Company = &Company'}]}`
+- Add a per-field RLS restriction: `{projectName:'P', fqn:'Role.Sales', rights:[{object:'Catalog.Products', right:'Read', value:'set', rls:'WHERE Ref.Company = &Company', rlsFields:['Price', 'Cost']}]}`
+- Add an RLS restriction template: `{projectName:'P', fqn:'Role.Sales', templates:[{op:'add', name:'ByCompany', condition:'WHERE Company = &Company'}]}`
+- Set the role-wide flags: `{projectName:'P', fqn:'Role.Sales', roleProperties:{setForNewObjects:true, setForAttributesByDefault:false}}`
+- Attach an owner to a common attribute: `{projectName:'P', fqn:'CommonAttribute.Author', content:[{metadata:'Catalog.Products', use:'Use'}]}`
+- Attach several owners (bilingual FQN): `{projectName:'P', fqn:'CommonAttribute.Author', content:[{op:'add', metadata:'Document.Order'}, {op:'add', metadata:'Справочник.Товары', use:'Auto'}]}`
+- Detach an owner: `{projectName:'P', fqn:'CommonAttribute.Author', content:[{op:'remove', metadata:'Catalog.Products'}]}`
+- Add an object to an exchange plan's content with auto-record allowed: `{projectName:'P', fqn:'ExchangePlan.Branches', content:[{metadata:'Catalog.Products', autoRecord:'Allow'}]}`
+- Add an exchange plan content object, denying auto-record (bilingual FQN): `{projectName:'P', fqn:'ExchangePlan.Branches', content:[{op:'add', metadata:'Документ.Заказ', autoRecord:'Deny'}]}`
+- Detach an exchange plan content object: `{projectName:'P', fqn:'ExchangePlan.Branches', content:[{op:'remove', metadata:'Catalog.Products'}]}`
+- Add an owner to a subordinate catalog: `{projectName:'P', fqn:'Catalog.Contacts', content:[{metadata:'Catalog.Partners'}]}`
+- Detach a catalog owner: `{projectName:'P', fqn:'Catalog.Contacts', content:[{op:'remove', metadata:'Catalog.Partners'}]}`
+- Add a register record / движение to a document: `{projectName:'P', fqn:'Document.Order', content:[{metadata:'AccumulationRegister.Goods'}]}`
+- Detach a document register record: `{projectName:'P', fqn:'Document.Order', content:[{op:'remove', metadata:'AccumulationRegister.Goods'}]}`
+- Add an object to a subsystem's content: `{projectName:'P', fqn:'Subsystem.Sales', content:[{metadata:'Constant.CompanyName'}]}`
+- Add several objects to a nested subsystem (bilingual FQN): `{projectName:'P', fqn:'Subsystem.Sales.Subsystem.Orders', content:[{op:'add', metadata:'Catalog.Products'}, {op:'add', metadata:'Документ.Заказ'}]}`
+- Detach an object from a subsystem's content: `{projectName:'P', fqn:'Subsystem.Sales', content:[{op:'remove', metadata:'Constant.CompanyName'}]}`
+- Author a title cell in a common template: `{projectName:'P', fqn:'CommonTemplate.InvoiceForm', template:{cells:[{row:0, col:0, text:'INVOICE', bold:true, fontSize:14, hAlign:'Center'}], merges:[{fromRow:0, fromCol:0, toRow:0, toCol:3}]}}`
+- Add a print-time parameter cell and a named area to an object-owned template: `{projectName:'P', fqn:'DataProcessor.Invoices.Template.Printout', template:{cells:[{row:2, col:1, parameter:'CustomerName', wrap:true, vAlign:'Center'}], areas:[{name:'Header', fromRow:0, fromCol:0, toRow:1, toCol:3}]}}`
+- Set column widths and a row height: `{projectName:'P', fqn:'CommonTemplate.InvoiceForm', template:{columnWidths:[{col:0, width:30}, {col:1, width:60}], rowHeights:[{row:0, height:24}]}}`
+- Author a report's DCS (a query dataset + a period parameter): `{projectName:'P', fqn:'Report.Sales', dcs:{dataSets:[{name:'DataSet1', type:'query', query:'SELECT Ref, Description FROM Catalog.Products'}], parameters:[{name:'Period', valueType:{types:[{kind:'Date', fractions:'Date'}]}}]}}`
+- Author explicit dataset fields (bilingual query): `{projectName:'P', fqn:'Report.Sales', dcs:{dataSets:[{name:'НаборДанных1', type:'query', query:'ВЫБРАТЬ Ссылка КАК Товар ИЗ Справочник.Товары', autoFillFields:false, fields:[{dataPath:'Товар', title:'Product'}]}]}}`
 
 ## Result
-JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, `persisted`, and (when the ё->е normalization rewrote anything) the list of `normalized` properties. A move additionally returns `destination` (where the moved item ended up, e.g. `group 'Main' at index 1`).
+JSON with `action='modified'`, the normalized `fqn`, the `applied` property names, `persisted`, and (when the ё->е normalization rewrote anything) the list of `normalized` properties. A move additionally returns `destination` (where the moved item ended up, e.g. `group 'Main' at index 1`). For a ROLE rights change `applied` is instead a counts object `{rights, templates, roleProperties}` (how many of each were applied). For a membership `content` change the result carries a `content` counts object: `{added, updated, removed}` for a CommonAttribute / ExchangePlan change (members attached / had their `use` / `autoRecord` flag updated / detached) and `{added, removed}` for a Catalog owners / Document register records / Subsystem content change (a plain reference list has no per-entry flag, so nothing is "updated"). For a `template` spreadsheet-content change the result carries a `template` counts object `{cells, merges, areas, columnWidths, rowHeights}` (how many of each were applied). For a `dcs` schema-authoring change the result carries a `dcs` counts object summarizing how many data sources / datasets / fields / parameters were applied.
 
 ## Reverting (no undo)
 There is no automatic undo: to revert a change, call modify_metadata again with the previous value (read the current value first with get_metadata_details). modify_metadata is intentionally NOT confirm-gated because it is reversible that way; only the destructive / high-blast-radius writes (delete_metadata, rename_metadata_object, update_database, delete_project) are gated with a confirm-preview.

@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.JUnitMarkdownFormatter;
 import com.ditrix.edt.mcp.server.utils.JUnitTestResults;
 import com.ditrix.edt.mcp.server.utils.JUnitXmlParser;
@@ -1081,8 +1082,12 @@ public class RunYaxunitTestsTool implements IMcpTool
      * logging and the Job display name). Bundling these keeps
      * {@link #awaitPreparedOrPending} and {@link #schedulePrepJob} below the
      * 7-parameter limit without changing any value or order.
+     *
+     * <p>Package-private (not {@code private}) so the same-package
+     * {@code runPrepJobBody} ratchet can construct a request, exactly as
+     * {@code DebugLaunchTool.runLaunchJobBody} is a package-private seam.
      */
-    private static final class PrepRequest
+    static final class PrepRequest
     {
         final String projectName;
         final ILaunchManager launchManager;
@@ -1161,40 +1166,76 @@ public class RunYaxunitTestsTool implements IMcpTool
             @Override
             protected IStatus run(IProgressMonitor monitor)
             {
-                try
-                {
-                    jobEntry.phase = "recompute"; //$NON-NLS-1$
-                    int terminateTimeout =
-                        LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
-                    PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
-                        req.launchManager, req.project, req.applicationId,
-                        req.appManager, terminateTimeout, req.updateScope);
-                    jobEntry.phase = "db-update"; //$NON-NLS-1$
-                    resultHolder[0] = result;
-                    if (!result.isOk())
-                    {
-                        jobEntry.error = result.getError();
-                    }
-                }
-                catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
-                {
-                    // Throwable, not Exception: an Error escaping the prep must still
-                    // surface as a prep failure — otherwise the retry call would see
-                    // done-without-error and proceed as if preparation succeeded.
-                    jobEntry.error = e.getMessage() != null ? e.getMessage()
-                        : e.getClass().getSimpleName();
-                    Activator.logError("Pre-launch preparation job failed: " + req.projectName, e); //$NON-NLS-1$
-                }
-                finally
-                {
-                    jobEntry.done = true;
-                    jobEntry.latch.countDown();
-                }
-                return Status.OK_STATUS;
+                return runPrepJobBody(jobEntry, req, resultHolder);
             }
         };
         prepJob.setPriority(Job.INTERACTIVE);
         prepJob.schedule();
+    }
+
+    /**
+     * Body of the background pre-launch preparation {@link Job} that
+     * {@link #schedulePrepJob} schedules — extracted as a package-private static seam so
+     * the headless ratchet can exercise it directly (scheduling a real Job needs a live
+     * workbench). Runs {@link LaunchLifecycleUtils#prepareForFreshLaunch}, stores the
+     * {@link PreLaunchResult} in {@code resultHolder[0]} and always completes the entry
+     * ({@code error}/{@code done}/latch) — identical to the inline body it replaces.
+     *
+     * <p><b>#230:</b> brackets the whole prep with the {@link InfobaseAuthDialogSuppressor}
+     * in-flight counter. This Job is fire-and-forget: {@code execute()} only blocks on it
+     * for {@code PRELAUNCH_BUDGET_MS} before returning a "pending" response, so
+     * {@code tool.execute()} has already returned and stamped {@code lastActivityEndMillis}.
+     * {@code prepareForFreshLaunch}'s db-update phase does the infobase-connecting
+     * {@code appManager.update} — the SAME connect that raises the blocking "Configure
+     * Infobase access Settings" auth dialog — and the recompute phase before it can
+     * legitimately run for minutes on a real config, far past the trailing grace window.
+     * The in-flight counter — not the short grace window — must therefore cover the whole
+     * recompute+db-update, so a dialog raised by this connect (missing/wrong stored creds)
+     * is still auto-cancelled instead of hanging the unattended call (mirrors
+     * {@code DebugLaunchTool.runLaunchJobBody}). The counter is ALWAYS released in
+     * {@code finally}, so it never leaks even on an {@link Error} escaping the prep.
+     *
+     * @param jobEntry the in-flight entry to complete (phase / error / done / latch)
+     * @param req the immutable prep pass-throughs
+     * @param resultHolder receives the {@link PreLaunchResult} in slot {@code [0]}
+     * @return {@link Status#OK_STATUS} (the Job outcome is carried on {@code jobEntry},
+     *         not on the returned status)
+     */
+    static IStatus runPrepJobBody(PrepInFlight jobEntry, PrepRequest req,
+            PreLaunchResult[] resultHolder)
+    {
+        InfobaseAuthDialogSuppressor.markActivityStart();
+        try
+        {
+            jobEntry.phase = "recompute"; //$NON-NLS-1$
+            int terminateTimeout =
+                LaunchLifecycleUtils.getDefaultTerminateTimeoutSeconds();
+            PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
+                req.launchManager, req.project, req.applicationId,
+                req.appManager, terminateTimeout, req.updateScope);
+            jobEntry.phase = "db-update"; //$NON-NLS-1$
+            resultHolder[0] = result;
+            if (!result.isOk())
+            {
+                jobEntry.error = result.getError();
+            }
+        }
+        catch (Throwable e) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+        {
+            // Throwable, not Exception: an Error escaping the prep must still
+            // surface as a prep failure — otherwise the retry call would see
+            // done-without-error and proceed as if preparation succeeded.
+            jobEntry.error = e.getMessage() != null ? e.getMessage()
+                : e.getClass().getSimpleName();
+            Activator.logError("Pre-launch preparation job failed: " + req.projectName, e); //$NON-NLS-1$
+        }
+        finally
+        {
+            InfobaseAuthDialogSuppressor.markActivityEnd();
+            jobEntry.done = true;
+            jobEntry.latch.countDown();
+        }
+        return Status.OK_STATUS;
     }
 
     /** Shared "Pre-launch preparation failed" error payload (identical wording in both surfacing sites). */

@@ -125,6 +125,7 @@ public final class Toolsets
         assign(METADATA,
             "create_metadata", "modify_metadata", "delete_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "rename_metadata_object", "adopt_metadata_object", //$NON-NLS-1$ //$NON-NLS-2$
+            "list_common_pictures", "export_common_picture", //$NON-NLS-1$ //$NON-NLS-2$
             "get_subsystem_content", "list_subsystems", //$NON-NLS-1$ //$NON-NLS-2$
             "get_configuration_properties", "list_configurations", //$NON-NLS-1$ //$NON-NLS-2$
             "create_launch_config", "delete_launch_config"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -136,8 +137,8 @@ public final class Toolsets
 
         assign(DEBUG,
             "debug_launch", "debug_status", "set_breakpoint", "remove_breakpoint", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "list_breakpoints", "wait_for_break", "get_variables", "step", "resume", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-            "evaluate_expression", "get_applications", "terminate_launch"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "list_breakpoints", "wait_for_break", "get_variables", "set_variable", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "step", "resume", "evaluate_expression", "get_applications", "terminate_launch"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
         assign(TESTING,
             "run_yaxunit_tests", "debug_yaxunit_tests"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -158,7 +159,7 @@ public final class Toolsets
             "clean_project", "revalidate_objects", "resync_to_disk", "update_database", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             "export_configuration_to_xml", "import_configuration_from_xml", "build_external_objects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "create_infobase", "delete_infobase", "set_infobase_credentials", "create_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "get_problem_summary", "get_project_errors", "get_markers", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "get_problem_summary", "get_project_errors", "get_markers", "get_event_log", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "get_check_description", "get_platform_documentation"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 

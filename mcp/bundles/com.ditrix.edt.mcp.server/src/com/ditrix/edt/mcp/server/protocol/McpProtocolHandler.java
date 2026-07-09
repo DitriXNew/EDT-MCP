@@ -311,6 +311,12 @@ public class McpProtocolHandler
         // headless. set_infobase_credentials provides the credentials so the dialog never needs to
         // appear on a correctly configured base.
         InfobaseAuthDialogSuppressor.ensureInstalled();
+        // Scope the auth-dialog suppression to actual MCP activity (#230): mark this dispatch
+        // in-flight so the suppressor auto-cancels an auth dialog raised during (and briefly
+        // after, via the trailing grace window that bridges async read-back Jobs) the call,
+        // while a human who opens the same dialog in the GUI when the server is idle can still
+        // use it. markActivityEnd() runs in the finally below so the counter never leaks.
+        InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
             result = tool.execute(params);
@@ -319,6 +325,7 @@ public class McpProtocolHandler
         }
         finally
         {
+            InfobaseAuthDialogSuppressor.markActivityEnd();
             // Clear current tool name after execution
             if (server != null)
             {

@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -749,6 +750,124 @@ public class FormElementWriterTest
             new String[1]);
         assertNotNull(err);
         assertTrue(err.contains("command action")); //$NON-NLS-1$
+    }
+
+    // ---- general extInfo access (ensureExtInfo / resolveExtInfoEClass, #235) ----------------------
+
+    @Test
+    public void testEnsureExtInfoCreatesUsualGroupExtInfoForEmptyGroup()
+    {
+        // A UsualGroup with an empty <extInfo> slot gets its concrete UsualGroupExtInfo created and
+        // linked - the derive-from-type path (generalized groupExtInfoClassifierFor).
+        EObject group = newObject(MODEL.formGroup);
+        setLiteral(group, "type", "UsualGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject extInfo = FormElementWriter.ensureExtInfo(newForm(), group);
+        assertNotNull(extInfo);
+        assertEquals("UsualGroupExtInfo", extInfo.eClass().getName()); //$NON-NLS-1$
+        // It is actually attached to the group's extInfo reference.
+        assertSame(extInfo, group.eGet(feature(group, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEnsureExtInfoIsIdempotentAndKeepsSetProperties()
+    {
+        // A 2nd ensureExtInfo returns the SAME instance and does NOT reset properties set on it.
+        EObject form = newForm();
+        EObject group = newObject(MODEL.formGroup);
+        setLiteral(group, "type", "UsualGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject first = FormElementWriter.ensureExtInfo(form, group);
+        setLiteral(first, "group", "AlwaysHorizontal"); //$NON-NLS-1$ //$NON-NLS-2$
+        first.eSet(feature(first, "united"), Boolean.TRUE); //$NON-NLS-1$
+        EObject second = FormElementWriter.ensureExtInfo(form, group);
+        assertSame(first, second);
+        assertEquals("AlwaysHorizontal", literalOf(second, "group")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.TRUE, second.eGet(feature(second, "united"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEnsureExtInfoReusesPresetExtInfoWithoutClobber()
+    {
+        // A designer-created (already present) extInfo carrying a set 'group' is reused verbatim - never
+        // re-created via setExtInfoClassifier (which would clobber the set layout property).
+        EObject group = newObject(MODEL.formGroup);
+        setLiteral(group, "type", "UsualGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject preset = newObject(MODEL.usualGroupExtInfo);
+        setLiteral(preset, "group", "Horizontal"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "extInfo"), preset); //$NON-NLS-1$
+        EObject ensured = FormElementWriter.ensureExtInfo(newForm(), group);
+        assertSame(preset, ensured);
+        assertEquals("Horizontal", literalOf(ensured, "group")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testEnsureExtInfoReplacesStaleExtInfoAfterTypeChange()
+    {
+        // #235 review: a form group whose `type` was changed via modify_metadata carries a STALE extInfo of
+        // the OLD type. The `type` is authoritative: resolveExtInfoEClass must report the NEW type's class,
+        // and ensureExtInfo must RECREATE the extInfo for the new type (not reuse the stale one) - so a
+        // later layout write lands on the correct holder instead of the wrong-type extInfo.
+        EObject form = newForm();
+        EObject group = newObject(MODEL.formGroup);
+        setLiteral(group, "type", "UsualGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject usual = FormElementWriter.ensureExtInfo(form, group);
+        assertEquals("UsualGroupExtInfo", usual.eClass().getName()); //$NON-NLS-1$
+        // Change the classifier: the UsualGroupExtInfo is now stale for a Pages group.
+        setLiteral(group, "type", "Pages"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the type is authoritative - resolveExtInfoEClass reports the NEW type's class", //$NON-NLS-1$
+            "PagesGroupExtInfo", FormElementWriter.resolveExtInfoEClass(group).getName()); //$NON-NLS-1$
+        EObject replaced = FormElementWriter.ensureExtInfo(form, group);
+        assertEquals("ensureExtInfo recreates the extInfo for the new type", //$NON-NLS-1$
+            "PagesGroupExtInfo", replaced.eClass().getName()); //$NON-NLS-1$
+        assertNotSame("the stale UsualGroupExtInfo must be replaced, not reused", usual, replaced); //$NON-NLS-1$
+        assertSame(replaced, group.eGet(feature(group, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEnsureExtInfoNoOpWhenElementHasNoExtInfoSlot()
+    {
+        // A form root (mdclass-like: no extInfo feature) is a no-op - null, nothing set.
+        EObject form = newForm();
+        assertNull(FormElementWriter.ensureExtInfo(form, form));
+        assertNull(FormElementWriter.resolveExtInfoEClass(form));
+    }
+
+    @Test
+    public void testResolveExtInfoEClassForEmptyGroupDoesNotInstantiate()
+    {
+        // Read-only listing: the concrete class is derived from the group type WITHOUT creating an
+        // instance (the extInfo slot stays empty).
+        EObject group = newObject(MODEL.formGroup);
+        setLiteral(group, "type", "UsualGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame(MODEL.usualGroupExtInfo, FormElementWriter.resolveExtInfoEClass(group));
+        assertNull(group.eGet(feature(group, "extInfo"))); //$NON-NLS-1$
+        // A different group type resolves its own concrete extInfo (generalized mapping).
+        EObject popup = newObject(MODEL.formGroup);
+        setLiteral(popup, "type", "Popup"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame(modelClass("PopupGroupExtInfo"), FormElementWriter.resolveExtInfoEClass(popup)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveExtInfoEClassReusesExistingInstanceForAnyKind()
+    {
+        // The reuse path is element-agnostic: a field carrying an InputFieldExtInfo reports that concrete
+        // class, so the general extInfo path is not group-only.
+        EClass inputExtInfo = modelClass("InputFieldExtInfo"); //$NON-NLS-1$
+        EObject field = newObject(modelClass("FormField")); //$NON-NLS-1$
+        field.eSet(feature(field, "extInfo"), newObject(inputExtInfo)); //$NON-NLS-1$
+        assertSame(inputExtInfo, FormElementWriter.resolveExtInfoEClass(field));
+    }
+
+    @Test
+    public void testUsualGroupExtInfoCarriesLayoutFeatures()
+    {
+        // The synthetic UsualGroupExtInfo exposes the #235 layout features (so the A/C/D unit tests that
+        // read/write them run headlessly).
+        for (String featureName : new String[] {"group", "united", "showLeftMargin", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "throughAlign", "currentRowUse", "representation"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertNotNull(featureName + " must exist on UsualGroupExtInfo", //$NON-NLS-1$
+                MODEL.usualGroupExtInfo.getEStructuralFeature(featureName));
+        }
     }
 
     /**
@@ -1979,6 +2098,12 @@ public class FormElementWriterTest
         return new DynamicEObjectImpl(eClass);
     }
 
+    /** Looks up a classifier of the synthetic form-like package by name (via any exposed EClass). */
+    private static EClass modelClass(String name)
+    {
+        return (EClass)MODEL.formGroup.getEPackage().getEClassifier(name);
+    }
+
     private static EStructuralFeature feature(EObject object, String name)
     {
         return object.eClass().getEStructuralFeature(name);
@@ -2046,6 +2171,7 @@ public class FormElementWriterTest
         final EClass form;
         final EClass formItem;
         final EClass formGroup;
+        final EClass usualGroupExtInfo;
         final EClass autoCommandBar;
         final EClass table;
         final EClass decoration;
@@ -2068,6 +2194,13 @@ public class FormElementWriterTest
                 "ButtonGroup", "ColumnGroup", "CommandBar", "UsualGroup", "Popup", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
                 "Page", "Pages"); //$NON-NLS-1$ //$NON-NLS-2$
             EEnum currentRowUse = newEnum(f, "CurrentRowUse", "DontUse", "Use", "Auto"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            // The UsualGroupExtInfo layout enums (#235): the children grouping and the through-align /
+            // representation tri-states nested under a group's <extInfo>.
+            EEnum formChildrenGroup = newEnum(f, "FormChildrenGroup", //$NON-NLS-1$
+                "Vertical", "Horizontal", "AlwaysHorizontal", "HorizontalIfPossible"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            EEnum throughAlign = newEnum(f, "FormElementsThroughAlign", "Auto", "Use", "DontUse"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            EEnum groupRepresentation = newEnum(f, "UsualGroupRepresentation", //$NON-NLS-1$
+                "None", "WeakSeparation", "NormalSeparation", "StrongSeparation"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             EEnum decorationType = newEnum(f, "ManagedFormDecorationType", "Label", "Picture"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             EEnum fieldType = newEnum(f, "ManagedFormFieldType", "InputField", "LabelField"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             EEnum horizontalAlign = newEnum(f, "ItemHorizontalAlignment", "Auto", "Left"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -2083,7 +2216,15 @@ public class FormElementWriterTest
             EClass extInfoBase = f.createEClass();
             extInfoBase.setName("FormItemExtInfo"); //$NON-NLS-1$
             extInfoBase.setAbstract(true);
-            EClass usualGroupExtInfo = subExtInfo(f, extInfoBase, "UsualGroupExtInfo"); //$NON-NLS-1$
+            usualGroupExtInfo = subExtInfo(f, extInfoBase, "UsualGroupExtInfo"); //$NON-NLS-1$
+            // The UsualGroup layout properties that live under <extInfo> (#235): the children grouping
+            // plus united / showLeftMargin / throughAlign / currentRowUse / representation.
+            addEnum(f, usualGroupExtInfo, "group", formChildrenGroup); //$NON-NLS-1$
+            addBoolean(f, usualGroupExtInfo, "united"); //$NON-NLS-1$
+            addBoolean(f, usualGroupExtInfo, "showLeftMargin"); //$NON-NLS-1$
+            addEnum(f, usualGroupExtInfo, "throughAlign", throughAlign); //$NON-NLS-1$
+            addEnum(f, usualGroupExtInfo, "currentRowUse", currentRowUse); //$NON-NLS-1$
+            addEnum(f, usualGroupExtInfo, "representation", groupRepresentation); //$NON-NLS-1$
             EClass popupGroupExtInfo = subExtInfo(f, extInfoBase, "PopupGroupExtInfo"); //$NON-NLS-1$
             EClass pageGroupExtInfo = subExtInfo(f, extInfoBase, "PageGroupExtInfo"); //$NON-NLS-1$
             EClass pagesGroupExtInfo = subExtInfo(f, extInfoBase, "PagesGroupExtInfo"); //$NON-NLS-1$
@@ -2281,6 +2422,9 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(placementArea);
             pkg.getEClassifiers().add(groupType);
             pkg.getEClassifiers().add(currentRowUse);
+            pkg.getEClassifiers().add(formChildrenGroup);
+            pkg.getEClassifiers().add(throughAlign);
+            pkg.getEClassifiers().add(groupRepresentation);
             pkg.getEClassifiers().add(decorationType);
             pkg.getEClassifiers().add(fieldType);
             pkg.getEClassifiers().add(horizontalAlign);

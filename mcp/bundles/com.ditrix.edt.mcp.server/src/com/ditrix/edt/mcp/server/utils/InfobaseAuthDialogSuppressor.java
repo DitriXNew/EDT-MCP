@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTException;
@@ -43,18 +44,36 @@ import com.ditrix.edt.mcp.server.Activator;
  * no public hook, so it is intercepted at the SWT level, like the launch modals in
  * {@link LaunchUpdateDialogAutoConfirmer}.
  *
- * <h2>Why always-on (not per-call)</h2>
- * EDT computes an application's update state (and connects to the infobase) inside
- * <b>background {@link org.eclipse.core.runtime.jobs.Job Jobs}</b> — e.g. the
- * read-back of {@code get_applications}/{@code create_infobase} — which raise the
- * dialog <em>after</em> the originating {@code tool.execute(...)} has already
- * returned. A filter that was armed only around the call would miss those. So the
- * filter is installed once (lazily, the first time a workbench {@link Display} is
- * available — {@link #ensureInstalled()} is called on every tool dispatch) and
- * stays installed for the workbench's lifetime: the MCP server runs unattended, so
- * this dialog must never block, whoever raises it. Credentials are provided through
- * {@code set_infobase_credentials} / {@code create_infobase}, so on a correctly
- * configured base the dialog never needs to appear at all.
+ * <h2>Why activity-scoped (not always-on) — issue #230</h2>
+ * The auth (access-settings) dialog is auto-cancelled only while an MCP tool call is
+ * <em>active or has just finished</em>, so a human who opens EDT's
+ * "Configure Infobase access" dialog in the GUI while the server is <b>idle</b> can
+ * still use it to store credentials into Secure Storage. Two mechanisms decide "active":
+ * <ul>
+ *   <li>an in-flight <b>counter</b> ({@link #IN_FLIGHT}, bumped by
+ *       {@link #markActivityStart()} / {@link #markActivityEnd()} around
+ *       {@code tool.execute(...)}) covers the whole <em>synchronous</em> call —
+ *       {@code update_database}'s minutes included — regardless of duration;</li>
+ *   <li>a trailing <b>grace window</b> ({@link #DEFAULT_ACTIVITY_GRACE_MILLIS}, from
+ *       {@link #lastActivityEndMillis}) bridges the short gap to the <em>asynchronous</em>
+ *       read-back {@link org.eclipse.core.runtime.jobs.Job Jobs} — e.g.
+ *       {@code get_applications}/{@code create_infobase} — that raise the dialog
+ *       <em>after</em> {@code tool.execute(...)} has already returned. Without this a
+ *       missed async dialog would hang an unattended call (a #194 regression).</li>
+ * </ul>
+ * An env <b>kill-switch</b> {@link #ENV_SUPPRESS_AUTH_DIALOG} (default ON — set it to
+ * {@code false}/{@code 0}/{@code no} to disable) lets an operator turn the auth-dialog
+ * suppression off entirely. The filter itself is still installed once (lazily, the
+ * first time a workbench {@link Display} is available — {@link #ensureInstalled()} is
+ * called on every tool dispatch) and stays installed for the workbench's lifetime;
+ * the activity/env decision is applied per event, only to the auth dialog.
+ * <p>The Secure Storage password-<b>hint</b> dialog stays <b>always-suppressed</b>
+ * (dismissed unconditionally, ignoring both the activity window and the env flag): it
+ * is an internal follow-up to the MCP server supplying the keyring master password
+ * programmatically ({@link McpSecureStorageProvider}) and is never something a human
+ * configures. Credentials are provided through {@code set_infobase_credentials} /
+ * {@code create_infobase}, so on a correctly configured base the auth dialog never
+ * needs to appear at all.
  *
  * <h2>Scope &amp; safety</h2>
  * <ul>
@@ -101,6 +120,45 @@ public final class InfobaseAuthDialogSuppressor
      */
     static final String SECURE_STORAGE_HINT_TITLE_PREFIX = "Secure Storage - Password Hint"; //$NON-NLS-1$
 
+    /**
+     * Kill-switch environment variable for the infobase access-settings ("auth") dialog suppression
+     * (issue #230). Default <b>ON</b>: unset / blank / any value other than a trimmed case-insensitive
+     * {@code false}/{@code 0}/{@code no} keeps the suppression enabled (so the #194 unattended-safety
+     * behaviour is preserved by default). Set it to {@code false} (or {@code 0}/{@code no}) on the EDT
+     * launch to disable auth-dialog suppression entirely.
+     *
+     * <p>The polarity is <em>inverted</em> vs {@code DestructiveConsentGate.ENV_DESTRUCTIVE_CONSENT}
+     * (that is opt-<em>IN</em>: only {@code allow} enables the bypass). Here the safe default is ON, so
+     * the classifier defaults to {@code true} and only an explicit negative value disables it.
+     */
+    static final String ENV_SUPPRESS_AUTH_DIALOG = "EDT_MCP_SUPPRESS_AUTH_DIALOG"; //$NON-NLS-1$
+
+    /**
+     * Trailing grace window (ms) after the last MCP call ends during which an auth dialog is still
+     * auto-cancelled. The in-flight {@link #IN_FLIGHT} counter already covers the whole synchronous
+     * {@code execute()} window regardless of duration; this window only bridges the short gap from
+     * execute-completion to an asynchronous read-back Job raising the dialog
+     * ({@code get_applications}/{@code create_infobase} — realistically a few seconds). 30 s gives a
+     * wide margin against a #194 regression while a human deliberately configuring credentials (idle
+     * for minutes) is far past the window.
+     */
+    static final long DEFAULT_ACTIVITY_GRACE_MILLIS = 30_000L;
+
+    /**
+     * Number of MCP tool calls currently executing. Incremented by {@link #markActivityStart()} before
+     * {@code tool.execute(...)} and decremented by {@link #markActivityEnd()} in the dispatch
+     * {@code finally}, so a still-running call keeps the auth dialog suppressed for its whole duration.
+     * An {@link AtomicInteger} because MCP worker threads call the mutators concurrently.
+     */
+    static final AtomicInteger IN_FLIGHT = new AtomicInteger();
+
+    /**
+     * {@link System#currentTimeMillis()} of the most recent {@link #markActivityEnd()}. Combined with
+     * {@link #DEFAULT_ACTIVITY_GRACE_MILLIS} it bridges the gap to an asynchronous read-back Job's
+     * dialog. Volatile: written on worker threads, read on the SWT event thread.
+     */
+    static volatile long lastActivityEndMillis;
+
     private static final Object LOCK = new Object();
 
     /** Fast-path flag: once the filter is installed on a live display, dispatch skips the UI round-trip. */
@@ -111,6 +169,89 @@ public final class InfobaseAuthDialogSuppressor
 
     private InfobaseAuthDialogSuppressor()
     {
+    }
+
+    /**
+     * Marks the start of an MCP tool call: increments the {@link #IN_FLIGHT} counter so an auth dialog
+     * raised while the call runs is auto-cancelled. Paired with {@link #markActivityEnd()} in the
+     * dispatch {@code finally} ({@code McpProtocolHandler.executeToolTimed}). Also armed around the
+     * <em>fire-and-forget</em> launch in {@code DebugLaunchTool} (whose infobase connect happens in a
+     * background Job after {@code execute()} has returned, so the trailing grace alone would not cover a
+     * minutes-long launch — see issue #230).
+     */
+    public static void markActivityStart()
+    {
+        IN_FLIGHT.incrementAndGet();
+    }
+
+    /**
+     * Marks the end of an MCP tool call: decrements the {@link #IN_FLIGHT} counter (clamped at zero as a
+     * defence against an unbalanced call) and stamps {@link #lastActivityEndMillis} so the trailing
+     * grace window keeps a briefly-later asynchronous read-back dialog suppressed. Always runs in the
+     * dispatch {@code finally} so the counter never leaks on a thrown {@code execute}.
+     */
+    public static void markActivityEnd()
+    {
+        if (IN_FLIGHT.decrementAndGet() < 0)
+        {
+            IN_FLIGHT.set(0);
+        }
+        lastActivityEndMillis = System.currentTimeMillis();
+    }
+
+    /**
+     * Reads the {@link #ENV_SUPPRESS_AUTH_DIALOG} environment variable and reports whether auth-dialog
+     * suppression is enabled. Delegates to the pure {@link #envAllowsSuppression(String)} so the
+     * classification is unit-testable without touching the process environment.
+     *
+     * @return {@code true} when the env flag leaves suppression enabled (the default)
+     */
+    static boolean isEnvSuppressEnabled()
+    {
+        return envAllowsSuppression(System.getenv(ENV_SUPPRESS_AUTH_DIALOG));
+    }
+
+    /**
+     * Pure classifier for the {@link #ENV_SUPPRESS_AUTH_DIALOG} value, <b>default ON</b>: returns
+     * {@code false} ONLY for a trimmed case-insensitive {@code false}/{@code 0}/{@code no}; every other
+     * value — including {@code null}, blank, {@code true}, or garbage — returns {@code true}. The
+     * default-ON polarity preserves the #194 unattended-safety behaviour for anyone who does not set the
+     * flag (a naive copy of {@code DestructiveConsentGate.envForcesAllow} would default suppression OFF
+     * and silently regress it).
+     *
+     * @param rawEnvValue the raw environment value (may be {@code null})
+     * @return {@code true} to keep suppression enabled, {@code false} only for an explicit off value
+     */
+    static boolean envAllowsSuppression(String rawEnvValue)
+    {
+        if (rawEnvValue == null)
+        {
+            return true;
+        }
+        String value = rawEnvValue.trim();
+        return !("false".equalsIgnoreCase(value) //$NON-NLS-1$
+            || "0".equals(value) //$NON-NLS-1$
+            || "no".equalsIgnoreCase(value)); //$NON-NLS-1$
+    }
+
+    /**
+     * Pure decision (and test seam): should the infobase access-settings ("auth") dialog be
+     * auto-cancelled right now? Suppress only when the env kill-switch leaves suppression enabled AND
+     * there is current MCP activity — either a call is in flight, or the last call ended within the
+     * grace window (so an asynchronous read-back dialog is still covered). When the server is idle
+     * (no in-flight call and past the window) the dialog is left alone so a human can use it.
+     *
+     * @param envEnabled whether the env kill-switch leaves suppression enabled
+     * @param inFlight the current {@link #IN_FLIGHT} count
+     * @param now the current time ({@link System#currentTimeMillis()})
+     * @param lastActivityEnd the timestamp of the last {@link #markActivityEnd()}
+     * @param grace the trailing grace window in ms ({@link #DEFAULT_ACTIVITY_GRACE_MILLIS})
+     * @return {@code true} to auto-cancel the auth dialog, {@code false} to leave it for the human
+     */
+    static boolean shouldSuppressAuthDialog(boolean envEnabled, int inFlight, long now,
+        long lastActivityEnd, long grace)
+    {
+        return envEnabled && (inFlight > 0 || now - lastActivityEnd < grace);
     }
 
     /**
@@ -221,6 +362,15 @@ public final class InfobaseAuthDialogSuppressor
             boolean authDialog = isAuthDialogTitle(title);
             boolean hintDialog = !authDialog && isSecureStorageHintDialogTitle(title);
             if (!authDialog && !hintDialog)
+            {
+                return;
+            }
+            // The Secure Storage hint dialog is dismissed unconditionally (internal follow-up, never
+            // human-configured). The auth dialog is dismissed only while there is MCP activity (a call
+            // in flight or within the trailing grace window) and the env kill-switch leaves suppression
+            // enabled — so a human who opens it in the GUI while the server is idle can use it (#230).
+            if (authDialog && !shouldSuppressAuthDialog(isEnvSuppressEnabled(), IN_FLIGHT.get(),
+                System.currentTimeMillis(), lastActivityEndMillis, DEFAULT_ACTIVITY_GRACE_MILLIS))
             {
                 return;
             }

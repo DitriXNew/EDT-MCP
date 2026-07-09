@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.preferences;
 import java.io.IOException;
 
 import org.eclipse.jface.preference.PreferencePage;
+import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabItem;
@@ -36,7 +37,8 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
     public McpServerPreferencePage()
     {
         setPreferenceStore(Activator.getDefault().getPreferenceStore());
-        setDescription("MCP Server settings for 1C:EDT v" + McpConstants.PLUGIN_VERSION + " @" + McpConstants.AUTHOR); //$NON-NLS-1$ //$NON-NLS-2$
+        setDescription(NLS.bind(Messages.McpServerPreferencePage_Description,
+            McpConstants.PLUGIN_VERSION, McpConstants.AUTHOR));
     }
 
     @Override
@@ -61,14 +63,17 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
 
         // Tab 1: General
         CTabItem generalItem = new CTabItem(tabFolder, SWT.NONE);
-        generalItem.setText("General"); //$NON-NLS-1$
+        generalItem.setText(Messages.McpServerPreferencePage_TabGeneral);
         generalTab = new GeneralTab(tabFolder);
         generalItem.setControl(generalTab.getControl());
 
         // Tab 2: Tools
         CTabItem toolsItem = new CTabItem(tabFolder, SWT.NONE);
-        toolsItem.setText("Tools"); //$NON-NLS-1$
+        toolsItem.setText(Messages.McpServerPreferencePage_TabTools);
         toolsTab = new ToolsTab(tabFolder);
+        // Link so the per-tool destructive-consent checkbox reflects the PENDING level chosen on the
+        // General tab (before Apply), not just the persisted value.
+        toolsTab.setGeneralTab(generalTab);
         toolsItem.setControl(toolsTab.getControl());
 
         // Select the first tab

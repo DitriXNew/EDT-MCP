@@ -25,6 +25,7 @@ import org.eclipse.jface.viewers.ITreeViewerListener;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.viewers.SelectionChangedEvent;
 import org.eclipse.jface.viewers.TreeExpansionEvent;
+import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.events.SelectionAdapter;
@@ -46,6 +47,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings.ParameterDef;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 
 /**
  * Tools management tab for MCP Server preferences.
@@ -63,6 +65,9 @@ public class ToolsTab
     /** Local copy of disabled tools for editing (committed on performOk) */
     private final Set<String> disabledTools;
 
+    /** Local copy of destructive-allowed tools for editing (committed on performOk) */
+    private final Set<String> destructiveAllowedTools;
+
     /** Flag to avoid recursion when updating check states (SWT is single-threaded) */
     private boolean updatingChecks = false;
 
@@ -77,9 +82,17 @@ public class ToolsTab
     private final List<Spinner> currentSpinners = new ArrayList<>();
     private String selectedTool;
 
+    /**
+     * Sibling General tab, used to read the PENDING (not-yet-committed) consent level so the
+     * per-tool allow checkbox reflects the user's current combo choice, not the persisted store.
+     * May be {@code null} (then the persisted level is used).
+     */
+    private GeneralTab generalTab;
+
     public ToolsTab(Composite parent)
     {
         disabledTools = new HashSet<>(ToolSettingsService.getInstance().getDisabledTools());
+        destructiveAllowedTools = new HashSet<>(ConsentSettingsService.getInstance().getAllowedTools());
         loadAllValues();
 
         composite = new Composite(parent, SWT.NONE);
@@ -115,6 +128,18 @@ public class ToolsTab
         return composite;
     }
 
+    /**
+     * Links the sibling General tab so the per-tool destructive-consent checkbox can reflect the
+     * PENDING consent level selected on that tab (before it is committed on {@code performOk}),
+     * instead of the persisted store value.
+     *
+     * @param generalTab the sibling General tab, or {@code null} to fall back to the persisted level
+     */
+    public void setGeneralTab(GeneralTab generalTab)
+    {
+        this.generalTab = generalTab;
+    }
+
     private void createPresetBar(Composite parent)
     {
         Composite bar = new Composite(parent, SWT.NONE);
@@ -127,7 +152,7 @@ public class ToolsTab
 
         // Check All button (leftmost)
         Button checkAllButton = new Button(bar, SWT.PUSH);
-        checkAllButton.setToolTipText("Enable all tools"); //$NON-NLS-1$
+        checkAllButton.setToolTipText(Messages.ToolsTab_EnableAllTools);
         ImageDescriptor checkAllIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
             Activator.PLUGIN_ID, "icons/check_all.png"); //$NON-NLS-1$
         if (checkAllIcon != null)
@@ -138,7 +163,7 @@ public class ToolsTab
         }
         else
         {
-            checkAllButton.setText("All"); //$NON-NLS-1$
+            checkAllButton.setText(Messages.ToolsTab_AllFallback);
         }
         checkAllButton.addSelectionListener(new SelectionAdapter()
         {
@@ -154,7 +179,7 @@ public class ToolsTab
 
         // Uncheck All button
         Button uncheckAllButton = new Button(bar, SWT.PUSH);
-        uncheckAllButton.setToolTipText("Disable all tools"); //$NON-NLS-1$
+        uncheckAllButton.setToolTipText(Messages.ToolsTab_DisableAllTools);
         ImageDescriptor uncheckAllIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
             Activator.PLUGIN_ID, "icons/uncheck_all.png"); //$NON-NLS-1$
         if (uncheckAllIcon != null)
@@ -165,7 +190,7 @@ public class ToolsTab
         }
         else
         {
-            uncheckAllButton.setText("None"); //$NON-NLS-1$
+            uncheckAllButton.setText(Messages.ToolsTab_NoneFallback);
         }
         uncheckAllButton.addSelectionListener(new SelectionAdapter()
         {
@@ -185,14 +210,14 @@ public class ToolsTab
 
         // Preset label + combo (after buttons)
         Label presetLabel = new Label(bar, SWT.NONE);
-        presetLabel.setText("Preset:"); //$NON-NLS-1$
+        presetLabel.setText(Messages.ToolsTab_Preset);
 
         presetCombo = new Combo(bar, SWT.DROP_DOWN | SWT.READ_ONLY);
         for (ToolPreset preset : ToolPreset.values())
         {
             presetCombo.add(preset.getDisplayName());
         }
-        presetCombo.setToolTipText("Select a preset configuration or customize manually"); //$NON-NLS-1$
+        presetCombo.setToolTipText(Messages.ToolsTab_PresetTooltip);
         GridData comboGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         presetCombo.setLayoutData(comboGd);
         selectMatchingPreset();
@@ -341,7 +366,7 @@ public class ToolsTab
         detailPanel.setLayout(layout);
 
         Label hint = new Label(detailPanel, SWT.WRAP);
-        hint.setText("Select a tool or group to see its description."); //$NON-NLS-1$
+        hint.setText(Messages.ToolsTab_SelectHint);
         hint.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
     }
 
@@ -367,7 +392,7 @@ public class ToolsTab
         else
         {
             Label hint = new Label(detailPanel, SWT.WRAP);
-            hint.setText("Select a tool or group to see its description."); //$NON-NLS-1$
+            hint.setText(Messages.ToolsTab_SelectHint);
             hint.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
         }
 
@@ -399,6 +424,8 @@ public class ToolsTab
         descText.setText(tool != null ? tool.getDescription() : ""); //$NON-NLS-1$
         descText.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
+        createDestructiveConsentControl(toolName);
+
         List<ParameterDef> params = paramSettings.getParametersForTool(toolName);
         if (params.isEmpty())
         {
@@ -406,7 +433,7 @@ public class ToolsTab
         }
 
         Group settingsGroup = new Group(detailPanel, SWT.NONE);
-        settingsGroup.setText("Settings"); //$NON-NLS-1$
+        settingsGroup.setText(Messages.ToolsTab_Settings);
         GridLayout groupLayout = new GridLayout(2, false);
         groupLayout.marginWidth = 8;
         groupLayout.marginHeight = 8;
@@ -429,16 +456,15 @@ public class ToolsTab
             Integer pending = pendingValues.get(key);
             spinner.setSelection(pending != null ? pending
                 : paramSettings.getParameterValue(toolName, param.getName(), param.getDefaultValue()));
-            spinner.setToolTipText(param.getDescription()
-                + " (default: " + param.getDefaultValue() //$NON-NLS-1$
-                + ", range: " + param.getMinValue() + "-" + param.getMaxValue() + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            spinner.setToolTipText(NLS.bind(Messages.ToolsTab_ParamTooltip, new Object[]{
+                param.getDescription(), param.getDefaultValue(), param.getMinValue(), param.getMaxValue()}));
             spinner.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
             spinner.setData("key", key); //$NON-NLS-1$
             currentSpinners.add(spinner);
         }
 
         Button restoreButton = new Button(settingsGroup, SWT.PUSH);
-        restoreButton.setText("Restore Defaults"); //$NON-NLS-1$
+        restoreButton.setText(Messages.ToolsTab_RestoreDefaults);
         GridData btnGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         btnGd.horizontalSpan = 2;
         btnGd.verticalIndent = 5;
@@ -451,6 +477,71 @@ public class ToolsTab
                 restoreDefaultsForTool(toolName);
             }
         });
+    }
+
+    /**
+     * Renders the per-tool "allow destructive without consent" checkbox, but only for a
+     * {@link DestructiveConsentGate#GATED_TOOLS} tool. The checkbox is enabled only at the
+     * {@code PER_TOOL} consent level (it is the per-tool allow-set for that level); at any
+     * other level it is shown disabled with an explanatory tooltip. The selection is held
+     * in {@link #destructiveAllowedTools} and committed on {@link #performOk()}.
+     *
+     * @param toolName the selected tool name
+     */
+    private void createDestructiveConsentControl(String toolName)
+    {
+        if (!DestructiveConsentGate.GATED_TOOLS.contains(toolName))
+        {
+            return;
+        }
+
+        boolean perToolLevel = currentConsentLevel() == ConsentSettingsService.Level.PER_TOOL;
+
+        Button allowCheck = new Button(detailPanel, SWT.CHECK);
+        allowCheck.setText(Messages.ToolsTab_AllowDestructive);
+        allowCheck.setSelection(destructiveAllowedTools.contains(toolName));
+        allowCheck.setEnabled(perToolLevel);
+        allowCheck.setToolTipText(perToolLevel
+            ? Messages.ToolsTab_AllowDestructive_Tooltip_Enabled
+            : Messages.ToolsTab_AllowDestructive_Tooltip_Disabled);
+        GridData checkGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        checkGd.verticalIndent = 8;
+        allowCheck.setLayoutData(checkGd);
+        allowCheck.addSelectionListener(destructiveAllowSelectionListener(allowCheck, toolName));
+    }
+
+    /**
+     * Resolves the consent level that governs whether the per-tool allow checkbox is editable.
+     * Prefers the PENDING selection on the sibling {@link GeneralTab} (so a level change made on
+     * that tab takes effect without pressing Apply first); falls back to the persisted store level
+     * when no General tab is linked (e.g. a headless/standalone construction).
+     */
+    private ConsentSettingsService.Level currentConsentLevel()
+    {
+        if (generalTab != null)
+        {
+            return generalTab.getPendingConsentLevel();
+        }
+        return ConsentSettingsService.getInstance().getLevel();
+    }
+
+    private SelectionAdapter destructiveAllowSelectionListener(Button allowCheck, String toolName)
+    {
+        return new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                if (allowCheck.getSelection())
+                {
+                    destructiveAllowedTools.add(toolName);
+                }
+                else
+                {
+                    destructiveAllowedTools.remove(toolName);
+                }
+            }
+        };
     }
 
     private void refreshCheckStates()
@@ -520,7 +611,7 @@ public class ToolsTab
                 }
             }
         }
-        countLabel.setText(enabled + " of " + total + " tools enabled"); //$NON-NLS-1$ //$NON-NLS-2$
+        countLabel.setText(NLS.bind(Messages.ToolsTab_CountLabel, enabled, total));
     }
 
     private void savePendingSpinnerValues()
@@ -574,6 +665,7 @@ public class ToolsTab
     {
         savePendingSpinnerValues();
         ToolSettingsService.getInstance().setDisabledTools(disabledTools);
+        ConsentSettingsService.getInstance().setAllowedTools(destructiveAllowedTools);
         for (Map.Entry<String, Integer> entry : pendingValues.entrySet())
         {
             String key = entry.getKey();
@@ -591,6 +683,7 @@ public class ToolsTab
     public void performDefaults()
     {
         disabledTools.clear();
+        destructiveAllowedTools.clear();
         refreshCheckStates();
         selectMatchingPreset();
         updateCountLabel();

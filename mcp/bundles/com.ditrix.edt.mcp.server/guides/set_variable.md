@@ -1,0 +1,27 @@
+Sets a BSL variable's value in a suspended debug stack frame - the "poke a new value in at the breakpoint" tool. It complements `get_variables` (read the frame) and `evaluate_expression` (compute a value): this one WRITES a variable you then keep running with.
+
+## When to use
+- You are suspended at a breakpoint (via `wait_for_break`) and want to change a local/parameter value before continuing - e.g. to reproduce a branch, step past a bad state, or inject test data.
+- Correcting a value mid-debug instead of restarting the whole session.
+
+## Parameter details
+Identify the frame exactly as `get_variables` does (same addressing rules):
+- `frameRef` (preferred) - the stable frame reference from `wait_for_break` / `step`.
+- `threadId` + `frameIndex` - a thread id plus a 0-based frame index (re-resolved against the live thread).
+- Pass neither and, if exactly one debug launch is suspended, its top frame is used.
+
+Then the two required inputs:
+- `variableName` (required) - the name of the variable in that frame to set.
+- `value` (required) - the new value as a BSL expression. It is evaluated live in the frame's context (a literal like `42`, `"text"`, `True`, or any BSL expression), then assigned to the variable.
+
+## What you get
+JSON: the variable after the write (`variableName`, `value`, `type`), so you can confirm the new value took hold. On failure, an actionable error (see below). A not-found / read-only / invalid-value error is raised *before* the write, so the frame is left unchanged. A **timeout** is different: the bounded worker can still complete the write after the timeout is reported, so the value may or may not have taken effect - re-read with `get_variables` to confirm.
+
+## Notes & gotchas
+- **This executes the `value` expression in the running 1C application** - like `evaluate_expression`, it can have side effects. Treat it as running code, not a plain assignment.
+- **Read-only variables cannot be set.** If the target does not support modification (e.g. a computed / read-only node), the tool returns an actionable error naming the variable instead of silently doing nothing.
+- **An invalid value is rejected up front.** If the `value` expression is malformed or its type is not assignable to the variable, the tool returns an "invalid value" error naming the variable - the frame's state is left unchanged.
+- **`variableName` not found in the frame** returns an actionable error - list the frame's variables with `get_variables` first to get the exact name.
+- **The change takes effect on `resume`/`step`.** The new value is written into the live frame now; execution uses it once you continue the thread.
+- **`frameRef`s go stale after every `step` or `resume`** - use the freshest one; a stale ref returns "call wait_for_break again" (the same frame-addressing rules as `get_variables`).
+- The write is bounded by a short timeout; a wedged client returns a timeout error rather than blocking indefinitely.

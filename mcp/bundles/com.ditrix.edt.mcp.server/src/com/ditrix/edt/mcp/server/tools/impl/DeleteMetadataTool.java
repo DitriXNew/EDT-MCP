@@ -38,6 +38,8 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
@@ -284,6 +286,27 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .put("fqn", fqn) //$NON-NLS-1$
                 .put(KEY_BLOCKING, true);
             return putBlockingReferences(blocked, blocking).toJson();
+        }
+
+        // Destructive-operation consent gate: the LAST check before the model mutation. Built from the
+        // ref list the tool already computed; on ALLOW the behaviour is byte-identical, on REJECT the
+        // caller returns an error and NOTHING is mutated. Headless / env-bypass / non-ASK never block.
+        // The count/name line names the ACTUAL deletion target (count 1, its FQN) — like the other five
+        // gated tools — so the common case (no blocking refs) reads "1 object: <fqn>" rather than a
+        // misleading "0 objects:". Any incoming references the delete leaves dangling (force=true) are
+        // described in the subtitle, where the count reflects the references, not the deletion.
+        String subtitle = blocking.isEmpty()
+            ? "This deletes '" + fqn + "' and cascades reference cleanup (BSL, forms, metadata)." //$NON-NLS-1$ //$NON-NLS-2$
+            : "This deletes '" + fqn + "' and cascades reference cleanup (BSL, forms, metadata); " //$NON-NLS-1$ //$NON-NLS-2$
+                + blocking.size() + " incoming reference(s) the refactoring cannot auto-clean will be " //$NON-NLS-1$
+                + "left dangling."; //$NON-NLS-1$
+        ConsentPreview preview = new ConsentPreview(
+            "Delete metadata node", //$NON-NLS-1$
+            subtitle, 1, Collections.singletonList(fqn));
+        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview)
+            == DestructiveConsentGate.ConsentDecision.REJECT)
+        {
+            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
         }
 
         try

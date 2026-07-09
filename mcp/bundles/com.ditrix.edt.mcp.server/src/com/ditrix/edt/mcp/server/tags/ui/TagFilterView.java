@@ -32,6 +32,7 @@ import org.eclipse.jface.viewers.ITreeContentProvider;
 import org.eclipse.jface.viewers.TableViewer;
 import org.eclipse.jface.viewers.TableViewerColumn;
 import org.eclipse.jface.viewers.TreeViewerColumn;
+import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.graphics.Image;
@@ -74,7 +75,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     private static final int COLOR_ICON_SIZE = 16;
 
     /** Placeholder/tooltip text for the search field */
-    private static final String SEARCH_REGEX_HINT = "Search (regex)...";
+    private static final String SEARCH_REGEX_HINT = Messages.TagFilterView_SearchRegexHint;
     
     private TagService tagService;
     private IV8ProjectManager v8ProjectManager;
@@ -135,7 +136,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     private void createTagsPanel(Composite parent) {
         Group group = new Group(parent, SWT.NONE);
-        group.setText("Filter by Tags");
+        group.setText(Messages.TagFilterView_FilterByTags);
         GridLayout layout = new GridLayout(3, false);
         layout.marginWidth = 5;
         layout.marginHeight = 5;
@@ -151,7 +152,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Buttons row - Select All and Deselect All as icon-only buttons
         Button selectAllBtn = new Button(group, SWT.PUSH);
-        selectAllBtn.setToolTipText("Select all tags");
+        selectAllBtn.setToolTipText(Messages.TagFilterView_SelectAllTagsTooltip);
         if (selectAllIcon != null) {
             selectAllBtn.setImage(selectAllIcon.createImage());
         }
@@ -163,7 +164,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         });
         
         Button deselectAllBtn = new Button(group, SWT.PUSH);
-        deselectAllBtn.setToolTipText("Deselect all tags");
+        deselectAllBtn.setToolTipText(Messages.TagFilterView_DeselectAllTagsTooltip);
         if (deselectAllIcon != null) {
             deselectAllBtn.setImage(deselectAllIcon.createImage());
         }
@@ -176,7 +177,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Refresh button aligned to the right
         Button refreshBtn = new Button(group, SWT.PUSH);
-        refreshBtn.setToolTipText("Refresh tags from YAML files");
+        refreshBtn.setToolTipText(Messages.TagFilterView_RefreshTooltip);
         if (refreshIcon != null) {
             refreshBtn.setImage(refreshIcon.createImage());
         }
@@ -200,7 +201,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Name column with project/tag icons
         TreeViewerColumn nameColumn = new TreeViewerColumn(tagsTreeViewer, SWT.NONE);
-        nameColumn.getColumn().setText("Project / Tag");
+        nameColumn.getColumn().setText(Messages.TagFilterView_ColumnProjectTag);
         nameColumn.getColumn().setWidth(200);
         nameColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
@@ -227,7 +228,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Count column
         TreeViewerColumn countColumn = new TreeViewerColumn(tagsTreeViewer, SWT.NONE);
-        countColumn.getColumn().setText("Count");
+        countColumn.getColumn().setText(Messages.TagFilterView_ColumnCount);
         countColumn.getColumn().setWidth(80);
         countColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
@@ -274,7 +275,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         } else if (element instanceof IProject project) {
             // Show total tags count for project
             List<Tag> tags = tagService.getTags(project);
-            return "(" + tags.size() + " tags)";
+            return NLS.bind(Messages.TagFilterView_ProjectTagCount, tags.size());
         }
         return "";
     }
@@ -343,7 +344,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
             public void menuAboutToShow(IMenuManager manager) {
                 IStructuredSelection selection = tagsTreeViewer.getStructuredSelection();
                 if (!selection.isEmpty() && selection.getFirstElement() instanceof IProject project) {
-                    manager.add(new Action("Open YAML File") {
+                    manager.add(new Action(Messages.TagFilterView_OpenYamlFileAction) {
                         @Override
                         public void run() {
                             openTagsYamlFile(project);
@@ -507,7 +508,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     
     private void createResultsPanel(Composite parent) {
         Group group = new Group(parent, SWT.NONE);
-        group.setText("Matching Objects");
+        group.setText(Messages.TagFilterView_MatchingObjects);
         GridLayout layout = new GridLayout(2, false);
         layout.marginWidth = 5;
         layout.marginHeight = 5;
@@ -525,8 +526,8 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Checkbox to hide tags with no matching objects when search filter is applied
         searchAllTagsCheckbox = new Button(group, SWT.CHECK);
-        searchAllTagsCheckbox.setText("Hide empty tags");
-        searchAllTagsCheckbox.setToolTipText("When checked, tags with no objects matching the search filter will be hidden in the Tags tree");
+        searchAllTagsCheckbox.setText(Messages.TagFilterView_HideEmptyTags);
+        searchAllTagsCheckbox.setToolTipText(Messages.TagFilterView_HideEmptyTagsTooltip);
         searchAllTagsCheckbox.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
             @Override
             public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
@@ -546,7 +547,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Project column
         TableViewerColumn projectColumn = new TableViewerColumn(resultsViewer, SWT.NONE);
-        projectColumn.getColumn().setText("Project");
+        projectColumn.getColumn().setText(Messages.TagFilterView_ColumnProject);
         projectColumn.getColumn().setWidth(100);
         projectColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
@@ -569,7 +570,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // FQN column - wider to show full paths, with icon
         TableViewerColumn fqnColumn = new TableViewerColumn(resultsViewer, SWT.NONE);
-        fqnColumn.getColumn().setText("Object");
+        fqnColumn.getColumn().setText(Messages.TagFilterView_ColumnObject);
         fqnColumn.getColumn().setWidth(350);
         fqnColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
@@ -591,7 +592,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Tags column
         TableViewerColumn tagsColumn = new TableViewerColumn(resultsViewer, SWT.NONE);
-        tagsColumn.getColumn().setText("Tags");
+        tagsColumn.getColumn().setText(Messages.TagFilterView_ColumnTags);
         tagsColumn.getColumn().setWidth(150);
         tagsColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
@@ -637,7 +638,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
         
         // Copy selected FQNs (works with multiple selection)
         if (!selection.isEmpty()) {
-            manager.add(new Action("Copy Selected (" + selection.size() + ")") {
+            manager.add(new Action(NLS.bind(Messages.TagFilterView_CopySelectedAction, selection.size())) {
                 @Override
                 public void run() {
                     copyToClipboard(buildSelectionClipboardText(selection));
@@ -647,7 +648,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
 
         // Copy All FQNs
         if (!filteredObjects.isEmpty()) {
-            manager.add(new Action("Copy All (" + filteredObjects.size() + ")") {
+            manager.add(new Action(NLS.bind(Messages.TagFilterView_CopyAllAction, filteredObjects.size())) {
                 @Override
                 public void run() {
                     copyToClipboard(buildAllClipboardText());
@@ -761,7 +762,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
                 searchText.setToolTipText(SEARCH_REGEX_HINT);
             } catch (PatternSyntaxException e) {
                 // Invalid regex - show error in tooltip
-                searchText.setToolTipText("Invalid regex: " + e.getDescription());
+                searchText.setToolTipText(NLS.bind(Messages.TagFilterView_InvalidRegex, e.getDescription()));
                 searchPattern = null;
             }
         }
@@ -853,7 +854,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
     }
     
     private void updateResultsCount() {
-        setPartName("Tag Filter (" + filteredObjects.size() + ")");
+        setPartName(NLS.bind(Messages.TagFilterView_PartName, filteredObjects.size()));
     }
     
     private Image createColorIcon(String hexColor) {
@@ -1004,8 +1005,8 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
                 // Show message that file doesn't exist
                 org.eclipse.jface.dialogs.MessageDialog.openInformation(
                     getSite().getShell(),
-                    "Tags File",
-                    "Tags file does not exist yet. Assign some tags first.\nExpected path: " + yamlFile.getFullPath());
+                    Messages.TagFilterView_TagsFileDialogTitle,
+                    NLS.bind(Messages.TagFilterView_TagsFileMissingMessage, yamlFile.getFullPath()));
             }
         } catch (Exception e) {
             Activator.logError("Failed to open tags YAML file", e);

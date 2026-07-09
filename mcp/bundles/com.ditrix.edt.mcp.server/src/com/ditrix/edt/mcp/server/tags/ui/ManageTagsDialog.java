@@ -21,6 +21,7 @@ import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.CheckboxTableViewer;
 import org.eclipse.jface.viewers.ColumnLabelProvider;
 import org.eclipse.jface.viewers.TableViewerColumn;
+import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
@@ -76,7 +77,7 @@ public class ManageTagsDialog extends Dialog {
     @Override
     protected void configureShell(Shell newShell) {
         super.configureShell(newShell);
-        newShell.setText("Manage Tags - " + objectFqn);
+        newShell.setText(NLS.bind(Messages.ManageTagsDialog_Title, objectFqn));
         newShell.setMinimumSize(400, 450);
     }
     
@@ -90,7 +91,7 @@ public class ManageTagsDialog extends Dialog {
         
         // Object info
         Label objectLabel = new Label(container, SWT.NONE);
-        objectLabel.setText("Object: " + objectFqn);
+        objectLabel.setText(NLS.bind(Messages.ManageTagsDialog_ObjectLabel, objectFqn));
         GridDataFactory.fillDefaults().grab(true, false).applyTo(objectLabel);
         
         // Tags table
@@ -107,7 +108,7 @@ public class ManageTagsDialog extends Dialog {
     
     private void createTagsTable(Composite parent) {
         Group group = new Group(parent, SWT.NONE);
-        group.setText("Available Tags");
+        group.setText(Messages.ManageTagsDialog_AvailableTags);
         GridDataFactory.fillDefaults().grab(true, true).applyTo(group);
         GridLayoutFactory.fillDefaults().margins(5, 5).numColumns(2).applyTo(group);
         
@@ -142,9 +143,9 @@ public class ManageTagsDialog extends Dialog {
         
         // Hotkey column (shows Ctrl+Alt+N for first 10 tags)
         TableViewerColumn hotkeyColumn = new TableViewerColumn(tagsViewer, SWT.CENTER);
-        hotkeyColumn.getColumn().setText("#");
+        hotkeyColumn.getColumn().setText(Messages.ManageTagsDialog_ColumnHotkey);
         hotkeyColumn.getColumn().setWidth(30);
-        hotkeyColumn.getColumn().setToolTipText("Hotkey index (Ctrl+Alt+N)");
+        hotkeyColumn.getColumn().setToolTipText(Messages.ManageTagsDialog_ColumnHotkeyTooltip);
         hotkeyColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
             public String getText(Object element) {
@@ -160,7 +161,7 @@ public class ManageTagsDialog extends Dialog {
         
         // Name column (wider)
         TableViewerColumn nameColumn = new TableViewerColumn(tagsViewer, SWT.NONE);
-        nameColumn.getColumn().setText("Tag");
+        nameColumn.getColumn().setText(Messages.ManageTagsDialog_ColumnTag);
         nameColumn.getColumn().setWidth(170);
         nameColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
@@ -174,7 +175,7 @@ public class ManageTagsDialog extends Dialog {
         
         // Description column
         TableViewerColumn descColumn = new TableViewerColumn(tagsViewer, SWT.NONE);
-        descColumn.getColumn().setText("Description");
+        descColumn.getColumn().setText(Messages.ManageTagsDialog_ColumnDescription);
         descColumn.getColumn().setWidth(200);
         descColumn.setLabelProvider(new ColumnLabelProvider() {
             @Override
@@ -192,8 +193,8 @@ public class ManageTagsDialog extends Dialog {
         GridLayoutFactory.fillDefaults().applyTo(buttonsComposite);
         
         Button moveUpButton = new Button(buttonsComposite, SWT.PUSH);
-        moveUpButton.setText("Move Up");
-        moveUpButton.setToolTipText("Move tag up (affects Ctrl+Alt+1-0 hotkeys)");
+        moveUpButton.setText(Messages.ManageTagsDialog_MoveUp);
+        moveUpButton.setToolTipText(Messages.ManageTagsDialog_MoveUpTooltip);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(moveUpButton);
         moveUpButton.addSelectionListener(new SelectionAdapter() {
             @Override
@@ -203,8 +204,8 @@ public class ManageTagsDialog extends Dialog {
         });
         
         Button moveDownButton = new Button(buttonsComposite, SWT.PUSH);
-        moveDownButton.setText("Move Down");
-        moveDownButton.setToolTipText("Move tag down (affects Ctrl+Alt+1-0 hotkeys)");
+        moveDownButton.setText(Messages.ManageTagsDialog_MoveDown);
+        moveDownButton.setToolTipText(Messages.ManageTagsDialog_MoveDownTooltip);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(moveDownButton);
         moveDownButton.addSelectionListener(new SelectionAdapter() {
             @Override
@@ -218,8 +219,8 @@ public class ManageTagsDialog extends Dialog {
         GridDataFactory.fillDefaults().grab(true, false).applyTo(separator);
         
         Button editButton = new Button(buttonsComposite, SWT.PUSH);
-        editButton.setText("Edit...");
-        editButton.setToolTipText("Edit selected tag");
+        editButton.setText(Messages.ManageTagsDialog_Edit);
+        editButton.setToolTipText(Messages.ManageTagsDialog_EditTooltip);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(editButton);
         editButton.addSelectionListener(new SelectionAdapter() {
             @Override
@@ -229,8 +230,8 @@ public class ManageTagsDialog extends Dialog {
         });
         
         Button deleteButton = new Button(buttonsComposite, SWT.PUSH);
-        deleteButton.setText("Delete");
-        deleteButton.setToolTipText("Delete selected tag");
+        deleteButton.setText(Messages.ManageTagsDialog_Delete);
+        deleteButton.setToolTipText(Messages.ManageTagsDialog_DeleteTooltip);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(deleteButton);
         deleteButton.addSelectionListener(new SelectionAdapter() {
             @Override
@@ -242,20 +243,20 @@ public class ManageTagsDialog extends Dialog {
     
     private void createNewTagSection(Composite parent) {
         Group group = new Group(parent, SWT.NONE);
-        group.setText("Create New Tag");
+        group.setText(Messages.ManageTagsDialog_CreateNewTag);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(group);
         GridLayoutFactory.fillDefaults().margins(5, 5).numColumns(4).applyTo(group);
         
         // Name
         Label nameLabel = new Label(group, SWT.NONE);
-        nameLabel.setText("Name:");
+        nameLabel.setText(Messages.ManageTagsDialog_NameLabel);
         
         newTagNameText = new Text(group, SWT.BORDER);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(newTagNameText);
         
         // Color button
         newTagColorButton = new Button(group, SWT.PUSH);
-        newTagColorButton.setToolTipText("Select color");
+        newTagColorButton.setToolTipText(Messages.ManageTagsDialog_SelectColorTooltip);
         updateColorButton();
         newTagColorButton.addSelectionListener(new SelectionAdapter() {
             @Override
@@ -272,7 +273,7 @@ public class ManageTagsDialog extends Dialog {
         
         // Add button
         Button addButton = new Button(group, SWT.PUSH);
-        addButton.setText("Add");
+        addButton.setText(Messages.ManageTagsDialog_Add);
         addButton.addSelectionListener(new SelectionAdapter() {
             @Override
             public void widgetSelected(SelectionEvent e) {
@@ -367,7 +368,7 @@ public class ManageTagsDialog extends Dialog {
     
     @Override
     protected void createButtonsForButtonBar(Composite parent) {
-        createButton(parent, IDialogConstants.OK_ID, "Apply", true);
+        createButton(parent, IDialogConstants.OK_ID, Messages.ManageTagsDialog_Apply, true);
         createButton(parent, IDialogConstants.CANCEL_ID, IDialogConstants.CANCEL_LABEL, false);
     }
     

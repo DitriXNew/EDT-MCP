@@ -5,7 +5,11 @@ What the tool does
 ------------------
 Reports a BSL method's call hierarchy in ONE direction:
   - direction="callers" (default): who calls this method (incoming).
-  - direction="callees": what this method calls (outgoing).
+  - direction="callees": what this method calls (outgoing, per call site).
+  - direction="outgoing": the AGGREGATED distinct outgoing-call targets of a method
+    (when methodName is given) OR of the WHOLE module (methodName is OPTIONAL for
+    outgoing). Rows are keyed by qualifier+method; an unqualified local call buckets
+    under the '(local)' qualifier (always ExtAPI '-').
 It addresses the *containing* method by (projectName, modulePath, methodName) —
 there is NO line/column parameter; resolution is by method NAME (case-insensitive,
 BslModuleUtils.findMethod). ResponseType is MARKDOWN, so the payload is in r.text
@@ -48,8 +52,9 @@ Error contract (the REAL split — verified against the Java + McpProtocolHandle
 A MARKDOWN tool's response is flagged isError:true ONLY when the returned string is a
 ToolResult.error(...).toJson() payload ({"success":false,...}) — McpProtocolHandler
 .isJsonErrorPayload diverts those to a structured JSON error. These paths set isError:
-  - missing projectName / modulePath / methodName  -> "<name> is required"
-  - direction not in {callers,callees}             -> "direction must be 'callers' or 'callees'"
+  - missing projectName / modulePath                -> "<name> is required"
+  - missing methodName (callers/callees only)       -> "methodName is required for callers/callees"
+  - direction not in {callers,callees,outgoing}     -> "direction must be 'callers', 'callees' or 'outgoing'"
   - project does not exist                          -> "Project not found: <name>"
   - module can't be loaded as a BSL Module          -> "Could not load EMF model for <modulePath>. ..."
 But the METHOD-NOT-FOUND path returns BslModuleUtils.buildMethodNotFoundResponse — a
@@ -69,11 +74,31 @@ from harness import (
     assert_not_contains,
     assert_no_diff,
     e2e_test,
+    _fail,
     PROJECT,
 )
 
 # src/-relative module path of the fixture CommonModule.Calc.
 CALC = "CommonModules/Calc/Module.bsl"
+
+
+def _assert_local_add_row(text):
+    """Structural invariant for the aggregated OUTGOING row of the fixture's one call
+    Test -> Add(1, 2): the row must be '(local)' qualifier + Method Add + ExtAPI '-'.
+
+    Asserts on the row's cells (a single '| ... |' table line that carries BOTH the
+    '(local)' qualifier AND the Add method AND a trailing ' - |' ExtAPI cell) rather than
+    on a brittle exact line number / count, per the slice's uncertainty rule. This proves
+    the frozen classification: an unqualified local call is bucketed under '(local)' and a
+    '(local)' row is ALWAYS extApi=false (rendered '-', never 'yes')."""
+    for line in (text or "").splitlines():
+        cells = [c.strip() for c in line.split("|")]
+        # A data row renders as: '' | Qualifier | Method | Count | First line | ExtAPI | ''
+        # (leading/trailing empties from the surrounding pipes). Match the local Add target.
+        if "(local)" in cells and "Add" in cells and cells and cells[-2] == "-":
+            return
+    _fail("expected an aggregated outgoing row for the local Add call "
+          "(Qualifier '(local)', Method 'Add', ExtAPI '-') in:\n%s" % (text or "")[:500])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -236,6 +261,94 @@ def test_callees_of_leaf_add_reports_none():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# HAPPY PATHS — direction="outgoing" (aggregated outgoing-calls mode)
+#
+# "outgoing" aggregates the DISTINCT call targets of a scope (a single method when
+# methodName is given, else the whole module) into a table keyed by qualifier+method,
+# counting the call sites and reporting the first line. The classification is RESOLVED,
+# not textual: an UNQUALIFIED local call (methodAccess is a StaticFeatureAccess) is
+# bucketed under the '(local)' qualifier token and is ALWAYS extApi=false ('-').
+#
+# Fixture truth used below: Test's body makes ONE unqualified local call — Add(1, 2) on
+# line 6. So both the scoped (methodName="Test") and the module-wide (no methodName,
+# which also walks Test) outgoing views must surface a target row with Method=Add,
+# Qualifier=(local), ExtAPI=-. Add itself calls nothing, so it contributes no target.
+# We assert the frozen wire shape (heading, banner, columns, the (local) token, ExtAPI=-)
+# rather than brittle exact counts/line numbers, since the module-wide total depends on
+# how many distinct targets the whole module has.
+# ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="get_method_call_hierarchy", kind="read")
+def test_outgoing_scoped():
+    """direction="outgoing" WITH methodName="Test": the aggregated outgoing-calls view of
+    Test. Test makes exactly one call — the unqualified local Add(1, 2) on line 6 — so the
+    scoped ('... :: Test') outgoing heading, the Outgoing banner, and a single '(local)'
+    target row for Add (ExtAPI '-') prove: (a) the outgoing direction is wired, (b) it
+    walks Test's own AST, (c) an unqualified call is classified as '(local)' (a
+    StaticFeatureAccess), NOT as an ext-API or an '(expr)' qualifier, and (d) a local
+    row is never marked ExtAPI. A finder that mis-classified the qualifier, or reused the
+    callers/callees branch, would fail these asserts."""
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT,
+        "modulePath": CALC,
+        "methodName": "Test",
+        "direction": "outgoing",
+    })
+    assert_ok(r, "outgoing of Calc.Test")
+    assert r.structured is None, \
+        "get_method_call_hierarchy is a MARKDOWN tool; structuredContent must be None"
+
+    # Scoped heading echoes the module path AND the resolved method (the ' :: Test' tail).
+    assert_contains(r.text, "## Outgoing Calls: " + CALC + " :: Test",
+                    "scoped outgoing heading must echo the module path and the method")
+    assert_contains(r.text, "**Direction:** Outgoing calls (aggregated targets)",
+                    "outgoing direction banner must be present")
+    assert_contains(r.text, "**Total distinct targets:**",
+                    "outgoing view must report a distinct-target total")
+    # The exact aggregation table header (the frozen wire columns).
+    assert_contains(r.text, "| Qualifier | Method | Count | First line | ExtAPI |",
+                    "outgoing table must use the frozen aggregated-columns header")
+    # The one target: the unqualified local Add call -> Qualifier '(local)', Method Add,
+    # ExtAPI '-' (a local row is always non-ext-API).
+    assert_contains(r.text, "| Add |",
+                    "the aggregated outgoing target must include the Add call")
+    assert_contains(r.text, "| (local) |",
+                    "an unqualified local call must be bucketed under the '(local)' qualifier")
+    _assert_local_add_row(r.text)
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="read")
+def test_outgoing_module_wide():
+    """direction="outgoing" WITHOUT methodName: methodName is OPTIONAL for outgoing, so the
+    tool aggregates the outgoing calls of the WHOLE module. Asserting the module-wide
+    heading (no ' :: ' scope tail), the Outgoing banner, and that the local Add target
+    still appears proves the module-wide walk (module.eAllContents) collected Test's call
+    to Add — i.e. omitting methodName does NOT error and does NOT scope to a single method.
+    A tool that still required methodName for outgoing would error here."""
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT,
+        "modulePath": CALC,
+        "direction": "outgoing",
+    })
+    assert_ok(r, "module-wide outgoing of Calc")
+    # Module-wide heading has NO ' :: <method>' scope tail.
+    assert_contains(r.text, "## Outgoing Calls: " + CALC,
+                    "module-wide outgoing heading must echo the module path")
+    assert_not_contains(r.text, "## Outgoing Calls: " + CALC + " ::",
+                        "module-wide outgoing (no methodName) must NOT carry a ' :: <method>' scope tail")
+    assert_contains(r.text, "**Direction:** Outgoing calls (aggregated targets)",
+                    "outgoing direction banner must be present module-wide")
+    assert_contains(r.text, "| Qualifier | Method | Count | First line | ExtAPI |",
+                    "module-wide outgoing table must use the frozen aggregated-columns header")
+    # The module's only call is Test -> Add (unqualified local), so the (local) Add target
+    # must appear in the module-wide aggregation too.
+    assert_contains(r.text, "| Add |",
+                    "the module-wide aggregation must include the Add target from Test")
+    _assert_local_add_row(r.text)
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # NEGATIVE MATRIX (mandatory) — true ToolResult.error (isError:true) paths
 # ──────────────────────────────────────────────────────────────────────────────
 @e2e_test(tool="get_method_call_hierarchy", kind="read")
@@ -274,27 +387,30 @@ def test_missing_modulepath_errors():
 
 @e2e_test(tool="get_method_call_hierarchy", kind="read")
 def test_missing_methodname_errors():
-    """projectName + modulePath present but methodName omitted -> the third
-    requireArguments check fires -> "methodName is required"."""
+    """projectName + modulePath present but methodName omitted (direction omitted ->
+    defaults to callers, where methodName IS required) -> the methodName guard fires ->
+    "methodName is required for callers/callees". (methodName is OPTIONAL only for
+    direction="outgoing" — see test_outgoing_module_wide; here the default callers
+    direction still requires it.)"""
     r = call("get_method_call_hierarchy", {
         "projectName": PROJECT,
         "modulePath": CALC,
     })
     e = assert_error(r, "missing methodName")
-    # AUDIT: names the param but no actionable next step (no hint to use
-    # get_module_structure to list method names). suggests=[] -> fix-card.
-    assert_error_quality(e, names=["methodName"], suggests=[],
-                         ctx="missing methodName names the param")
+    # Actionable: names the missing param AND points at get_module_structure (the sibling
+    # tool that lists the module's procedures and functions) as the next step.
+    assert_error_quality(e, names=["methodName"], suggests=["get_module_structure"],
+                         ctx="missing methodName names the param and points at get_module_structure")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 
 @e2e_test(tool="get_method_call_hierarchy", kind="read")
 def test_invalid_direction_enum_errors_and_names_valid_values():
-    """direction is an enum {callers,callees}. A value outside it ("sideways") is
+    """direction is an enum {callers,callees,outgoing}. A value outside it ("sideways") is
     rejected AFTER the required-arg check -> ToolResult.error("direction must be
-    'callers' or 'callees'"). The message is actionable: it enumerates the two valid
-    values. A tool that silently treated an unknown direction as the default would NOT
-    error here -> this guards the enum validation."""
+    'callers', 'callees' or 'outgoing'"). The message is actionable: it enumerates the
+    three valid values. A tool that silently treated an unknown direction as the default
+    would NOT error here -> this guards the enum validation."""
     r = call("get_method_call_hierarchy", {
         "projectName": PROJECT,
         "modulePath": CALC,
@@ -302,8 +418,8 @@ def test_invalid_direction_enum_errors_and_names_valid_values():
         "direction": "sideways",
     })
     e = assert_error(r, "invalid direction enum")
-    # Actionable: names the offending param AND lists the two valid enum values.
-    assert_error_quality(e, names=["direction"], suggests=["callers", "callees"],
+    # Actionable: names the offending param AND lists the three valid enum values.
+    assert_error_quality(e, names=["direction"], suggests=["callers", "callees", "outgoing"],
                          ctx="invalid direction names the param and the valid values")
     assert_no_diff("an invalid call must not touch the project on disk")
 

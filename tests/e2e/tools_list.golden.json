@@ -144,7 +144,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Clean EDT project and trigger full revalidation. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. Full rebuild of the ENTIRE configuration — slow on large projects. For a single externally-edited object prefer revalidate_objects([FQN]).",
+    "description": "Clean EDT project and trigger full revalidation. Direction: DISK -> MODEL - re-imports the on-disk src/ .mdo files into the in-memory model. Refreshes files from disk, clears all validation markers, and waits for EDT to complete revalidation. Full rebuild of the ENTIRE configuration — slow on large projects. Discards UNSAVED in-memory model edits (they are recomputed from disk); save pending changes first. For a single externally-edited object prefer revalidate_objects([FQN]). Reverse direction (MODEL -> DISK, write the model out to .mdo) is resync_to_disk. Full parameters and examples: call get_tool_guide('clean_project').",
     "inputSchema": {
       "properties": {
         "projectName": {
@@ -1346,6 +1346,63 @@
   },
   {
     "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolves the picture by FQN 'CommonPicture.<Name>' (Russian token ОбщаяКартинка accepted). Omit 'variant' to get the inventory only (no image bytes); pass variant='best'/'svg'/an exact variant name to also get that variant decoded to PNG as base64. SVG variants are rasterized to PNG. Full parameters and examples: call get_tool_guide('export_common_picture').",
+    "inputSchema": {
+      "properties": {
+        "fqn": {
+          "description": "CommonPicture FQN, e.g. 'CommonPicture.МояКартинка' (Russian type token ОбщаяКартинка accepted). Required.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name (required).",
+          "type": "string"
+        },
+        "variant": {
+          "description": "Optional. Which variant to decode to PNG: 'best' (the best raster variant), 'svg' (the vector variant, rasterized), or an exact variant/entry name from the 'variants' list. Omit it to return the inventory only (no image bytes).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn"
+      ],
+      "type": "object"
+    },
+    "name": "export_common_picture",
+    "outputSchema": {
+      "properties": {
+        "fqn": {
+          "description": "The resolved CommonPicture FQN.",
+          "type": "string"
+        },
+        "selected": {
+          "description": "Present only when 'variant' was requested and resolved: the chosen variant decoded to PNG - name, contentType ('image/png'), sizeBytes and pngBase64.",
+          "type": "object"
+        },
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "variants": {
+          "description": "All picture variants: each has name, dpi, theme, interfaceVariant, pictureDirection, template (boolean), glyphWidth, glyphHeight, contentType and sizeBytes. Nullable 1C enums are rendered as stable literals or '-'.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
@@ -1685,6 +1742,146 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Read a 1C infobase event log WITHOUT a running 1C session by parsing the raw log files (legacy text ver 2.0: a 1Cv8.lgf dictionary + dated *.lgp partitions). High diagnostic value: errors, user actions, posting, authentication. Locate the log by projectName (+ optional applicationId from get_applications for a FILE infobase), or pass logDir directly for an offline copy or a SERVER-mode infobase. Filters: from/to period, user, event, eventContains, severity, commentContains, metadataContains, session; paginated (limit/offset/order). Returns infobase PII (user names, data presentations). Full parameters and examples: call get_tool_guide('get_event_log').",
+    "inputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Application id from get_applications, to pick ONE infobase when the project has several. Optional; ignored when logDir is given.",
+          "type": "string"
+        },
+        "commentContains": {
+          "description": "Case-insensitive substring match on the event comment.",
+          "type": "string"
+        },
+        "event": {
+          "description": "Filter by exact event id/name (e.g. _$Session$_.Authentication). Use eventContains for a substring match instead.",
+          "type": "string"
+        },
+        "eventContains": {
+          "description": "Case-insensitive substring match on the event name.",
+          "type": "string"
+        },
+        "from": {
+          "description": "Period lower bound, ISO-8601 (e.g. 2026-04-01 or 2026-04-01T09:00:00). Omit for no lower bound.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max events to return (default 100, max 1000).",
+          "type": "integer"
+        },
+        "logDir": {
+          "description": "Absolute path to a 1Cv8Log directory to read directly (an offline copy, or a SERVER-mode infobase whose cluster path is not model-derivable). Overrides projectName/applicationId resolution.",
+          "type": "string"
+        },
+        "metadataContains": {
+          "description": "Case-insensitive substring match on the metadata full name as stored in the log (e.g. Document.SalesOrder), not a localized synonym.",
+          "type": "string"
+        },
+        "offset": {
+          "description": "Number of matching events to skip before this page (pagination; default 0).",
+          "type": "integer"
+        },
+        "order": {
+          "description": "Result order by date: date_asc (oldest first, default) or date_desc (newest first).",
+          "enum": [
+            "date_asc",
+            "date_desc"
+          ],
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT configuration project whose infobase event log to read. Provide this (optionally with applicationId) OR logDir.",
+          "type": "string"
+        },
+        "session": {
+          "description": "Filter by session number.",
+          "type": "string"
+        },
+        "severity": {
+          "description": "Filter by severity. Accepts I/W/E/N, the English words Information/Warning/Error/Note, or their Russian equivalents. JSON array or comma-separated.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "Period upper bound, ISO-8601. Omit for no upper bound.",
+          "type": "string"
+        },
+        "user": {
+          "description": "Filter by user name(s) (exact). JSON array [\"Ivanov\"] or comma-separated.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "get_event_log",
+    "outputSchema": {
+      "properties": {
+        "events": {
+          "description": "The page of events: {date, severity, severityPresentation, user, computer, application, event, comment, metadata, metadataUuid, session, data}.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "format": {
+          "description": "The detected log format (e.g. text-2.0).",
+          "type": "string"
+        },
+        "infobaseType": {
+          "description": "How the log was located: FILE (resolved from the project), SERVER, or OVERRIDE (logDir).",
+          "type": "string"
+        },
+        "limit": {
+          "description": "The effective page size (after clamping to [1, max]).",
+          "type": "integer"
+        },
+        "matched": {
+          "description": "Total records matching the filters across scanned partitions.",
+          "type": "integer"
+        },
+        "offset": {
+          "description": "The offset applied.",
+          "type": "integer"
+        },
+        "resolvedLogDir": {
+          "description": "The 1Cv8Log directory that was actually read.",
+          "type": "string"
+        },
+        "returned": {
+          "description": "Number of events returned on this page.",
+          "type": "integer"
+        },
+        "scanned": {
+          "description": "Total records scanned before filtering.",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the read succeeded",
+          "type": "boolean"
+        },
+        "truncated": {
+          "description": "True if the scan hit its cap and stopped early (matched/scanned are lower bounds).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Return a YAML snapshot of a form's calculated WYSIWYG layout (bounds, element types, display properties) as text; use it to inspect or compare what a form actually renders. Requires EDT launched with -DnativeFormBufferedLayoutRender=true, else the result is blank (missing flag, not a bad call). Full parameters and examples: call get_tool_guide('get_form_layout_snapshot').",
     "inputSchema": {
       "properties": {
@@ -1794,7 +1991,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
+    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties ('full: true' shows every object, otherwise only the non-default rows, the first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
         "assignable": {
@@ -1819,6 +2016,10 @@
         "projectName": {
           "description": "EDT project name (required)",
           "type": "string"
+        },
+        "roleObjectOffset": {
+          "description": "For a ROLE FQN only: 0-based object offset into the rights matrix, for paging past the first 100 authored objects in the default (non-full) view (default: 0; ignored when 'full: true', which renders every object up to 1000). Use it (or 'full: true') to read a role that authors more than 100 objects.",
+          "type": "integer"
         }
       },
       "required": [
@@ -1878,11 +2079,16 @@
     "inputSchema": {
       "properties": {
         "direction": {
-          "description": "'callers' (default) or 'callees'",
+          "description": "'callers' (default) = who calls this method; 'callees' = what this method calls; 'outgoing' = aggregated distinct call targets (module-wide when methodName omitted)",
           "enum": [
             "callers",
-            "callees"
+            "callees",
+            "outgoing"
           ],
+          "type": "string"
+        },
+        "extApiPrefix": {
+          "description": "For direction 'outgoing': literal call-qualifier prefix (case-insensitive) that flags a target as an external service API. Default: the 1C region name 'ПрограммныйИнтерфейсСервиса'.",
           "type": "string"
         },
         "limit": {
@@ -1890,7 +2096,7 @@
           "type": "integer"
         },
         "methodName": {
-          "description": "Name of the procedure/function (case-insensitive, required)",
+          "description": "Name of the procedure/function (case-insensitive). Required for direction 'callers'/'callees'; optional for 'outgoing' (omit to aggregate the whole module).",
           "type": "string"
         },
         "modulePath": {
@@ -1904,8 +2110,7 @@
       },
       "required": [
         "projectName",
-        "modulePath",
-        "methodName"
+        "modulePath"
       ],
       "type": "object"
     },
@@ -2675,6 +2880,36 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, picture direction, byte size) as a Markdown overview. Use it to see which pictures exist and to spot mixed-icon mistakes; no image bytes are returned - for the PNG of one picture use export_common_picture. Full parameters and examples: call get_tool_guide('list_common_pictures').",
+    "inputSchema": {
+      "properties": {
+        "language": {
+          "description": "Synonym language code, e.g. 'en'/'ru' (default: configuration default)",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max pictures listed (default from preferences: 100, max 1000)",
+          "type": "integer"
+        },
+        "projectName": {
+          "description": "EDT project name (required)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "list_common_pictures",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxunit_tests / debug_yaxunit_tests / update_database: use the returned 'name' as their launchConfigurationName. Use type='attach' for server-side debug setups, type='client' for 1C:Enterprise client configs, or type='all' (default). Full parameters and examples: call get_tool_guide('list_configurations').",
     "inputSchema": {
       "properties": {
@@ -2880,9 +3115,20 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
+    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Edit a structured membership LIST with 'content' instead of 'properties', dispatched by the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). 'content'=[{op?:'add'|'remove' (default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or removes one by its metadata FQN; a CommonAttribute entry takes 'use' ('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and a Catalog owner / Document register record / Subsystem content object is a plain reference (no flag). AUTHOR a SpreadsheetDocument (print form / макет) TEMPLATE's content with a 'template' payload instead of 'properties' on a template FQN (a common template 'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>'): 'template'={cells:[{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}], merges:[{fromRow, fromCol, toRow, toCol}], areas:[{name, fromRow, fromCol, toRow, toCol}], columnWidths:[{col, width}], rowHeights:[{row, height}]} writes the cells (text or a print-time parameter) with formatting, merged ranges, named areas and column / row sizes into the template's spreadsheet content; render the result with get_template_screenshot. AUTHOR a REPORT's Data Composition Schema (СКД / .dcs) with a 'dcs' payload instead of 'properties' on a Report FQN ('Report.<Name>'): 'dcs'={dataSources:[{name, type?}], dataSets:[{name, type:'query', query, dataSource?, autoFillFields?, fields:[{name?, dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the report's main schema (query data sets + fields + schema parameters), creating the DCS if the report has none. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
     "inputSchema": {
       "properties": {
+        "content": {
+          "description": "Members to attach / detach in a structured membership list, dispatched by the FQN's kind (a COMMON ATTRIBUTE's owners, an EXCHANGE PLAN's content objects, a CATALOG's owners, a DOCUMENT's register records, a SUBSYSTEM's content objects), as [{op?, metadata, use?, autoRecord?}]. 'op' is 'add' (default) / 'remove'; 'metadata' is the member object FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары' - only the type token is bilingual). 'use' (CommonAttribute only, add only, default 'Use') is 'Use' / 'DontUse' / 'Auto'; 'autoRecord' (ExchangePlan only, add only) is 'Allow' / 'Deny' (omit to keep the platform default). A Catalog owner, a Document register record and a Subsystem content object are plain references (no flag). Adding is idempotent (a re-added CommonAttribute owner has its 'use' updated, a re-added ExchangePlan object its 'autoRecord'; a re-added plain reference is a no-op). Valid only for a CommonAttribute / ExchangePlan / Catalog / Document / Subsystem FQN (a Subsystem FQN may be nested); cannot be combined with 'properties'.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "dcs": {
+          "description": "REPORT FQN only ('Report.<Name>'): the Data Composition Schema (СКД) content to author, instead of 'properties'. Authors the report's main DCS (creating it if the report has none yet). An object with: 'dataSources' [{name, type?}] (a data source, default type a local query source); 'dataSets' [{name, type:'query', query (the 1C query text, bilingual keywords), dataSource?, autoFillFields? (default true - EDT derives the fields from the query), fields? [{name?, dataPath, title?, role?}]}] a query data set; 'parameters' [{name, valueType?, title?, use?}] schema parameters. Valid only for a Report FQN; cannot be combined with 'properties' / 'content' / 'template' / a Role payload.",
+          "type": "object"
+        },
         "fqn": {
           "description": "Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or 'Catalog.Products.Attribute.Weight' (type / kind tokens may be English or Russian; the Name parts are the programmatic Name).",
           "type": "string"
@@ -2896,7 +3142,29 @@
           "type": "string"
         },
         "properties": {
-          "description": "Properties to set, as [{name, value, language?}] (required, at least one). 'name' is the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new value; 'language' is the code for a synonym (default: config default).",
+          "description": "Properties to set, as [{name, value, language?}]. 'name' is the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new value; 'language' is the code for a synonym (default: config default). Required unless the FQN is a Role and a role payload (rights / templates / roleProperties) is given.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "rights": {
+          "description": "ROLE only: per-object access rights to set, as [{object, right, value?, rls?, rlsFields?}]. 'object' is a metadata FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары'); 'right' is a bilingual right name (e.g. 'Read'/'Чтение', 'Update'/'Изменение'); 'value' is 'set' (allowed, default) / 'unset' (denied) / 'provided' (default/inherited), or a boolean (true=set, false=unset). 'rls' is an optional Row-Level-Security restriction condition (1C query text); 'rlsFields' is an optional array of field names the RLS applies to (omit / empty = whole-object restriction).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "roleProperties": {
+          "description": "ROLE only: the three role properties, as optional booleans {setForNewObjects, setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags are changed.",
+          "type": "object"
+        },
+        "template": {
+          "description": "SpreadsheetDocument (print form / макет) TEMPLATE FQN only: the spreadsheet content to author, instead of 'properties'. An object with any of: 'cells' [{row, col (both 0-based, required), text? OR parameter? (a print-time parameter name), bold?, fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? ('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text)}]; 'merges' [{fromRow, fromCol, toRow, toCol}] merged cell ranges; 'areas' [{name, fromRow, fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); 'columnWidths' [{col, width}] and 'rowHeights' [{row, height}] column / row sizes. Setting a cell overwrites that (row, col); the rest of the content is kept. Valid only for a SpreadsheetDocument template FQN; cannot be combined with 'properties' / 'content' / a Role payload.",
+          "type": "object"
+        },
+        "templates": {
+          "description": "ROLE only: RLS restriction templates to change, as [{op?, name, condition?}]. 'op' is 'add' (default) / 'edit' / 'delete'; 'name' is the template name; 'condition' is the RLS restriction text (required for add/edit).",
           "items": {
             "type": "object"
           },
@@ -2905,8 +3173,7 @@
       },
       "required": [
         "projectName",
-        "fqn",
-        "properties"
+        "fqn"
       ],
       "type": "object"
     },
@@ -2918,11 +3185,19 @@
           "type": "string"
         },
         "applied": {
-          "description": "Names of the properties that were set",
+          "description": "Names of the properties that were set (for a Role rights change this is instead an object {rights, templates, roleProperties} with the applied counts)",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "content": {
+          "description": "For a membership-list content change: the counts object. A CommonAttribute / ExchangePlan change reports {added, updated, removed} (members attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a Catalog owners / Document register records / Subsystem content change (a plain reference list, no per-entry flag) reports {added, removed}",
+          "type": "object"
+        },
+        "dcs": {
+          "description": "For a DCS (Report Data Composition Schema) content change: the applied counts object {dataSources, dataSets, fields, parameters}",
+          "type": "object"
         },
         "destination": {
           "description": "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. \"group 'Main' at index 1\"",
@@ -2950,6 +3225,10 @@
         "success": {
           "description": "Whether the properties were set",
           "type": "boolean"
+        },
+        "template": {
+          "description": "For a template content change: the applied counts object {cells, merges, areas, columnWidths, rowHeights}",
+          "type": "object"
         }
       },
       "required": [
@@ -3181,7 +3460,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Walks EVERY top metadata object of the configuration (all kinds), reports the objects whose .mdo is missing on disk (missingBefore), and force-exports that missing subset so the files are restored (fullExport=true re-exports every object instead). Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Dangling/orphaned references in Configuration.mdo (unresolved proxies shown by get_project_errors as md-reference-intergrity 'lost reference' warnings that block update_database / XML import) are REPORTED by default (danglingFound + danglingDetails); set cleanDanglingReferences=true to REMOVE them - destructive: rewrites Configuration.mdo. Full parameters and examples: call get_tool_guide('resync_to_disk').",
+    "description": "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to src/); the reverse is clean_project, which rebuilds MODEL <- DISK and DISCARDS any unsaved in-memory model edits. Walks EVERY top metadata object of the configuration (all kinds), reports the objects whose .mdo is missing on disk (missingBefore), and force-exports that missing subset so the files are restored (fullExport=true re-exports every object instead - requires overwriteDiskEdits=true to confirm, as it overwrites on-disk edits). Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Dangling/orphaned references in Configuration.mdo (unresolved proxies shown by get_project_errors as md-reference-intergrity 'lost reference' warnings that block update_database / XML import) are REPORTED by default (danglingFound + danglingDetails); set cleanDanglingReferences=true to REMOVE them - destructive: rewrites Configuration.mdo. Full parameters and examples: call get_tool_guide('resync_to_disk').",
     "inputSchema": {
       "properties": {
         "cleanDanglingReferences": {
@@ -3190,6 +3469,10 @@
         },
         "fullExport": {
           "description": "When true, force-export EVERY metadata top object's .mdo (a full disk refresh; slow on a large configuration - the export runs on the UI thread). Default: false - export only the objects whose .mdo is missing on disk.",
+          "type": "boolean"
+        },
+        "overwriteDiskEdits": {
+          "description": "Required confirmation for fullExport=true: force-exporting every .mdo from the in-memory model OVERWRITES any on-disk edits. Default: false - fullExport is rejected unless this is true. Ignored when fullExport=false.",
           "type": "boolean"
         },
         "projectName": {
@@ -3605,6 +3888,68 @@
         },
         "user": {
           "description": "Stored infobase user name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Set a BSL variable's value in a suspended debug frame. WRITE/side-effect: EXECUTES the entered value as a BSL literal/expression live in the running 1C application, mutating the variable. Address the frame by frameRef from wait_for_break (preferred) or threadId+frameIndex; name the variable (dot-path for a nested member). Read current values with get_variables first; use evaluate_expression to compute without mutating.",
+    "inputSchema": {
+      "properties": {
+        "frameIndex": {
+          "description": "0-based frame index when using threadId",
+          "type": "integer"
+        },
+        "frameRef": {
+          "description": "Stable frame reference returned from wait_for_break (preferred)",
+          "type": "integer"
+        },
+        "threadId": {
+          "description": "Thread id (alternative to frameRef)",
+          "type": "integer"
+        },
+        "value": {
+          "description": "New value as a BSL literal/expression (e.g. 42, \"text\", True, Дата(2025,1,1))",
+          "type": "string"
+        },
+        "variableName": {
+          "description": "Name of the variable to set (dot-separated to reach a nested member)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "variableName",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "set_variable",
+    "outputSchema": {
+      "properties": {
+        "success": {
+          "description": "Whether the operation succeeded",
+          "type": "boolean"
+        },
+        "type": {
+          "description": "BSL reference type name of the new value",
+          "type": "string"
+        },
+        "value": {
+          "description": "The variable's new value after the set (may be truncated)",
+          "type": "string"
+        },
+        "variableName": {
+          "description": "The variable that was set",
           "type": "string"
         }
       },

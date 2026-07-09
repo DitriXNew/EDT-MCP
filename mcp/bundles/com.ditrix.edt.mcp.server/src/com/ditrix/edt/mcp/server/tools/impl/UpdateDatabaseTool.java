@@ -25,6 +25,8 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
@@ -273,6 +275,22 @@ public class UpdateDatabaseTool implements IMcpTool
             {
                 return buildPreviewResult(projectName, applicationId, application, updateType,
                     stateBefore, terminateRunningClients);
+            }
+
+            // Destructive-operation consent gate: the LAST check before the (irreversible) infobase
+            // mutation and before any running client is terminated to free it. Built from the resolved
+            // update plan the tool already computed; on ALLOW the behaviour is byte-identical, on REJECT
+            // nothing is mutated. Headless / env-bypass / non-ASK never block.
+            ConsentPreview consentPreview = new ConsentPreview(
+                "Update database", //$NON-NLS-1$
+                "This applies a " + updateType.name() //$NON-NLS-1$
+                    + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
+                    + "' (project " + projectName + "). This mutates the infobase and is irreversible.", //$NON-NLS-1$ //$NON-NLS-2$
+                1, java.util.Collections.singletonList(application.getName()));
+            if (DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview)
+                == DestructiveConsentGate.ConsentDecision.REJECT)
+            {
+                return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
             }
 
             // Create execution context with the active Shell so EDT can parent

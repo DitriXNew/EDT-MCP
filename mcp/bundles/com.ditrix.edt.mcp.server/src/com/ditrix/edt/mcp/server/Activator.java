@@ -10,6 +10,8 @@ import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.osgi.framework.BundleContext;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
+import com._1c.g5.v8.dt.core.event.IEventBroker;
+import com._1c.g5.v8.dt.core.model.IModelObjectCollectionRuntimeOrderSorter;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
@@ -25,6 +27,7 @@ import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
+import com._1c.g5.v8.dt.rights.IRightInfosService;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.utils.Log;
@@ -458,6 +461,42 @@ public class Activator extends AbstractUIPlugin
     public Object getRuntimeDebugClientTargetManager()
     {
         return services.getRuntimeDebugClientTargetManager();
+    }
+
+    /**
+     * Returns the {@link IRightInfosService} used to resolve the access rights valid for a metadata
+     * object (so a role's right value / RLS can be resolved by its bilingual name). Consumed by the
+     * role branch of {@code get_metadata_details} and by the role-rights writer of
+     * {@code modify_metadata}.
+     *
+     * @return the right-infos service, or null if not available
+     */
+    public IRightInfosService getRightInfosService()
+    {
+        return services.getRightInfosService();
+    }
+
+    /**
+     * Returns the {@link IEventBroker} EDT-model event broker required by the rights write tasks
+     * to publish model-change events. Consumed by the role-rights writer of {@code modify_metadata}.
+     *
+     * @return the event broker, or null if not available
+     */
+    public IEventBroker getEventBroker()
+    {
+        return services.getEventBroker();
+    }
+
+    /**
+     * Returns the {@link IModelObjectCollectionRuntimeOrderSorter} used by the rights write tasks to
+     * keep the rights collections in their canonical runtime order. Consumed by the role-rights writer
+     * of {@code modify_metadata}.
+     *
+     * @return the collection order sorter, or null if not available
+     */
+    public IModelObjectCollectionRuntimeOrderSorter getCollectionOrderSorter()
+    {
+        return services.getCollectionOrderSorter();
     }
 
     /**

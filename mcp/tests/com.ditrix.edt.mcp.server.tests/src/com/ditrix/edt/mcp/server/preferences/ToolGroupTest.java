@@ -173,7 +173,8 @@ public class ToolGroupTest
         assertTrue(tools.contains("set_breakpoint"));
         assertTrue(tools.contains("resume"));
         assertTrue(tools.contains("get_variables"));
-        assertEquals(12, tools.size());
+        assertTrue(tools.contains("set_variable"));
+        assertEquals(13, tools.size());
     }
 
     @Test

@@ -14,6 +14,8 @@ import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.util.tracker.ServiceTracker;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
+import com._1c.g5.v8.dt.core.event.IEventBroker;
+import com._1c.g5.v8.dt.core.model.IModelObjectCollectionRuntimeOrderSorter;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
@@ -31,6 +33,8 @@ import com._1c.g5.v8.dt.md.ui.presentation.IPresentationService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
+import com._1c.g5.v8.dt.rights.IRightInfosService;
+import com._1c.g5.v8.dt.rights.RightsPlugin;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.wiring.ServiceProperties;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -69,6 +73,9 @@ public class EdtServices
     private ServiceTracker<IExtensionProjectManager, IExtensionProjectManager> extensionProjectManagerTracker;
     private ServiceTracker<IConfigurationProjectManager, IConfigurationProjectManager> configurationProjectManagerTracker;
     private ServiceTracker<IExternalObjectProjectManager, IExternalObjectProjectManager> externalObjectProjectManagerTracker;
+    private ServiceTracker<IRightInfosService, IRightInfosService> rightInfosServiceTracker;
+    private ServiceTracker<IEventBroker, IEventBroker> eventBrokerTracker;
+    private ServiceTracker<IModelObjectCollectionRuntimeOrderSorter, IModelObjectCollectionRuntimeOrderSorter> collectionOrderSorterTracker;
 
     /**
      * The FORM-model {@link IModelObjectFactory}, tracked with an LDAP filter on the EDT wiring
@@ -181,6 +188,16 @@ public class EdtServices
         externalObjectProjectManagerTracker = new ServiceTracker<>(context, IExternalObjectProjectManager.class, null);
         externalObjectProjectManagerTracker.open();
 
+        rightInfosServiceTracker = new ServiceTracker<>(context, IRightInfosService.class, null);
+        rightInfosServiceTracker.open();
+
+        eventBrokerTracker = new ServiceTracker<>(context, IEventBroker.class, null);
+        eventBrokerTracker.open();
+
+        collectionOrderSorterTracker =
+            new ServiceTracker<>(context, IModelObjectCollectionRuntimeOrderSorter.class, null);
+        collectionOrderSorterTracker.open();
+
         try
         {
             Filter formFactoryFilter = context.createFilter("(&(objectClass=" //$NON-NLS-1$
@@ -248,6 +265,9 @@ public class EdtServices
         extensionProjectManagerTracker = closeTracker(extensionProjectManagerTracker);
         configurationProjectManagerTracker = closeTracker(configurationProjectManagerTracker);
         externalObjectProjectManagerTracker = closeTracker(externalObjectProjectManagerTracker);
+        rightInfosServiceTracker = closeTracker(rightInfosServiceTracker);
+        eventBrokerTracker = closeTracker(eventBrokerTracker);
+        collectionOrderSorterTracker = closeTracker(collectionOrderSorterTracker);
         formModelObjectFactoryTracker = closeTracker(formModelObjectFactoryTracker);
         exportConfigurationFilesApiTracker = closeTracker(exportConfigurationFilesApiTracker);
         importConfigurationFilesApiTracker = closeTracker(importConfigurationFilesApiTracker);
@@ -728,6 +748,86 @@ public class EdtServices
             return null;
         }
         return externalObjectProjectManagerTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IRightInfosService} used to enumerate the rights that are valid for a given
+     * metadata object (an EObject), so a role's right value / RLS can be resolved by its bilingual
+     * name. Consumed by the role branch of {@code get_metadata_details} and by the role-rights writer
+     * of {@code modify_metadata}.
+     * <p>
+     * The service is first looked up as a plain OSGi service (the EDT wiring framework registers its
+     * Guice singletons as OSGi services). If the tracker is not initialized or the OSGi registration
+     * is not present in the running platform, it falls back to the rights bundle's Guice injector
+     * ({@code RightsPlugin.getDefault().getInjector().getInstance(IRightInfosService.class)}), which
+     * is the injector that binds the service in the first place. Returns {@code null} when neither
+     * route resolves it (e.g. a headless test runtime with no rights bundle activated).
+     *
+     * @return the right-infos service, or {@code null} if not available
+     */
+    public IRightInfosService getRightInfosService()
+    {
+        if (rightInfosServiceTracker != null)
+        {
+            IRightInfosService service = rightInfosServiceTracker.getService();
+            if (service != null)
+            {
+                return service;
+            }
+        }
+        // Fallback: the OSGi service may not be registered even though the rights bundle binds the
+        // service in its Guice injector. Resolve it directly from the rights injector.
+        try
+        {
+            RightsPlugin rightsPlugin = RightsPlugin.getDefault();
+            if (rightsPlugin != null)
+            {
+                Injector injector = rightsPlugin.getInjector();
+                if (injector != null)
+                {
+                    return injector.getInstance(IRightInfosService.class);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Failed to obtain IRightInfosService from RightsPlugin injector", e); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Returns the {@link IEventBroker} EDT-model event broker required by the rights write tasks
+     * ({@code AddRightValuesTask}, {@code AddRlsTask}, {@code EditRlsTask}, the RLS-template tasks and
+     * the role-property tasks) to publish model-change events. Consumed by the role-rights writer of
+     * {@code modify_metadata}.
+     *
+     * @return the event broker, or {@code null} if not available
+     */
+    public IEventBroker getEventBroker()
+    {
+        if (eventBrokerTracker == null)
+        {
+            return null;
+        }
+        return eventBrokerTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IModelObjectCollectionRuntimeOrderSorter} used by the rights write tasks
+     * ({@code AddRightValuesTask}, {@code AddRlsTask}, {@code SetSetRightsForNewObjectsTask}) to keep
+     * the rights collections in their canonical runtime order. Consumed by the role-rights writer of
+     * {@code modify_metadata}.
+     *
+     * @return the collection order sorter, or {@code null} if not available
+     */
+    public IModelObjectCollectionRuntimeOrderSorter getCollectionOrderSorter()
+    {
+        if (collectionOrderSorterTracker == null)
+        {
+            return null;
+        }
+        return collectionOrderSorterTracker.getService();
     }
 
     /**

@@ -956,3 +956,77 @@ def test_rebind_button_command_mixed_with_other_property_rejected():
     assert_error_quality(e, suggests=["cannot be combined", "separate call"],
                          ctx="a button command rebind cannot be mixed with a property change")
     assert_tree_unchanged(before, "a rejected mixed rebind must change nothing")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Happy — form GROUP layout props that live under <extInfo> (UsualGroupExtInfo):
+# the grouping `group` enum + the `united` flag are NOT on the group element but
+# on its nested UsualGroupExtInfo. modify_metadata resolves / creates that extInfo
+# holder reflectively and routes the eSet there (issue #235). A mixed direct +
+# extInfo batch routes each property to its correct holder in one transaction.
+# Fixture: Catalog.Catalog has a managed form "ItemForm".
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_group_extinfo_layout_props():
+    # Set a UsualGroup's grouping (`group`) + `united` flag: both live on the group's nested
+    # UsualGroupExtInfo, so the tool must create / reuse that extInfo holder and land the values there.
+    _seed_form_group("ExtGrp")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group.ExtGrp",
+        "properties": [
+            # "Vertical" (not the enum default "Horizontal", which EMF omits from disk as eIsSet==false).
+            {"name": "group", "value": "Vertical"},
+            {"name": "united", "value": True},
+        ],
+    })
+    assert_ok(r, "set a UsualGroup's group + united (extInfo layout props)")
+    assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
+    applied = r.structured.get("applied") or []
+    for f in ("group", "united"):
+        assert f in applied, "%s must be in applied: %r" % (f, r.structured)
+    assert r.structured.get("persisted") is True, \
+        "the extInfo change must force-export the .form to disk: %r" % (r.structured,)
+    # The nested <extInfo xsi:type="form:UsualGroupExtInfo"> + the grouping value land in the .form.
+    poll_diff_contains("UsualGroupExtInfo",
+                       ctx="the nested extInfo (form:UsualGroupExtInfo) must land in the .form on disk")
+    assert_contains(diff(), "<group>Vertical</group>",
+                    "the group's Vertical grouping must land under <extInfo> on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_group_mixed_direct_and_extinfo_batch():
+    # A single call mixing a DIRECT feature (visible, on the group element) with an extInfo feature
+    # (group, on UsualGroupExtInfo) must apply each to its correct holder in ONE transaction: both land.
+    _seed_form_group("MixExtGrp")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group.MixExtGrp",
+        "properties": [
+            {"name": "visible", "value": False},        # direct feature on the group element
+            {"name": "group", "value": "Vertical"},     # extInfo feature (UsualGroupExtInfo.group); non-default so it serializes
+        ],
+    })
+    assert_ok(r, "mixed direct + extInfo batch on a UsualGroup")
+    applied = r.structured.get("applied") or []
+    for f in ("visible", "group"):
+        assert f in applied, "%s must be in applied: %r" % (f, r.structured)
+    # The extInfo grouping prop from the mixed batch reaches the created UsualGroupExtInfo holder.
+    poll_diff_contains("<group>Vertical</group>",
+                       ctx="the extInfo group prop from a mixed batch must land under <extInfo>")
+    assert_contains(diff(), "UsualGroupExtInfo",
+                    "the mixed batch must create the UsualGroupExtInfo holder for the extInfo prop")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_group_unknown_extinfo_property_lists_assignable():
+    # An unknown property on a group is rejected with the now-EXTENDED assignable set (member ∪ extInfo),
+    # so the error steers the caller to the real layout props that live under <extInfo>.
+    _seed_form_group("BadExtGrp")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group.BadExtGrp",
+        "properties": [{"name": "definitelyNotAGroupProp_zz", "value": "x"}],
+    })
+    e = assert_error(r, "unknown group property")
+    assert_error_quality(e, names=["definitelyNotAGroupProp_zz"],
+                         suggests=["not assignable", "Assignable properties"],
+                         ctx="an unknown group property lists the assignable set incl. the extInfo props")

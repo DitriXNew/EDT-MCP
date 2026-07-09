@@ -29,6 +29,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
@@ -959,7 +960,11 @@ public class DebugLaunchTool implements IMcpTool
             return null;
         }
         // No workbench (headless tests): launch synchronously and surface errors.
+        // The infobase auth-dialog suppression is held across the synchronous connect for
+        // the same #230 reason as the async Job body above (kept symmetric with the
+        // arm/disarm pattern; a no-op headless where no dialog can appear).
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true);
+        InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
             config.launch(ILaunchManager.DEBUG_MODE, null);
@@ -972,6 +977,7 @@ public class DebugLaunchTool implements IMcpTool
         }
         finally
         {
+            InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true);
         }
     }
@@ -1005,6 +1011,16 @@ public class DebugLaunchTool implements IMcpTool
         // auto-confirmed on this debug path (it is independent of the update
         // opt-out). Manual EDT launches outside this window still prompt.
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true);
+        // Keep the infobase auth-dialog suppression active for the WHOLE async launch
+        // (#230). This launch is fire-and-forget: tool.execute() has already returned and
+        // stamped lastActivityEndMillis, and with updateBeforeLaunch=false there is no
+        // synchronous preflight connect — the FIRST (and only) infobase connect happens
+        // right here in config.launch, which can run for minutes (e.g. the standalone-
+        // server mode-switch restart). The in-flight counter — not the short trailing
+        // grace window — must therefore cover it, so a "Configure Infobase access Settings"
+        // dialog raised by this connect (missing/wrong stored creds) is still auto-cancelled
+        // instead of hanging the unattended call (mirrors the arm/disarm pattern above).
+        InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
             config.launch(ILaunchManager.DEBUG_MODE, monitor);
@@ -1025,6 +1041,7 @@ public class DebugLaunchTool implements IMcpTool
         }
         finally
         {
+            InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true);
         }
     }

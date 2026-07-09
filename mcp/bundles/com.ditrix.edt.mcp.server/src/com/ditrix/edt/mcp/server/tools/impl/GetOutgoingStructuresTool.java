@@ -287,7 +287,7 @@ public class GetOutgoingStructuresTool implements IMcpTool
     boolean collectMethodRecords(Method method, String qualifierFilter, int limit, JsonArray records)
     {
         String methodName = method.getName();
-        for (Iterator<EObject> iter = method.eAllContents(); iter.hasNext();)
+        for (Iterator<EObject> iter = method.eAllContents(); iter.hasNext();) // NOSONAR guard-continue filter chain; merging into nested ifs deepens nesting and hurts readability
         {
             if (records.size() >= limit)
             {

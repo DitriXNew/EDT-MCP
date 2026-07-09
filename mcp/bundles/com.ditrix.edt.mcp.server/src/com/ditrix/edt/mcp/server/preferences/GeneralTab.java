@@ -13,6 +13,7 @@ import java.util.List;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.jface.resource.ImageDescriptor;
+import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
@@ -52,6 +53,7 @@ public class GeneralTab
     private Button plainTextCheck;
     private Button showTagsCheck;
     private Combo tagStyleCombo;
+    private Combo consentLevelCombo;
     private Combo updateCheckCombo;
     private Label statusLabel;
     private Button startButton;
@@ -62,16 +64,22 @@ public class GeneralTab
     private final List<org.eclipse.swt.graphics.Image> managedImages = new ArrayList<>();
 
     private static final String[][] TAG_STYLES = {
-        {"All tags (suffix)", PreferenceConstants.TAGS_STYLE_SUFFIX}, //$NON-NLS-1$
-        {"First tag only", PreferenceConstants.TAGS_STYLE_FIRST_TAG}, //$NON-NLS-1$
-        {"Tag count", PreferenceConstants.TAGS_STYLE_COUNT} //$NON-NLS-1$
+        {Messages.GeneralTab_TagStyle_AllTagsSuffix, PreferenceConstants.TAGS_STYLE_SUFFIX},
+        {Messages.GeneralTab_TagStyle_FirstTagOnly, PreferenceConstants.TAGS_STYLE_FIRST_TAG},
+        {Messages.GeneralTab_TagStyle_TagCount, PreferenceConstants.TAGS_STYLE_COUNT}
+    };
+
+    private static final String[][] CONSENT_LEVELS = {
+        {Messages.GeneralTab_ConsentLevel_AskAlways, PreferenceConstants.CONSENT_LEVEL_ASK_ALWAYS},
+        {Messages.GeneralTab_ConsentLevel_AllowAll, PreferenceConstants.CONSENT_LEVEL_ALLOW_ALL},
+        {Messages.GeneralTab_ConsentLevel_PerTool, PreferenceConstants.CONSENT_LEVEL_PER_TOOL}
     };
 
     private static final String[][] UPDATE_INTERVALS = {
-        {"On every startup", PreferenceConstants.UPDATE_CHECK_ON_STARTUP}, //$NON-NLS-1$
-        {"Hourly", PreferenceConstants.UPDATE_CHECK_HOURLY}, //$NON-NLS-1$
-        {"Daily", PreferenceConstants.UPDATE_CHECK_DAILY}, //$NON-NLS-1$
-        {"Never", PreferenceConstants.UPDATE_CHECK_NEVER} //$NON-NLS-1$
+        {Messages.GeneralTab_UpdateInterval_OnStartup, PreferenceConstants.UPDATE_CHECK_ON_STARTUP},
+        {Messages.GeneralTab_UpdateInterval_Hourly, PreferenceConstants.UPDATE_CHECK_HOURLY},
+        {Messages.GeneralTab_UpdateInterval_Daily, PreferenceConstants.UPDATE_CHECK_DAILY},
+        {Messages.GeneralTab_UpdateInterval_Never, PreferenceConstants.UPDATE_CHECK_NEVER}
     };
 
     public GeneralTab(Composite parent)
@@ -87,6 +95,7 @@ public class GeneralTab
         createServerSection();
         createLimitsSection();
         createTagsSection();
+        createConsentSection();
         createUpdateSection();
         createServerControlSection();
     }
@@ -99,7 +108,7 @@ public class GeneralTab
     private void createServerSection()
     {
         // Port
-        createLabel("Server Port:"); //$NON-NLS-1$
+        createLabel(Messages.GeneralTab_ServerPort);
         portSpinner = new Spinner(composite, SWT.BORDER);
         portSpinner.setMinimum(1024);
         portSpinner.setMaximum(65535);
@@ -109,7 +118,7 @@ public class GeneralTab
 
         // Auto-start
         autoStartCheck = new Button(composite, SWT.CHECK);
-        autoStartCheck.setText("Automatically start with EDT"); //$NON-NLS-1$
+        autoStartCheck.setText(Messages.GeneralTab_AutoStart);
         autoStartCheck.setSelection(store.getBoolean(PreferenceConstants.PREF_AUTO_START));
         GridData autoStartGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         autoStartGd.horizontalSpan = 3;
@@ -117,14 +126,14 @@ public class GeneralTab
 
         // Allow remote (non-loopback) access — security
         allowRemoteCheck = new Button(composite, SWT.CHECK);
-        allowRemoteCheck.setText("Allow remote (non-loopback) access — set an auth token below"); //$NON-NLS-1$
+        allowRemoteCheck.setText(Messages.GeneralTab_AllowRemote);
         allowRemoteCheck.setSelection(store.getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS));
         GridData allowRemoteGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         allowRemoteGd.horizontalSpan = 3;
         allowRemoteCheck.setLayoutData(allowRemoteGd);
 
         // Auth token (empty = authentication disabled)
-        createLabel("Auth token (empty = no auth):"); //$NON-NLS-1$
+        createLabel(Messages.GeneralTab_AuthToken);
         authTokenText = new Text(composite, SWT.BORDER | SWT.PASSWORD);
         authTokenText.setText(store.getString(PreferenceConstants.PREF_AUTH_TOKEN));
         GridData authTokenGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
@@ -132,19 +141,19 @@ public class GeneralTab
         authTokenText.setLayoutData(authTokenGd);
 
         // Checks folder
-        createLabel("Check descriptions folder:"); //$NON-NLS-1$
+        createLabel(Messages.GeneralTab_ChecksFolder);
         checksFolderText = new Text(composite, SWT.BORDER);
         checksFolderText.setText(store.getString(PreferenceConstants.PREF_CHECKS_FOLDER));
         checksFolderText.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         Button browseButton = new Button(composite, SWT.PUSH);
-        browseButton.setText("Browse..."); //$NON-NLS-1$
+        browseButton.setText(Messages.GeneralTab_Browse);
         browseButton.addSelectionListener(new SelectionAdapter()
         {
             @Override
             public void widgetSelected(SelectionEvent e)
             {
                 DirectoryDialog dialog = new DirectoryDialog(composite.getShell());
-                dialog.setMessage("Select check descriptions folder"); //$NON-NLS-1$
+                dialog.setMessage(Messages.GeneralTab_SelectChecksFolder);
                 String path = dialog.open();
                 if (path != null)
                 {
@@ -158,10 +167,8 @@ public class GeneralTab
     {
         // Plain text mode
         plainTextCheck = new Button(composite, SWT.CHECK);
-        plainTextCheck.setText("Plain text mode (Cursor compatibility)"); //$NON-NLS-1$
-        plainTextCheck.setToolTipText(
-            "When enabled, returns results as plain text instead of embedded resources. " + //$NON-NLS-1$
-            "Enable this if your AI client (e.g., Cursor) doesn't support MCP resources."); //$NON-NLS-1$
+        plainTextCheck.setText(Messages.GeneralTab_PlainTextMode);
+        plainTextCheck.setToolTipText(Messages.GeneralTab_PlainTextMode_Tooltip);
         plainTextCheck.setSelection(store.getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE));
         GridData ptGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         ptGd.horizontalSpan = 3;
@@ -179,14 +186,14 @@ public class GeneralTab
 
         // Show tags in navigator
         showTagsCheck = new Button(composite, SWT.CHECK);
-        showTagsCheck.setText("Show tags in Navigator"); //$NON-NLS-1$
+        showTagsCheck.setText(Messages.GeneralTab_ShowTags);
         showTagsCheck.setSelection(store.getBoolean(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR));
         GridData stGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         stGd.horizontalSpan = 3;
         showTagsCheck.setLayoutData(stGd);
 
         // Tag decoration style
-        createLabel("Tag decoration style:"); //$NON-NLS-1$
+        createLabel(Messages.GeneralTab_TagDecorationStyle);
         tagStyleCombo = new Combo(composite, SWT.DROP_DOWN | SWT.READ_ONLY);
         String currentStyle = store.getString(PreferenceConstants.PREF_TAGS_DECORATION_STYLE);
         int styleIndex = 0;
@@ -203,10 +210,38 @@ public class GeneralTab
         createLabel(""); //$NON-NLS-1$
     }
 
+    private void createConsentSection()
+    {
+        // Separator
+        Label separator = new Label(composite, SWT.HORIZONTAL | SWT.SEPARATOR);
+        GridData sepGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        sepGd.horizontalSpan = 3;
+        sepGd.verticalIndent = 5;
+        separator.setLayoutData(sepGd);
+
+        // Destructive operations consent level
+        createLabel(Messages.GeneralTab_DestructiveOperations);
+        consentLevelCombo = new Combo(composite, SWT.DROP_DOWN | SWT.READ_ONLY);
+        consentLevelCombo.setToolTipText(Messages.GeneralTab_DestructiveOperations_Tooltip);
+        String currentLevel = store.getString(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_LEVEL);
+        int levelIndex = 0;
+        for (int i = 0; i < CONSENT_LEVELS.length; i++)
+        {
+            consentLevelCombo.add(CONSENT_LEVELS[i][0]);
+            if (CONSENT_LEVELS[i][1].equals(currentLevel))
+            {
+                levelIndex = i;
+            }
+        }
+        consentLevelCombo.select(levelIndex);
+        consentLevelCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
+        createLabel(""); //$NON-NLS-1$
+    }
+
     private void createUpdateSection()
     {
         // Update check interval
-        createLabel("Check for updates:"); //$NON-NLS-1$
+        createLabel(Messages.GeneralTab_CheckForUpdates);
         updateCheckCombo = new Combo(composite, SWT.DROP_DOWN | SWT.READ_ONLY);
         String currentInterval = store.getString(PreferenceConstants.PREF_UPDATE_CHECK_INTERVAL);
         int intervalIndex = 0;
@@ -232,7 +267,7 @@ public class GeneralTab
         checkNowRow.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         Button checkNowButton = new Button(checkNowRow, SWT.PUSH);
-        checkNowButton.setText("Check now"); //$NON-NLS-1$
+        checkNowButton.setText(Messages.GeneralTab_CheckNow);
 
         Link checkResultLink = new Link(checkNowRow, SWT.NONE);
         checkResultLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -256,7 +291,7 @@ public class GeneralTab
             @Override
             public void widgetSelected(SelectionEvent e)
             {
-                checkResultLink.setText("Checking..."); //$NON-NLS-1$
+                checkResultLink.setText(Messages.GeneralTab_Checking);
                 checkResultLink.getParent().layout(true, true);
                 Thread t = new Thread(() -> {
                     UpdateChecker.getInstance().checkNow();
@@ -290,11 +325,11 @@ public class GeneralTab
         }
         else if (checker.isUpdateAvailable())
         {
-            link.setText("New release available: <a>" + latest + " — What's new?</a>"); //$NON-NLS-1$ //$NON-NLS-2$
+            link.setText(NLS.bind(Messages.GeneralTab_NewReleaseAvailable, latest));
         }
         else
         {
-            link.setText("Up to date (" + McpConstants.PLUGIN_VERSION + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            link.setText(NLS.bind(Messages.GeneralTab_UpToDate, McpConstants.PLUGIN_VERSION));
         }
     }
 
@@ -309,7 +344,7 @@ public class GeneralTab
 
         // Section title
         Label sectionTitle = new Label(composite, SWT.NONE);
-        sectionTitle.setText("Server Control"); //$NON-NLS-1$
+        sectionTitle.setText(Messages.GeneralTab_ServerControl);
         GridData titleGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         titleGd.horizontalSpan = 3;
         sectionTitle.setLayoutData(titleGd);
@@ -323,7 +358,7 @@ public class GeneralTab
 
         // Status
         Label statusTitleLabel = new Label(controlComposite, SWT.NONE);
-        statusTitleLabel.setText("Status:"); //$NON-NLS-1$
+        statusTitleLabel.setText(Messages.GeneralTab_Status);
 
         statusLabel = new Label(controlComposite, SWT.NONE);
         GridData statusGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
@@ -340,7 +375,7 @@ public class GeneralTab
             Activator.PLUGIN_ID, "icons/restart.png"); //$NON-NLS-1$
 
         startButton = new Button(controlComposite, SWT.PUSH);
-        startButton.setText("Start"); //$NON-NLS-1$
+        startButton.setText(Messages.GeneralTab_Start);
         setManagedImage(startButton, startIcon);
         startButton.addSelectionListener(new SelectionAdapter()
         {
@@ -352,7 +387,7 @@ public class GeneralTab
         });
 
         stopButton = new Button(controlComposite, SWT.PUSH);
-        stopButton.setText("Stop"); //$NON-NLS-1$
+        stopButton.setText(Messages.GeneralTab_Stop);
         setManagedImage(stopButton, stopIcon);
         stopButton.addSelectionListener(new SelectionAdapter()
         {
@@ -364,7 +399,7 @@ public class GeneralTab
         });
 
         restartButton = new Button(controlComposite, SWT.PUSH);
-        restartButton.setText("Restart"); //$NON-NLS-1$
+        restartButton.setText(Messages.GeneralTab_Restart);
         setManagedImage(restartButton, restartIcon);
         restartButton.addSelectionListener(new SelectionAdapter()
         {
@@ -380,7 +415,7 @@ public class GeneralTab
 
         // Connection info
         Label infoLabel = new Label(controlComposite, SWT.NONE);
-        infoLabel.setText("Endpoint: http://localhost:<port>/mcp"); //$NON-NLS-1$
+        infoLabel.setText(Messages.GeneralTab_Endpoint);
         GridData infoGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         infoGd.horizontalSpan = 4;
         infoLabel.setLayoutData(infoGd);
@@ -411,6 +446,12 @@ public class GeneralTab
         if (intervalIdx >= 0 && intervalIdx < UPDATE_INTERVALS.length)
         {
             store.setValue(PreferenceConstants.PREF_UPDATE_CHECK_INTERVAL, UPDATE_INTERVALS[intervalIdx][1]);
+        }
+
+        int consentIdx = consentLevelCombo.getSelectionIndex();
+        if (consentIdx >= 0 && consentIdx < CONSENT_LEVELS.length)
+        {
+            store.setValue(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_LEVEL, CONSENT_LEVELS[consentIdx][1]);
         }
     }
 
@@ -446,6 +487,16 @@ public class GeneralTab
                 break;
             }
         }
+
+        // Find index for default consent level
+        for (int i = 0; i < CONSENT_LEVELS.length; i++)
+        {
+            if (CONSENT_LEVELS[i][1].equals(PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_LEVEL))
+            {
+                consentLevelCombo.select(i);
+                break;
+            }
+        }
     }
 
     /**
@@ -456,18 +507,33 @@ public class GeneralTab
         return portSpinner.getSelection();
     }
 
+    /**
+     * Returns the consent level currently SELECTED in the combo (the pending, not-yet-committed
+     * value), so a sibling tab can react to the user's choice before {@link #performOk()} persists
+     * it. Falls back to {@link ConsentSettingsService.Level#ASK_ALWAYS} when nothing is selected.
+     */
+    public ConsentSettingsService.Level getPendingConsentLevel()
+    {
+        int idx = consentLevelCombo.getSelectionIndex();
+        if (idx >= 0 && idx < CONSENT_LEVELS.length)
+        {
+            return ConsentSettingsService.Level.fromPreferenceValue(CONSENT_LEVELS[idx][1]);
+        }
+        return ConsentSettingsService.Level.ASK_ALWAYS;
+    }
+
     private void updateStatusLabel()
     {
         McpServer server = Activator.getDefault().getMcpServer();
         Shell shell = composite.getShell();
         if (server != null && server.isRunning())
         {
-            statusLabel.setText("Running on port " + server.getPort()); //$NON-NLS-1$
+            statusLabel.setText(NLS.bind(Messages.GeneralTab_RunningOnPort, server.getPort()));
             statusLabel.setForeground(shell.getDisplay().getSystemColor(SWT.COLOR_DARK_GREEN));
         }
         else
         {
-            statusLabel.setText("Stopped"); //$NON-NLS-1$
+            statusLabel.setText(Messages.GeneralTab_Stopped);
             statusLabel.setForeground(shell.getDisplay().getSystemColor(SWT.COLOR_DARK_RED));
         }
     }
@@ -499,7 +565,8 @@ public class GeneralTab
         {
             Activator.logError("Failed to start MCP Server", e); //$NON-NLS-1$
             MessageDialog.openError(composite.getShell(),
-                "Start Failed", "Failed to start MCP Server: " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+                Messages.GeneralTab_StartFailedTitle,
+                NLS.bind(Messages.GeneralTab_StartFailedMessage, e.getMessage()));
         }
     }
 
@@ -533,7 +600,8 @@ public class GeneralTab
         {
             Activator.logError("Failed to restart MCP Server", e); //$NON-NLS-1$
             MessageDialog.openError(composite.getShell(),
-                "Restart Failed", "Failed to restart MCP Server: " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+                Messages.GeneralTab_RestartFailedTitle,
+                NLS.bind(Messages.GeneralTab_RestartFailedMessage, e.getMessage()));
         }
     }
 

@@ -12,12 +12,18 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.eclipse.core.runtime.IStatus;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
 
 /**
  * Tests for {@link RunYaxunitTestsTool}.
@@ -379,5 +385,86 @@ public class RunYaxunitTestsToolTest
             guide.contains("background")); //$NON-NLS-1$
         assertTrue("guide must document the pending-retry contract for prep",
             guide.contains("same arguments")); //$NON-NLS-1$
+    }
+
+    // ============ #230 — the async prep body brackets the auth-dialog suppressor ============
+
+    @Test
+    public void testPrepJobBodyBracketsTheAuthDialogSuppressorCounter() throws Exception
+    {
+        // #230 regression guard: schedulePrepJob runs prepareForFreshLaunch (whose db-update
+        // phase does the infobase connect that raises the blocking "Configure Infobase access
+        // Settings" dialog) in a fire-and-forget background Job. execute() only blocks on it for
+        // the 25s budget and then returns "pending", so the trailing grace window alone would NOT
+        // cover a minutes-long prep — the in-flight COUNTER must span the whole body, exactly like
+        // DebugLaunchTool.runLaunchJobBody. This drives the extracted body seam headlessly and
+        // asserts it holds the counter up for its whole duration and never leaks it.
+        AtomicInteger inFlight = inFlightCounter();
+        int original = inFlight.get();
+
+        // Pre-arm one activity level so a MISSING markActivityStart is detectable: a lone
+        // markActivityEnd would drop the counter BELOW this level, a leaked markActivityStart
+        // would leave it ABOVE — a plain net-zero-from-idle check could tell neither apart.
+        InfobaseAuthDialogSuppressor.markActivityStart();
+        int armed = inFlight.get();
+        assertEquals("pre-arm must raise the in-flight level by one", original + 1, armed);
+
+        long beforeBody = System.currentTimeMillis();
+
+        // A null launchManager makes prepareForFreshLaunch return a clean PreLaunchResult error
+        // immediately (see LaunchLifecycleUtils.prepareForFreshLaunch) — a fully headless,
+        // deterministic drive of the body that needs no EDT services (the real db-update phase,
+        // which would raise the dialog on a live base, never runs here).
+        RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
+            "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, "prep-job-suppressor-ratchet"); //$NON-NLS-1$
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+        PreLaunchResult[] holder = new PreLaunchResult[1];
+
+        IStatus status = RunYaxunitTestsTool.runPrepJobBody(entry, req, holder);
+
+        // The body always ran to completion: it OKs (the real outcome rides on the entry),
+        // completes the entry and counts its latch down for the awaiting caller.
+        assertNotNull(status);
+        assertTrue("prep body always returns OK (the outcome is carried on the entry)", status.isOK());
+        assertTrue("prep body must mark the entry done", entry.done);
+        assertEquals("prep body must count the entry latch down", 0L, entry.latch.getCount());
+        assertNotNull("a null launch manager must surface a prep error on the entry", entry.error);
+
+        // Bracketed, not leaked: the counter is back to EXACTLY the pre-armed level
+        // (markActivityStart +1 then markActivityEnd -1 inside the body), proving it was held
+        // above the idle baseline for the whole prep. A missing start would read armed-1 here;
+        // a missing end would read armed+1.
+        assertEquals("runPrepJobBody must leave the in-flight counter at the pre-armed level",
+            armed, inFlight.get());
+
+        // markActivityEnd stamped the trailing-grace timestamp during the body.
+        assertTrue("runPrepJobBody must stamp lastActivityEndMillis via markActivityEnd",
+            lastActivityEndMillis() >= beforeBody);
+
+        // Undo the pre-arm so the shared static baseline is restored for the other tests.
+        InfobaseAuthDialogSuppressor.markActivityEnd();
+        assertEquals("cleanup must restore the original in-flight baseline",
+            original, inFlight.get());
+    }
+
+    /**
+     * Reads the package-private {@code InfobaseAuthDialogSuppressor.IN_FLIGHT} counter via
+     * reflection — the field lives in the {@code utils} package, out of this test's package,
+     * and the suppressor exposes no public getter (only the {@code markActivity*} mutators).
+     */
+    private static AtomicInteger inFlightCounter() throws Exception
+    {
+        Field f = InfobaseAuthDialogSuppressor.class.getDeclaredField("IN_FLIGHT"); //$NON-NLS-1$
+        f.setAccessible(true);
+        return (AtomicInteger)f.get(null);
+    }
+
+    /** Reads the package-private {@code InfobaseAuthDialogSuppressor.lastActivityEndMillis} via reflection. */
+    private static long lastActivityEndMillis() throws Exception
+    {
+        Field f = InfobaseAuthDialogSuppressor.class.getDeclaredField("lastActivityEndMillis"); //$NON-NLS-1$
+        f.setAccessible(true);
+        return f.getLong(null);
     }
 }

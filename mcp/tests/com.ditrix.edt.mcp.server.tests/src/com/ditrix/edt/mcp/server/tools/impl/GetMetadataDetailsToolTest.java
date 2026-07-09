@@ -17,6 +17,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EEnum;
+import org.eclipse.emf.ecore.EEnumLiteral;
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EPackage;
+import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.EcoreFactory;
+import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -342,5 +352,127 @@ public class GetMetadataDetailsToolTest
         assertTrue(section.contains("Catalog.A\\|B")); //$NON-NLS-1$
         assertTrue(section.contains("bad \\| reason")); //$NON-NLS-1$
         assertFalse(section.contains("**Error:**")); //$NON-NLS-1$
+    }
+
+    // ==================== Form-member assignable view: the general reflective extInfo path (#235) ====================
+    //
+    // A form MEMBER (a group / field / table / decoration inside a form's editable content model) is
+    // not an mdclass node, so its assignable schema is rendered from the ELEMENT's own features UNION
+    // its <extInfo>'s layout properties. formatAssignable is widened to any EObject for exactly this;
+    // resolving the live form needs a workbench + BM model (covered by the E2E suite), but the union
+    // RENDERING is verified here headlessly on a synthetic UsualGroup whose UsualGroupExtInfo carries
+    // the `group` (layout enum) and `united` (boolean) props that live inside <extInfo>.
+
+    /**
+     * {@code formatAssignable} on a form GROUP element lists BOTH the element's own features and the
+     * layout properties nested in its {@code extInfo} (issue #235): a UsualGroup's {@code group} (an
+     * enum, so its allowed literals are surfaced for modify_metadata to validate against) and
+     * {@code united} appear in the assignable table.
+     */
+    @Test
+    public void testFormGroupAssignableListsExtInfoLayoutProps()
+    {
+        EObject group = syntheticUsualGroupWithExtInfo();
+        String md = GetMetadataDetailsTool.formatAssignable(
+            "Catalog.Catalog.Form.ItemForm.Group.G", group); //$NON-NLS-1$
+        assertTrue("must render the assignable schema heading", //$NON-NLS-1$
+            md.contains("Assignable properties")); //$NON-NLS-1$
+        assertTrue("the extInfo layout enum 'group' must be listed as assignable", //$NON-NLS-1$
+            md.contains("| group |")); //$NON-NLS-1$
+        assertTrue("the extInfo 'united' layout flag must be listed as assignable", //$NON-NLS-1$
+            md.contains("| united |")); //$NON-NLS-1$
+        // `group` is an enum, so its allowed literals are surfaced so modify_metadata can validate.
+        assertTrue("the group layout enum must surface its allowed literals", //$NON-NLS-1$
+            md.contains("Horizontal")); //$NON-NLS-1$
+    }
+
+    /**
+     * When the form GROUP element carries a LIVE extInfo with values SET, {@code formatAssignable}
+     * renders those values in the Current column (issue #235): it feeds the live extInfo instance
+     * through the instance-aware introspection, so a designer-authored {@code group=Horizontal} /
+     * {@code united=true} shows up rather than a blank Current cell. Guards against regressing to the
+     * EClass-only listing (which renders no current value for the extInfo props while the direct
+     * features show theirs - the inconsistency the reviewer flagged).
+     */
+    @Test
+    public void testFormGroupAssignableRendersExtInfoCurrentValue()
+    {
+        EObject group = syntheticUsualGroupWithExtInfo();
+        // Set group=Horizontal + united=true on the live extInfo, mimicking a designer-authored layout.
+        EObject extInfo = (EObject)group.eGet(group.eClass().getEStructuralFeature("extInfo")); //$NON-NLS-1$
+        EStructuralFeature groupFeature = extInfo.eClass().getEStructuralFeature("group"); //$NON-NLS-1$
+        EEnum grouping = (EEnum)((EAttribute)groupFeature).getEAttributeType();
+        extInfo.eSet(groupFeature, grouping.getEEnumLiteralByLiteral("Horizontal")); //$NON-NLS-1$
+        extInfo.eSet(extInfo.eClass().getEStructuralFeature("united"), Boolean.TRUE); //$NON-NLS-1$
+
+        String md = GetMetadataDetailsTool.formatAssignable(
+            "Catalog.Catalog.Form.ItemForm.Group.G", group); //$NON-NLS-1$
+        // The extInfo props must carry their CURRENT value, not a blank Current cell.
+        assertTrue("the extInfo 'group' current value must render as the set literal", //$NON-NLS-1$
+            md.contains("| group | ENUM | Horizontal |")); //$NON-NLS-1$
+        assertTrue("the extInfo 'united' current value must render as true", //$NON-NLS-1$
+            md.contains("| united | BOOLEAN | true |")); //$NON-NLS-1$
+    }
+
+    /**
+     * Builds a synthetic form GROUP element whose {@code extInfo} is a {@code UsualGroupExtInfo}
+     * carrying the {@code group} (a layout EEnum with Vertical / Horizontal literals) and
+     * {@code united} (a boolean) layout properties - the reflective shape
+     * {@code get_metadata_details(assignable)} renders from, so the union of element + extInfo features
+     * is exercised WITHOUT a live workbench. The concrete {@code extInfo} instance is set so the
+     * extInfo EClass resolves regardless of the resolver's abstract-type strategy.
+     */
+    private static EObject syntheticUsualGroupWithExtInfo()
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://example.com/edt-mcp/formlike/235"); //$NON-NLS-1$
+
+        EEnum groupEnum = f.createEEnum();
+        groupEnum.setName("FormChildrenGroup"); //$NON-NLS-1$
+        addLiteral(f, groupEnum, "Vertical", 0); //$NON-NLS-1$
+        addLiteral(f, groupEnum, "Horizontal", 1); //$NON-NLS-1$
+        pkg.getEClassifiers().add(groupEnum);
+
+        EClass extInfo = f.createEClass();
+        extInfo.setName("UsualGroupExtInfo"); //$NON-NLS-1$
+        EAttribute groupAttr = f.createEAttribute();
+        groupAttr.setName("group"); //$NON-NLS-1$
+        groupAttr.setEType(groupEnum);
+        extInfo.getEStructuralFeatures().add(groupAttr);
+        EAttribute unitedAttr = f.createEAttribute();
+        unitedAttr.setName("united"); //$NON-NLS-1$
+        unitedAttr.setEType(EcorePackage.Literals.EBOOLEAN);
+        extInfo.getEStructuralFeatures().add(unitedAttr);
+        pkg.getEClassifiers().add(extInfo);
+
+        EClass groupClass = f.createEClass();
+        groupClass.setName("UsualGroup"); //$NON-NLS-1$
+        EAttribute nameAttr = f.createEAttribute();
+        nameAttr.setName("name"); //$NON-NLS-1$
+        nameAttr.setEType(EcorePackage.Literals.ESTRING);
+        groupClass.getEStructuralFeatures().add(nameAttr);
+        EReference extInfoRef = f.createEReference();
+        extInfoRef.setName("extInfo"); //$NON-NLS-1$
+        extInfoRef.setEType(extInfo);
+        extInfoRef.setContainment(true);
+        groupClass.getEStructuralFeatures().add(extInfoRef);
+        pkg.getEClassifiers().add(groupClass);
+
+        EObject groupObj = pkg.getEFactoryInstance().create(groupClass);
+        EObject extInfoObj = pkg.getEFactoryInstance().create(extInfo);
+        groupObj.eSet(extInfoRef, extInfoObj);
+        return groupObj;
+    }
+
+    private static void addLiteral(EcoreFactory f, EEnum eEnum, String name, int value)
+    {
+        EEnumLiteral literal = f.createEEnumLiteral();
+        literal.setName(name);
+        literal.setValue(value);
+        literal.setLiteral(name);
+        eEnum.getELiterals().add(literal);
     }
 }

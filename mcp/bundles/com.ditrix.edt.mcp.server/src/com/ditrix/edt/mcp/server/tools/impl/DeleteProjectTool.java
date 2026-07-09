@@ -17,6 +17,8 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -123,6 +125,23 @@ public class DeleteProjectTool implements IMcpTool
                     + (deleteContent ? " AND delete its files from disk (IRREVERSIBLE)" : " (files kept on disk)") //$NON-NLS-1$ //$NON-NLS-2$
                     + ". Re-call with confirm=true to apply it.") //$NON-NLS-1$
                 .toJson();
+        }
+
+        // Destructive-operation consent gate: the LAST check before the project is removed. On ALLOW the
+        // behaviour is byte-identical, on REJECT nothing is mutated. Headless / env-bypass / non-ASK
+        // never block. The project is confirmed to exist above, so the preview names a real target.
+        ConsentPreview preview = new ConsentPreview(
+            "Delete project", //$NON-NLS-1$
+            deleteContent
+                ? "This removes project '" + projectName //$NON-NLS-1$
+                    + "' from the workspace AND deletes its files from disk (irreversible)." //$NON-NLS-1$
+                : "This removes project '" + projectName //$NON-NLS-1$
+                    + "' from the workspace (files kept on disk).", //$NON-NLS-1$
+            1, java.util.Collections.singletonList(projectName));
+        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview)
+            == DestructiveConsentGate.ConsentDecision.REJECT)
+        {
+            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
         }
 
         try

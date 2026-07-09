@@ -92,6 +92,8 @@ public final class FormElementWriter
     private static final String FEATURE_VIEW = "view"; //$NON-NLS-1$
     /** The form attribute's "use in edit mode" presentation flag (an {@code AdjustableBoolean}). */
     private static final String FEATURE_EDIT = "edit"; //$NON-NLS-1$
+    /** A FormField/column's edit-mode enum feature (Enter / EnterOnInput). */
+    private static final String FEATURE_EDIT_MODE = "editMode"; //$NON-NLS-1$
     /** The English programmatic Name of a managed object form's main attribute. */
     private static final String MAIN_ATTRIBUTE_NAME_EN = "Object"; //$NON-NLS-1$
     /** The dynamic-list ext-info EClass and its query-carrying features. */
@@ -1133,16 +1135,18 @@ public final class FormElementWriter
             if (fieldError != null)
             {
                 skipped.add(trimmed);
-                continue;
             }
-            // The designer's object-form wizard creates these bound object fields with editMode
-            // "EnterOnInput" (the table-column path already uses it), whereas createField's default
-            // "Enter" is for a manually-created standalone field. Re-set the just-created field
-            // (named after the attribute) for byte-parity with the designer. Issue #208.
-            EObject seededField = findItem(content, trimmed);
-            if (seededField != null)
+            else
             {
-                setEnumFeature(seededField, "editMode", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$
+                // The designer's object-form wizard creates these bound object fields with editMode
+                // "EnterOnInput" (the table-column path already uses it), whereas createField's default
+                // "Enter" is for a manually-created standalone field. Re-set the just-created field
+                // (named after the attribute) for byte-parity with the designer. Issue #208.
+                EObject seededField = findItem(content, trimmed);
+                if (seededField != null)
+                {
+                    setEnumFeature(seededField, FEATURE_EDIT_MODE, "EnterOnInput"); //$NON-NLS-1$
+                }
             }
         }
         if (!skipped.isEmpty())
@@ -2286,9 +2290,9 @@ public final class FormElementWriter
         }
         // The field binds to a form attribute by name. A DOTTED path binds to a SUB-attribute of the
         // head form attribute. Two heads are valid for a dotted path:
-        //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields
-        //     (auto-filled by EDT - not a model attribute);
-        //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of
+        //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields // NOSONAR explanatory prose, not commented-out code
+        //     (auto-filled by EDT - not a model attribute); // NOSONAR explanatory prose, not commented-out code
+        //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of // NOSONAR explanatory prose, not commented-out code
         //     the object type, like the designer's bound object fields.
         // Validate the head attribute, and require one of those two heads when a dotted path is used.
         int dot = attrName.indexOf('.');
@@ -2340,7 +2344,7 @@ public final class FormElementWriter
         setBooleanFeature(item, "showInHeader", true); //$NON-NLS-1$
         setBooleanFeature(item, "showInFooter", true); //$NON-NLS-1$
         setEnumFeature(item, "headerHorizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
-        setEnumFeature(item, "editMode", "Enter"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(item, FEATURE_EDIT_MODE, "Enter"); //$NON-NLS-1$
         EObject extInfo = singleReference(item, FEATURE_EXT_INFO);
         if (extInfo != null)
         {
@@ -2495,7 +2499,7 @@ public final class FormElementWriter
         setBooleanFeature(column, "showInHeader", true); //$NON-NLS-1$
         setBooleanFeature(column, "showInFooter", true); //$NON-NLS-1$
         setEnumFeature(column, "headerHorizontalAlign", "Left"); //$NON-NLS-1$ //$NON-NLS-2$
-        setEnumFeature(column, "editMode", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$
+        setEnumFeature(column, FEATURE_EDIT_MODE, "EnterOnInput"); //$NON-NLS-1$
         setExtInfoClassifier(formModel, column, ECLASS_INPUT_FIELD_EXT_INFO);
         EObject extInfo = singleReference(column, FEATURE_EXT_INFO);
         if (extInfo != null)
@@ -2896,6 +2900,142 @@ public final class FormElementWriter
         {
             item.eSet(feature, extInfoClass.getEPackage().getEFactoryInstance().create(extInfoClass));
         }
+    }
+
+    // ---- general extInfo access (the layout/style properties nested under <extInfo>) --------------
+    //
+    // A form element's layout / style properties (a UsualGroup's grouping + united / showLeftMargin /
+    // throughAlign / representation, a field's input options, ...) do not live on the element itself but
+    // on its nested extInfo EObject. The two helpers below are the ONE general, fully reflective path
+    // that both the read listing (get_metadata_details) and the write path (modify_metadata) share so a
+    // property that lives under <extInfo> is resolved / created for ANY element kind, not just groups.
+
+    /**
+     * Resolves the CONCRETE {@code extInfo} EClass of a form {@code element} for READ-ONLY listing (no
+     * instantiation, no mutation). When the element already carries an {@code extInfo} instance its own
+     * EClass is returned - the fully general path that works for ANY element kind (field, decoration,
+     * table, ...), since those carry their extInfo from creation. When the slot is empty the concrete
+     * class is derived from the element's kind: a {@code FormGroup}'s matches its {@code type} literal
+     * (the {@code FormObjectFactory} pairs, via {@link #groupExtInfoClassifierFor}). Returns
+     * {@code null} when the element has no {@code extInfo} feature (e.g. an mdclass object - the extInfo
+     * path is then a no-op) or the concrete class cannot be resolved.
+     *
+     * @param element the form element to inspect
+     * @return the concrete extInfo EClass, or {@code null}
+     */
+    public static EClass resolveExtInfoEClass(EObject element)
+    {
+        if (element == null)
+        {
+            return null;
+        }
+        EStructuralFeature feature = element.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(feature instanceof EReference) || feature.isMany())
+        {
+            return null;
+        }
+        EObject existing = singleReference(element, FEATURE_EXT_INFO);
+        String classifierName = extInfoClassifierNameFor(element);
+        if (existing != null)
+        {
+            // A form group's `type` is authoritative: a live extInfo whose class no longer matches the
+            // group's current type is STALE (the type was changed via modify_metadata), so the
+            // type-derived class wins - the stale holder is re-resolved here and RECREATED by
+            // ensureExtInfo instead of being reused against the wrong type (#235 review: a separate
+            // `type` change previously left a stale extInfo the next call reused).
+            if (classifierName != null && !existing.eClass().getName().equals(classifierName))
+            {
+                EClass derived = formEClass(element, classifierName);
+                if (derived != null)
+                {
+                    return derived;
+                }
+            }
+            return existing.eClass();
+        }
+        return classifierName != null ? formEClass(element, classifierName) : null;
+    }
+
+    /**
+     * The form {@code element}'s LIVE nested {@code extInfo} instance, read reflectively from the
+     * single-valued {@code extInfo} reference, or {@code null} when the element has no {@code extInfo}
+     * feature (e.g. an mdclass object) or the slot is empty. The READ-ONLY counterpart of
+     * {@link #ensureExtInfo} - no instantiation, no mutation: {@code get_metadata_details} uses it to
+     * render the extInfo layout props' CURRENT values off the live instance (the same single-valued
+     * {@code extInfo} read the reuse branch of {@link #resolveExtInfoEClass} and
+     * {@code ModifyMetadataTool.extInfoOf} perform). Fully reflective.
+     *
+     * @param element the form element to inspect
+     * @return the element's live extInfo instance, or {@code null}
+     */
+    public static EObject extInfoInstance(EObject element)
+    {
+        return element == null ? null : singleReference(element, FEATURE_EXT_INFO);
+    }
+
+    /**
+     * The concrete extInfo classifier NAME for an element whose {@code extInfo} slot is EMPTY, or
+     * {@code null} when it cannot be derived without an instance. Generalizes
+     * {@link #groupExtInfoClassifierFor}: a {@code FormGroup}'s concrete extInfo matches its
+     * {@code type} literal (defaulting to a {@code UsualGroup} when the type is unset). Other kinds
+     * already carry their extInfo from creation, so the reuse branch of {@link #resolveExtInfoEClass}
+     * covers them and this returns {@code null} for them.
+     */
+    private static String extInfoClassifierNameFor(EObject element)
+    {
+        if (ECLASS_FORM_GROUP.equals(element.eClass().getName()))
+        {
+            String typeLiteral = enumLiteralOf(element, FEATURE_TYPE);
+            return groupExtInfoClassifierFor(typeLiteral != null ? typeLiteral : TYPE_LITERAL_USUAL_GROUP);
+        }
+        return null;
+    }
+
+    /**
+     * Ensures the form {@code element} carries its concrete {@code extInfo} EObject and returns it,
+     * creating one only when the slot is empty. IDEMPOTENT: an existing extInfo is REUSED verbatim (a
+     * 2nd call returns the SAME instance, its already-set layout properties are never reset) - the
+     * resolve-then-create path never runs over a populated slot, so it cannot clobber an existing
+     * extInfo. Returns {@code null} when the element has no {@code extInfo} feature (a no-op, e.g. an
+     * mdclass object) or the concrete extInfo class cannot be resolved / instantiated (kept
+     * unattended-safe).
+     *
+     * <p>Fully reflective: the concrete extInfo EClass is resolved via {@link #resolveExtInfoEClass}
+     * on the element's own EPackage and instantiated through that package's factory - no
+     * {@code com._1c.g5.v8.dt.form.model} import, no {@code IModelObjectFactory} / Guice. The
+     * {@code formModel} identifies the owning content form (bounding {@code element} to a single form
+     * context, and kept for symmetry with the other form-write helpers).</p>
+     *
+     * @param formModel the editable content form owning {@code element}
+     * @param element the form element whose extInfo is ensured
+     * @return the element's (existing or freshly created) extInfo EObject, or {@code null}
+     */
+    public static EObject ensureExtInfo(EObject formModel, EObject element) // NOSONAR formModel bounds the element to a content-form context and keeps the write-helper signature symmetry
+    {
+        EStructuralFeature feature = element.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(feature instanceof EReference) || feature.isMany())
+        {
+            return null;
+        }
+        EObject existing = singleReference(element, FEATURE_EXT_INFO);
+        // resolveExtInfoEClass is type-authoritative: for a form group whose `type` was changed it
+        // returns the NEW type's extInfo class (not the stale live instance's), so a matching extInfo is
+        // REUSED verbatim (never clobbered) while a STALE one (class != the type-derived class) is
+        // recreated below - closing the #235-review gap where a separate `type` change left the old-type
+        // extInfo in place for the next call to reuse.
+        EClass extInfoClass = resolveExtInfoEClass(element);
+        if (existing != null
+            && (extInfoClass == null || existing.eClass().getName().equals(extInfoClass.getName())))
+        {
+            return existing;
+        }
+        if (extInfoClass == null || extInfoClass.isAbstract() || extInfoClass.getEPackage() == null)
+        {
+            return existing; // stale/empty but no better class resolvable - keep what is there (may be null)
+        }
+        EObject created = extInfoClass.getEPackage().getEFactoryInstance().create(extInfoClass);
+        element.eSet(feature, created); // fills an empty slot or replaces a stale (type-mismatched) holder
+        return created;
     }
 
     // ---- event handlers -------------------------------------------------------------------------

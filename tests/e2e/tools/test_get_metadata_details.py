@@ -272,3 +272,46 @@ def test_common_form_fqn_renders_structure():
     # The enriched renderer (FormStructureReader.render) always emits the Event handlers section
     # header, even for a form that declares no handlers (empty-section convention).
     assert_contains(r.text, "Event handlers", "the enriched structure must add an Event handlers section")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FORM-MEMBER assignable schema — a form GROUP FQN (assignable:true) lists the
+# layout props nested in <extInfo> (issue #235). A form member is NOT an mdclass
+# node, so the assignable view used to fail with "Object not found"; it now routes
+# the FQN through modify_metadata's form resolver and renders the element's own
+# features UNION its extInfo's layout props (the general reflective extInfo path).
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_assignable_on_form_group_lists_extinfo_layout_props():
+    # Seed a UsualGroup on the fixture form, then read its assignable schema.
+    grp = "GMDAsgGrp"
+    r0 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group." + grp})
+    assert_ok(r0, "seed form group " + grp)
+    wait_for_project_ready()
+
+    r = call("get_metadata_details", {
+        "projectName": PROJECT,
+        "objectFqns": ["Catalog.Catalog.Form.ItemForm.Group." + grp],
+        "assignable": True,
+    })
+    assert_ok(r, "assignable schema for a form-group FQN")
+    # Regression guard for the reported bug: a valid form-group FQN must resolve via the form
+    # resolver, NOT be rejected as an unresolvable mdclass node.
+    assert_not_contains(r.text, "Object not found",
+        "a valid form-group FQN must not fail as 'Object not found'")
+    if "## Errors" in r.text:
+        raise AssertionError(
+            "the form group should resolve, but a ## Errors section was emitted:\n" + r.text[:400])
+    assert_contains(r.text, "Assignable properties",
+        "assignable mode must render the schema heading for a form member")
+    # The UsualGroupExtInfo layout props live INSIDE <extInfo>; the general reflective extInfo path
+    # now surfaces them. `group` (the grouping layout enum) and `united` are the canonical two
+    # from the issue. Assert the table CELLS (| group |) so the FQN heading's "Group" cannot match.
+    assert_contains(r.text, "| group |",
+        "the extInfo layout 'group' enum must be listed as assignable")
+    assert_contains(r.text, "| united |",
+        "the extInfo 'united' layout flag must be listed as assignable")
+    # (No assert_no_diff here: the test intentionally SEEDS the group, so the tree is dirty; the
+    # pure-read nature of the assignable view is covered by the mdclass assignable read tests.)

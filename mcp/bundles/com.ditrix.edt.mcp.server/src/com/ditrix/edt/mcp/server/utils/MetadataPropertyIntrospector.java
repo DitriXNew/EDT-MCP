@@ -83,9 +83,22 @@ public final class MetadataPropertyIntrospector
         public final List<String> allowedValues;
         /** The owning {@link EStructuralFeature} (for the applier; not serialized). */
         public final EStructuralFeature feature;
+        /**
+         * Whether this property lives on the element's nested {@code <extInfo>} EObject (a layout /
+         * kind-specific sub-object) rather than on the element itself. A caller that WRITES the value
+         * must therefore route the {@code eSet} to the extInfo holder (creating it when absent), not to
+         * the element. Always {@code false} for a direct feature - the only case on the mdclass path.
+         */
+        public final boolean onExtInfo;
 
         PropertyInfo(String name, ValueKind valueKind, String currentValue, List<String> allowedValues,
             EStructuralFeature feature)
+        {
+            this(name, valueKind, currentValue, allowedValues, feature, false);
+        }
+
+        PropertyInfo(String name, ValueKind valueKind, String currentValue, List<String> allowedValues,
+            EStructuralFeature feature, boolean onExtInfo)
         {
             this.name = name;
             this.valueKind = valueKind;
@@ -93,6 +106,7 @@ public final class MetadataPropertyIntrospector
             this.allowedValues = allowedValues == null ? Collections.emptyList()
                 : Collections.unmodifiableList(allowedValues);
             this.feature = feature;
+            this.onExtInfo = onExtInfo;
         }
     }
 
@@ -129,6 +143,43 @@ public final class MetadataPropertyIntrospector
                 allowedValuesFor(feature, kind), feature));
         }
         return result;
+    }
+
+    /**
+     * Extends {@link #introspect(EObject)} with the assignable properties that live on {@code element}'s
+     * nested {@code <extInfo>} EObject - a general, model-agnostic path for ANY element that carries an
+     * extInfo (e.g. a form group's {@code UsualGroupExtInfo} layout props). The direct-element
+     * properties come first (each with {@code onExtInfo == false}); the {@code extInfoEClass}'s
+     * assignable features are then appended (each with {@code onExtInfo == true}), skipping any whose
+     * name collides with a direct feature (DIRECT-precedence). The extInfo properties are listed from
+     * their EClass only (no instance), so their {@code currentValue} is {@code null}; use
+     * {@link #introspect(EObject, EObject)} to also render the current values from a live extInfo
+     * instance.
+     *
+     * <p>{@code extInfoEClass == null} - the mdclass path, where an object has no extInfo - makes this
+     * exactly {@link #introspect(EObject)}.</p>
+     *
+     * @param element the element to introspect (e.g. a form group)
+     * @param extInfoEClass the element's concrete extInfo EClass, or {@code null} when it has none
+     * @return the direct-then-extInfo assignable property schemas (never {@code null})
+     */
+    public static List<PropertyInfo> introspect(EObject element, EClass extInfoEClass)
+    {
+        return introspectWithExtInfo(element, extInfoEClass, null);
+    }
+
+    /**
+     * Like {@link #introspect(EObject, EClass)} but reads the extInfo properties' CURRENT values from
+     * the live {@code extInfo} instance (whose EClass supplies the feature list). {@code extInfo == null}
+     * - the element has no extInfo yet - makes this exactly {@link #introspect(EObject)}.
+     *
+     * @param element the element to introspect
+     * @param extInfo the element's live extInfo instance, or {@code null} when it has none
+     * @return the direct-then-extInfo assignable property schemas, extInfo currents rendered
+     */
+    public static List<PropertyInfo> introspect(EObject element, EObject extInfo)
+    {
+        return introspectWithExtInfo(element, extInfo == null ? null : extInfo.eClass(), extInfo);
     }
 
     /**
@@ -192,6 +243,36 @@ public final class MetadataPropertyIntrospector
     }
 
     /**
+     * Extends {@link #findFeature(EObject, String)} to also resolve a property that lives on
+     * {@code element}'s nested extInfo instance. A DIRECT feature of {@code element} wins on a name
+     * collision (returned with {@code onExtInfo == false}); only when the element has no such direct
+     * assignable feature is {@code extInfo}'s feature returned (with {@code onExtInfo == true}), so the
+     * caller can route the write to the extInfo holder. Like {@link #findFeature(EObject, String)} the
+     * current value is NOT rendered.
+     *
+     * @param element the element (e.g. a form group)
+     * @param extInfo the element's live extInfo instance, or {@code null}
+     * @param name the feature name (case-insensitive)
+     * @return the property info - its {@code onExtInfo} telling the caller which receiver to write - or
+     *         {@code null} if neither the element nor its extInfo has such an assignable property
+     */
+    public static PropertyInfo findFeature(EObject element, EObject extInfo, String name)
+    {
+        PropertyInfo direct = findFeature(element, name);
+        if (direct != null)
+        {
+            return direct;
+        }
+        PropertyInfo onExt = findFeature(extInfo, name);
+        if (onExt == null)
+        {
+            return null;
+        }
+        return new PropertyInfo(onExt.name, onExt.valueKind, onExt.currentValue, onExt.allowedValues,
+            onExt.feature, true);
+    }
+
+    /**
      * Returns the assignable property names of {@code obj}, for an actionable "available properties"
      * error hint. Names-only iteration: no current value is rendered.
      *
@@ -208,6 +289,35 @@ public final class MetadataPropertyIntrospector
         for (EStructuralFeature feature : obj.eClass().getEAllStructuralFeatures())
         {
             if (isAssignable(feature) && classify(feature) != null)
+            {
+                names.add(feature.getName());
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Extends {@link #assignableNames(EObject)} with the assignable feature names on {@code element}'s
+     * nested extInfo (its {@code extInfoEClass}), so an actionable "available properties" hint covers
+     * the extInfo layout props too. Direct names come first; an extInfo name that collides with a
+     * direct one is dropped (DIRECT-precedence). {@code extInfoEClass == null} makes this exactly
+     * {@link #assignableNames(EObject)}.
+     *
+     * @param element the element
+     * @param extInfoEClass the element's concrete extInfo EClass, or {@code null}
+     * @return the direct-then-extInfo assignable feature names (never {@code null})
+     */
+    public static List<String> assignableNames(EObject element, EClass extInfoEClass)
+    {
+        List<String> names = assignableNames(element);
+        if (extInfoEClass == null)
+        {
+            return names;
+        }
+        for (EStructuralFeature feature : extInfoEClass.getEAllStructuralFeatures())
+        {
+            if (isAssignable(feature) && classify(feature) != null
+                && !containsIgnoreCase(names, feature.getName()))
             {
                 names.add(feature.getName());
             }
@@ -241,6 +351,56 @@ public final class MetadataPropertyIntrospector
     }
 
     // ---- internals ------------------------------------------------------------------------------
+
+    /**
+     * Shared body of the extInfo-aware {@link #introspect(EObject, EClass)} /
+     * {@link #introspect(EObject, EObject)}: the direct properties of {@code element} followed by the
+     * assignable features of {@code extInfoEClass} (DIRECT-precedence on a name collision), the latter
+     * marked {@code onExtInfo}, their current value rendered from {@code extInfo} when it is non-null.
+     */
+    private static List<PropertyInfo> introspectWithExtInfo(EObject element, EClass extInfoEClass,
+        EObject extInfo)
+    {
+        List<PropertyInfo> result = introspect(element);
+        if (extInfoEClass == null)
+        {
+            return result;
+        }
+        List<String> directNames = new ArrayList<>();
+        for (PropertyInfo p : result)
+        {
+            directNames.add(p.name);
+        }
+        for (EStructuralFeature feature : extInfoEClass.getEAllStructuralFeatures())
+        {
+            if (!isAssignable(feature) || containsIgnoreCase(directNames, feature.getName()))
+            {
+                continue;
+            }
+            ValueKind kind = classify(feature);
+            if (kind == null)
+            {
+                continue;
+            }
+            String current = extInfo != null ? renderCurrent(extInfo, feature, kind) : null;
+            result.add(new PropertyInfo(feature.getName(), kind, current,
+                allowedValuesFor(feature, kind), feature, true));
+        }
+        return result;
+    }
+
+    /** Whether {@code names} already contains {@code name}, case-insensitively (DIRECT-precedence check). */
+    private static boolean containsIgnoreCase(List<String> names, String name)
+    {
+        for (String existing : names)
+        {
+            if (existing.equalsIgnoreCase(name))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private static boolean isAssignable(EStructuralFeature feature)
     {
