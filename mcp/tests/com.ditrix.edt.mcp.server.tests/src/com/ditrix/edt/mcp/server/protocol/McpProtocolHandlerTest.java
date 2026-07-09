@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.protocol;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.After;
@@ -1075,6 +1077,117 @@ public class McpProtocolHandlerTest
             McpProtocolHandler.extractErrorMessage("{\"success\":false,\"error\":null}"));
     }
 
+    // === Request/response history recorder at the choke point (#254) ===
+
+    @Test
+    public void testRecordingProducesByteIdenticalOutput()
+    {
+        // NO-REGRESSION: recording ON must produce byte-for-byte the same wire output
+        // as with the recorder disabled. The recorder runs in a finally and only
+        // reads, so a capturing handler and a no-op handler must agree on every kind.
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+        RecordingSpyHandler recording = new RecordingSpyHandler();
+        SilentHandler silent = new SilentHandler();
+
+        String[] requests = {
+            buildJsonRpcRequest(1, "initialize", null),
+            buildJsonRpcRequest(2, "tools/list", null),
+            buildToolCallRequest(3, "ok_tool", null),
+            buildJsonRpcRequest(4, "notifications/initialized", null),
+            buildJsonRpcRequest(5, "ping", null),
+            buildJsonRpcRequest(6, "unknown/method", null),
+            "not valid json {{{"
+        };
+        for (String req : requests)
+        {
+            assertEquals("recording on must not change the wire output",
+                silent.processRequest(req), recording.processRequest(req));
+        }
+    }
+
+    @Test
+    public void testEachMessageKindRecordedExactlyOnce()
+    {
+        // Every MCP message kind flowing through the single choke point must be
+        // recorded exactly once, carrying its method (and tool name for tools/call).
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+        RecordingSpyHandler spy = new RecordingSpyHandler();
+
+        spy.processRequest(buildJsonRpcRequest(1, "initialize", null));
+        assertEquals("initialize must record exactly once", 1, spy.recordCount());
+        assertEquals("initialize", spy.methods.get(0));
+        assertNull("a non-tools/call has no tool name", spy.toolNames.get(0));
+
+        spy.processRequest(buildJsonRpcRequest(2, "tools/list", null));
+        assertEquals(2, spy.recordCount());
+        assertEquals("tools/list", spy.methods.get(1));
+
+        String toolResponse = spy.processRequest(buildToolCallRequest(3, "ok_tool", null));
+        assertEquals(3, spy.recordCount());
+        assertEquals("tools/call", spy.methods.get(2));
+        assertEquals("a tools/call must record its tool name", "ok_tool", spy.toolNames.get(2));
+        assertEquals("the recorded response must be dispatch's exact string",
+            toolResponse, spy.responses.get(2));
+
+        spy.processRequest(buildJsonRpcRequest(4, "notifications/initialized", null));
+        assertEquals("a notification must record exactly once", 4, spy.recordCount());
+        assertEquals("notifications/initialized", spy.methods.get(3));
+
+        spy.processRequest(buildJsonRpcRequest(5, "ping", null));
+        assertEquals(5, spy.recordCount());
+        assertEquals("ping", spy.methods.get(4));
+
+        spy.processRequest(buildJsonRpcRequest(6, "unknown/method", null));
+        assertEquals("an error response must still record exactly once", 6, spy.recordCount());
+        assertEquals("unknown/method", spy.methods.get(5));
+
+        spy.processRequest("not valid json {{{");
+        assertEquals("an unparseable request must record exactly once", 7, spy.recordCount());
+        assertNull("an unparseable request records a null method", spy.methods.get(6));
+        assertNull("an unparseable request records a null tool name", spy.toolNames.get(6));
+    }
+
+    @Test
+    public void testNullNotificationRecordedAsOk()
+    {
+        // A notification (notifications/initialized) is answered with 202 and no body,
+        // so dispatch returns null. It must still be recorded exactly once, with a
+        // null response body — a normal successful exchange, neither skipped nor an
+        // error — so the recorder classifies it as ok.
+        RecordingSpyHandler spy = new RecordingSpyHandler();
+
+        String response = spy.processRequest(buildJsonRpcRequest(1, "notifications/initialized", null));
+
+        assertNull("a notification must still return null (202 Accepted)", response);
+        assertEquals("the notification must be recorded exactly once", 1, spy.recordCount());
+        assertNull("a notification records a null response body", spy.responses.get(0));
+        assertEquals("notifications/initialized", spy.methods.get(0));
+        assertNull("a notification has no tool name", spy.toolNames.get(0));
+    }
+
+    @Test
+    public void testRecorderFailureDoesNotBreakCall()
+    {
+        // A recorder that throws must NEVER break the wire path: the call still
+        // returns dispatch's exact response and the exception is swallowed at the
+        // choke point.
+        registry.register(new StubJsonTool("ok_tool", "{\"value\":7}"));
+        RecordingSpyHandler spy = new RecordingSpyHandler();
+        spy.throwOnRecord = true;
+
+        String initResponse = spy.processRequest(buildJsonRpcRequest(1, "initialize", null));
+        assertNotNull("a throwing recorder must not suppress the response", initResponse);
+        assertNotNull("initialize must still succeed", parseResponse(initResponse).get("result"));
+
+        String toolResponse = spy.processRequest(buildToolCallRequest(2, "ok_tool", null));
+        JsonObject result = parseResponse(toolResponse).getAsJsonObject("result");
+        assertEquals("the tool result must be intact despite a throwing recorder", 7,
+            result.getAsJsonObject("structuredContent").get("value").getAsInt());
+
+        // The throwing recorder was actually exercised for each call (guard swallowed it).
+        assertEquals("the recorder must have been invoked for each call", 2, spy.recordCount());
+    }
+
     // === Helpers ===
 
     private String buildJsonRpcRequest(Object id, String method, String paramsJson)
@@ -1208,5 +1321,57 @@ public class McpProtocolHandlerTest
 
         @Override
         public String execute(Map<String, String> params) { return payload; }
+    }
+
+    /**
+     * A {@link McpProtocolHandler} that captures every {@code recordToHistory} call
+     * (instead of delegating to the live history singleton), so the recorder hook at
+     * the choke point can be asserted without a running EDT/OSGi runtime. Optionally
+     * throws from the seam to prove the guard in {@code processRequest} swallows a
+     * recorder failure without altering the returned response.
+     */
+    private static class RecordingSpyHandler extends McpProtocolHandler
+    {
+        final List<String> methods = new ArrayList<>();
+        final List<String> toolNames = new ArrayList<>();
+        final List<String> requests = new ArrayList<>();
+        final List<String> responses = new ArrayList<>();
+        final List<Long> durations = new ArrayList<>();
+        boolean throwOnRecord;
+
+        @Override
+        void recordToHistory(String method, String toolName, String requestJson, String responseJson,
+            long durationMs)
+        {
+            methods.add(method);
+            toolNames.add(toolName);
+            requests.add(requestJson);
+            responses.add(responseJson);
+            durations.add(durationMs);
+            if (throwOnRecord)
+            {
+                throw new IllegalStateException("recorder failure (test)");
+            }
+        }
+
+        int recordCount()
+        {
+            return methods.size();
+        }
+    }
+
+    /**
+     * A {@link McpProtocolHandler} whose recorder seam is a no-op, used as the
+     * recording-disabled baseline to prove recording does not change the wire output.
+     */
+    private static class SilentHandler extends McpProtocolHandler
+    {
+        @Override
+        void recordToHistory(String method, String toolName, String requestJson, String responseJson,
+            long durationMs)
+        {
+            // Intentionally no-op: the recording-off baseline for the byte-identical
+            // output comparison.
+        }
     }
 }
