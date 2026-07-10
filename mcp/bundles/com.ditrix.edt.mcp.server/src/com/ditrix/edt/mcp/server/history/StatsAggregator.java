@@ -197,10 +197,14 @@ public final class StatsAggregator
      * never by substring). Any parse failure or non-object payload is treated as a
      * non-error so the stats path never throws.
      *
+     * <p>Public so a history reader (e.g. the {@code get_mcp_history} tool's
+     * {@code status} filter) can classify a record's outcome through the exact same
+     * classifier the statistics use, rather than duplicating the logic.
+     *
      * @param responseJson the recorded response payload (may be {@code null})
      * @return {@code true} when the response represents an error outcome
      */
-    static boolean isErrorResponse(String responseJson)
+    public static boolean isErrorResponse(String responseJson)
     {
         if (responseJson == null)
         {

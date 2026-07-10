@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**76 tools.**
+**79 tools.**
 
 ## Core
 
@@ -74,6 +74,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`remove_breakpoint`](remove_breakpoint.md) | Remove a 1C BSL line breakpoint. Either pass breakpointId (returned from set_breakpoint) or projectName+module+lineNumber to look it up by coordinates. |
 | [`resume`](resume.md) | Resume a suspended debug thread or all threads of a debug target. Pass threadId (from wait_for_break) or applicationId. applicationId accepts ANY id form for… |
 | [`set_breakpoint`](set_breakpoint.md) | Set a line breakpoint on a 1C BSL module. Accepts either an EDT module-relative path (e.g. 'CommonModules/Foo/Module.bsl') or an absolute filesystem path. Us… |
+| [`set_variable`](set_variable.md) | Set a BSL variable's value in a suspended debug frame. WRITE/side-effect: EXECUTES the entered value as a BSL literal/expression live in the running 1C appli… |
 | [`step`](step.md) | Step a suspended debug thread. kind ∈ {over, into, out}. Blocks until the next SUSPEND event (or timeout) and returns the new frame snapshot. |
 | [`terminate_launch`](terminate_launch.md) | Terminate one or more 1C launches started from THIS EDT instance; externally launched 1C clients are never touched. Select ONE target mode: launchConfigurati… |
 | [`wait_for_break`](wait_for_break.md) | Wait for a debug suspend event (e.g. breakpoint hit) on the given application. Returns the suspended thread/frame snapshot, or {hit:false} on timeout. applic… |
@@ -140,7 +141,9 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`delete_project`](delete_project.md) | Remove an EDT project from the workspace, optionally deleting its files from disk (deleteContent). Destructive: guarded by a confirm-preview - call without c… |
 | [`export_configuration_to_xml`](export_configuration_to_xml.md) | Export an EDT configuration project to XML files (EDT menu: Export -> Configuration to XML Files). Equivalent of 1C platform DumpConfigToFiles. |
 | [`get_check_description`](get_check_description.md) | Get detailed description of an EDT check by its ID. Returns markdown content with check explanation, examples, and how to fix. Accepts the symbolic check id… |
+| [`get_event_log`](get_event_log.md) | Read a 1C infobase event log WITHOUT a running 1C session by parsing the raw log files (legacy text ver 2.0: a 1Cv8.lgf dictionary + dated *.lgp partitions).… |
 | [`get_markers`](get_markers.md) | List workspace markers: bookmarks and/or task markers (TODO, FIXME, XXX, HACK). Filter by markerKind (bookmark \| task; omit to list both), projectName, fileP… |
+| [`get_mcp_history`](get_mcp_history.md) | Return the recorded MCP call history (this server's in-memory ring of request/response exchanges) so you can introspect your OWN traffic: which tools you cal… |
 | [`get_platform_documentation`](get_platform_documentation.md) | Look up 1C:Enterprise platform documentation for built-in types (ValueTable, Array, Structure) and global built-in functions, including their methods, proper… |
 | [`get_problem_summary`](get_problem_summary.md) | Get problem summary with counts grouped by project and EDT severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). Use this for severity totals on… |
 | [`get_project_errors`](get_project_errors.md) | List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message,… |
