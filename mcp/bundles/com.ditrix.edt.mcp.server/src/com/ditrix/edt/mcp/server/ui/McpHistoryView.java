@@ -10,7 +10,9 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.jface.action.Action;
@@ -38,10 +40,14 @@ import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.DateTime;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Spinner;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.ISharedImages;
@@ -99,7 +105,7 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
     public static final String ID = "com.ditrix.edt.mcp.server.history.historyView"; //$NON-NLS-1$
 
     private static final DateTimeFormatter TIME_FORMAT =
-        DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneId.systemDefault()); //$NON-NLS-1$
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS").withZone(ZoneId.systemDefault()); //$NON-NLS-1$
 
     // Response-envelope keys for the UI status classifier. This mirrors the
     // package-private StatsAggregator.isErrorResponse contract (a JSON-RPC top-level
@@ -131,6 +137,15 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
     private TableViewer historyViewer;
     private Text detailText;
     private Button copyJsonButton;
+
+    // History filter bar (all touched only on the UI thread).
+    private Combo methodFilterCombo;
+    private Spinner minDurationSpinner;
+    private Button intervalCheck;
+    private DateTime fromDate;
+    private DateTime fromTime;
+    private DateTime toDate;
+    private DateTime toTime;
 
     // Statistics tab
     private CTabFolder tabFolder;
@@ -183,13 +198,118 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
 
     private Composite createHistoryTab(Composite parent)
     {
-        SashForm sash = new SashForm(parent, SWT.VERTICAL);
+        Composite container = new Composite(parent, SWT.NONE);
+        GridLayout layout = new GridLayout(1, false);
+        layout.marginWidth = 0;
+        layout.marginHeight = 0;
+        layout.verticalSpacing = 0;
+        container.setLayout(layout);
+
+        createFilterBar(container);
+
+        SashForm sash = new SashForm(container, SWT.VERTICAL);
+        sash.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
         createHistoryTable(sash);
         createDetailPane(sash);
 
         sash.setWeights(60, 40);
-        return sash;
+        return container;
+    }
+
+    /**
+     * A wrapping filter bar above the history table. All predicates it drives are
+     * evaluated in {@link #refreshHistoryTable()} via {@link #matchesFilters}; the
+     * Statistics tab is unaffected (it always reads the full snapshot). Every control
+     * schedules a table-only refresh, never a modal, and is disposed with the view.
+     */
+    private void createFilterBar(Composite parent)
+    {
+        Composite bar = new Composite(parent, SWT.NONE);
+        RowLayout barLayout = new RowLayout(SWT.HORIZONTAL);
+        barLayout.center = true;
+        barLayout.wrap = true;
+        barLayout.marginTop = 2;
+        barLayout.marginBottom = 2;
+        barLayout.marginLeft = 3;
+        bar.setLayout(barLayout);
+        bar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        SelectionAdapter refreshOnChange = new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                refreshHistoryTable();
+            }
+        };
+
+        Label methodLabel = new Label(bar, SWT.NONE);
+        methodLabel.setText(Messages.McpHistoryView_FilterMethodLabel);
+
+        methodFilterCombo = new Combo(bar, SWT.READ_ONLY | SWT.DROP_DOWN);
+        methodFilterCombo.setToolTipText(Messages.McpHistoryView_FilterMethodTooltip);
+        methodFilterCombo.setItems(Messages.McpHistoryView_FilterAll);
+        methodFilterCombo.select(0);
+        methodFilterCombo.addSelectionListener(refreshOnChange);
+
+        Label durationLabel = new Label(bar, SWT.NONE);
+        durationLabel.setText(Messages.McpHistoryView_FilterMinDurationLabel);
+
+        minDurationSpinner = new Spinner(bar, SWT.BORDER);
+        minDurationSpinner.setMinimum(0);
+        minDurationSpinner.setMaximum(Integer.MAX_VALUE);
+        minDurationSpinner.setIncrement(50);
+        minDurationSpinner.setPageIncrement(500);
+        minDurationSpinner.setSelection(0);
+        minDurationSpinner.setToolTipText(Messages.McpHistoryView_FilterMinDurationTooltip);
+        minDurationSpinner.addSelectionListener(refreshOnChange);
+
+        intervalCheck = new Button(bar, SWT.CHECK);
+        intervalCheck.setText(Messages.McpHistoryView_FilterIntervalLabel);
+        intervalCheck.setToolTipText(Messages.McpHistoryView_FilterIntervalTooltip);
+        intervalCheck.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                setIntervalControlsEnabled(intervalCheck.getSelection());
+                refreshHistoryTable();
+            }
+        });
+
+        fromDate = new DateTime(bar, SWT.DATE | SWT.DROP_DOWN | SWT.BORDER);
+        fromDate.addSelectionListener(refreshOnChange);
+        fromTime = new DateTime(bar, SWT.TIME | SWT.BORDER);
+        fromTime.setHours(0);
+        fromTime.setMinutes(0);
+        fromTime.setSeconds(0);
+        fromTime.addSelectionListener(refreshOnChange);
+
+        Label toLabel = new Label(bar, SWT.NONE);
+        toLabel.setText(Messages.McpHistoryView_FilterIntervalTo);
+
+        toDate = new DateTime(bar, SWT.DATE | SWT.DROP_DOWN | SWT.BORDER);
+        toDate.addSelectionListener(refreshOnChange);
+        toTime = new DateTime(bar, SWT.TIME | SWT.BORDER);
+        toTime.setHours(23);
+        toTime.setMinutes(59);
+        toTime.setSeconds(59);
+        toTime.addSelectionListener(refreshOnChange);
+
+        // Interval filter defaults OFF -> the DateTime controls start disabled.
+        setIntervalControlsEnabled(false);
+    }
+
+    private void setIntervalControlsEnabled(boolean enabled)
+    {
+        for (DateTime control : new DateTime[] {fromDate, fromTime, toDate, toTime})
+        {
+            if (control != null && !control.isDisposed())
+            {
+                control.setEnabled(enabled);
+            }
+        }
     }
 
     private void createHistoryTable(Composite parent)
@@ -201,7 +321,7 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         historyViewer = new TableViewer(table);
         historyViewer.setContentProvider(ArrayContentProvider.getInstance());
 
-        addHistoryColumn(Messages.McpHistoryView_ColumnTime, 110, new ColumnLabelProvider()
+        addHistoryColumn(Messages.McpHistoryView_ColumnTime, 160, new ColumnLabelProvider()
         {
             @Override
             public String getText(Object element)
@@ -479,14 +599,32 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         {
             return;
         }
-        tableRows.clear();
-        for (McpCallRecord record : history.snapshot())
+        List<McpCallRecord> snapshot = history.snapshot();
+
+        // Keep the method/tool filter choices in sync with the buffer before reading
+        // the current selection back out of the combo.
+        refreshMethodFilterItems(snapshot);
+
+        String selectedKey = selectedMethodKey();
+        long minDurationMs = minDurationSpinner != null && !minDurationSpinner.isDisposed()
+            ? minDurationSpinner.getSelection() : 0L;
+        boolean intervalOn = intervalCheck != null && !intervalCheck.isDisposed()
+            && intervalCheck.getSelection();
+        long fromMs = Long.MIN_VALUE;
+        long toMs = Long.MAX_VALUE;
+        if (intervalOn)
         {
-            if (toolsCallOnly && !McpConstants.METHOD_TOOLS_CALL.equals(record.getMethod()))
+            fromMs = toEpochMillis(fromDate, fromTime, false);
+            toMs = toEpochMillis(toDate, toTime, true);
+        }
+
+        tableRows.clear();
+        for (McpCallRecord record : snapshot)
+        {
+            if (matchesFilters(record, toolsCallOnly, selectedKey, minDurationMs, intervalOn, fromMs, toMs))
             {
-                continue;
+                tableRows.add(record);
             }
-            tableRows.add(record);
         }
         // refresh() (not setInput) so the current row selection survives a live update.
         historyViewer.refresh();
@@ -495,6 +633,54 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
             revealLatest();
         }
         updateDetail();
+    }
+
+    /**
+     * The method/tool key currently selected in the filter combo, or {@code null}
+     * when the {@code (all)} sentinel (index 0) is selected (i.e. no key filter).
+     */
+    private String selectedMethodKey()
+    {
+        if (methodFilterCombo == null || methodFilterCombo.isDisposed())
+        {
+            return null;
+        }
+        int idx = methodFilterCombo.getSelectionIndex();
+        return idx > 0 ? methodFilterCombo.getItem(idx) : null;
+    }
+
+    /**
+     * Recomputes the combo's distinct method/tool key set from the snapshot on each
+     * refresh, keeping the {@code (all)} sentinel first and the remaining keys sorted.
+     * The user's current selection is preserved when its key is still present;
+     * otherwise the selection falls back to {@code (all)}. Programmatic
+     * {@code setItems}/{@code select} do not fire a {@code SelectionEvent}, so this
+     * never re-enters the refresh.
+     */
+    private void refreshMethodFilterItems(List<McpCallRecord> snapshot)
+    {
+        if (methodFilterCombo == null || methodFilterCombo.isDisposed())
+        {
+            return;
+        }
+        String previous = methodFilterCombo.getText();
+
+        TreeSet<String> keys = new TreeSet<>();
+        for (McpCallRecord record : snapshot)
+        {
+            if (record != null)
+            {
+                keys.add(statKey(record));
+            }
+        }
+
+        List<String> items = new ArrayList<>(keys.size() + 1);
+        items.add(Messages.McpHistoryView_FilterAll);
+        items.addAll(keys);
+        methodFilterCombo.setItems(items.toArray(new String[0]));
+
+        int idx = items.indexOf(previous);
+        methodFilterCombo.select(idx >= 0 ? idx : 0);
     }
 
     private void refreshStatistics()
@@ -635,6 +821,87 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
             return method.isEmpty() ? tool : method + " : " + tool; //$NON-NLS-1$
         }
         return method;
+    }
+
+    /**
+     * The filter grouping key for a record: the tool name for a {@code tools/call}
+     * with a non-blank tool, otherwise the JSON-RPC method. This mirrors the
+     * package-private {@code StatsAggregator.keyOf} (which is not visible from this
+     * package) so the combo's choices line up 1:1 with the Statistics rows; the two
+     * MUST stay in sync. A record with no method at all yields
+     * {@link StatsAggregator#NON_TOOL_METHODS_KEY}, exactly as {@code keyOf} does.
+     *
+     * @param record the record to key (never {@code null})
+     * @return the grouping key, never {@code null}
+     */
+    static String statKey(McpCallRecord record)
+    {
+        // Delegates to the single source of truth so the filter Combo's keys and the
+        // Statistics rows can never drift apart.
+        return StatsAggregator.keyOf(record);
+    }
+
+    /**
+     * Pure AND-composed predicate for one history row. Combines, in order: the
+     * existing {@code tools/call}-only toggle, the selected method/tool key, the
+     * minimum-duration threshold, and (only when {@code intervalOn}) the inclusive
+     * timestamp window. Extracted as a static so it is unit-testable without SWT.
+     *
+     * @param record the record to test; {@code null} never matches
+     * @param toolsCallOnly when {@code true}, keep only {@code tools/call} exchanges
+     * @param selectedKey the required {@link #statKey(McpCallRecord)}, or {@code null}
+     *            for no key filter (the {@code (all)} choice)
+     * @param minDurationMs keep only records with {@code getDurationMs() >=} this
+     * @param intervalOn when {@code true}, apply the {@code [fromMs, toMs]} window
+     * @param fromMsInclusive lower timestamp bound, inclusive (used iff {@code intervalOn})
+     * @param toMsInclusive upper timestamp bound, inclusive (used iff {@code intervalOn})
+     * @return {@code true} when the record passes every active filter
+     */
+    static boolean matchesFilters(McpCallRecord record, boolean toolsCallOnly, String selectedKey,
+        long minDurationMs, boolean intervalOn, long fromMsInclusive, long toMsInclusive)
+    {
+        if (record == null)
+        {
+            return false;
+        }
+        if (toolsCallOnly && !McpConstants.METHOD_TOOLS_CALL.equals(record.getMethod()))
+        {
+            return false;
+        }
+        if (selectedKey != null && !selectedKey.equals(statKey(record)))
+        {
+            return false;
+        }
+        if (record.getDurationMs() < minDurationMs)
+        {
+            return false;
+        }
+        if (intervalOn)
+        {
+            long ts = record.getTimestampMs();
+            if (ts < fromMsInclusive || ts > toMsInclusive)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Combines a {@link SWT#DATE} widget and a {@link SWT#TIME} widget into an
+     * epoch-millisecond instant in the system default time zone. The {@code endOfSecond}
+     * flag rounds the millisecond field up to {@code 999} so an inclusive upper bound
+     * covers the whole selected second (the widgets have second resolution).
+     */
+    private static long toEpochMillis(DateTime date, DateTime time, boolean endOfSecond)
+    {
+        Calendar cal = Calendar.getInstance();
+        cal.clear();
+        // DateTime.getMonth() is 0-based, matching Calendar's month field.
+        cal.set(date.getYear(), date.getMonth(), date.getDay(),
+            time.getHours(), time.getMinutes(), time.getSeconds());
+        cal.set(Calendar.MILLISECOND, endOfSecond ? 999 : 0);
+        return cal.getTimeInMillis();
     }
 
     private static String buildSummary(StatsResult result)

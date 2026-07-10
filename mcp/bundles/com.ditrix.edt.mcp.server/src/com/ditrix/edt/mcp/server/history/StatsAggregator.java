@@ -172,7 +172,7 @@ public final class StatsAggregator
      * @param record the record to key
      * @return the row key, never {@code null}
      */
-    static String keyOf(McpCallRecord record)
+    public static String keyOf(McpCallRecord record)
     {
         String method = record.getMethod();
         if (McpConstants.METHOD_TOOLS_CALL.equals(method))
