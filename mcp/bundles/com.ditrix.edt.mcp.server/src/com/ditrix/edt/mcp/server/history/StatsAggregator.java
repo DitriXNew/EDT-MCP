@@ -57,11 +57,11 @@ public final class StatsAggregator
     public static final String APPROX_PREFIX = "~"; //$NON-NLS-1$
 
     /**
-     * Synthetic row key that collects every non-{@code tools/call} method
-     * (initialize / tools/list / notifications / ping / resources / ...). These
-     * are not tools, so they share one bucket rather than a per-tool row.
+     * Fallback row key for a record that carries no JSON-RPC method at all (should
+     * not normally happen). Real methods (initialize / tools/list / notifications /
+     * ping / …) are keyed by the method name itself, so each gets its own row.
      */
-    public static final String NON_TOOL_METHODS_KEY = "(non-tool methods)"; //$NON-NLS-1$
+    public static final String NON_TOOL_METHODS_KEY = "(unknown)"; //$NON-NLS-1$
 
     // Response-envelope keys used by the status classifier. These mirror the wire
     // shape produced by the protocol handler; they are matched structurally (typed
@@ -163,20 +163,29 @@ public final class StatsAggregator
 
     /**
      * Row key for a record: the tool name for a {@code tools/call} with a non-blank
-     * tool, otherwise the synthetic {@link #NON_TOOL_METHODS_KEY} bucket.
+     * tool, otherwise the JSON-RPC method itself (so {@code tools/list},
+     * {@code initialize}, {@code notifications/initialized}, {@code ping}, … each get
+     * their own row instead of being lumped together — {@code tools/list} in
+     * particular is a real context-eater). Falls back to {@link #NON_TOOL_METHODS_KEY}
+     * only for a record with no method at all.
      *
      * @param record the record to key
      * @return the row key, never {@code null}
      */
     static String keyOf(McpCallRecord record)
     {
-        if (McpConstants.METHOD_TOOLS_CALL.equals(record.getMethod()))
+        String method = record.getMethod();
+        if (McpConstants.METHOD_TOOLS_CALL.equals(method))
         {
             String tool = record.getToolName();
             if (tool != null && !tool.trim().isEmpty())
             {
                 return tool;
             }
+        }
+        if (method != null && !method.trim().isEmpty())
+        {
+            return method;
         }
         return NON_TOOL_METHODS_KEY;
     }

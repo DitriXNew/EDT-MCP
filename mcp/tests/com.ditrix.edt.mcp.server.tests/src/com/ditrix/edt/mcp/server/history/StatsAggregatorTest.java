@@ -205,21 +205,25 @@ public class StatsAggregatorTest
     }
 
     @Test
-    public void testNonToolsCallGroupedUnderSyntheticKey()
+    public void testNonToolsCallKeyedByMethod()
     {
         List<McpCallRecord> snap = new ArrayList<>();
         snap.add(method(1, McpConstants.METHOD_INITIALIZE, OK_RESULT));
         snap.add(method(2, McpConstants.METHOD_TOOLS_LIST, OK_RESULT));
         snap.add(method(3, McpConstants.METHOD_INITIALIZED, OK_RESULT));
-        // A tools/call with a blank tool name also falls into the synthetic bucket.
+        // A tools/call with a blank tool name keys by its method (tools/call), not a tool.
         snap.add(toolCall(4, "  ", "{}", OK_RESULT, 1));
         snap.add(toolCall(5, "real_tool", "{}", OK_RESULT, 1));
 
         StatsResult result = StatsAggregator.aggregate(snap);
 
-        assertEquals(2, result.getRows().size());
-        ToolStats synthetic = row(result, StatsAggregator.NON_TOOL_METHODS_KEY);
-        assertEquals(4L, synthetic.getCalls());
+        // Each JSON-RPC method now gets its own row (so tools/list is visible on its own),
+        // plus the one named tool — five distinct rows, not one lumped bucket.
+        assertEquals(5, result.getRows().size());
+        assertEquals(1L, row(result, McpConstants.METHOD_INITIALIZE).getCalls());
+        assertEquals(1L, row(result, McpConstants.METHOD_TOOLS_LIST).getCalls());
+        assertEquals(1L, row(result, McpConstants.METHOD_INITIALIZED).getCalls());
+        assertEquals(1L, row(result, McpConstants.METHOD_TOOLS_CALL).getCalls());
         assertEquals(1L, row(result, "real_tool").getCalls());
     }
 
