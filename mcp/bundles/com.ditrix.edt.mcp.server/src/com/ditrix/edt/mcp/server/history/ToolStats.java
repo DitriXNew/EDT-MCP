@@ -10,16 +10,20 @@ package com.ditrix.edt.mcp.server.history;
  * One immutable per-tool row of the MCP context-usage statistics.
  *
  * <p>A row aggregates every recorded call that maps to the same key: for a
- * {@code tools/call} message the key is the tool name; every other JSON-RPC
- * method (initialize / tools/list / notifications / ping / ...) is collapsed
- * into the single synthetic bucket {@link StatsAggregator#NON_TOOL_METHODS_KEY}.
+ * {@code tools/call} message the key is the tool name; every other JSON-RPC method
+ * (initialize / tools/list / notifications / ping / ...) is keyed by its own method
+ * name, so each gets its own row (see {@link StatsAggregator#keyOf}). Only a record
+ * with no method at all falls back to the synthetic
+ * {@link StatsAggregator#NON_TOOL_METHODS_KEY} bucket.
  *
  * <p>The headline metric is the <b>context weight</b> &mdash; a heuristic ranking
- * of how much of the LLM context a tool tends to fill. It is defined (per the
- * approved spec) as the response character total plus the approximate token count
- * ({@code responseChars / 4}) plus the response word count. Token counts are
- * <i>approximate</i> and are always rendered with a tilde prefix
- * ({@link StatsAggregator#APPROX_PREFIX}); they must never be presented as exact.
+ * of how much of the LLM context a tool tends to fill. It is defined as the
+ * (pre-truncation) response character total plus the approximate token count
+ * ({@code responseChars / 4}). Token counts are <i>approximate</i> and are always
+ * rendered with a tilde prefix ({@link StatsAggregator#APPROX_PREFIX}); they must
+ * never be presented as exact. Response word count is exposed as its own displayed
+ * statistic but is deliberately NOT part of the ranking metric, so ordering depends
+ * only on size and is not perturbed by whitespace or language.
  *
  * <p>Instances are produced only by {@link StatsAggregator}; the class is a
  * side-effect-free value holder.
@@ -69,7 +73,10 @@ public final class ToolStats
         this.avgDurationMs = calls > 0 ? Math.round((double)totalDurationMs / calls) : 0L;
         this.sharePercent = totalCallsForShare > 0 ? (calls * 100.0d) / totalCallsForShare : 0.0d;
         this.approxTokens = responseChars / 4;
-        this.contextWeight = responseChars + this.approxTokens + responseWords;
+        // Context weight = response size + approximate tokens (size-driven only). Response
+        // words is a displayed statistic, NOT a ranking term, so the order is not perturbed
+        // by whitespace/language density.
+        this.contextWeight = responseChars + this.approxTokens;
     }
 
     /**
@@ -166,9 +173,10 @@ public final class ToolStats
     }
 
     /**
-     * The context weight used to rank context-eaters: response characters plus the
-     * approximate token estimate plus response words. Higher means the tool tends
-     * to fill more of the LLM context.
+     * The context weight used to rank context-eaters: the (pre-truncation) response
+     * characters plus the approximate token estimate ({@code responseChars / 4}).
+     * Response words are intentionally excluded so the ranking is size-driven only.
+     * Higher means the tool tends to fill more of the LLM context.
      *
      * @return the composite context-weight metric
      */

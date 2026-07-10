@@ -347,7 +347,8 @@
 
    <!-- MCP request/response History View (issue #254): in-EDT browser over the
         exchanges recorded at the transport choke point, plus a context-usage
-        Statistics tab. No new MCP tool - tools/list stays unchanged. -->
+        Statistics tab. (The same feature also adds the read-only get_mcp_history
+        tool over the wire; the view itself contributes no tool.) -->
    <extension point="org.eclipse.ui.views">
       <view
             id="com.ditrix.edt.mcp.server.history.historyView"

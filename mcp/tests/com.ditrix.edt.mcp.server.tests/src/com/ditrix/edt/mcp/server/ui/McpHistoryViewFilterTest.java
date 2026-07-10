@@ -41,13 +41,14 @@ public class McpHistoryViewFilterTest
 
     private static McpCallRecord record(String method, String tool, long timestampMs, long durationMs)
     {
-        return new McpCallRecord(timestampMs, method, tool, "{}", OK, durationMs); //$NON-NLS-1$
+        return new McpCallRecord(timestampMs, method, tool, "{}", OK, durationMs, 2, OK.length()); //$NON-NLS-1$
     }
 
     private static McpCallRecord record(String method, String tool, long timestampMs, long durationMs,
         String responseJson)
     {
-        return new McpCallRecord(timestampMs, method, tool, "{}", responseJson, durationMs); //$NON-NLS-1$
+        return new McpCallRecord(timestampMs, method, tool, "{}", responseJson, durationMs, //$NON-NLS-1$
+            2, responseJson == null ? 0 : responseJson.length());
     }
 
     // ------------------------------------------------------------------ statKey

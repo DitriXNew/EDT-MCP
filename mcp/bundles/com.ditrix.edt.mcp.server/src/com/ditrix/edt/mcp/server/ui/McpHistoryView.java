@@ -65,8 +65,10 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 
 /**
  * In-EDT view over the MCP request/response history recorded at the transport choke
@@ -139,9 +141,12 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
     private Button copyJsonButton;
 
     /**
-     * The untouched, valid pretty-printed JSON of the currently selected exchange.
-     * The detail Text control shows a display-only variant with escaped newlines
-     * rendered as real line breaks; Copy-JSON always copies this unchanged string.
+     * The clipboard payload for the currently selected exchange: a single, VALID
+     * pretty-printed JSON object {@code {"request": ..., "response": ...}} (each body
+     * parsed back to JSON, or kept as a string value when it is truncated/non-JSON).
+     * Copy-JSON copies exactly this. The detail Text control shows a separate,
+     * human-readable two-section rendering ({@link #buildDisplayText}); the two are kept
+     * distinct so the pane can carry section headers while the clipboard stays valid JSON.
      */
     private String detailJson = ""; //$NON-NLS-1$
 
@@ -570,6 +575,38 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         scheduleRefresh();
     }
 
+    /**
+     * Recorder-config-change callback (recording toggled or ring resized via the MCP
+     * Server preferences). Runs on the caller thread, so it only marshals the refresh
+     * onto the UI thread. The status line is updated even while the view is paused (so a
+     * "Recording: off" toggle shows at once); the table and statistics are refreshed only
+     * when not paused (a shrunk ring may have evicted rows the view still shows).
+     */
+    @Override
+    public void onConfigChanged()
+    {
+        Display display = Display.getDefault();
+        if (display == null || display.isDisposed())
+        {
+            return;
+        }
+        display.asyncExec(() ->
+        {
+            if (historyViewer == null || historyViewer.getControl().isDisposed())
+            {
+                return;
+            }
+            if (paused)
+            {
+                updateStatusLine();
+            }
+            else
+            {
+                refreshAll();
+            }
+        });
+    }
+
     private void scheduleRefresh()
     {
         if (paused)
@@ -606,12 +643,16 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         updateStatusLine();
     }
 
-    private void refreshHistoryTable()
+    /**
+     * Reads the current filter-bar state and returns the ring snapshot filtered by the
+     * same AND predicate the history table uses ({@link #matchesFilters}). Shared by the
+     * history table and the Statistics tab so the statistics reflect exactly the selected
+     * tool/status/duration/time-window slice, not the whole ring. UI-thread only.
+     *
+     * @return the filtered records, oldest first
+     */
+    private List<McpCallRecord> collectFilteredRecords()
     {
-        if (historyViewer == null || historyViewer.getControl().isDisposed())
-        {
-            return;
-        }
         List<McpCallRecord> snapshot = history.snapshot();
 
         String textFilter = methodFilterText != null && !methodFilterText.isDisposed()
@@ -630,15 +671,26 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
             toMs = toEpochMillis(toDate, toTime, true);
         }
 
-        tableRows.clear();
+        List<McpCallRecord> filtered = new ArrayList<>();
         for (McpCallRecord record : snapshot)
         {
             if (matchesFilters(record, toolsCallOnly, textFilter, errorsOnly, minDurationMs, intervalOn,
                 fromMs, toMs))
             {
-                tableRows.add(record);
+                filtered.add(record);
             }
         }
+        return filtered;
+    }
+
+    private void refreshHistoryTable()
+    {
+        if (historyViewer == null || historyViewer.getControl().isDisposed())
+        {
+            return;
+        }
+        tableRows.clear();
+        tableRows.addAll(collectFilteredRecords());
         // refresh() (not setInput) so the current row selection survives a live update.
         historyViewer.refresh();
         if (autoScroll)
@@ -654,7 +706,9 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         {
             return;
         }
-        StatsResult result = StatsAggregator.aggregate(history.snapshot());
+        // Aggregate the SAME filtered slice the history table shows, so the summary, rows
+        // and top-3 reflect the selected tool/status/duration/time-window filters.
+        StatsResult result = StatsAggregator.aggregate(collectFilteredRecords());
         statsViewer.setInput(result.getRows());
         statsSummaryLabel.setText(buildSummary(result));
         statsTopLabel.setText(buildTop3(result));
@@ -704,16 +758,16 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
             return;
         }
         copyJsonButton.setEnabled(true);
-        String json = buildDetail(record);
+        String clipboardJson = buildClipboardJson(record);
         // Refresh only when the shown exchange actually changed, so typing into the
         // method filter (which re-runs refreshHistoryTable but keeps the selection)
         // does not reset the detail pane's scroll/caret to the top on every keystroke.
-        if (json.equals(detailJson))
+        if (clipboardJson.equals(detailJson))
         {
             return;
         }
-        detailJson = json;
-        setDetailText(json);
+        detailJson = clipboardJson;
+        setDetailText(buildDisplayText(record));
     }
 
     private McpCallRecord selectedRecord()
@@ -726,7 +780,12 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         return null;
     }
 
-    private String buildDetail(McpCallRecord record)
+    /**
+     * The human-readable detail-pane rendering of one exchange: a "Request" section and a
+     * "Response" section, each pretty-printed. This is display-only (it carries section
+     * headers and is NOT valid JSON); the clipboard uses {@link #buildClipboardJson}.
+     */
+    private String buildDisplayText(McpCallRecord record)
     {
         StringBuilder sb = new StringBuilder();
         sb.append(Messages.McpHistoryView_RequestSection).append('\n');
@@ -734,6 +793,42 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         sb.append("\n\n").append(Messages.McpHistoryView_ResponseSection).append('\n'); //$NON-NLS-1$
         sb.append(prettyOrNone(record.getResponseJson()));
         return sb.toString();
+    }
+
+    /**
+     * Builds the Copy-JSON clipboard payload: ONE valid, pretty-printed JSON object
+     * {@code {"request": <req>, "response": <resp>}}. Each body is parsed back to a JSON
+     * value so structured payloads stay structured; a {@code null} body becomes JSON
+     * {@code null}, and a truncated / non-JSON body is kept as a JSON string value — so
+     * the result is always valid JSON, unlike the two-section display text.
+     */
+    private String buildClipboardJson(McpCallRecord record)
+    {
+        JsonObject root = new JsonObject();
+        root.add("request", asJsonOrString(record.getRequestJson())); //$NON-NLS-1$
+        root.add("response", asJsonOrString(record.getResponseJson())); //$NON-NLS-1$
+        return prettyGson.toJson(root);
+    }
+
+    /**
+     * Parses {@code json} to a JSON element, or wraps it as a JSON string value when it is
+     * {@code null} (→ JSON null) or not parseable (e.g. a body carrying the truncation
+     * marker), so the enclosing object is always valid JSON.
+     */
+    private static JsonElement asJsonOrString(String json)
+    {
+        if (json == null)
+        {
+            return JsonNull.INSTANCE;
+        }
+        try
+        {
+            return JsonParser.parseString(json);
+        }
+        catch (RuntimeException e) // NOSONAR a non-JSON / truncated body is kept as a string value
+        {
+            return new JsonPrimitive(json);
+        }
     }
 
     private String prettyOrNone(String json)

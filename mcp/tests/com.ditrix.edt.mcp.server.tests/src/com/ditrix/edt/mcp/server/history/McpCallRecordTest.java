@@ -25,8 +25,10 @@ public class McpCallRecordTest
     @Test
     public void testGettersRoundTripConstructorArguments()
     {
+        // Distinct original sizes (100/200) to prove they round-trip independently of the
+        // stored bodies — the recorder passes the PRE-truncation lengths here.
         McpCallRecord record =
-            new McpCallRecord(1234L, "tools/call", "list_projects", "{\"req\":1}", "{\"res\":2}", 42L);
+            new McpCallRecord(1234L, "tools/call", "list_projects", "{\"req\":1}", "{\"res\":2}", 42L, 100, 200);
 
         assertEquals("timestampMs must round-trip", 1234L, record.getTimestampMs());
         assertEquals("method must round-trip", "tools/call", record.getMethod());
@@ -34,6 +36,8 @@ public class McpCallRecordTest
         assertEquals("requestJson must round-trip", "{\"req\":1}", record.getRequestJson());
         assertEquals("responseJson must round-trip", "{\"res\":2}", record.getResponseJson());
         assertEquals("durationMs must round-trip", 42L, record.getDurationMs());
+        assertEquals("originalRequestChars must round-trip", 100, record.getOriginalRequestChars());
+        assertEquals("originalResponseChars must round-trip", 200, record.getOriginalResponseChars());
     }
 
     @Test
@@ -41,7 +45,7 @@ public class McpCallRecordTest
     {
         // method/toolName/requestJson/responseJson are all nullable; the record
         // stores them verbatim without throwing.
-        McpCallRecord record = new McpCallRecord(0L, null, null, null, null, 0L);
+        McpCallRecord record = new McpCallRecord(0L, null, null, null, null, 0L, 0, 0);
 
         assertNull("method may be null", record.getMethod());
         assertNull("toolName may be null", record.getToolName());
@@ -49,6 +53,8 @@ public class McpCallRecordTest
         assertNull("responseJson may be null", record.getResponseJson());
         assertEquals("timestampMs is preserved", 0L, record.getTimestampMs());
         assertEquals("durationMs is preserved", 0L, record.getDurationMs());
+        assertEquals("originalRequestChars is preserved", 0, record.getOriginalRequestChars());
+        assertEquals("originalResponseChars is preserved", 0, record.getOriginalResponseChars());
     }
 
     @Test

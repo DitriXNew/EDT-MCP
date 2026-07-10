@@ -56,8 +56,16 @@ public final class HistoryConfig
     /**
      * Largest allowed ring capacity. A configured value above this is clamped so a
      * mistyped preference cannot let the bounded ring grow without limit.
+     *
+     * <p>Chosen for a safe worst-case memory footprint: each record retains up to two
+     * bodies capped at {@link McpCallHistory#MAX_PAYLOAD_CHARS} (~20 000 chars) each,
+     * so {@code MAX_BUFFER_SIZE} records is at most about
+     * {@code 5 000 * 2 * 20 000 = 200 M} chars &asymp; 400&nbsp;MB (UTF-16) in the
+     * absolute worst case, and far less in practice (most payloads are small and the
+     * default capacity is only {@link #DEFAULT_BUFFER_SIZE}). A larger ceiling (the
+     * previous 100 000) could retain multiple GB and OOM a typical EDT heap.</p>
      */
-    public static final int MAX_BUFFER_SIZE = 100_000;
+    public static final int MAX_BUFFER_SIZE = 5_000;
 
     private HistoryConfig()
     {

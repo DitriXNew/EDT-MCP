@@ -402,8 +402,10 @@ public class GetMcpHistoryTool implements IMcpTool
         m.put(REC_TOOL, StatsAggregator.keyOf(record));
         m.put(REC_DURATION_MS, record.getDurationMs());
         m.put(REC_STATUS, StatsAggregator.isErrorResponse(record.getResponseJson()) ? STATUS_ERROR : STATUS_OK);
-        m.put(REC_REQUEST_CHARS, charCount(record.getRequestJson()));
-        m.put(REC_RESPONSE_CHARS, charCount(record.getResponseJson()));
+        // Report the ORIGINAL pre-truncation sizes so a large, ring-capped response is not
+        // reported as ~20 000 chars (which would mis-rank the real context consumers).
+        m.put(REC_REQUEST_CHARS, record.getOriginalRequestChars());
+        m.put(REC_RESPONSE_CHARS, record.getOriginalResponseChars());
         if (includeBodies)
         {
             m.put(REC_REQUEST_JSON, record.getRequestJson());
@@ -475,16 +477,5 @@ public class GetMcpHistoryTool implements IMcpTool
             out.add(m);
         }
         return out;
-    }
-
-    /**
-     * Character count of a payload (0 for {@code null}).
-     *
-     * @param s the payload (may be {@code null})
-     * @return its length, or 0
-     */
-    private static int charCount(String s)
-    {
-        return s == null ? 0 : s.length();
     }
 }

@@ -36,8 +36,11 @@ import com.google.gson.JsonParser;
  *     ({@code tools/call}, {@code initialize}, ...)</li>
  * <li>{@code String getToolName()} &mdash; the tool name for {@code tools/call}
  *     (may be {@code null} otherwise)</li>
- * <li>{@code String getRequestJson()} &mdash; the recorded request payload</li>
- * <li>{@code String getResponseJson()} &mdash; the recorded response payload</li>
+ * <li>{@code String getRequestJson()} &mdash; the recorded (possibly capped) request payload</li>
+ * <li>{@code String getResponseJson()} &mdash; the recorded (possibly capped) response payload</li>
+ * <li>{@code int getOriginalRequestChars()} / {@code int getOriginalResponseChars()}
+ *     &mdash; the true pre-truncation payload sizes, used for the size sums so a capped
+ *     body is not undercounted</li>
  * <li>{@code long getDurationMs()} &mdash; wall-clock duration of the call</li>
  * </ul>
  * The error/OK status is <i>not</i> read from the record: this class owns its own
@@ -132,9 +135,13 @@ public final class StatsAggregator
 
                 acc.calls++;
                 acc.totalDurationMs += Math.max(0L, record.getDurationMs());
-                acc.requestChars += charCount(request);
+                // Size sums use the ORIGINAL pre-truncation lengths carried by the record,
+                // so a response capped for the ring is still counted (and ranked) at its
+                // full context contribution. Word counts stay approximate (from the stored,
+                // possibly capped body) since they are a displayed stat, not a ranking term.
+                acc.requestChars += record.getOriginalRequestChars();
                 acc.requestWords += countWords(request);
-                acc.responseChars += charCount(response);
+                acc.responseChars += record.getOriginalResponseChars();
                 acc.responseWords += countWords(response);
                 if (isErrorResponse(response))
                 {
@@ -269,14 +276,6 @@ public final class StatsAggregator
     public static String formatApproxTokens(long approxTokens)
     {
         return APPROX_PREFIX + approxTokens;
-    }
-
-    /**
-     * Number of characters in a payload (0 for {@code null}).
-     */
-    static long charCount(String s)
-    {
-        return s == null ? 0L : s.length();
     }
 
     /**

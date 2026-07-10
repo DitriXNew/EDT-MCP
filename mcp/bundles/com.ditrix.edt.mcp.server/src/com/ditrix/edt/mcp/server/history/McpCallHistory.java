@@ -142,8 +142,14 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
 
             // Cap payloads BEFORE taking the buffer lock so the critical section is
             // strictly the O(1) evict + add (no substring/allocation under the lock).
+            // Capture the ORIGINAL lengths first (an O(1) String.length(), no JSON parse
+            // on the hot path) so the statistics measure the real payload size even when
+            // the stored body is truncated to the ring's per-record cap.
+            int origRequestChars = requestJson == null ? 0 : requestJson.length();
+            int origResponseChars = responseJson == null ? 0 : responseJson.length();
             McpCallRecord entry = new McpCallRecord(System.currentTimeMillis(), method, toolName,
-                capPayload(requestJson), capPayload(responseJson), durationMs);
+                capPayload(requestJson), capPayload(responseJson), durationMs, origRequestChars,
+                origResponseChars);
 
             int cap = clampCap(bufferSize);
             synchronized (bufferLock)
@@ -262,6 +268,11 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
     {
         setRecordingEnabled(HistoryConfig.isRecordEnabled(store));
         setBufferSize(HistoryConfig.getBufferSize(store));
+        // Notify listeners (the History view) that the recording flag / ring size just
+        // changed, so an already-open view refreshes its "Recording: on/off" status and
+        // drops rows evicted by a shrunk ring instead of showing stale state until the
+        // next recorded exchange. Off the record hot path; guarded per listener.
+        fireConfigChanged();
     }
 
     /**
@@ -305,6 +316,26 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
             catch (RuntimeException e) // NOSONAR a faulty listener must not break recording
             {
                 // Intentionally swallowed per the record() no-throw invariant.
+            }
+        }
+    }
+
+    /**
+     * Fires the {@code onConfigChanged} callback for every listener, guarding each call
+     * so a faulty listener cannot leak an exception to the caller. Invoked off the
+     * {@link #record} hot path (only when {@link #applyPreferences} runs).
+     */
+    private void fireConfigChanged()
+    {
+        for (HistoryListener listener : listeners)
+        {
+            try
+            {
+                listener.onConfigChanged();
+            }
+            catch (RuntimeException e) // NOSONAR a faulty listener must not break reconfiguration
+            {
+                // Intentionally swallowed: a settings apply must never fail on a bad listener.
             }
         }
     }
@@ -362,5 +393,17 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
          * @param record the newly appended, immutable record
          */
         void onRecord(McpCallRecord record);
+
+        /**
+         * Invoked when the recorder's configuration (recording flag / ring capacity)
+         * changes via {@link McpCallHistory#applyPreferences}, so a UI listener can
+         * refresh its status and drop rows evicted by a shrunk ring. Runs off the
+         * record hot path and is exception-guarded by the ring. The default is a no-op
+         * so existing listeners need not implement it.
+         */
+        default void onConfigChanged()
+        {
+            // no-op by default
+        }
     }
 }

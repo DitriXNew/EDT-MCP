@@ -35,12 +35,15 @@ public class StatsAggregatorTest
 
     private static McpCallRecord toolCall(long ts, String tool, String request, String response, long durationMs)
     {
-        return new McpCallRecord(ts, McpConstants.METHOD_TOOLS_CALL, tool, request, response, durationMs);
+        // Tests never truncate, so the original sizes equal the stored body lengths.
+        return new McpCallRecord(ts, McpConstants.METHOD_TOOLS_CALL, tool, request, response, durationMs,
+            request == null ? 0 : request.length(), response == null ? 0 : response.length());
     }
 
     private static McpCallRecord method(long ts, String method, String response)
     {
-        return new McpCallRecord(ts, method, null, "{}", response, 1L);
+        return new McpCallRecord(ts, method, null, "{}", response, 1L,
+            2, response == null ? 0 : response.length());
     }
 
     private static ToolStats row(StatsResult result, String key)
@@ -155,8 +158,9 @@ public class StatsAggregatorTest
         long expectedTokens = response.length() / 4; // 13/4 == 3
         assertEquals(expectedTokens, stat.getApproxTokens());
         assertEquals("~" + expectedTokens, stat.getApproxTokensDisplay());
-        // context weight = response chars + approx tokens + response words
-        assertEquals(response.length() + expectedTokens + 3, stat.getContextWeight());
+        // context weight = response chars + approx tokens (response words are a displayed
+        // statistic only, NOT part of the ranking metric).
+        assertEquals(response.length() + expectedTokens, stat.getContextWeight());
     }
 
     @Test

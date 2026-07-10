@@ -15,6 +15,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
@@ -84,6 +85,16 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
 
     /** Set once when the first overflow drop happens, to log the warning only once. */
     private final AtomicBoolean overflowWarned = new AtomicBoolean(false);
+
+    /**
+     * Coalesces drain scheduling: at most ONE drain task is queued on the executor at a
+     * time. Without this, {@link #enqueue} would submit one drain task per accepted record
+     * and, since a single drain empties the whole queue, thousands of redundant no-op tasks
+     * would pile up on the executor's unbounded task queue under sustained traffic (the
+     * bounded-memory guarantee would move from the line queue to the task queue). Set true
+     * when a drain is scheduled, cleared at the start of {@link #drain}.
+     */
+    private final AtomicBoolean drainScheduled = new AtomicBoolean(false);
 
     /** Count of records dropped on overflow (diagnostics / tests). */
     private final AtomicLong dropped = new AtomicLong(0);
@@ -175,10 +186,17 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     }
 
     /**
-     * Atomically replaces the {@link #active} sink with {@code next}, then registers
-     * the new sink and unregisters + {@link #close() closes} the old one. The lock is
-     * held only for the field swap; the (potentially blocking) {@code close()} runs
-     * outside it so it never serializes with a concurrent swap.
+     * Installs {@code next} as the {@link #active} sink, unless it targets the SAME log
+     * file the active sink already writes (an unchanged configuration) — in which case the
+     * running sink is kept and the freshly-built {@code next} duplicate is discarded, so
+     * there is never a second writer on the same file.
+     * <p>
+     * When the target does change, the old sink is unregistered <b>before</b> the new one
+     * is registered (a single-registration handoff, so no record is ever delivered to two
+     * sinks at once), then the old sink is {@link #close() closed} to flush its pending
+     * lines. Because the targets differ, the old sink's flush and the new sink's writes go
+     * to different files and cannot interleave. The lock is held only for the field swap;
+     * the (potentially blocking) {@code close()} runs outside it.
      *
      * @param next the new sink to install, or {@code null} to leave the file log off
      */
@@ -188,8 +206,24 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
         McpCallHistoryFileLog previous;
         synchronized (ACTIVE_LOCK)
         {
+            Path currentFile = active == null ? null : active.logFile;
+            Path nextFile = next == null ? null : next.logFile;
+            if (Objects.equals(currentFile, nextFile))
+            {
+                // Unchanged target: keep the running sink; drop the unused duplicate (its
+                // executor thread is released — the file was never opened for it).
+                if (next != null)
+                {
+                    next.close();
+                }
+                return;
+            }
             previous = active;
             active = next;
+        }
+        if (previous != null)
+        {
+            history.removeListener(previous);
         }
         if (next != null)
         {
@@ -197,7 +231,6 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
         }
         if (previous != null)
         {
-            history.removeListener(previous);
             previous.close();
         }
     }
@@ -319,24 +352,42 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
             }
             return;
         }
-        try
+        scheduleDrain();
+    }
+
+    /**
+     * Schedules a single drain task if one is not already pending, so a burst of records
+     * coalesces into one drain instead of one task per record (see {@link #drainScheduled}).
+     * A rejected submission (executor shutting down) resets the flag so a later
+     * {@link #close()} residual drain still flushes the line.
+     */
+    private void scheduleDrain()
+    {
+        if (drainScheduled.compareAndSet(false, true))
         {
-            writer.execute(this::drain);
-        }
-        catch (RejectedExecutionException e)
-        {
-            // The executor is shutting down. The line stays queued and is written by a
-            // drain task already in flight, or discarded on shutdown. Never propagate.
+            try
+            {
+                writer.execute(this::drain);
+            }
+            catch (RejectedExecutionException e)
+            {
+                // The executor is shutting down. Clear the flag we just set; the line stays
+                // queued and is flushed by close()'s residual drain. Never propagate.
+                drainScheduled.set(false);
+            }
         }
     }
 
     /**
      * Drains all currently queued lines to disk on the background thread. Any I/O
      * failure disables the sink (swallowed, logged once): the queue is cleared and
-     * no further writes are attempted.
+     * no further writes are attempted. Clears {@link #drainScheduled} up front (so
+     * records offered during this drain re-schedule a fresh task) and, as a safety net,
+     * reschedules if lines remain when it finishes.
      */
     private void drain()
     {
+        drainScheduled.set(false);
         if (failed)
         {
             queue.clear();
@@ -359,6 +410,13 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
             queue.clear();
             closeWriterQuietly();
             Activator.logError("MCP call history file log disabled after an I/O failure writing " + logFile, e); //$NON-NLS-1$
+            return;
+        }
+        // A line offered between the last successful poll() and the flag reset above would
+        // otherwise wait for the next record; reschedule so it is not stranded.
+        if (!queue.isEmpty())
+        {
+            scheduleDrain();
         }
     }
 
@@ -413,7 +471,41 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
             Thread.currentThread().interrupt();
             writer.shutdownNow();
         }
+        // The writer thread has now terminated (or been cancelled), so no drain runs
+        // concurrently. Flush any line left in the queue by a race between enqueue and
+        // shutdown (offer succeeded, then execute was rejected) — otherwise close()'s
+        // documented "flush pending lines" promise would silently drop it.
+        drainResidual();
         closeWriterQuietly();
+    }
+
+    /**
+     * Final synchronous flush of any lines still queued after the executor has
+     * terminated. Runs on the closing thread with no concurrent writer, so it may
+     * touch {@link #out} directly. Best-effort: a failure here is logged, not thrown
+     * (the sink is closing anyway).
+     */
+    private void drainResidual()
+    {
+        if (failed || queue.isEmpty())
+        {
+            return;
+        }
+        try
+        {
+            ensureOpen();
+            String line;
+            while ((line = queue.poll()) != null)
+            {
+                out.write(line);
+                out.write('\n');
+            }
+            out.flush();
+        }
+        catch (IOException | RuntimeException e)
+        {
+            Activator.logError("MCP call history file log failed to flush pending lines on close: " + logFile, e); //$NON-NLS-1$
+        }
     }
 
     private void closeWriterQuietly()
