@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
-import java.util.TreeSet;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.jface.action.Action;
@@ -40,9 +40,9 @@ import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.layout.RowData;
 import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.Button;
-import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.DateTime;
 import org.eclipse.swt.widgets.Display;
@@ -138,8 +138,16 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
     private Text detailText;
     private Button copyJsonButton;
 
+    /**
+     * The untouched, valid pretty-printed JSON of the currently selected exchange.
+     * The detail Text control shows a display-only variant with escaped newlines
+     * rendered as real line breaks; Copy-JSON always copies this unchanged string.
+     */
+    private String detailJson = ""; //$NON-NLS-1$
+
     // History filter bar (all touched only on the UI thread).
-    private Combo methodFilterCombo;
+    private Text methodFilterText;
+    private Button errorsOnlyCheck;
     private Spinner minDurationSpinner;
     private Button intervalCheck;
     private DateTime fromDate;
@@ -247,11 +255,16 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         Label methodLabel = new Label(bar, SWT.NONE);
         methodLabel.setText(Messages.McpHistoryView_FilterMethodLabel);
 
-        methodFilterCombo = new Combo(bar, SWT.READ_ONLY | SWT.DROP_DOWN);
-        methodFilterCombo.setToolTipText(Messages.McpHistoryView_FilterMethodTooltip);
-        methodFilterCombo.setItems(Messages.McpHistoryView_FilterAll);
-        methodFilterCombo.select(0);
-        methodFilterCombo.addSelectionListener(refreshOnChange);
+        methodFilterText = new Text(bar, SWT.BORDER | SWT.SEARCH);
+        methodFilterText.setToolTipText(Messages.McpHistoryView_FilterMethodTooltip);
+        methodFilterText.setMessage(Messages.McpHistoryView_FilterMethodPlaceholder);
+        methodFilterText.setLayoutData(new RowData(160, SWT.DEFAULT));
+        methodFilterText.addModifyListener(e -> refreshHistoryTable());
+
+        errorsOnlyCheck = new Button(bar, SWT.CHECK);
+        errorsOnlyCheck.setText(Messages.McpHistoryView_FilterErrorsOnlyLabel);
+        errorsOnlyCheck.setToolTipText(Messages.McpHistoryView_FilterErrorsOnlyTooltip);
+        errorsOnlyCheck.addSelectionListener(refreshOnChange);
 
         Label durationLabel = new Label(bar, SWT.NONE);
         durationLabel.setText(Messages.McpHistoryView_FilterMinDurationLabel);
@@ -356,7 +369,7 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
             {
                 if (element instanceof McpCallRecord r)
                 {
-                    return isErrorResponse(r.getResponseJson())
+                    return isError(r)
                         ? Messages.McpHistoryView_StatusError : Messages.McpHistoryView_StatusOk;
                 }
                 return ""; //$NON-NLS-1$
@@ -365,7 +378,7 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
             @Override
             public Color getForeground(Object element)
             {
-                if (element instanceof McpCallRecord r && isErrorResponse(r.getResponseJson()))
+                if (element instanceof McpCallRecord r && isError(r))
                 {
                     return table.getDisplay().getSystemColor(SWT.COLOR_RED);
                 }
@@ -601,11 +614,10 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         }
         List<McpCallRecord> snapshot = history.snapshot();
 
-        // Keep the method/tool filter choices in sync with the buffer before reading
-        // the current selection back out of the combo.
-        refreshMethodFilterItems(snapshot);
-
-        String selectedKey = selectedMethodKey();
+        String textFilter = methodFilterText != null && !methodFilterText.isDisposed()
+            ? methodFilterText.getText() : null;
+        boolean errorsOnly = errorsOnlyCheck != null && !errorsOnlyCheck.isDisposed()
+            && errorsOnlyCheck.getSelection();
         long minDurationMs = minDurationSpinner != null && !minDurationSpinner.isDisposed()
             ? minDurationSpinner.getSelection() : 0L;
         boolean intervalOn = intervalCheck != null && !intervalCheck.isDisposed()
@@ -621,7 +633,8 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         tableRows.clear();
         for (McpCallRecord record : snapshot)
         {
-            if (matchesFilters(record, toolsCallOnly, selectedKey, minDurationMs, intervalOn, fromMs, toMs))
+            if (matchesFilters(record, toolsCallOnly, textFilter, errorsOnly, minDurationMs, intervalOn,
+                fromMs, toMs))
             {
                 tableRows.add(record);
             }
@@ -633,54 +646,6 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
             revealLatest();
         }
         updateDetail();
-    }
-
-    /**
-     * The method/tool key currently selected in the filter combo, or {@code null}
-     * when the {@code (all)} sentinel (index 0) is selected (i.e. no key filter).
-     */
-    private String selectedMethodKey()
-    {
-        if (methodFilterCombo == null || methodFilterCombo.isDisposed())
-        {
-            return null;
-        }
-        int idx = methodFilterCombo.getSelectionIndex();
-        return idx > 0 ? methodFilterCombo.getItem(idx) : null;
-    }
-
-    /**
-     * Recomputes the combo's distinct method/tool key set from the snapshot on each
-     * refresh, keeping the {@code (all)} sentinel first and the remaining keys sorted.
-     * The user's current selection is preserved when its key is still present;
-     * otherwise the selection falls back to {@code (all)}. Programmatic
-     * {@code setItems}/{@code select} do not fire a {@code SelectionEvent}, so this
-     * never re-enters the refresh.
-     */
-    private void refreshMethodFilterItems(List<McpCallRecord> snapshot)
-    {
-        if (methodFilterCombo == null || methodFilterCombo.isDisposed())
-        {
-            return;
-        }
-        String previous = methodFilterCombo.getText();
-
-        TreeSet<String> keys = new TreeSet<>();
-        for (McpCallRecord record : snapshot)
-        {
-            if (record != null)
-            {
-                keys.add(statKey(record));
-            }
-        }
-
-        List<String> items = new ArrayList<>(keys.size() + 1);
-        items.add(Messages.McpHistoryView_FilterAll);
-        items.addAll(keys);
-        methodFilterCombo.setItems(items.toArray(new String[0]));
-
-        int idx = items.indexOf(previous);
-        methodFilterCombo.select(idx >= 0 ? idx : 0);
     }
 
     private void refreshStatistics()
@@ -730,12 +695,25 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         McpCallRecord record = selectedRecord();
         if (record == null)
         {
-            detailText.setText(""); //$NON-NLS-1$
+            if (!detailJson.isEmpty())
+            {
+                detailJson = ""; //$NON-NLS-1$
+                detailText.setText(""); //$NON-NLS-1$
+            }
             copyJsonButton.setEnabled(false);
             return;
         }
-        setDetailText(buildDetail(record));
         copyJsonButton.setEnabled(true);
+        String json = buildDetail(record);
+        // Refresh only when the shown exchange actually changed, so typing into the
+        // method filter (which re-runs refreshHistoryTable but keeps the selection)
+        // does not reset the detail pane's scroll/caret to the top on every keystroke.
+        if (json.equals(detailJson))
+        {
+            return;
+        }
+        detailJson = json;
+        setDetailText(json);
     }
 
     private McpCallRecord selectedRecord()
@@ -787,22 +765,48 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
 
     private void setDetailText(String text)
     {
-        // Gson emits '\n'; normalise to the platform delimiter so the Text control on
-        // every OS renders line breaks instead of control glyphs.
-        detailText.setText(text.replace("\n", Text.DELIMITER)); //$NON-NLS-1$
+        // Display-only rendering. First turn JSON string-value escaped newlines
+        // (\r\n, \n) into real line breaks so multi-line values (e.g. a BSL module
+        // body) read naturally instead of showing literal "\n"; then normalise every
+        // newline (Gson emits '\n' between tokens) to the platform delimiter so the
+        // Text control on every OS renders breaks instead of control glyphs. The
+        // Copy-JSON clipboard keeps the untouched, still-valid JSON (escapes intact).
+        String rendered = renderEscapedNewlines(text);
+        detailText.setText(rendered.replace("\n", Text.DELIMITER)); //$NON-NLS-1$
+    }
+
+    /**
+     * Display-only transform: replaces JSON string-value escaped newline sequences
+     * ({@code \r\n} then {@code \n}) with real line breaks so multi-line values read
+     * naturally. Escaped backslashes ({@code \\}) are protected first, so a
+     * JSON-encoded backslash immediately followed by {@code n}/{@code r} (e.g. a
+     * Windows path serialized as {@code "C:\\node"}) is left intact instead of being
+     * mis-rendered as a spurious line break. Never used for the clipboard, so the
+     * copied text stays valid JSON.
+     */
+    static String renderEscapedNewlines(String text)
+    {
+        // A JSON-encoded escaped backslash ("\\") must not be read as the start of a
+        // newline escape. Park every escaped backslash on a sentinel (the NUL char,
+        // which pretty-printed JSON always emits as an escape, never literally),
+        // unescape the genuine \r\n / \n sequences, then restore the escaped backslashes.
+        final String sentinel = "\0"; //$NON-NLS-1$
+        return text.replace("\\\\", sentinel) //$NON-NLS-1$
+            .replace("\\r\\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .replace("\\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .replace(sentinel, "\\\\"); //$NON-NLS-1$
     }
 
     private void copyDetailToClipboard()
     {
-        String text = detailText.getText();
-        if (text.isEmpty())
+        if (detailJson == null || detailJson.isEmpty())
         {
             return;
         }
         Clipboard clipboard = new Clipboard(detailText.getDisplay());
         try
         {
-            clipboard.setContents(new Object[] {text}, new Transfer[] {TextTransfer.getInstance()});
+            clipboard.setContents(new Object[] {detailJson}, new Transfer[] {TextTransfer.getInstance()});
         }
         finally
         {
@@ -827,38 +831,57 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
      * The filter grouping key for a record: the tool name for a {@code tools/call}
      * with a non-blank tool, otherwise the JSON-RPC method. This mirrors the
      * package-private {@code StatsAggregator.keyOf} (which is not visible from this
-     * package) so the combo's choices line up 1:1 with the Statistics rows; the two
-     * MUST stay in sync. A record with no method at all yields
-     * {@link StatsAggregator#NON_TOOL_METHODS_KEY}, exactly as {@code keyOf} does.
+     * package) so the method/tool substring filter matches the same key the
+     * Statistics rows are grouped by; the two MUST stay in sync. A record with no
+     * method at all yields {@link StatsAggregator#NON_TOOL_METHODS_KEY}, exactly as
+     * {@code keyOf} does.
      *
      * @param record the record to key (never {@code null})
      * @return the grouping key, never {@code null}
      */
     static String statKey(McpCallRecord record)
     {
-        // Delegates to the single source of truth so the filter Combo's keys and the
-        // Statistics rows can never drift apart.
+        // Delegates to the single source of truth so the substring filter's key and
+        // the Statistics rows can never drift apart.
         return StatsAggregator.keyOf(record);
     }
 
     /**
+     * UI error classifier for a whole record: {@code true} when its recorded response
+     * is an error outcome per {@link #isErrorResponse(String)}. A {@code null} record
+     * is not an error. Shared by the Status column and the errors-only filter so the
+     * two can never disagree.
+     *
+     * @param record the record to classify (may be {@code null})
+     * @return {@code true} when the record's response represents an error outcome
+     */
+    static boolean isError(McpCallRecord record)
+    {
+        return record != null && isErrorResponse(record.getResponseJson());
+    }
+
+    /**
      * Pure AND-composed predicate for one history row. Combines, in order: the
-     * existing {@code tools/call}-only toggle, the selected method/tool key, the
-     * minimum-duration threshold, and (only when {@code intervalOn}) the inclusive
-     * timestamp window. Extracted as a static so it is unit-testable without SWT.
+     * existing {@code tools/call}-only toggle, the case-insensitive method/tool
+     * substring, the errors-only toggle, the minimum-duration threshold, and (only
+     * when {@code intervalOn}) the inclusive timestamp window. Extracted as a static
+     * so it is unit-testable without SWT.
      *
      * @param record the record to test; {@code null} never matches
      * @param toolsCallOnly when {@code true}, keep only {@code tools/call} exchanges
-     * @param selectedKey the required {@link #statKey(McpCallRecord)}, or {@code null}
-     *            for no key filter (the {@code (all)} choice)
+     * @param textFilter a case-insensitive substring the record's
+     *            {@link #statKey(McpCallRecord)} must contain; {@code null}/blank means
+     *            no text filter
+     * @param errorsOnly when {@code true}, keep only records classified as an error
+     *            outcome by {@link #isError(McpCallRecord)}
      * @param minDurationMs keep only records with {@code getDurationMs() >=} this
      * @param intervalOn when {@code true}, apply the {@code [fromMs, toMs]} window
      * @param fromMsInclusive lower timestamp bound, inclusive (used iff {@code intervalOn})
      * @param toMsInclusive upper timestamp bound, inclusive (used iff {@code intervalOn})
      * @return {@code true} when the record passes every active filter
      */
-    static boolean matchesFilters(McpCallRecord record, boolean toolsCallOnly, String selectedKey,
-        long minDurationMs, boolean intervalOn, long fromMsInclusive, long toMsInclusive)
+    static boolean matchesFilters(McpCallRecord record, boolean toolsCallOnly, String textFilter,
+        boolean errorsOnly, long minDurationMs, boolean intervalOn, long fromMsInclusive, long toMsInclusive)
     {
         if (record == null)
         {
@@ -868,7 +891,12 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         {
             return false;
         }
-        if (selectedKey != null && !selectedKey.equals(statKey(record)))
+        if (textFilter != null && !textFilter.isBlank()
+            && !statKey(record).toLowerCase(Locale.ROOT).contains(textFilter.toLowerCase(Locale.ROOT)))
+        {
+            return false;
+        }
+        if (errorsOnly && !isError(record))
         {
             return false;
         }
