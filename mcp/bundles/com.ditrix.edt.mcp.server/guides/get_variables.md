@@ -21,8 +21,8 @@ JSON: `variables` (each with `name`, `value`, `type`) and a `count`. Long values
 - Start from the frames in the `wait_for_break` / `step` response, then use `expandPath` to dig into a specific structure rather than expanding everything.
 - To evaluate an arbitrary BSL expression (not just read a variable) in the same frame, use `evaluate_expression`.
 
-## Personal-data (152-FZ) redaction
-`get_variables` is one of the tools flagged **`returnsInfobaseData`**: its result can carry real personal data read out of a running infobase (full names, tax / insurance / passport numbers, e-mail, phone, etc.). Sending that to an LLM verbatim is unacceptable for a production infobase under Russian personal-data law (Federal Law 152-FZ). The server therefore ships an optional **PII redactor** that runs at the single wire-serialization choke point, on the response of every `returnsInfobaseData` tool, BEFORE it leaves the server.
+## Personal-data redaction
+`get_variables` is one of the tools flagged **`returnsInfobaseData`**: its result can carry real personal data read out of a running infobase (full names, tax / insurance / passport numbers, e-mail, phone, etc.). Sending that to an LLM verbatim is unacceptable for a production infobase under Russian personal-data law (Federal Law ). The server therefore ships an optional **PII redactor** that runs at the single wire-serialization choke point, on the response of every `returnsInfobaseData` tool, BEFORE it leaves the server.
 
 - **Flagged tools (v1):** `get_variables`, `evaluate_expression`, `wait_for_break`. (`get_event_log` from #243 gets flagged once it merges - it is not in this build.)
 - **Toggle:** Window -> Preferences -> MCP Server, the redaction checkbox. **Default OFF** - the user decides. While OFF the response is **byte-identical** to a build without the redactor (the choke point returns the same string unchanged - no JSON parse / re-serialize), so goldens and the existing e2e stay unaffected.

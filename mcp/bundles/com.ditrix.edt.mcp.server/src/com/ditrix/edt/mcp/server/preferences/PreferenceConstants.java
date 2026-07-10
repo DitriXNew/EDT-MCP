@@ -137,10 +137,10 @@ public final class PreferenceConstants
     /** Default: no tools allowed without consent (empty string). */
     public static final String DEFAULT_DESTRUCTIVE_ALLOWED_TOOLS = ""; //$NON-NLS-1$
 
-    // === PII redaction (152-FZ) preferences ===
+    // === PII redaction preferences ===
 
     /**
-     * Master toggle for the 152-FZ PII redactor: when on, the result of every tool
+     * Master toggle for the PII redactor: when on, the result of every tool
      * flagged {@code returnsInfobaseData()} is passed through the redactor before it
      * leaves the server. The env kill-switch {@code EDT_MCP_PII_REDACTION}
      * (on/off) overrides this store value (see {@code PiiRedactionSettings}).
@@ -167,7 +167,7 @@ public final class PreferenceConstants
      * Default rule table: the bundled default rules serialized to JSON
      * ({@link PiiRuleCodec#loadBundledDefaults()} re-encoded via {@code PiiRuleCodec.encode}),
      * which reproduce the previous hard-coded
-     * 152-FZ detection. The packaged {@code pii-defaults.json} is the single source of
+     * PII detection. The packaged {@code pii-defaults.json} is the single source of
      * truth; this constant is its serialized form so an untouched store, and a headless
      * context with no store, both resolve to the same bundled rule set.
      */

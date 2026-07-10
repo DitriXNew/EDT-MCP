@@ -25,7 +25,7 @@ import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 
 /**
- * The 152-FZ PII redactor invoked at the single wire-serialization choke point
+ * The PII redactor invoked at the single wire-serialization choke point
  * ({@code McpProtocolHandler}) on every tool result. It is a strict no-op unless
  * redaction is enabled AND the tool is flagged {@link IMcpTool#returnsInfobaseData()};
  * in every skip case it returns the SAME {@link String} reference it was given, so an

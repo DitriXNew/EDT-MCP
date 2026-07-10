@@ -267,7 +267,7 @@ public class McpProtocolHandler
         // Execute the tool (timed + logged + status-bar cleared in one place).
         String result = executeToolTimed(tool, params, server);
 
-        // 152-FZ PII redaction (#242): the single wire-serialization choke point.
+        // PII redaction (#242): the single wire-serialization choke point.
         // A no-op unless redaction is enabled AND the tool returnsInfobaseData();
         // returns the same reference otherwise, so output stays byte-identical.
         result = PiiRedactor.redactIfEnabled(tool, params, result);

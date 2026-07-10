@@ -106,7 +106,7 @@ public interface IMcpTool
      * Whether this tool's result can carry personal data read from a live 1C
      * infobase (debug variables, evaluated expressions, suspended stack frames,
      * and — once it lands — event-log entries), as opposed to EDT/workspace
-     * metadata. The single wire-serialization choke point runs the 152-FZ PII
+     * metadata. The single wire-serialization choke point runs the PII
      * redactor ONLY on the result of a tool that returns {@code true} here; every
      * other tool's output is passed through untouched.
      * <p>

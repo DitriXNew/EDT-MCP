@@ -35,7 +35,7 @@ import com.ditrix.edt.mcp.server.utils.privacy.PiiRuleCodec;
 import com.ditrix.edt.mcp.server.utils.privacy.PiiRuleSet;
 
 /**
- * Privacy settings tab for MCP Server preferences: the 152-FZ PII-redaction controls.
+ * Privacy settings tab for MCP Server preferences: the PII-redaction controls.
  * <p>
  * It holds the master on/off toggle (relocated here from the General tab; its
  * preference key {@link PreferenceConstants#PREF_PII_REDACTION_ENABLED} is unchanged

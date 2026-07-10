@@ -28,7 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
  * MCP Server preference page with tabbed layout.
  * Tab 1: General - port, auto-start, checks folder, plain text, tags, updates, server control
  * Tab 2: Tools - tree of tool groups with enable/disable, description, and parameter settings
- * Tab 3: Privacy - 152-FZ PII redaction master toggle, pseudonym salt, and the detection rule table
+ * Tab 3: Privacy - PII redaction master toggle, pseudonym salt, and the detection rule table
  */
 public class McpServerPreferencePage extends PreferencePage implements IWorkbenchPreferencePage
 {

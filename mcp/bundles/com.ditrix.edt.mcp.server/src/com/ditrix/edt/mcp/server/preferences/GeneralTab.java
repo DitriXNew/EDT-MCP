@@ -237,7 +237,7 @@ public class GeneralTab
         consentLevelCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
         createLabel(""); //$NON-NLS-1$
 
-        // The 152-FZ PII redaction master toggle lives on the dedicated Privacy tab
+        // The PII redaction master toggle lives on the dedicated Privacy tab
         // (see PrivacyTab); it is not duplicated here.
     }
 

@@ -14,7 +14,7 @@ import com.ditrix.edt.mcp.server.utils.privacy.PiiRuleSet;
 
 /**
  * Resolves the user-configurable PII rule table and the pseudonymiser salt for the
- * 152-FZ redactor. The rule table replaces the previous hard-coded detection: it is
+ * PII redactor. The rule table replaces the previous hard-coded detection: it is
  * stored as JSON in {@link PreferenceConstants#PREF_PII_RULES_JSON} (default
  * {@link PreferenceConstants#DEFAULT_PII_RULES_JSON}) and the salt in
  * {@link PreferenceConstants#PREF_PII_SALT} (default empty).

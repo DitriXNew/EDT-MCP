@@ -14,7 +14,7 @@ import org.eclipse.jface.preference.IPreferenceStore;
 import com.ditrix.edt.mcp.server.Activator;
 
 /**
- * Resolves whether the 152-FZ PII redactor is active for the current call. The
+ * Resolves whether the PII redactor is active for the current call. The
  * master toggle lives in the plugin preferences
  * ({@link PreferenceConstants#PREF_PII_REDACTION_ENABLED}, default OFF), but an
  * environment kill-switch WINS over the stored value so an automated / CI stand
