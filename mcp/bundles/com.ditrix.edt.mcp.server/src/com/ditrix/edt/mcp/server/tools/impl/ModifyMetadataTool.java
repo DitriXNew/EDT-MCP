@@ -339,32 +339,127 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
-        if (err != null)
+        ModifyArgs args = parseModifyArgs(params);
+        if (args.error != null)
         {
-            return err;
+            return args.error;
         }
-        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
-        String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
+
+        ProjectContext ctx = resolveProjectAndConfig(args.projectName);
+        if (ctx.hasError())
+        {
+            return ctx.error;
+        }
+
+        String normFqn = MetadataTypeUtils.normalizeFqn(args.fqn);
+
+        // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
+        // branch: form members live on the editable Form content model (a cross-model hop), not the
+        // mdclass tree. A Role / content payload addressed to a form member is refused there.
+        FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
+        if (formRef != null)
+        {
+            return dispatchFormMemberFqn(ctx, normFqn, formRef, args);
+        }
+
+        // A SUBSYSTEM-content payload (content[] on a Subsystem FQN) is dispatched EARLY, before the
+        // generic single-segment resolver (see dispatchSubsystemContentPayload); null means the
+        // request is not a subsystem content change.
+        String subsystemResult = dispatchSubsystemContentPayload(ctx, normFqn, args);
+        if (subsystemResult != null)
+        {
+            return subsystemResult;
+        }
+
+        // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
+        // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
+        // would miss the stored name — the resolver retries the normalized FQN.
+        ResolvedTarget resolvedTarget = resolveModifyTarget(ctx.config, args.fqn, normFqn);
+        if (resolvedTarget.error != null)
+        {
+            return resolvedTarget.error;
+        }
+        normFqn = resolvedTarget.normFqn;
+        MdObject target = resolvedTarget.node.object;
+
+        // The payload surfaces (dcs / template / role / membership content) are dispatched by the
+        // resolved target's kind; null means none applies and the generic path runs.
+        String payloadResult = dispatchPayloads(ctx, normFqn, target, args);
+        if (payloadResult != null)
+        {
+            return payloadResult;
+        }
+
+        // The remaining case: a generic 'properties' change applied through the BM write boundary.
+        return applyGenericPropertyChanges(ctx, args.projectName, normFqn, resolvedTarget.node, target,
+            args.properties, args.normReport);
+    }
+
+    /**
+     * The parsed + validated arguments of one modify_metadata call (built by
+     * {@link #parseModifyArgs}): the addressed project / FQN, the generic 'properties' list, the
+     * payload surfaces (role / membership content / template / dcs) with their presence flags, and
+     * the yo-normalization report. When {@link #error} is non-null (a ready JSON error), the other
+     * fields must not be used.
+     */
+    private static final class ModifyArgs
+    {
+        /** A ready {@link ToolResult#error} JSON when parsing / validation failed, else {@code null}. */
+        String error;
+        String projectName;
+        String fqn;
+        List<JsonObject> properties;
+        List<JsonObject> rolePayloadRights;
+        List<JsonObject> rolePayloadTemplates;
+        JsonObject roleProperties;
+        boolean hasRolePayload;
+        List<JsonObject> content;
+        boolean hasContentPayload;
+        JsonObject templateSpec;
+        boolean hasTemplatePayload;
+        JsonObject dcsSpec;
+        boolean hasDcsPayload;
+        MdNameNormalizer.Report normReport;
+    }
+
+    /**
+     * Parses + validates the raw request arguments into a {@link ModifyArgs} bundle: the addressed
+     * project / FQN, the generic 'properties' list, the Role payload ('rights' / 'templates' /
+     * 'roleProperties'), the membership 'content' payload, the parsed 'template' / 'dcs' payload
+     * specs with their presence flags, and the yo-normalization report. {@link ModifyArgs#error} is
+     * non-null (a ready JSON error) when a required argument is missing, a payload argument is
+     * malformed, or no payload at all was supplied. Extracted verbatim from
+     * {@link #executeOnUiThread}.
+     */
+    private static ModifyArgs parseModifyArgs(Map<String, String> params)
+    {
+        ModifyArgs args = new ModifyArgs();
+        args.error = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
+        if (args.error != null)
+        {
+            return args;
+        }
+        args.projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        args.fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
-        List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
+        args.properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
 
         // Role payload (rights[] / templates[] / roleProperties): dispatched when the resolved FQN is a
         // Role. When present, 'properties' is optional (a role is modified through the rights surface,
         // not the generic property bag).
-        List<JsonObject> rolePayloadRights = JsonUtils.extractObjectArray(params, KEY_RIGHTS);
-        List<JsonObject> rolePayloadTemplates = JsonUtils.extractObjectArray(params, KEY_TEMPLATES);
-        JsonObject roleProperties = parseRolePropertiesArg(params);
-        boolean hasRolePayload =
-            !rolePayloadRights.isEmpty() || !rolePayloadTemplates.isEmpty() || roleProperties != null;
+        args.rolePayloadRights = JsonUtils.extractObjectArray(params, KEY_RIGHTS);
+        args.rolePayloadTemplates = JsonUtils.extractObjectArray(params, KEY_TEMPLATES);
+        args.roleProperties = parseRolePropertiesArg(params);
+        args.hasRolePayload = !args.rolePayloadRights.isEmpty()
+            || !args.rolePayloadTemplates.isEmpty() || args.roleProperties != null;
 
         // Membership content payload (content[]): one generic list dispatched by the resolved FQN's
         // kind (a CommonAttribute's / a Catalog's owners, an ExchangePlan's content objects, a
         // Document's register records). When present, 'properties' is optional (the membership list is
         // edited through its own surface, not the generic property bag) - mirrors the Role rights[]
         // precedent.
-        List<JsonObject> content = JsonUtils.extractObjectArray(params, KEY_CONTENT);
-        boolean hasContentPayload = !content.isEmpty();
+        args.content = JsonUtils.extractObjectArray(params, KEY_CONTENT);
+        args.hasContentPayload = !args.content.isEmpty();
 
         // Template spreadsheet-content payload (template={cells/merges/areas/columnWidths/rowHeights}):
         // authored on a SpreadsheetDocument template FQN. When present, 'properties' is optional (the
@@ -376,10 +471,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         TemplateArg templateArg = parseTemplateArg(params);
         if (templateArg.error != null)
         {
-            return templateArg.error;
+            args.error = templateArg.error;
+            return args;
         }
-        JsonObject templateSpec = templateArg.spec;
-        boolean hasTemplatePayload = templateSpec != null;
+        args.templateSpec = templateArg.spec;
+        args.hasTemplatePayload = args.templateSpec != null;
 
         // Report Data Composition Schema payload (dcs={dataSources/dataSets/parameters}): authored on a
         // Report FQN. When present, 'properties' is optional (the DCS is authored through its own surface,
@@ -389,106 +485,154 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         DcsArg dcsArg = parseDcsArg(params);
         if (dcsArg.error != null)
         {
-            return dcsArg.error;
+            args.error = dcsArg.error;
+            return args;
         }
-        JsonObject dcsSpec = dcsArg.spec;
-        boolean hasDcsPayload = dcsSpec != null;
+        args.dcsSpec = dcsArg.spec;
+        args.hasDcsPayload = args.dcsSpec != null;
 
-        if (properties.isEmpty() && !hasRolePayload && !hasContentPayload && !hasTemplatePayload
-            && !hasDcsPayload)
+        if (args.properties.isEmpty() && !args.hasRolePayload && !args.hasContentPayload
+            && !args.hasTemplatePayload && !args.hasDcsPayload)
         {
-            return ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
+            args.error = ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
                 + "set, e.g. [{name: 'comment', value: 'Goods'}]. For a Role FQN, provide 'rights', " //$NON-NLS-1$
                 + "'templates' or 'roleProperties' instead; for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
                 + "Catalog / Document / Subsystem FQN, provide 'content' instead; for a template FQN, " //$NON-NLS-1$
                 + "provide 'template' instead; for a Report FQN, provide 'dcs' instead.").toJson(); //$NON-NLS-1$
+            return args;
         }
 
         // 'ё'->'е' normalization is applied at the parse step to every localized-string / free-text
         // value being set (synonym / comment / title / ...), matching mdo-ru-name-unallowed-letter.
         // Rename is out of scope here, so there is no Name to normalize.
-        MdNameNormalizer.Report normReport = new MdNameNormalizer.Report(normalizeYo);
+        args.normReport = new MdNameNormalizer.Report(normalizeYo);
+        return args;
+    }
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
-        if (ctx.hasError())
+    /**
+     * Dispatches a FQN that addresses a FORM member: refuses a 'template' / 'dcs' payload up front
+     * (a form member is neither a spreadsheet template nor a Report, so the sibling payload is never
+     * silently dropped while the form branch reports success), then hands over to
+     * {@link #dispatchFormMember} (which symmetrically refuses the Role / membership 'content'
+     * payloads). Extracted verbatim from {@link #executeOnUiThread}.
+     */
+    private String dispatchFormMemberFqn(ProjectContext ctx, String normFqn,
+        FormElementWriter.FormMemberRef formRef, ModifyArgs args)
+    {
+        // A 'template' payload addressed to a FORM-member FQN is refused here (a form member is not a
+        // spreadsheet template), symmetric with the Role / content refusal dispatchFormMember already
+        // enforces, so the sibling payload is never silently dropped while the form branch reports
+        // success. The guard is at the call site to keep dispatchFormMember byte-unchanged.
+        if (args.hasTemplatePayload)
         {
-            return ctx.error;
+            return templateOnlyForTemplateFqnError(normFqn, "addresses a FORM member"); //$NON-NLS-1$
         }
-        Configuration config = ctx.config;
-
-        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
-
-        // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
-        // branch: form members live on the editable Form content model (a cross-model hop), not the
-        // mdclass tree. A Role / content payload addressed to a form member is refused there.
-        FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
-        if (formRef != null)
+        // Symmetrically, a 'dcs' payload addressed to a FORM member is refused (a form member is not a
+        // Report), so the sibling payload is never silently dropped while the form branch reports
+        // success.
+        if (args.hasDcsPayload)
         {
-            // A 'template' payload addressed to a FORM-member FQN is refused here (a form member is not a
-            // spreadsheet template), symmetric with the Role / content refusal dispatchFormMember already
-            // enforces, so the sibling payload is never silently dropped while the form branch reports
-            // success. The guard is at the call site to keep dispatchFormMember byte-unchanged.
-            if (hasTemplatePayload)
-            {
-                return templateOnlyForTemplateFqnError(normFqn, "addresses a FORM member"); //$NON-NLS-1$
-            }
-            // Symmetrically, a 'dcs' payload addressed to a FORM member is refused (a form member is not a
-            // Report), so the sibling payload is never silently dropped while the form branch reports
-            // success.
-            if (hasDcsPayload)
-            {
-                return dcsOnlyForReportFqnError(normFqn, "addresses a FORM member"); //$NON-NLS-1$
-            }
-            return dispatchFormMember(ctx, normFqn, formRef, properties, normReport, hasRolePayload,
-                hasContentPayload);
+            return dcsOnlyForReportFqnError(normFqn, "addresses a FORM member"); //$NON-NLS-1$
         }
+        return dispatchFormMember(ctx, normFqn, formRef, args.properties, args.normReport,
+            args.hasRolePayload, args.hasContentPayload);
+    }
 
-        // A SUBSYSTEM-content payload (content[] on a Subsystem FQN, possibly NESTED - e.g.
-        // 'Subsystem.Sales.Subsystem.Orders') is dispatched EARLY, before the generic single-segment
-        // resolver below: a subsystem's content list is edited through its own membership surface, and
-        // the shared SubsystemUtils.resolveByFqn is the only resolver that walks a nested (and bilingual)
-        // subsystem path. Scoped to a content payload so a subsystem FQN carrying only 'properties' still
-        // takes the normal generic-property path below (its 'content' generic property still REPLACES the
-        // whole list; the content[] payload here ADDS / REMOVES one member).
-        if (hasContentPayload && SubsystemUtils.isSubsystemTypeToken(firstToken(normFqn)))
+    /**
+     * Dispatches a SUBSYSTEM-content payload (content[] on a Subsystem FQN, possibly NESTED - e.g.
+     * 'Subsystem.Sales.Subsystem.Orders') BEFORE the generic single-segment resolver: a subsystem's
+     * content list is edited through its own membership surface, and the shared
+     * SubsystemUtils.resolveByFqn is the only resolver that walks a nested (and bilingual) subsystem
+     * path. Scoped to a content payload so a subsystem FQN carrying only 'properties' still takes
+     * the normal generic-property path (its 'content' generic property still REPLACES the whole
+     * list; the content[] payload here ADDS / REMOVES one member). Returns {@code null} when the
+     * request is not a subsystem content change, so the caller continues down the normal path.
+     * Extracted verbatim from {@link #executeOnUiThread}.
+     */
+    private String dispatchSubsystemContentPayload(ProjectContext ctx, String normFqn, ModifyArgs args)
+    {
+        if (!args.hasContentPayload || !SubsystemUtils.isSubsystemTypeToken(firstToken(normFqn)))
         {
-            Subsystem subsystem = SubsystemUtils.resolveByFqn(config, normFqn);
-            if (subsystem == null)
-            {
-                return ToolResult.error("Subsystem not found: " + fqn + ". Use 'Subsystem.Name' for a " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "top subsystem or 'Subsystem.Parent.Subsystem.Child' for a nested one (the type " //$NON-NLS-1$
-                    + "token may be English or Russian). Use get_metadata_objects or list_subsystems to " //$NON-NLS-1$
-                    + "find an FQN.").toJson(); //$NON-NLS-1$
-            }
-            // A 'template' payload addressed to a Subsystem FQN is refused here (a subsystem is not a
-            // spreadsheet template), so a template payload combined with a subsystem content[] payload is
-            // never silently dropped. The guard is at the call site to keep modifySubsystemContent
-            // byte-unchanged.
-            if (hasTemplatePayload)
-            {
-                return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
-            }
-            // Symmetrically, a 'dcs' payload addressed to a Subsystem FQN is refused (a subsystem is not a
-            // Report), so a dcs payload combined with a subsystem content[] payload is never silently
-            // dropped.
-            if (hasDcsPayload)
-            {
-                return dcsOnlyForReportFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
-            }
-            return modifySubsystemContent(ctx, normFqn, subsystem, properties, content, hasRolePayload);
+            return null;
+        }
+        Subsystem subsystem = SubsystemUtils.resolveByFqn(ctx.config, normFqn);
+        if (subsystem == null)
+        {
+            return ToolResult.error("Subsystem not found: " + args.fqn + ". Use 'Subsystem.Name' for a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "top subsystem or 'Subsystem.Parent.Subsystem.Child' for a nested one (the type " //$NON-NLS-1$
+                + "token may be English or Russian). Use get_metadata_objects or list_subsystems to " //$NON-NLS-1$
+                + "find an FQN.").toJson(); //$NON-NLS-1$
+        }
+        // A 'template' payload addressed to a Subsystem FQN is refused here (a subsystem is not a
+        // spreadsheet template), so a template payload combined with a subsystem content[] payload is
+        // never silently dropped. The guard is at the call site to keep modifySubsystemContent
+        // byte-unchanged.
+        if (args.hasTemplatePayload)
+        {
+            return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
+        }
+        // Symmetrically, a 'dcs' payload addressed to a Subsystem FQN is refused (a subsystem is not a
+        // Report), so a dcs payload combined with a subsystem content[] payload is never silently
+        // dropped.
+        if (args.hasDcsPayload)
+        {
+            return dcsOnlyForReportFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
+        }
+        return modifySubsystemContent(ctx, normFqn, subsystem, args.properties, args.content,
+            args.hasRolePayload);
+    }
+
+    /**
+     * The resolved modify target (built by {@link #resolveModifyTarget}): the resolved metadata node
+     * plus the FQN to use downstream (the yo-normalized form when the fallback resolved), or a ready
+     * JSON {@link #error} when the node was not found. Exactly one of {@code node} / {@code error}
+     * is non-null.
+     */
+    private static final class ResolvedTarget
+    {
+        /** A ready {@link ToolResult#error} JSON when the node was not found, else {@code null}. */
+        final String error;
+        /** The resolved node (with a non-null {@code object}), or {@code null} on error. */
+        final MetadataNodeResolver.MetadataNode node;
+        /** The FQN to use downstream, or {@code null} on error. */
+        final String normFqn;
+
+        private ResolvedTarget(String error, MetadataNodeResolver.MetadataNode node, String normFqn)
+        {
+            this.error = error;
+            this.node = node;
+            this.normFqn = normFqn;
         }
 
-        // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
-        // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
-        // would miss the stored name — the resolver retries the normalized FQN.
+        static ResolvedTarget notFound(String error)
+        {
+            return new ResolvedTarget(error, null, null);
+        }
+
+        static ResolvedTarget of(MetadataNodeResolver.MetadataNode node, String normFqn)
+        {
+            return new ResolvedTarget(null, node, normFqn);
+        }
+    }
+
+    /**
+     * Resolves the modify target with the exact-first / yo-fallback strategy (create_metadata
+     * normalizes 'yo'->'ye' in names by default, so the resolver retries the normalized FQN when the
+     * exact one misses). Returns a {@link ResolvedTarget} carrying the resolved node + the FQN to
+     * use downstream, or a ready JSON {@link ResolvedTarget#error} when the node does not exist.
+     * Extracted verbatim from {@link #executeOnUiThread}.
+     */
+    private static ResolvedTarget resolveModifyTarget(Configuration config, String fqn, String normFqn)
+    {
         MetadataNodeResolver.ResolvedNode resolved =
             MetadataNodeResolver.resolveExistingWithYoFallback(config, normFqn);
         MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null || node.object == null)
         {
-            return ToolResult.error("Node not found: " + fqn + ". Use 'Type.Name' for a top object or " //$NON-NLS-1$ //$NON-NLS-2$
-                + "'Type.Name.Kind.Name' for a member. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
-                + MetadataNodeResolver.yoNotFoundHint(normFqn)).toJson();
+            return ResolvedTarget.notFound(
+                ToolResult.error("Node not found: " + fqn + ". Use 'Type.Name' for a top object or " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'Type.Name.Kind.Name' for a member. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
+                    + MetadataNodeResolver.yoNotFoundHint(normFqn)).toJson());
         }
         if (resolved.yoFallback)
         {
@@ -497,25 +641,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + resolved.fqn + "'"); //$NON-NLS-1$
             normFqn = resolved.fqn;
         }
-        MdObject target = node.object;
+        return ResolvedTarget.of(node, normFqn);
+    }
 
+    /**
+     * Dispatches the payload surfaces against the resolved target, in the fixed dcs -> template ->
+     * role -> membership-content order (each guard refuses its payload on a wrong-kind FQN, so a
+     * sibling payload is never silently dropped). Returns the branch result, or {@code null} when no
+     * payload surface applies and the generic 'properties' path should run. Extracted verbatim from
+     * {@link #executeOnUiThread}.
+     */
+    private String dispatchPayloads(ProjectContext ctx, String normFqn, MdObject target, ModifyArgs args)
+    {
         // A `dcs` payload on a Report FQN authors the report's Data Composition Schema; the same payload on
         // a NON-Report FQN is refused. Dispatched BEFORE the template / role / content path so a dcs
         // payload combined with another payload is refused here (the dcsMixError guard) - never silently
         // dropped - and a dcs+template mix reports the dcs-centric error rather than the generic
-        // template-not-valid one. Entered only when a dcs payload is present.
-        if (hasDcsPayload)
+        // template-not-valid one. Null means there is no dcs payload.
+        String dcsPayloadResult = dispatchDcsPayload(ctx, normFqn, target, args);
+        if (dcsPayloadResult != null)
         {
-            if (!(target instanceof Report))
-            {
-                return dcsOnlyForReportFqnError(normFqn, ERR_IS_A + target.eClass().getName());
-            }
-            String mixError = dcsMixError(properties, content, hasRolePayload, hasTemplatePayload);
-            if (mixError != null)
-            {
-                return mixError;
-            }
-            return modifyDcsContent(ctx, normFqn, (Report)target, dcsSpec);
+            return dcsPayloadResult;
         }
 
         // A `template` spreadsheet-content payload on a BasicTemplate FQN is authored through the moxel
@@ -524,8 +670,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // non-template FQN) or inside modifyTemplateContent (on a template FQN, the mixing guard) - never
         // silently dropped. Returns null when there is no template payload, so the role / content /
         // generic path below still runs.
-        String templatePayloadResult = dispatchTemplatePayload(ctx, normFqn, target, properties, content,
-            hasRolePayload, templateSpec);
+        String templatePayloadResult = dispatchTemplatePayload(ctx, normFqn, target, args.properties,
+            args.content, args.hasRolePayload, args.templateSpec);
         if (templatePayloadResult != null)
         {
             return templatePayloadResult;
@@ -534,8 +680,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // A ROLE FQN carrying a role payload (rights / templates / roleProperties) is dispatched to the
         // rights writer; the same payload on a NON-Role FQN is refused. Returns null only when there is
         // no role payload, so the content / generic property path below still runs.
-        String rolePayloadResult = dispatchRolePayload(ctx, normFqn, target, properties,
-            rolePayloadRights, rolePayloadTemplates, roleProperties, hasRolePayload);
+        String rolePayloadResult = dispatchRolePayload(ctx, normFqn, target, args.properties,
+            args.rolePayloadRights, args.rolePayloadTemplates, args.roleProperties,
+            args.hasRolePayload);
         if (rolePayloadResult != null)
         {
             return rolePayloadResult;
@@ -544,14 +691,37 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // A FQN carrying a content payload (content[]) is dispatched by the resolved object's KIND to
         // its dedicated membership writer (or refused for an unsupported kind); the branch always
         // returns.
-        if (hasContentPayload)
+        if (args.hasContentPayload)
         {
-            return dispatchContentPayload(ctx, normFqn, target, properties, content);
+            return dispatchContentPayload(ctx, normFqn, target, args.properties, args.content);
         }
+        return null;
+    }
 
-        // The remaining case: a generic 'properties' change applied through the BM write boundary.
-        return applyGenericPropertyChanges(ctx, projectName, normFqn, node, target, properties,
-            normReport);
+    /**
+     * Dispatches a {@code dcs} payload: a Report FQN carrying the payload goes to
+     * {@link #modifyDcsContent} (after the no-mixing guard); the same payload on a NON-Report FQN is
+     * refused. Returns {@code null} when there is NO dcs payload. Extracted verbatim from
+     * {@link #executeOnUiThread}.
+     */
+    private String dispatchDcsPayload(ProjectContext ctx, String normFqn, MdObject target,
+        ModifyArgs args)
+    {
+        if (!args.hasDcsPayload)
+        {
+            return null;
+        }
+        if (!(target instanceof Report))
+        {
+            return dcsOnlyForReportFqnError(normFqn, ERR_IS_A + target.eClass().getName());
+        }
+        String mixError = dcsMixError(args.properties, args.content, args.hasRolePayload,
+            args.hasTemplatePayload);
+        if (mixError != null)
+        {
+            return mixError;
+        }
+        return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec);
     }
 
     /**
@@ -721,55 +891,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return nonSpreadsheetError;
         }
 
-        // A common template (Template.X / CommonTemplate.X) is its OWN top BM object; an object-owned
-        // template (Catalog.Y.Template.Z) is INLINE in its owner's .mdo, so it is NOT a top object. Its
-        // stable BM id still re-fetches inside the tx (getObjectById resolves any managed object, not only
-        // top ones), but the force-export target must be the TOP object's canonical (all-English) FQN - the
-        // template itself when it is top, else the OWNER top object (bmGetTopObject) whose .mdo + sibling
-        // .mxlx carry the content. Mirrors RoleRightsWriter's top climb - self when already top, else
-        // bmGetTopObject. A bmGetFqn read is legal only on a top object, so it happens on `topObject`, never on a non-top
-        // template. A null top (should not happen for a resolved template) fails LOUD, nothing written.
-        IBmObject templateBm = (IBmObject)template;
-        final long templateBmId = templateBm.bmGetId();
-        IBmObject topObject = templateBm.bmIsTop() ? templateBm : templateBm.bmGetTopObject();
-        if (topObject == null)
+        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn);
+        if (writeCtx.error != null)
         {
-            return ToolResult.error("Cannot resolve the on-disk file to export for template '" + normFqn //$NON-NLS-1$
-                + "': its owning top-level object could not be found; report it with the template FQN.") //$NON-NLS-1$
-                    .toJson();
-        }
-        final String exportFqn = topObject.bmGetFqn();
-
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
-        {
-            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
-        }
-        IBmModel bmModel = bmModelManager.getModel(ctx.project);
-        if (bmModel == null)
-        {
-            return ToolResult.error(ERR_NO_BM_MODEL
-                + ctx.project.getName()).toJson();
-        }
-
-        // Drives the canonical (project-aware) <languageSettings> block when an EMPTY template's content
-        // is materialized inside the tx (a freshly created template has getTemplate()==null). Resolved
-        // best-effort with the SAME manager the force-export below uses; a null project still yields a
-        // templateMode=true document (only the languageSettings block is skipped, which the platform's
-        // moxel reader null-guards). Effectively final so it is captured by the write lambda.
-        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-        final IDtProject dtProject =
-            dtProjectManager == null ? null : dtProjectManager.getDtProject(ctx.project);
-
-        // The moxel content is a transient @ExternalProperty of the template - its own .mxlx resource, NOT
-        // an inline BM reference. A freshly-materialized content doc must be ATTACHED as a BM top object
-        // under its generated external-property FQN (the same machinery FormElementWriter uses for a form's
-        // content), else committing the write fails with "Failed to persist reference value". Effectively
-        // final so it is captured by the write lambda.
-        ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        if (fqnGenerator == null)
-        {
-            return ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
+            return writeCtx.error;
         }
 
         // Captured inside the write: the moxel content's OWN canonical FQN (a template's content IS a
@@ -779,29 +904,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         SpreadsheetTemplateWriter.Result result;
         try
         {
-            result = BmTransactions.write(bmModel, "ModifyTemplateContent", (tx, pm) -> //$NON-NLS-1$
-            {
-                Object inTx = tx.getObjectById(templateBmId);
-                if (!(inTx instanceof BasicTemplate))
-                {
-                    throw new TemplateWriteException(ToolResult.error("The template could not be " //$NON-NLS-1$
-                        + "resolved inside the transaction.").toJson());
-                }
-                BasicTemplate txTemplate = (BasicTemplate)inTx;
-                SpreadsheetDocument doc =
-                    resolveSpreadsheetContent(txTemplate, tx, dtProject, fqnGenerator, normFqn);
-                // The content doc is now an attached BM top object (pre-existing on disk, or freshly
-                // materialized + attachTopObject'd inside resolveSpreadsheetContent), so its own resource
-                // FQN resolves and is force-exported alongside the template so the sibling .mxlx drains.
-                contentFqnHolder[0] = contentResourceExportFqn(doc);
-                SpreadsheetTemplateWriter.Result applied = SpreadsheetTemplateWriter.apply(doc, templateSpec);
-                if (applied.hasError())
-                {
-                    // Roll the whole write back so a validation failure leaves nothing on disk.
-                    throw new TemplateWriteException(applied.error);
-                }
-                return applied;
-            });
+            result = BmTransactions.write(writeCtx.bmModel, "ModifyTemplateContent", //$NON-NLS-1$
+                (tx, pm) -> applyTemplateSpec(tx, writeCtx, normFqn, templateSpec, contentFqnHolder));
         }
         catch (TemplateWriteException e)
         {
@@ -821,14 +925,139 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // alone would NOT drain it - so export the content resource's OWN FQN too, guarding against the
         // #239-class silent-false-success (persisted=true while the authored cells never reach disk).
         List<String> exportFqns = new ArrayList<>();
-        exportFqns.add(exportFqn);
+        exportFqns.add(writeCtx.exportFqn);
         String contentFqn = contentFqnHolder[0];
-        if (contentFqn != null && !contentFqn.equals(exportFqn))
+        if (contentFqn != null && !contentFqn.equals(writeCtx.exportFqn))
         {
             exportFqns.add(contentFqn);
         }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         return buildTemplateResult(normFqn, result, persisted);
+    }
+
+    /**
+     * Everything the template-content write boundary needs (built by
+     * {@link #resolveTemplateWriteContext}): the template's BM id for the in-tx re-fetch, the TOP
+     * object's canonical FQN to force-export, the BM model, the (nullable) {@link IDtProject}
+     * driving the canonical languageSettings block, and the external-property FQN generator. When
+     * {@link #error} is non-null (a ready JSON error), the other fields must not be used.
+     */
+    private static final class TemplateWriteContext
+    {
+        /** A ready {@link ToolResult#error} JSON when a service / export target is missing, else {@code null}. */
+        String error;
+        /** The template's stable BM id, re-fetched inside the write tx. */
+        long templateBmId;
+        /** The TOP object's canonical (all-English) FQN to force-export after the commit. */
+        String exportFqn;
+        IBmModel bmModel;
+        /** Nullable: a null project still yields a templateMode=true document. */
+        IDtProject dtProject;
+        ITopObjectFqnGenerator fqnGenerator;
+    }
+
+    /**
+     * Resolves everything the template-content write needs up front: the template's BM id, the TOP
+     * object's canonical FQN to force-export, the project's BM model, the (nullable)
+     * {@link IDtProject} and the external-property FQN generator. Returns a
+     * {@link TemplateWriteContext} whose non-null {@code error} (a ready JSON error) reports a
+     * missing service / unresolvable export target. Extracted verbatim from
+     * {@link #modifyTemplateContent}.
+     */
+    private static TemplateWriteContext resolveTemplateWriteContext(ProjectContext ctx,
+        BasicTemplate template, String normFqn)
+    {
+        TemplateWriteContext writeCtx = new TemplateWriteContext();
+
+        // A common template (Template.X / CommonTemplate.X) is its OWN top BM object; an object-owned
+        // template (Catalog.Y.Template.Z) is INLINE in its owner's .mdo, so it is NOT a top object. Its
+        // stable BM id still re-fetches inside the tx (getObjectById resolves any managed object, not only
+        // top ones), but the force-export target must be the TOP object's canonical (all-English) FQN - the
+        // template itself when it is top, else the OWNER top object (bmGetTopObject) whose .mdo + sibling
+        // .mxlx carry the content. Mirrors RoleRightsWriter's top climb - self when already top, else
+        // bmGetTopObject. A bmGetFqn read is legal only on a top object, so it happens on `topObject`, never on a non-top
+        // template. A null top (should not happen for a resolved template) fails LOUD, nothing written.
+        IBmObject templateBm = (IBmObject)template;
+        writeCtx.templateBmId = templateBm.bmGetId();
+        IBmObject topObject = templateBm.bmIsTop() ? templateBm : templateBm.bmGetTopObject();
+        if (topObject == null)
+        {
+            writeCtx.error = ToolResult.error("Cannot resolve the on-disk file to export for template '" + normFqn //$NON-NLS-1$
+                + "': its owning top-level object could not be found; report it with the template FQN.") //$NON-NLS-1$
+                    .toJson();
+            return writeCtx;
+        }
+        writeCtx.exportFqn = topObject.bmGetFqn();
+
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (bmModelManager == null)
+        {
+            writeCtx.error = ToolResult.error(ERR_NO_BM_MANAGER).toJson();
+            return writeCtx;
+        }
+        writeCtx.bmModel = bmModelManager.getModel(ctx.project);
+        if (writeCtx.bmModel == null)
+        {
+            writeCtx.error = ToolResult.error(ERR_NO_BM_MODEL
+                + ctx.project.getName()).toJson();
+            return writeCtx;
+        }
+
+        // Drives the canonical (project-aware) <languageSettings> block when an EMPTY template's content
+        // is materialized inside the tx (a freshly created template has getTemplate()==null). Resolved
+        // best-effort with the SAME manager the force-export below uses; a null project still yields a
+        // templateMode=true document (only the languageSettings block is skipped, which the platform's
+        // moxel reader null-guards). Carried on the write context captured by the write lambda.
+        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
+        writeCtx.dtProject =
+            dtProjectManager == null ? null : dtProjectManager.getDtProject(ctx.project);
+
+        // The moxel content is a transient @ExternalProperty of the template - its own .mxlx resource, NOT
+        // an inline BM reference. A freshly-materialized content doc must be ATTACHED as a BM top object
+        // under its generated external-property FQN (the same machinery FormElementWriter uses for a form's
+        // content), else committing the write fails with "Failed to persist reference value". Carried on
+        // the write context captured by the write lambda.
+        writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+        if (writeCtx.fqnGenerator == null)
+        {
+            writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
+            return writeCtx;
+        }
+        return writeCtx;
+    }
+
+    /**
+     * The template-content write-transaction body: re-fetches the template by its BM id, resolves
+     * (or materializes + attaches) its content {@link SpreadsheetDocument}, records the content
+     * resource's OWN export FQN into {@code contentFqnHolder}, and applies the payload via
+     * {@link SpreadsheetTemplateWriter}. Throws a {@link TemplateWriteException} carrying a ready
+     * JSON error on a resolution / validation failure, so the surrounding tx rolls back with no
+     * partial mutation. Extracted verbatim from the write lambda of {@link #modifyTemplateContent}.
+     */
+    private static SpreadsheetTemplateWriter.Result applyTemplateSpec(IBmTransaction tx,
+        TemplateWriteContext writeCtx, String normFqn, JsonObject templateSpec,
+        String[] contentFqnHolder)
+    {
+        Object inTx = tx.getObjectById(writeCtx.templateBmId);
+        if (!(inTx instanceof BasicTemplate))
+        {
+            throw new TemplateWriteException(ToolResult.error("The template could not be " //$NON-NLS-1$
+                + "resolved inside the transaction.").toJson());
+        }
+        BasicTemplate txTemplate = (BasicTemplate)inTx;
+        SpreadsheetDocument doc =
+            resolveSpreadsheetContent(txTemplate, tx, writeCtx.dtProject, writeCtx.fqnGenerator, normFqn);
+        // The content doc is now an attached BM top object (pre-existing on disk, or freshly
+        // materialized + attachTopObject'd inside resolveSpreadsheetContent), so its own resource
+        // FQN resolves and is force-exported alongside the template so the sibling .mxlx drains.
+        contentFqnHolder[0] = contentResourceExportFqn(doc);
+        SpreadsheetTemplateWriter.Result applied = SpreadsheetTemplateWriter.apply(doc, templateSpec);
+        if (applied.hasError())
+        {
+            // Roll the whole write back so a validation failure leaves nothing on disk.
+            throw new TemplateWriteException(applied.error);
+        }
+        return applied;
     }
 
     /**
@@ -1159,53 +1388,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         IBmObject reportBm = (IBmObject)report;
         final long reportBmId = reportBm.bmGetId();
 
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
+        DcsWriteContext writeCtx = resolveDcsWriteContext(ctx);
+        if (writeCtx.error != null)
         {
-            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
+            return writeCtx.error;
         }
-        IBmModel bmModel = bmModelManager.getModel(ctx.project);
-        if (bmModel == null)
-        {
-            return ToolResult.error(ERR_NO_BM_MODEL
-                + ctx.project.getName()).toJson();
-        }
-
-        // The DCS content is a transient @ExternalProperty of the DCS template (its own .dcs resource); a
-        // freshly-materialized content must be ATTACHED as a BM top object under its generated
-        // external-property FQN, so the generator is needed inside the write.
-        ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        if (fqnGenerator == null)
-        {
-            return ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
-        }
-
-        // The report may have NO DCS template yet - the first `dcs` write lazily materializes it through
-        // the parent-aware model factory, so the factory + platform version are needed inside the write.
-        final IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = v8ProjectManager == null ? null : v8ProjectManager.getProject(ctx.project);
-        if (factory == null || v8Project == null)
-        {
-            return ToolResult.error("EDT services unavailable (model factory / project) for project: " //$NON-NLS-1$
-                + ctx.project.getName()).toJson();
-        }
-        final Version version = v8Project.getVersion();
-        // A parameter's `valueType` is built into an mcore TypeDescription through the shared S2 builder
-        // (same path as the generic `type` property, prepareTypeDescription). Supplied to DcsWriter as a
-        // TypeResolver so the pure writer never touches the platform type provider directly.
-        final Configuration dcsConfig = ctx.config;
-        final DcsWriter.TypeResolver typeResolver = valueTypeSpec -> {
-            if (version == null)
-            {
-                return DcsWriter.TypeResolution.failed(
-                    "Cannot resolve the platform version needed to build the parameter type."); //$NON-NLS-1$
-            }
-            MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(valueTypeSpec, dcsConfig, version);
-            return tr.error != null
-                ? DcsWriter.TypeResolution.failed(tr.error)
-                : DcsWriter.TypeResolution.of(tr.typeDescription);
-        };
 
         // Captured inside the write: the on-disk export targets. exportFqnHolder = the DCS template's TOP
         // object (the Report), contentFqnHolder = the DCS content's OWN resource FQN (the .dcs).
@@ -1214,41 +1401,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         DcsWriter.Result result;
         try
         {
-            result = BmTransactions.write(bmModel, "ModifyDcsContent", (tx, pm) -> //$NON-NLS-1$
-            {
-                Object inTx = tx.getObjectById(reportBmId);
-                if (!(inTx instanceof Report))
-                {
-                    throw new TemplateWriteException(ToolResult.error("The report could not be resolved " //$NON-NLS-1$
-                        + "inside the transaction.").toJson()); //$NON-NLS-1$
-                }
-                Report txReport = (Report)inTx;
-                BasicTemplate dcsTemplate = findOrCreateDcsTemplate(txReport, factory, version);
-                // A report DCS template is inline in the report's .mdo (not a top object), so its export
-                // target is the OWNER top object (the Report), the same top climb as modifyTemplateContent -
-                // a bmGetFqn read is legal only on a top object.
-                IBmObject templateBm = (IBmObject)dcsTemplate;
-                IBmObject topObject = templateBm.bmIsTop() ? templateBm : templateBm.bmGetTopObject();
-                if (topObject == null)
-                {
-                    throw new TemplateWriteException(ToolResult.error("Cannot resolve the on-disk file to " //$NON-NLS-1$
-                        + "export for the DCS of report '" + normFqn //$NON-NLS-1$
-                        + "'; report it with the report FQN.").toJson()); //$NON-NLS-1$
-                }
-                exportFqnHolder[0] = topObject.bmGetFqn();
-                DataCompositionSchema schema = resolveDcsContent(dcsTemplate, tx, fqnGenerator, normFqn);
-                // The content is now an attached BM top object (pre-existing, or freshly attached inside
-                // resolveDcsContent), so its own resource FQN resolves and is force-exported alongside the
-                // template so the sibling .dcs drains.
-                contentFqnHolder[0] = contentResourceExportFqn(schema);
-                DcsWriter.Result applied = DcsWriter.apply(schema, dcsSpec, typeResolver);
-                if (applied.hasError())
-                {
-                    // Roll the whole write back so a validation failure leaves nothing on disk.
-                    throw new TemplateWriteException(applied.error);
-                }
-                return applied;
-            });
+            result = BmTransactions.write(writeCtx.bmModel, "ModifyDcsContent", //$NON-NLS-1$
+                (tx, pm) -> applyDcsSpec(tx, reportBmId, writeCtx, normFqn, dcsSpec, exportFqnHolder,
+                    contentFqnHolder));
         }
         catch (TemplateWriteException e)
         {
@@ -1278,6 +1433,141 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean persisted =
             !exportFqns.isEmpty() && BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         return buildDcsResult(normFqn, result, persisted);
+    }
+
+    /**
+     * Everything the DCS write boundary needs (built by {@link #resolveDcsWriteContext}): the BM
+     * model, the external-property FQN generator, the parent-aware model factory + platform version,
+     * and the {@code valueType} resolver bridging {@link DcsWriter} to the shared type builder. When
+     * {@link #error} is non-null (a ready JSON error), the other fields must not be used.
+     */
+    private static final class DcsWriteContext
+    {
+        /** A ready {@link ToolResult#error} JSON when an EDT service is missing, else {@code null}. */
+        String error;
+        IBmModel bmModel;
+        ITopObjectFqnGenerator fqnGenerator;
+        IModelObjectFactory factory;
+        /** The project's platform version; may be {@code null} (the type resolver then fails actionably). */
+        Version version;
+        DcsWriter.TypeResolver typeResolver;
+    }
+
+    /**
+     * Resolves everything the DCS write boundary needs up front (the BM model, the external-property
+     * FQN generator, the model factory + platform version, the {@code valueType} resolver). Returns a
+     * {@link DcsWriteContext} whose non-null {@code error} (a ready JSON error) reports a missing EDT
+     * service. Extracted verbatim from {@link #modifyDcsContent}.
+     */
+    private static DcsWriteContext resolveDcsWriteContext(ProjectContext ctx)
+    {
+        DcsWriteContext writeCtx = new DcsWriteContext();
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (bmModelManager == null)
+        {
+            writeCtx.error = ToolResult.error(ERR_NO_BM_MANAGER).toJson();
+            return writeCtx;
+        }
+        writeCtx.bmModel = bmModelManager.getModel(ctx.project);
+        if (writeCtx.bmModel == null)
+        {
+            writeCtx.error = ToolResult.error(ERR_NO_BM_MODEL
+                + ctx.project.getName()).toJson();
+            return writeCtx;
+        }
+
+        // The DCS content is a transient @ExternalProperty of the DCS template (its own .dcs resource); a
+        // freshly-materialized content must be ATTACHED as a BM top object under its generated
+        // external-property FQN, so the generator is needed inside the write.
+        writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+        if (writeCtx.fqnGenerator == null)
+        {
+            writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
+            return writeCtx;
+        }
+
+        // The report may have NO DCS template yet - the first `dcs` write lazily materializes it through
+        // the parent-aware model factory, so the factory + platform version are needed inside the write.
+        writeCtx.factory = Activator.getDefault().getModelObjectFactory();
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = v8ProjectManager == null ? null : v8ProjectManager.getProject(ctx.project);
+        if (writeCtx.factory == null || v8Project == null)
+        {
+            writeCtx.error = ToolResult.error("EDT services unavailable (model factory / project) for project: " //$NON-NLS-1$
+                + ctx.project.getName()).toJson();
+            return writeCtx;
+        }
+        writeCtx.version = v8Project.getVersion();
+        writeCtx.typeResolver = dcsTypeResolver(ctx.config, writeCtx.version);
+        return writeCtx;
+    }
+
+    /**
+     * Builds the {@link DcsWriter.TypeResolver} the DCS write uses for a parameter's
+     * {@code valueType}. Extracted verbatim from {@link #modifyDcsContent}.
+     */
+    private static DcsWriter.TypeResolver dcsTypeResolver(Configuration dcsConfig, Version version)
+    {
+        // A parameter's `valueType` is built into an mcore TypeDescription through the shared S2 builder
+        // (same path as the generic `type` property, prepareTypeDescription). Supplied to DcsWriter as a
+        // TypeResolver so the pure writer never touches the platform type provider directly.
+        return valueTypeSpec -> {
+            if (version == null)
+            {
+                return DcsWriter.TypeResolution.failed(
+                    "Cannot resolve the platform version needed to build the parameter type."); //$NON-NLS-1$
+            }
+            MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(valueTypeSpec, dcsConfig, version);
+            return tr.error != null
+                ? DcsWriter.TypeResolution.failed(tr.error)
+                : DcsWriter.TypeResolution.of(tr.typeDescription);
+        };
+    }
+
+    /**
+     * The DCS write-transaction body: re-fetches the Report by its BM id, finds-or-materializes its
+     * main DCS template, records the export targets into {@code exportFqnHolder} /
+     * {@code contentFqnHolder}, resolves the content {@link DataCompositionSchema} and applies the
+     * payload via {@link DcsWriter}. Throws a {@link TemplateWriteException} carrying a ready JSON
+     * error on a resolution / validation failure, so the surrounding tx rolls back with no partial
+     * mutation. Extracted verbatim from the write lambda of {@link #modifyDcsContent}.
+     */
+    private static DcsWriter.Result applyDcsSpec(IBmTransaction tx, long reportBmId,
+        DcsWriteContext writeCtx, String normFqn, JsonObject dcsSpec, String[] exportFqnHolder,
+        String[] contentFqnHolder)
+    {
+        Object inTx = tx.getObjectById(reportBmId);
+        if (!(inTx instanceof Report))
+        {
+            throw new TemplateWriteException(ToolResult.error("The report could not be resolved " //$NON-NLS-1$
+                + "inside the transaction.").toJson()); //$NON-NLS-1$
+        }
+        Report txReport = (Report)inTx;
+        BasicTemplate dcsTemplate = findOrCreateDcsTemplate(txReport, writeCtx.factory, writeCtx.version);
+        // A report DCS template is inline in the report's .mdo (not a top object), so its export
+        // target is the OWNER top object (the Report), the same top climb as modifyTemplateContent -
+        // a bmGetFqn read is legal only on a top object.
+        IBmObject templateBm = (IBmObject)dcsTemplate;
+        IBmObject topObject = templateBm.bmIsTop() ? templateBm : templateBm.bmGetTopObject();
+        if (topObject == null)
+        {
+            throw new TemplateWriteException(ToolResult.error("Cannot resolve the on-disk file to " //$NON-NLS-1$
+                + "export for the DCS of report '" + normFqn //$NON-NLS-1$
+                + "'; report it with the report FQN.").toJson()); //$NON-NLS-1$
+        }
+        exportFqnHolder[0] = topObject.bmGetFqn();
+        DataCompositionSchema schema = resolveDcsContent(dcsTemplate, tx, writeCtx.fqnGenerator, normFqn);
+        // The content is now an attached BM top object (pre-existing, or freshly attached inside
+        // resolveDcsContent), so its own resource FQN resolves and is force-exported alongside the
+        // template so the sibling .dcs drains.
+        contentFqnHolder[0] = contentResourceExportFqn(schema);
+        DcsWriter.Result applied = DcsWriter.apply(schema, dcsSpec, writeCtx.typeResolver);
+        if (applied.hasError())
+        {
+            // Roll the whole write back so a validation failure leaves nothing on disk.
+            throw new TemplateWriteException(applied.error);
+        }
+        return applied;
     }
 
     /**
@@ -3269,38 +3559,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case LOCALIZED_STRING:
                 return prepareLocalized(config, name, value, prop, info, out, normReport);
             case ENUM:
-            {
-                EEnumLiteral literal = MetadataPropertyIntrospector.resolveEnumLiteral(info.feature, value);
-                if (literal == null)
-                {
-                    return ToolResult.error("'" + value + "' is not a valid value for '" + name //$NON-NLS-1$ //$NON-NLS-2$
-                        + "'. Allowed: " + String.join(", ", info.allowedValues) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                out.add(PreparedChange.scalar(info.feature, literal.getInstance()));
-                return null;
-            }
+                return prepareEnum(name, value, info, out);
             case BOOLEAN:
-            {
-                Boolean b = parseBoolean(value);
-                if (b == null)
-                {
-                    return ToolResult.error("'" + value + "' is not a valid boolean for '" + name //$NON-NLS-1$ //$NON-NLS-2$
-                        + "'. Use true or false.").toJson(); //$NON-NLS-1$
-                }
-                out.add(PreparedChange.scalar(info.feature, b));
-                return null;
-            }
+                return prepareBoolean(name, value, info, out);
             case INTEGER:
-            {
-                Integer i = parseInteger(value);
-                if (i == null)
-                {
-                    return ToolResult.error("'" + value + "' is not a valid integer for '" + name //$NON-NLS-1$ //$NON-NLS-2$
-                        + "'.").toJson(); //$NON-NLS-1$
-                }
-                out.add(PreparedChange.scalar(info.feature, i));
-                return null;
-            }
+                return prepareInteger(name, value, info, out);
             case TYPE_DESCRIPTION:
                 return prepareTypeDescription(config, version, name, prop, info, out);
             case REFERENCE:
@@ -3311,14 +3574,80 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareStyleValue(name, prop, target, info, out);
             case STRING:
             default:
-                if (value == null || value.isEmpty())
-                {
-                    return requireValueError(name);
-                }
-                out.add(PreparedChange.scalar(info.feature,
-                    normalizeStringPropertyValue(name, value, normReport)));
-                return null;
+                return prepareString(name, value, info, out, normReport);
         }
+    }
+
+    /**
+     * Validates an {@code ENUM} property value against the feature's literals and, on success,
+     * appends the prepared scalar change to {@code out}. Returns a JSON error listing the allowed
+     * values on failure, or {@code null} on success. Extracted verbatim from {@link #prepare}.
+     */
+    private static String prepareEnum(String name, String value, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        EEnumLiteral literal = MetadataPropertyIntrospector.resolveEnumLiteral(info.feature, value);
+        if (literal == null)
+        {
+            return ToolResult.error("'" + value + "' is not a valid value for '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Allowed: " + String.join(", ", info.allowedValues) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        out.add(PreparedChange.scalar(info.feature, literal.getInstance()));
+        return null;
+    }
+
+    /**
+     * Validates a {@code BOOLEAN} property value and, on success, appends the prepared scalar
+     * change to {@code out}. Returns a JSON error on a non-boolean value, or {@code null} on
+     * success. Extracted verbatim from {@link #prepare}.
+     */
+    private static String prepareBoolean(String name, String value, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        Boolean b = parseBoolean(value);
+        if (b == null)
+        {
+            return ToolResult.error("'" + value + "' is not a valid boolean for '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Use true or false.").toJson(); //$NON-NLS-1$
+        }
+        out.add(PreparedChange.scalar(info.feature, b));
+        return null;
+    }
+
+    /**
+     * Validates an {@code INTEGER} property value and, on success, appends the prepared scalar
+     * change to {@code out}. Returns a JSON error on a non-integer value, or {@code null} on
+     * success. Extracted verbatim from {@link #prepare}.
+     */
+    private static String prepareInteger(String name, String value, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        Integer i = parseInteger(value);
+        if (i == null)
+        {
+            return ToolResult.error("'" + value + "' is not a valid integer for '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                + "'.").toJson(); //$NON-NLS-1$
+        }
+        out.add(PreparedChange.scalar(info.feature, i));
+        return null;
+    }
+
+    /**
+     * Validates a plain {@code STRING} property (the default value kind) and, on success, appends
+     * the prepared scalar change (with the yo-normalization applied) to {@code out}. Returns a
+     * JSON error on a missing value, or {@code null} on success. Extracted verbatim from
+     * {@link #prepare}.
+     */
+    private static String prepareString(String name, String value, PropertyInfo info,
+        List<PreparedChange> out, MdNameNormalizer.Report normReport)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return requireValueError(name);
+        }
+        out.add(PreparedChange.scalar(info.feature,
+            normalizeStringPropertyValue(name, value, normReport)));
+        return null;
     }
 
     /**

@@ -268,6 +268,16 @@ public final class SpreadsheetTemplateWriter
         cell.setParameter(null);
         cell.setFormatIndex(0);
 
+        applyCellContent(cell, plan);
+        applyCellFormat(document, cell, plan);
+    }
+
+    /**
+     * Sets the cell's content: its report parameter name, or its literal text as a {@link LocalString}
+     * keyed by the neutral language code. A content-less (style-only) plan leaves the cell cleared.
+     */
+    private static void applyCellContent(Cell cell, CellPlan plan)
+    {
         if (plan.parameter != null)
         {
             cell.setParameter(plan.parameter);
@@ -278,7 +288,15 @@ public final class SpreadsheetTemplateWriter
             text.getContent().put(NEUTRAL_LANGUAGE_KEY, plan.text);
             cell.setText(text);
         }
+    }
 
+    /**
+     * Points the cell's {@code formatIndex} at an interned {@link Format} carrying the plan's font /
+     * alignment / wrap / fill. A plan with no styling and no parameter keeps the neutral base format
+     * (index 0) already reset by the caller.
+     */
+    private static void applyCellFormat(SpreadsheetDocument document, Cell cell, CellPlan plan)
+    {
         Integer fontIndex = null;
         if (plan.bold || plan.fontSize != null)
         {
@@ -288,29 +306,35 @@ public final class SpreadsheetTemplateWriter
         if (fontIndex != null || plan.hAlign != null || plan.vAlign != null || plan.textPlacement != null
             || fillType != null)
         {
-            Format format = MoxelFactory.eINSTANCE.createFormat();
-            if (fontIndex != null)
-            {
-                format.setFont(fontIndex.intValue());
-            }
-            if (plan.hAlign != null)
-            {
-                format.setHorizontalAlignment(plan.hAlign);
-            }
-            if (plan.vAlign != null)
-            {
-                format.setVerticalAlignment(plan.vAlign);
-            }
-            if (plan.textPlacement != null)
-            {
-                format.setTextPlacement(plan.textPlacement);
-            }
-            if (fillType != null)
-            {
-                format.setFillType(fillType);
-            }
-            cell.setFormatIndex(internFormat(document, format));
+            cell.setFormatIndex(internFormat(document, buildCellFormat(fontIndex, plan, fillType)));
         }
+    }
+
+    /** Builds the cell {@link Format} carrying the resolved font index / alignments / wrap / fill type. */
+    private static Format buildCellFormat(Integer fontIndex, CellPlan plan, FillType fillType)
+    {
+        Format format = MoxelFactory.eINSTANCE.createFormat();
+        if (fontIndex != null)
+        {
+            format.setFont(fontIndex.intValue());
+        }
+        if (plan.hAlign != null)
+        {
+            format.setHorizontalAlignment(plan.hAlign);
+        }
+        if (plan.vAlign != null)
+        {
+            format.setVerticalAlignment(plan.vAlign);
+        }
+        if (plan.textPlacement != null)
+        {
+            format.setTextPlacement(plan.textPlacement);
+        }
+        if (fillType != null)
+        {
+            format.setFillType(fillType);
+        }
+        return format;
     }
 
     /** Adds a merged region as a {@link Merge} over the delta-encoded {@link Rect}. */
@@ -662,11 +686,35 @@ public final class SpreadsheetTemplateWriter
                 + "literal text OR a report parameter name."; //$NON-NLS-1$
         }
 
+        CellStyleResult style = parseCellStyle(entry, where);
+        if (style.error != null)
+        {
+            return style.error;
+        }
+        if (text == null && parameter == null && !style.hasAnyStyle())
+        {
+            return ERR_CELL + where + ") needs at least one of 'text', 'parameter', 'bold', " //$NON-NLS-1$
+                + "'fontSize', 'hAlign', 'vAlign' or 'wrap'."; //$NON-NLS-1$
+        }
+
+        plan.cells.add(new CellPlan(row.intValue(), col.intValue(), text, parameter, style.bold,
+            style.fontSize, style.hAlign, style.vAlign, style.wrap));
+        return null;
+    }
+
+    /**
+     * Parses + validates a cell entry's optional style members: {@code bold}, a positive
+     * {@code fontSize}, the {@code hAlign} / {@code vAlign} alignment tokens and the {@code wrap} text
+     * placement. A bad value is a ready error.
+     */
+    private static CellStyleResult parseCellStyle(JsonObject entry, String where)
+    {
         boolean bold = Boolean.TRUE.equals(boolMember(entry, KEY_BOLD));
         Integer fontSize = intMember(entry, KEY_FONT_SIZE);
         if (fontSize != null && fontSize.intValue() <= 0)
         {
-            return ERR_CELL + where + ") 'fontSize' must be a positive integer, got " + fontSize + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            return CellStyleResult.failed(
+                ERR_CELL + where + ") 'fontSize' must be a positive integer, got " + fontSize + "."); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         HorizontalAlignment hAlign = null;
@@ -675,8 +723,8 @@ public final class SpreadsheetTemplateWriter
             hAlign = resolveEnum(HorizontalAlignment.values(), stringMember(entry, KEY_H_ALIGN));
             if (hAlign == null)
             {
-                return enumError(where, KEY_H_ALIGN, stringMember(entry, KEY_H_ALIGN),
-                    HorizontalAlignment.values());
+                return CellStyleResult.failed(enumError(where, KEY_H_ALIGN,
+                    stringMember(entry, KEY_H_ALIGN), HorizontalAlignment.values()));
             }
         }
         VerticalAlignment vAlign = null;
@@ -685,27 +733,16 @@ public final class SpreadsheetTemplateWriter
             vAlign = resolveEnum(VerticalAlignment.values(), stringMember(entry, KEY_V_ALIGN));
             if (vAlign == null)
             {
-                return enumError(where, KEY_V_ALIGN, stringMember(entry, KEY_V_ALIGN),
-                    VerticalAlignment.values());
+                return CellStyleResult.failed(enumError(where, KEY_V_ALIGN,
+                    stringMember(entry, KEY_V_ALIGN), VerticalAlignment.values()));
             }
         }
         WrapResult wrap = parseWrap(entry, where);
         if (wrap.error != null)
         {
-            return wrap.error;
+            return CellStyleResult.failed(wrap.error);
         }
-
-        boolean hasFormatting =
-            bold || fontSize != null || hAlign != null || vAlign != null || wrap.value != null;
-        if (text == null && parameter == null && !hasFormatting)
-        {
-            return ERR_CELL + where + ") needs at least one of 'text', 'parameter', 'bold', " //$NON-NLS-1$
-                + "'fontSize', 'hAlign', 'vAlign' or 'wrap'."; //$NON-NLS-1$
-        }
-
-        plan.cells.add(new CellPlan(row.intValue(), col.intValue(), text, parameter, bold, fontSize,
-            hAlign, vAlign, wrap.value));
-        return null;
+        return CellStyleResult.ok(bold, fontSize, hAlign, vAlign, wrap.value);
     }
 
     private static String parseMerges(JsonObject spec, Plan plan)
@@ -1239,6 +1276,48 @@ public final class SpreadsheetTemplateWriter
         static WrapResult failed(String error)
         {
             return new WrapResult(null, error);
+        }
+    }
+
+    /**
+     * The outcome of parsing a cell entry's optional style members ({@code bold} / {@code fontSize} /
+     * {@code hAlign} / {@code vAlign} / {@code wrap}): the resolved values or a ready error.
+     */
+    private static final class CellStyleResult
+    {
+        final boolean bold;
+        final Integer fontSize;
+        final HorizontalAlignment hAlign;
+        final VerticalAlignment vAlign;
+        final TextPlacement wrap;
+        final String error;
+
+        private CellStyleResult(boolean bold, Integer fontSize, HorizontalAlignment hAlign,
+            VerticalAlignment vAlign, TextPlacement wrap, String error)
+        {
+            this.bold = bold;
+            this.fontSize = fontSize;
+            this.hAlign = hAlign;
+            this.vAlign = vAlign;
+            this.wrap = wrap;
+            this.error = error;
+        }
+
+        static CellStyleResult ok(boolean bold, Integer fontSize, HorizontalAlignment hAlign,
+            VerticalAlignment vAlign, TextPlacement wrap)
+        {
+            return new CellStyleResult(bold, fontSize, hAlign, vAlign, wrap, null);
+        }
+
+        static CellStyleResult failed(String error)
+        {
+            return new CellStyleResult(false, null, null, null, null, error);
+        }
+
+        /** Whether any style member was set (what makes a content-less cell entry still meaningful). */
+        boolean hasAnyStyle()
+        {
+            return bold || fontSize != null || hAlign != null || vAlign != null || wrap != null;
         }
     }
 }

@@ -215,53 +215,82 @@ public final class PiiRedactor
     {
         if (node.isJsonObject())
         {
-            JsonObject obj = node.getAsJsonObject();
-            String siblingName = stringField(obj, KEY_NAME);
-            List<String> keys = new ArrayList<>(obj.keySet());
-            for (String key : keys)
-            {
-                JsonElement child = obj.get(key);
-                if (isJsonString(child))
-                {
-                    String original = child.getAsString();
-                    String redacted = redactString(key, original, siblingName, engine, counter);
-                    if (!redacted.equals(original))
-                    {
-                        obj.addProperty(key, redacted);
-                        if (KEY_VALUE.equals(key))
-                        {
-                            // the truncated and fullLength markers describe the ORIGINAL value length -
-                            // a pseudonym/mask changes it, so drop them or they lie.
-                            obj.remove(KEY_TRUNCATED);
-                            obj.remove(KEY_FULL_LENGTH);
-                        }
-                    }
-                }
-                else if (isContainer(child))
-                {
-                    redactElement(child, key, engine, counter);
-                }
-            }
+            redactObject(node.getAsJsonObject(), engine, counter);
         }
         else if (node.isJsonArray())
         {
-            JsonArray arr = node.getAsJsonArray();
-            for (int i = 0; i < arr.size(); i++)
+            redactArray(node.getAsJsonArray(), enclosingKey, engine, counter);
+        }
+    }
+
+    /**
+     * Redacts the fields of {@code obj} in place: each string field is evaluated by its
+     * key (the sibling {@code name} is captured up front, so the ORIGINAL name still
+     * classifies {@code value} even if the {@code name} field itself gets redacted);
+     * container fields recurse with their key as the enclosing key.
+     */
+    private static void redactObject(JsonObject obj, RuleEngine engine, Counter counter)
+    {
+        String siblingName = stringField(obj, KEY_NAME);
+        List<String> keys = new ArrayList<>(obj.keySet());
+        for (String key : keys)
+        {
+            JsonElement child = obj.get(key);
+            if (isJsonString(child))
             {
-                JsonElement el = arr.get(i);
-                if (isJsonString(el))
+                redactObjectStringField(obj, key, child.getAsString(), siblingName, engine, counter);
+            }
+            else if (isContainer(child))
+            {
+                redactElement(child, key, engine, counter);
+            }
+        }
+    }
+
+    /**
+     * Redacts one string field of {@code obj}: when the value changes it is written back,
+     * and for the canonical {@code value} field the now-stale
+     * {@code truncated}/{@code fullLength} siblings are dropped.
+     */
+    private static void redactObjectStringField(JsonObject obj, String key, String original, String siblingName,
+        RuleEngine engine, Counter counter)
+    {
+        String redacted = redactString(key, original, siblingName, engine, counter);
+        if (!redacted.equals(original))
+        {
+            obj.addProperty(key, redacted);
+            if (KEY_VALUE.equals(key))
+            {
+                // the truncated and fullLength markers describe the ORIGINAL value length -
+                // a pseudonym/mask changes it, so drop them or they lie.
+                obj.remove(KEY_TRUNCATED);
+                obj.remove(KEY_FULL_LENGTH);
+            }
+        }
+    }
+
+    /**
+     * Redacts the elements of {@code arr} in place: string elements are evaluated by the
+     * array's enclosing key (no sibling name), container elements recurse under the same
+     * key.
+     */
+    private static void redactArray(JsonArray arr, String enclosingKey, RuleEngine engine, Counter counter)
+    {
+        for (int i = 0; i < arr.size(); i++)
+        {
+            JsonElement el = arr.get(i);
+            if (isJsonString(el))
+            {
+                String original = el.getAsString();
+                String redacted = redactString(enclosingKey, original, null, engine, counter);
+                if (!redacted.equals(original))
                 {
-                    String original = el.getAsString();
-                    String redacted = redactString(enclosingKey, original, null, engine, counter);
-                    if (!redacted.equals(original))
-                    {
-                        arr.set(i, new JsonPrimitive(redacted));
-                    }
+                    arr.set(i, new JsonPrimitive(redacted));
                 }
-                else if (isContainer(el))
-                {
-                    redactElement(el, enclosingKey, engine, counter);
-                }
+            }
+            else if (isContainer(el))
+            {
+                redactElement(el, enclosingKey, engine, counter);
             }
         }
     }
@@ -349,24 +378,33 @@ public final class PiiRedactor
             this.pseudonymizer = pseudonymizer;
             for (PiiRule rule : ruleSet.getRules())
             {
-                if (!rule.isEnabled())
-                {
-                    continue;
-                }
-                Pattern pattern = safeCompile(rule.getRegex());
-                if (pattern == null)
-                {
-                    continue; // a bad regex is skipped, never thrown - one bad row cannot break the rest
-                }
-                CompiledRule compiled = new CompiledRule(pattern, rule.isCountable(), rule.getRepresentation());
-                if (rule.getScope().appliesToName())
-                {
-                    nameRules.add(compiled);
-                }
-                if (rule.getScope().appliesToValue())
-                {
-                    valueRules.add(compiled);
-                }
+                register(rule);
+            }
+        }
+
+        /**
+         * Compiles and registers one rule row into the per-surface lists; a disabled rule
+         * or one with an invalid regex is dropped without effect.
+         */
+        private void register(PiiRule rule)
+        {
+            if (!rule.isEnabled())
+            {
+                return;
+            }
+            Pattern pattern = safeCompile(rule.getRegex());
+            if (pattern == null)
+            {
+                return; // a bad regex is skipped, never thrown - one bad row cannot break the rest
+            }
+            CompiledRule compiled = new CompiledRule(pattern, rule.isCountable(), rule.getRepresentation());
+            if (rule.getScope().appliesToName())
+            {
+                nameRules.add(compiled);
+            }
+            if (rule.getScope().appliesToValue())
+            {
+                valueRules.add(compiled);
             }
         }
 

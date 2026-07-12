@@ -244,36 +244,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         // resolver and render its assignable-property table - what modify_metadata can set.
         if (ctx.assignable)
         {
-            String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
-            // A form-member FQN (a group / field / table / decoration inside a form's editable content
-            // model) is NOT part of the mdclass tree, so MetadataNodeResolver cannot see it and the
-            // assignable view used to fail with "Object not found". Route it - BEFORE the mdclass
-            // resolver - through the SAME form resolver modify_metadata uses, and render the element's
-            // own features UNION its extInfo's layout props (the general reflective extInfo path,
-            // issue #235). A plain mdclass FQN yields no FormMemberRef, so its path is unchanged.
-            FormElementWriter.FormMemberRef memberRef = FormElementWriter.parse(normFqn);
-            if (memberRef != null)
-            {
-                String memberAssignable =
-                    renderFormMemberAssignable(ctx.config, ctx.bmModel, normFqn, memberRef);
-                if (memberAssignable == null)
-                {
-                    failures.add(new String[] { fqn, "the form member could not be resolved (the form " //$NON-NLS-1$
-                        + "may have no editable content model, or the element does not exist)" }); //$NON-NLS-1$
-                    return;
-                }
-                sb.append(memberAssignable);
-                sb.append(SECTION_SEPARATOR);
-                return;
-            }
-            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(ctx.config, fqn);
-            if (node == null || node.object == null)
-            {
-                failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
-                return;
-            }
-            sb.append(formatAssignable(normFqn, node.object));
-            sb.append(SECTION_SEPARATOR);
+            appendAssignableView(fqn, sb, failures, ctx);
             return;
         }
 
@@ -309,19 +280,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         // boundary; the EObjects must not escape the read task.
         if (mdObject instanceof Role)
         {
-            String roleRights = renderRoleRights(ctx.bmModel, (Role)mdObject,
-                MetadataTypeUtils.normalizeFqn(fqn), ctx.full, ctx.effectiveLanguage, ctx.roleObjectOffset);
-            if (roleRights == null)
-            {
-                failures.add(new String[] { fqn, "the role's rights model is unavailable (the BM model " //$NON-NLS-1$
-                    + "is not ready or the project is not yet built)" }); //$NON-NLS-1$
-                return;
-            }
-            sb.append(roleRights);
-            sb.append("\n**Origin:** ") //$NON-NLS-1$
-                .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), ctx.isExtensionProject))
-                .append("\n"); //$NON-NLS-1$
-            sb.append(SECTION_SEPARATOR);
+            appendRoleRightsView((Role)mdObject, fqn, sb, failures, ctx);
             return;
         }
 
@@ -331,6 +290,71 @@ public class GetMetadataDetailsTool implements IMcpTool
         // an adopted base object from one the extension itself owns.
         sb.append("\n**Origin:** ") //$NON-NLS-1$
             .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), ctx.isExtensionProject))
+            .append("\n"); //$NON-NLS-1$
+        sb.append(SECTION_SEPARATOR);
+    }
+
+    /**
+     * Renders the ASSIGNABLE-property view for one FQN of the request: a form-member FQN is routed
+     * through the form resolver (issue #235), any other FQN through the shared mdclass resolver.
+     * Appends the table to {@code sb}, or records a {@code {fqn, reason}} row in {@code failures}
+     * when the node cannot be resolved. Extracted verbatim from the {@code ctx.assignable} branch
+     * of {@link #processFqn}; no behaviour change.
+     */
+    private void appendAssignableView(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx)
+    {
+        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        // A form-member FQN (a group / field / table / decoration inside a form's editable content
+        // model) is NOT part of the mdclass tree, so MetadataNodeResolver cannot see it and the
+        // assignable view used to fail with "Object not found". Route it - BEFORE the mdclass
+        // resolver - through the SAME form resolver modify_metadata uses, and render the element's
+        // own features UNION its extInfo's layout props (the general reflective extInfo path,
+        // issue #235). A plain mdclass FQN yields no FormMemberRef, so its path is unchanged.
+        FormElementWriter.FormMemberRef memberRef = FormElementWriter.parse(normFqn);
+        if (memberRef != null)
+        {
+            String memberAssignable =
+                renderFormMemberAssignable(ctx.config, ctx.bmModel, normFqn, memberRef);
+            if (memberAssignable == null)
+            {
+                failures.add(new String[] { fqn, "the form member could not be resolved (the form " //$NON-NLS-1$
+                    + "may have no editable content model, or the element does not exist)" }); //$NON-NLS-1$
+                return;
+            }
+            sb.append(memberAssignable);
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(ctx.config, fqn);
+        if (node == null || node.object == null)
+        {
+            failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
+            return;
+        }
+        sb.append(formatAssignable(normFqn, node.object));
+        sb.append(SECTION_SEPARATOR);
+    }
+
+    /**
+     * Renders a Role FQN's ACCESS-RIGHTS matrix (rights values / RLS / templates / role properties)
+     * followed by the ORIGIN footer. Appends the section to {@code sb}, or records a
+     * {@code {fqn, reason}} row in {@code failures} when the editable rights model is unavailable.
+     * Extracted verbatim from the {@code Role} branch of {@link #processFqn}; no behaviour change.
+     */
+    private void appendRoleRightsView(Role role, String fqn, StringBuilder sb, List<String[]> failures,
+        RenderContext ctx)
+    {
+        String roleRights = renderRoleRights(ctx.bmModel, role,
+            MetadataTypeUtils.normalizeFqn(fqn), ctx.full, ctx.effectiveLanguage, ctx.roleObjectOffset);
+        if (roleRights == null)
+        {
+            failures.add(new String[] { fqn, "the role's rights model is unavailable (the BM model " //$NON-NLS-1$
+                + "is not ready or the project is not yet built)" }); //$NON-NLS-1$
+            return;
+        }
+        sb.append(roleRights);
+        sb.append("\n**Origin:** ") //$NON-NLS-1$
+            .append(ExtensionOriginUtils.originLabel(role.getObjectBelonging(), ctx.isExtensionProject))
             .append("\n"); //$NON-NLS-1$
         sb.append(SECTION_SEPARATOR);
     }

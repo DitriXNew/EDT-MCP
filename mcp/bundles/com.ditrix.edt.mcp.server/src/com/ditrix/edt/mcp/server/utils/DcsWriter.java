@@ -752,41 +752,54 @@ public final class DcsWriter
         }
         for (int i = 0; i < entries.size(); i++)
         {
-            JsonObject entry = entries.get(i);
-            String where = KEY_PARAMETERS + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-            String name = nonEmptyString(entry, KEY_NAME);
-            if (name == null)
+            String error = parseParameter(entries.get(i), i, plan);
+            if (error != null)
             {
-                return ERR_PARAMETER + where + ERR_NEEDS_NAME;
+                return error;
             }
-            JsonElement valueTypeSpec = null;
-            if (entry.has(KEY_VALUE_TYPE) && !entry.get(KEY_VALUE_TYPE).isJsonNull())
-            {
-                valueTypeSpec = entry.get(KEY_VALUE_TYPE);
-                if (!valueTypeSpec.isJsonObject())
-                {
-                    return ERR_PARAMETER + where + ") 'valueType' must be an object like " //$NON-NLS-1$
-                        + "{types:[{kind:'String'}]}."; //$NON-NLS-1$
-                }
-            }
-            TitleResult title = parseTitle(entry, where);
-            if (title.error != null)
-            {
-                return title.error;
-            }
-            DataCompositionParameterUse use = null;
-            if (entry.has(KEY_USE) && !entry.get(KEY_USE).isJsonNull())
-            {
-                use = resolveEnum(DataCompositionParameterUse.values(), stringMember(entry, KEY_USE));
-                if (use == null)
-                {
-                    return ERR_PARAMETER + where + ") 'use' must be one of " //$NON-NLS-1$
-                        + enumTokens(DataCompositionParameterUse.values()) + "; got '" //$NON-NLS-1$
-                        + stringMember(entry, KEY_USE) + "'."; //$NON-NLS-1$
-                }
-            }
-            plan.parameters.add(new ParameterPlan(name, valueTypeSpec, title.plan, use));
         }
+        return null;
+    }
+
+    /**
+     * Parses + validates one {@code parameters[index]} entry (name, optional {@code valueType} object,
+     * optional title, optional {@code use} enum) into a {@link ParameterPlan}, or a ready error.
+     */
+    private static String parseParameter(JsonObject entry, int index, Plan plan)
+    {
+        String where = KEY_PARAMETERS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+        String name = nonEmptyString(entry, KEY_NAME);
+        if (name == null)
+        {
+            return ERR_PARAMETER + where + ERR_NEEDS_NAME;
+        }
+        JsonElement valueTypeSpec = null;
+        if (entry.has(KEY_VALUE_TYPE) && !entry.get(KEY_VALUE_TYPE).isJsonNull())
+        {
+            valueTypeSpec = entry.get(KEY_VALUE_TYPE);
+            if (!valueTypeSpec.isJsonObject())
+            {
+                return ERR_PARAMETER + where + ") 'valueType' must be an object like " //$NON-NLS-1$
+                    + "{types:[{kind:'String'}]}."; //$NON-NLS-1$
+            }
+        }
+        TitleResult title = parseTitle(entry, where);
+        if (title.error != null)
+        {
+            return title.error;
+        }
+        DataCompositionParameterUse use = null;
+        if (entry.has(KEY_USE) && !entry.get(KEY_USE).isJsonNull())
+        {
+            use = resolveEnum(DataCompositionParameterUse.values(), stringMember(entry, KEY_USE));
+            if (use == null)
+            {
+                return ERR_PARAMETER + where + ") 'use' must be one of " //$NON-NLS-1$
+                    + enumTokens(DataCompositionParameterUse.values()) + "; got '" //$NON-NLS-1$
+                    + stringMember(entry, KEY_USE) + "'."; //$NON-NLS-1$
+            }
+        }
+        plan.parameters.add(new ParameterPlan(name, valueTypeSpec, title.plan, use));
         return null;
     }
 
