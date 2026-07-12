@@ -27,6 +27,7 @@ import com.ditrix.edt.mcp.server.utils.GuideRenderer;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
+import com.ditrix.edt.mcp.server.utils.privacy.PiiRedactor;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -351,6 +352,11 @@ public class McpProtocolHandler
         
         // Execute the tool (timed + logged + status-bar cleared in one place).
         String result = executeToolTimed(tool, params, server);
+
+        // PII redaction (#242): the single wire-serialization choke point.
+        // A no-op unless redaction is enabled AND the tool returnsInfobaseData();
+        // returns the same reference otherwise, so output stays byte-identical.
+        result = PiiRedactor.redactIfEnabled(tool, params, result);
 
         // Check if user sent a signal during execution
         UserSignal signal = null;

@@ -29,12 +29,14 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
  * Tab 1: General - port, auto-start, checks folder, plain text, tags, updates, server control
  * Tab 2: Tools - tree of tool groups with enable/disable, description, and parameter settings
  * Tab 3: History - request/response history recorder + file-log settings
+ * Tab 4: Privacy - PII redaction master toggle, pseudonym salt, and the detection rule table
  */
 public class McpServerPreferencePage extends PreferencePage implements IWorkbenchPreferencePage
 {
     private GeneralTab generalTab;
     private ToolsTab toolsTab;
     private HistoryTab historyTab;
+    private PrivacyTab privacyTab;
 
     public McpServerPreferencePage()
     {
@@ -84,6 +86,12 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
         historyTab = new HistoryTab(tabFolder);
         historyItem.setControl(historyTab.getControl());
 
+        // Tab 4: Privacy
+        CTabItem privacyItem = new CTabItem(tabFolder, SWT.NONE);
+        privacyItem.setText(Messages.McpServerPreferencePage_TabPrivacy);
+        privacyTab = new PrivacyTab(tabFolder);
+        privacyItem.setControl(privacyTab.getControl());
+
         // Select the first tab
         tabFolder.setSelection(0);
 
@@ -98,6 +106,7 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
         generalTab.performOk();
         toolsTab.performOk();
         historyTab.performOk();
+        privacyTab.performOk();
 
         // If tool enablement changed and server is running, restart to apply
         if (toolsChanged)
@@ -126,6 +135,7 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
         generalTab.performDefaults();
         toolsTab.performDefaults();
         historyTab.performDefaults();
+        privacyTab.performDefaults();
         super.performDefaults();
     }
 
@@ -143,6 +153,10 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
         if (historyTab != null)
         {
             historyTab.dispose();
+        }
+        if (privacyTab != null)
+        {
+            privacyTab.dispose();
         }
         super.dispose();
     }
