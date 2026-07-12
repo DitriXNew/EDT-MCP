@@ -378,13 +378,12 @@ public final class MetadataPropertyIntrospector
                 continue;
             }
             ValueKind kind = classify(feature);
-            if (kind == null)
+            if (kind != null)
             {
-                continue;
+                String current = extInfo != null ? renderCurrent(extInfo, feature, kind) : null;
+                result.add(new PropertyInfo(feature.getName(), kind, current,
+                    allowedValuesFor(feature, kind), feature, true));
             }
-            String current = extInfo != null ? renderCurrent(extInfo, feature, kind) : null;
-            result.add(new PropertyInfo(feature.getName(), kind, current,
-                allowedValuesFor(feature, kind), feature, true));
         }
         return result;
     }

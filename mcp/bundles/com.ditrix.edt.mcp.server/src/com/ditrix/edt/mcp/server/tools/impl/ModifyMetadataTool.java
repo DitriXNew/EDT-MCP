@@ -126,6 +126,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Payload / output key: the SpreadsheetDocument template content spec / applied-counts object. */
     private static final String KEY_TEMPLATE = "template"; //$NON-NLS-1$
 
+    /** Actual-kind stem in the "payload only for X FQN" refusals (java:S1192). */
+    private static final String ERR_IS_A = "is a "; //$NON-NLS-1$
+
+    /** Shared BM bootstrap failure messages (java:S1192). */
+    private static final String ERR_NO_BM_MANAGER = "IBmModelManager not available"; //$NON-NLS-1$
+    private static final String ERR_NO_BM_MODEL = "BM model not available for project: "; //$NON-NLS-1$
+
     /** Payload / output key: the Report Data Composition Schema (СКД) content spec / applied-counts object. */
     private static final String KEY_DCS = "dcs"; //$NON-NLS-1$
 
@@ -459,14 +466,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // byte-unchanged.
             if (hasTemplatePayload)
             {
-                return templateOnlyForTemplateFqnError(normFqn, "is a " + subsystem.eClass().getName()); //$NON-NLS-1$
+                return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
             }
             // Symmetrically, a 'dcs' payload addressed to a Subsystem FQN is refused (a subsystem is not a
             // Report), so a dcs payload combined with a subsystem content[] payload is never silently
             // dropped.
             if (hasDcsPayload)
             {
-                return dcsOnlyForReportFqnError(normFqn, "is a " + subsystem.eClass().getName()); //$NON-NLS-1$
+                return dcsOnlyForReportFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
             }
             return modifySubsystemContent(ctx, normFqn, subsystem, properties, content, hasRolePayload);
         }
@@ -501,7 +508,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             if (!(target instanceof Report))
             {
-                return dcsOnlyForReportFqnError(normFqn, "is a " + target.eClass().getName()); //$NON-NLS-1$
+                return dcsOnlyForReportFqnError(normFqn, ERR_IS_A + target.eClass().getName());
             }
             String mixError = dcsMixError(properties, content, hasRolePayload, hasTemplatePayload);
             if (mixError != null)
@@ -518,7 +525,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // silently dropped. Returns null when there is no template payload, so the role / content /
         // generic path below still runs.
         String templatePayloadResult = dispatchTemplatePayload(ctx, normFqn, target, properties, content,
-            hasRolePayload, templateSpec, hasTemplatePayload);
+            hasRolePayload, templateSpec);
         if (templatePayloadResult != null)
         {
             return templatePayloadResult;
@@ -654,8 +661,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private String dispatchTemplatePayload(ProjectContext ctx, String normFqn, MdObject target,
         List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload,
-        JsonObject templateSpec, boolean hasTemplatePayload)
+        JsonObject templateSpec)
     {
+        // The payload presence is derivable from the spec itself (java:S107: 8 -> 7 params).
+        boolean hasTemplatePayload = templateSpec != null;
         if (target instanceof BasicTemplate && hasTemplatePayload)
         {
             return modifyTemplateContent(ctx, normFqn, (BasicTemplate)target, properties, content,
@@ -663,7 +672,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         if (hasTemplatePayload)
         {
-            return templateOnlyForTemplateFqnError(normFqn, "is a " + target.eClass().getName()); //$NON-NLS-1$
+            return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + target.eClass().getName());
         }
         return null;
     }
@@ -717,8 +726,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // stable BM id still re-fetches inside the tx (getObjectById resolves any managed object, not only
         // top ones), but the force-export target must be the TOP object's canonical (all-English) FQN - the
         // template itself when it is top, else the OWNER top object (bmGetTopObject) whose .mdo + sibling
-        // .mxlx carry the content. Mirrors RoleRightsWriter's bmIsTop() ? self : bmGetTopObject() climb;
-        // bmGetFqn() is legal only on a top object, so it is read on `topObject`, never on a non-top
+        // .mxlx carry the content. Mirrors RoleRightsWriter's top climb - self when already top, else
+        // bmGetTopObject. A bmGetFqn read is legal only on a top object, so it happens on `topObject`, never on a non-top
         // template. A null top (should not happen for a resolved template) fails LOUD, nothing written.
         IBmObject templateBm = (IBmObject)template;
         final long templateBmId = templateBm.bmGetId();
@@ -734,12 +743,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
         }
         IBmModel bmModel = bmModelManager.getModel(ctx.project);
         if (bmModel == null)
         {
-            return ToolResult.error("BM model not available for project: " //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MODEL
                 + ctx.project.getName()).toJson();
         }
 
@@ -1153,12 +1162,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
         }
         IBmModel bmModel = bmModelManager.getModel(ctx.project);
         if (bmModel == null)
         {
-            return ToolResult.error("BM model not available for project: " //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MODEL
                 + ctx.project.getName()).toJson();
         }
 
@@ -1216,8 +1225,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 Report txReport = (Report)inTx;
                 BasicTemplate dcsTemplate = findOrCreateDcsTemplate(txReport, factory, version);
                 // A report DCS template is inline in the report's .mdo (not a top object), so its export
-                // target is the OWNER top object (the Report). Mirrors modifyTemplateContent's top climb;
-                // bmGetFqn() is legal only on a top object.
+                // target is the OWNER top object (the Report), the same top climb as modifyTemplateContent -
+                // a bmGetFqn read is legal only on a top object.
                 IBmObject templateBm = (IBmObject)dcsTemplate;
                 IBmObject topObject = templateBm.bmIsTop() ? templateBm : templateBm.bmGetTopObject();
                 if (topObject == null)
@@ -1549,12 +1558,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
         }
         IBmModel bmModel = bmModelManager.getModel(ctx.project);
         if (bmModel == null)
         {
-            return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
+            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
         }
 
         try
@@ -2066,7 +2075,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // so exporting the resolved subsystem's canonical top-object FQN once drains the change to disk.
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqn);
 
-        return buildMembershipResult(normFqn, "subsystem", "content", result, persisted); //$NON-NLS-1$ //$NON-NLS-2$
+        return buildMembershipResult(normFqn, "subsystem", KEY_CONTENT, result, persisted); //$NON-NLS-1$
     }
 
     /**

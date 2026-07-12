@@ -11,8 +11,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 
 /**
  * The filter + pagination spec consumed by {@link EventLogReader}. Fluent setters
@@ -221,7 +221,7 @@ public final class EventLogQuery
         }
     }
 
-    private static Set<String> normalise(List<String> vals, Function<String, String> tx)
+    private static Set<String> normalise(List<String> vals, UnaryOperator<String> tx)
     {
         if (vals == null || vals.isEmpty())
         {

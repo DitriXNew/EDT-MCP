@@ -116,6 +116,9 @@ public final class SpreadsheetTemplateWriter
     private static final String KEY_WIDTH = "width"; //$NON-NLS-1$
     private static final String KEY_HEIGHT = "height"; //$NON-NLS-1$
 
+    /** Stem of every cell-validation error message (java:S1192). */
+    private static final String ERR_CELL = "A cell ("; //$NON-NLS-1$
+
     /**
      * Language key for a cell's text {@link LocalString}. The v1 {@code template} payload carries no
      * per-cell language, so text is stored under the platform's language-neutral key {@code "#"}
@@ -655,7 +658,7 @@ public final class SpreadsheetTemplateWriter
         String parameter = nonEmptyString(entry, KEY_PARAMETER);
         if (text != null && parameter != null)
         {
-            return "A cell (" + where + ") cannot set both 'text' and 'parameter'; a cell holds EITHER " //$NON-NLS-1$ //$NON-NLS-2$
+            return ERR_CELL + where + ") cannot set both 'text' and 'parameter'; a cell holds EITHER " //$NON-NLS-1$
                 + "literal text OR a report parameter name."; //$NON-NLS-1$
         }
 
@@ -663,7 +666,7 @@ public final class SpreadsheetTemplateWriter
         Integer fontSize = intMember(entry, KEY_FONT_SIZE);
         if (fontSize != null && fontSize.intValue() <= 0)
         {
-            return "A cell (" + where + ") 'fontSize' must be a positive integer, got " + fontSize + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ERR_CELL + where + ") 'fontSize' must be a positive integer, got " + fontSize + "."; //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         HorizontalAlignment hAlign = null;
@@ -696,7 +699,7 @@ public final class SpreadsheetTemplateWriter
             bold || fontSize != null || hAlign != null || vAlign != null || wrap.value != null;
         if (text == null && parameter == null && !hasFormatting)
         {
-            return "A cell (" + where + ") needs at least one of 'text', 'parameter', 'bold', " //$NON-NLS-1$ //$NON-NLS-2$
+            return ERR_CELL + where + ") needs at least one of 'text', 'parameter', 'bold', " //$NON-NLS-1$
                 + "'fontSize', 'hAlign', 'vAlign' or 'wrap'."; //$NON-NLS-1$
         }
 
@@ -907,13 +910,13 @@ public final class SpreadsheetTemplateWriter
     private static <E extends Enum<E> & Enumerator> String enumError(String where, String field,
         String token, E[] values)
     {
-        return "A cell (" + where + ") '" + field + "' must be one of " + enumTokens(values) + "; got '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        return ERR_CELL + where + ") '" + field + "' must be one of " + enumTokens(values) + "; got '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + token + "'."; //$NON-NLS-1$
     }
 
     private static String wrapError(String where, String token)
     {
-        return "A cell (" + where + ") 'wrap' must be a boolean or one of " //$NON-NLS-1$ //$NON-NLS-2$
+        return ERR_CELL + where + ") 'wrap' must be a boolean or one of " //$NON-NLS-1$
             + enumTokens(TextPlacement.values()) + "; got '" + token + "'."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -1110,7 +1113,7 @@ public final class SpreadsheetTemplateWriter
         final VerticalAlignment vAlign;
         final TextPlacement textPlacement;
 
-        CellPlan(int row, int col, String text, String parameter, boolean bold, Integer fontSize,
+        CellPlan(int row, int col, String text, String parameter, boolean bold, Integer fontSize, // NOSONAR S107: this IS the parameter object - an internal immutable holder mirroring the parsed JSON cell spec 1:1
             HorizontalAlignment hAlign, VerticalAlignment vAlign, TextPlacement textPlacement)
         {
             this.row = row;

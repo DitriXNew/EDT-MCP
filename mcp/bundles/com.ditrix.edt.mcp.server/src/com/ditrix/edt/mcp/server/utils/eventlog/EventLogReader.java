@@ -156,10 +156,10 @@ public final class EventLogReader
         LgpParser lgp = new LgpParser(refs);
         Predicate<EventRecord> filter = q.asPredicate();
 
-        long offset = Math.max(0L, (long)q.offset);
-        long limit = Math.max(0L, (long)q.limit);
+        long offset = Math.max(0L, q.offset);
+        long limit = Math.max(0L, q.limit);
         long windowEnd = offset + limit;
-        int windowCap = (int)Math.min((long)Integer.MAX_VALUE, Math.max(1L, windowEnd));
+        int windowCap = (int)Math.min(Integer.MAX_VALUE, Math.max(1L, windowEnd));
 
         // Window buffering, both bounded to O(offset+limit) (never the whole log):
         //  - ascending: partitions oldest-first; keep the matches at ordinals

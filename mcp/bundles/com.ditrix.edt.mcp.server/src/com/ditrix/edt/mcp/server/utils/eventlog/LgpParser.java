@@ -108,15 +108,10 @@ public final class LgpParser
         {
             total++;
             EventRecord ev = decode(rec);
-            if (ev == null)
-            {
-                continue;
-            }
-            if (filter != null && !filter.test(ev))
-            {
-                continue;
-            }
-            if (!sink.accept(ev))
+            // Single loop exit (java:S135): a non-decodable / filtered-out record simply
+            // never reaches the sink; only a sink refusal stops the stream.
+            boolean matches = ev != null && (filter == null || filter.test(ev));
+            if (matches && !sink.accept(ev))
             {
                 break;
             }
@@ -314,11 +309,11 @@ public final class LgpParser
         int hh = Integer.parseInt(s.substring(11, 13));
         int mi = Integer.parseInt(s.substring(14, 16));
         int ss = Integer.parseInt(s.substring(17, 19));
-        return (long)yyyy * 10000000000L
-            + (long)mm * 100000000L
-            + (long)dd * 1000000L
-            + (long)hh * 10000L
-            + (long)mi * 100L
-            + (long)ss;
+        return yyyy * 10000000000L
+            + mm * 100000000L
+            + dd * 1000000L
+            + hh * 10000L
+            + mi * 100L
+            + ss;
     }
 }

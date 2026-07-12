@@ -230,7 +230,7 @@ public final class PiiRedactor
                         obj.addProperty(key, redacted);
                         if (KEY_VALUE.equals(key))
                         {
-                            // truncated/fullLength describe the ORIGINAL value length;
+                            // the truncated and fullLength markers describe the ORIGINAL value length -
                             // a pseudonym/mask changes it, so drop them or they lie.
                             obj.remove(KEY_TRUNCATED);
                             obj.remove(KEY_FULL_LENGTH);

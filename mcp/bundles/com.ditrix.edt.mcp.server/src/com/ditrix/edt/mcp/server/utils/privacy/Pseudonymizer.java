@@ -58,6 +58,12 @@ public final class Pseudonymizer
     /** Cyrillic small letter IE. */
     private static final char IE = '\u0435';
 
+    /**
+     * Shared random source for the blank-salt per-instance key: one {@link SecureRandom}
+     * created once and re-used (java:S2119). Thread-safe by the SecureRandom contract.
+     */
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     private final byte[] key;
 
     /**
@@ -82,7 +88,7 @@ public final class Pseudonymizer
         if (salt == null || salt.trim().isEmpty())
         {
             byte[] random = new byte[32];
-            new SecureRandom().nextBytes(random);
+            RANDOM.nextBytes(random);
             return random;
         }
         try

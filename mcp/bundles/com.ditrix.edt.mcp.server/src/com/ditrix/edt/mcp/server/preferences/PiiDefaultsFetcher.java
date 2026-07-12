@@ -322,6 +322,9 @@ public final class PiiDefaultsFetcher
      *
      * @return an error message for the first offending row, or {@code null} if all rows are safe
      */
+    /** Stem of every row-validation rejection message (java:S1192). */
+    private static final String ERR_REJECTED_RULE = "Rejected: rule #"; //$NON-NLS-1$
+
     private static String validateRows(JsonArray rules)
     {
         for (int i = 0; i < rules.size(); i++)
@@ -329,18 +332,18 @@ public final class PiiDefaultsFetcher
             JsonElement el = rules.get(i);
             if (el == null || !el.isJsonObject())
             {
-                return "Rejected: rule #" + (i + 1) + " is not a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$
+                return ERR_REJECTED_RULE + (i + 1) + " is not a JSON object."; //$NON-NLS-1$
             }
             JsonObject rule = el.getAsJsonObject();
             String regex = stringField(rule, KEY_REGEX);
             if (regex == null || regex.isEmpty())
             {
-                return "Rejected: rule #" + (i + 1) + " has a missing or empty '" //$NON-NLS-1$ //$NON-NLS-2$
+                return ERR_REJECTED_RULE + (i + 1) + " has a missing or empty '" //$NON-NLS-1$
                     + KEY_REGEX + "'."; //$NON-NLS-1$
             }
             if (regex.length() > MAX_PATTERN_LENGTH)
             {
-                return "Rejected: rule #" + (i + 1) + " has a pattern longer than " //$NON-NLS-1$ //$NON-NLS-2$
+                return ERR_REJECTED_RULE + (i + 1) + " has a pattern longer than " //$NON-NLS-1$
                     + MAX_PATTERN_LENGTH + " characters."; //$NON-NLS-1$
             }
             try
@@ -349,7 +352,7 @@ public final class PiiDefaultsFetcher
             }
             catch (PatternSyntaxException e)
             {
-                return "Rejected: rule #" + (i + 1) + " has an invalid regular expression: " //$NON-NLS-1$ //$NON-NLS-2$
+                return ERR_REJECTED_RULE + (i + 1) + " has an invalid regular expression: " //$NON-NLS-1$
                     + e.getDescription() + "."; //$NON-NLS-1$
             }
         }

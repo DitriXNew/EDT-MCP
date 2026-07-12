@@ -71,7 +71,7 @@ public class PrivacyTab
     private List<PiiRule> rules = new ArrayList<>();
 
     /** Guards async repo-fetch callbacks after the tab is disposed. */
-    private boolean disposed;
+    private boolean disposed; // NOSONAR S1450: cross-method lifecycle guard - set in dispose(), read by the async repo-fetch callback; not a method-local
 
     public PrivacyTab(Composite parent)
     {

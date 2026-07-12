@@ -120,6 +120,13 @@ public final class DcsWriter
     private static final String KEY_VALUE_TYPE = "valueType"; //$NON-NLS-1$
     private static final String KEY_USE = "use"; //$NON-NLS-1$
 
+    // ---- validation error-message stems (java:S1192) --------------------------------------------
+
+    private static final String ERR_DATA_SET = "A data set ("; //$NON-NLS-1$
+    private static final String ERR_PARAMETER = "A parameter ("; //$NON-NLS-1$
+    private static final String ERR_FIELD_ROLE = "A field role ("; //$NON-NLS-1$
+    private static final String ERR_NEEDS_NAME = ") needs a non-empty 'name'."; //$NON-NLS-1$
+
     // ---- role keys ----------------------------------------------------------------------------
 
     private static final String ROLE_DIMENSION = "dimension"; //$NON-NLS-1$
@@ -643,7 +650,7 @@ public final class DcsWriter
             String name = nonEmptyString(entry, KEY_NAME);
             if (name == null)
             {
-                return "A data source (" + where + ") needs a non-empty 'name'."; //$NON-NLS-1$ //$NON-NLS-2$
+                return "A data source (" + where + ERR_NEEDS_NAME; //$NON-NLS-1$
             }
             String type = nonEmptyString(entry, KEY_TYPE);
             plan.dataSources.add(new DataSourcePlan(name, type != null ? type : LOCAL_SOURCE_TYPE));
@@ -675,12 +682,12 @@ public final class DcsWriter
         String name = nonEmptyString(entry, KEY_NAME);
         if (name == null)
         {
-            return "A data set (" + where + ") needs a non-empty 'name'."; //$NON-NLS-1$ //$NON-NLS-2$
+            return ERR_DATA_SET + where + ERR_NEEDS_NAME;
         }
         String type = nonEmptyString(entry, KEY_TYPE);
         if (type != null && !TYPE_QUERY.equalsIgnoreCase(type))
         {
-            return "A data set (" + where + ") 'type' must be 'query' in v1; got '" + type //$NON-NLS-1$ //$NON-NLS-2$
+            return ERR_DATA_SET + where + ") 'type' must be 'query' in v1; got '" + type //$NON-NLS-1$
                 + "'. Object / union data sets are deferred to v2."; //$NON-NLS-1$
         }
         String query = nonEmptyString(entry, KEY_QUERY);
@@ -694,7 +701,7 @@ public final class DcsWriter
         List<JsonObject> fieldEntries = objectArray(entry, KEY_FIELDS);
         if (fieldEntries == null)
         {
-            return "A data set (" + where + ") '" + KEY_FIELDS + "' must be an array of objects."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ERR_DATA_SET + where + ") '" + KEY_FIELDS + "' must be an array of objects."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         List<FieldPlan> fields = new ArrayList<>();
         for (int i = 0; i < fieldEntries.size(); i++)
@@ -750,7 +757,7 @@ public final class DcsWriter
             String name = nonEmptyString(entry, KEY_NAME);
             if (name == null)
             {
-                return "A parameter (" + where + ") needs a non-empty 'name'."; //$NON-NLS-1$ //$NON-NLS-2$
+                return ERR_PARAMETER + where + ERR_NEEDS_NAME;
             }
             JsonElement valueTypeSpec = null;
             if (entry.has(KEY_VALUE_TYPE) && !entry.get(KEY_VALUE_TYPE).isJsonNull())
@@ -758,7 +765,7 @@ public final class DcsWriter
                 valueTypeSpec = entry.get(KEY_VALUE_TYPE);
                 if (!valueTypeSpec.isJsonObject())
                 {
-                    return "A parameter (" + where + ") 'valueType' must be an object like " //$NON-NLS-1$ //$NON-NLS-2$
+                    return ERR_PARAMETER + where + ") 'valueType' must be an object like " //$NON-NLS-1$
                         + "{types:[{kind:'String'}]}."; //$NON-NLS-1$
                 }
             }
@@ -773,7 +780,7 @@ public final class DcsWriter
                 use = resolveEnum(DataCompositionParameterUse.values(), stringMember(entry, KEY_USE));
                 if (use == null)
                 {
-                    return "A parameter (" + where + ") 'use' must be one of " //$NON-NLS-1$ //$NON-NLS-2$
+                    return ERR_PARAMETER + where + ") 'use' must be one of " //$NON-NLS-1$
                         + enumTokens(DataCompositionParameterUse.values()) + "; got '" //$NON-NLS-1$
                         + stringMember(entry, KEY_USE) + "'."; //$NON-NLS-1$
                 }
@@ -801,7 +808,7 @@ public final class DcsWriter
             {
                 return TitleResult.ok(null);
             }
-            return TitleResult.ok(TitlePlan.value(value));
+            return TitleResult.ok(TitlePlan.of(value));
         }
         if (element.isJsonObject())
         {
@@ -820,7 +827,7 @@ public final class DcsWriter
             {
                 return TitleResult.ok(null);
             }
-            return TitleResult.ok(TitlePlan.localized(localized));
+            return TitleResult.ok(TitlePlan.ofLocalized(localized));
         }
         return TitleResult.failed("A title (" + where + ") must be a string or a {code:text} object."); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -841,7 +848,7 @@ public final class DcsWriter
         JsonElement element = entry.get(KEY_ROLE);
         if (!element.isJsonObject())
         {
-            return RoleResult.failed("A field role (" + where + ") must be an object of flags, e.g. " //$NON-NLS-1$ //$NON-NLS-2$
+            return RoleResult.failed(ERR_FIELD_ROLE + where + ") must be an object of flags, e.g. " //$NON-NLS-1$
                 + "{dimension:true}."); //$NON-NLS-1$
         }
         JsonObject roleObj = element.getAsJsonObject();
@@ -860,14 +867,14 @@ public final class DcsWriter
                 stringMember(roleObj, ROLE_PERIOD_TYPE));
             if (role.periodType == null)
             {
-                return RoleResult.failed("A field role (" + where + ") 'periodType' must be one of " //$NON-NLS-1$ //$NON-NLS-2$
+                return RoleResult.failed(ERR_FIELD_ROLE + where + ") 'periodType' must be one of " //$NON-NLS-1$
                     + enumTokens(DataCompositionPeriodType.values()) + "; got '" //$NON-NLS-1$
                     + stringMember(roleObj, ROLE_PERIOD_TYPE) + "'."); //$NON-NLS-1$
             }
         }
         if (role.isEmpty())
         {
-            return RoleResult.failed("A field role (" + where + ") needs at least one of 'dimension', " //$NON-NLS-1$ //$NON-NLS-2$
+            return RoleResult.failed(ERR_FIELD_ROLE + where + ") needs at least one of 'dimension', " //$NON-NLS-1$
                 + "'main', 'required', 'ignoreNullValues', 'dimensionAttribute', 'account', 'balance', " //$NON-NLS-1$
                 + "'periodType' or 'periodNumber'."); //$NON-NLS-1$
         }
@@ -1134,12 +1141,12 @@ public final class DcsWriter
             this.localized = localized;
         }
 
-        static TitlePlan value(String value)
+        static TitlePlan of(String value)
         {
             return new TitlePlan(value, null);
         }
 
-        static TitlePlan localized(Map<String, String> localized)
+        static TitlePlan ofLocalized(Map<String, String> localized)
         {
             return new TitlePlan(null, localized);
         }
