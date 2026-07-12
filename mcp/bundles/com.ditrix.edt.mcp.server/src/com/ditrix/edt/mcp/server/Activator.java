@@ -30,6 +30,7 @@ import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
 import com._1c.g5.v8.dt.rights.IRightInfosService;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
+import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
@@ -99,7 +100,11 @@ public class Activator extends AbstractUIPlugin
         {
             mcpServer.stop();
         }
-        
+
+        // Flush and close the optional history file-log sink (releases its background
+        // writer thread + file handle). No-op when the file log is off.
+        McpCallHistoryFileLog.shutdown();
+
         // Close service trackers
         services.dispose();
 

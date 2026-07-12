@@ -17,8 +17,11 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.ui.IStartup;
 
+import com.ditrix.edt.mcp.server.history.McpCallHistory;
+import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 
 /**
@@ -51,6 +54,19 @@ public class McpServerStartup implements IStartup
     {
         // Opt-in headless/CI bootstrap (env-gated; no-op without the env vars).
         importConfiguredProjects();
+
+        // Seed the in-memory history recorder from persisted preferences so the record
+        // toggle and buffer size take effect on the live singleton from startup (record
+        // ON by default). Without this the recorder would keep its compile-time defaults
+        // and the History preferences could never turn it off or change its size.
+        IPreferenceStore historyStore = Activator.getDefault().getPreferenceStore();
+        McpCallHistory.getInstance().applyPreferences(historyStore);
+
+        // Install the optional JSONL file-log sink for the MCP call history from the
+        // persisted preferences. No-op unless enabled; never blocks startup (all
+        // failures swallowed). The sink is retained so a later preference change can
+        // re-evaluate it and plugin shutdown can flush and close it.
+        McpCallHistoryFileLog.reconfigure();
 
         // Auto-start when the preference is set OR the env override forces it.
         boolean autoStart = "true".equalsIgnoreCase(System.getenv(ENV_AUTO_START)) //$NON-NLS-1$

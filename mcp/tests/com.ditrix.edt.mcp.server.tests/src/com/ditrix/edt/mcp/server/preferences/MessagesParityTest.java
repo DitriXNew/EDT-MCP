@@ -30,11 +30,12 @@ import org.osgi.framework.FrameworkUtil;
 /**
  * Ratchet for the bilingual (RU/EN) settings/tags UI: every English {@code .properties}
  * bundle and its {@code _ru} sibling must carry the SAME key set — no missing translation
- * and no orphan key — across all three externalization channels the feature uses:
+ * and no orphan key — across all four externalization channels the feature uses:
  *
  * <ul>
  *   <li>the preferences NLS bundle ({@code preferences/messages.properties} — the settings form);</li>
  *   <li>the tags-UI NLS bundle ({@code tags/ui/messages.properties} — the tag dialogs);</li>
+ *   <li>the History-view NLS bundle ({@code ui/messages.properties} — the MCP History view);</li>
  *   <li>the {@code plugin.xml} {@code %key} localization ({@code plugin.properties} — registry names).</li>
  * </ul>
  *
@@ -57,6 +58,8 @@ public class MessagesParityTest
     private static final String PREFS_RU = "com/ditrix/edt/mcp/server/preferences/messages_ru.properties"; //$NON-NLS-1$
     private static final String TAGS_EN = "com/ditrix/edt/mcp/server/tags/ui/messages.properties"; //$NON-NLS-1$
     private static final String TAGS_RU = "com/ditrix/edt/mcp/server/tags/ui/messages_ru.properties"; //$NON-NLS-1$
+    private static final String HISTORY_EN = "com/ditrix/edt/mcp/server/ui/messages.properties"; //$NON-NLS-1$
+    private static final String HISTORY_RU = "com/ditrix/edt/mcp/server/ui/messages_ru.properties"; //$NON-NLS-1$
     private static final String PLUGIN_EN = "plugin.properties"; //$NON-NLS-1$
     private static final String PLUGIN_RU = "plugin_ru.properties"; //$NON-NLS-1$
 
@@ -77,6 +80,13 @@ public class MessagesParityTest
         assertKeyParity(TAGS_EN, TAGS_RU);
     }
 
+    /** The MCP History view's NLS bundle: English keys == Russian keys. */
+    @Test
+    public void testHistoryViewMessagesKeyParity() throws IOException
+    {
+        assertKeyParity(HISTORY_EN, HISTORY_RU);
+    }
+
     /** The plugin.xml %-localization: English keys == Russian keys. */
     @Test
     public void testPluginPropertiesKeyParity() throws IOException
@@ -92,7 +102,8 @@ public class MessagesParityTest
     /** The NLS Messages classes whose fields must all resolve (both bundles this feature ships). */
     private static final String[] MESSAGES_CLASSES = {
         "com.ditrix.edt.mcp.server.preferences.Messages", //$NON-NLS-1$
-        "com.ditrix.edt.mcp.server.tags.ui.Messages" //$NON-NLS-1$
+        "com.ditrix.edt.mcp.server.tags.ui.Messages", //$NON-NLS-1$
+        "com.ditrix.edt.mcp.server.ui.Messages" //$NON-NLS-1$
     };
 
     @Test
@@ -154,7 +165,7 @@ public class MessagesParityTest
     @Test
     public void testRussianFilesAreAsciiEscapedAndBomFree() throws IOException
     {
-        for (String ruPath : new String[] {PLUGIN_RU, PREFS_RU, TAGS_RU})
+        for (String ruPath : new String[] {PLUGIN_RU, PREFS_RU, TAGS_RU, HISTORY_RU})
         {
             URL url = resolve(ruPath);
             assertNotNull("packaged Russian resource not found (missing file, or not in " //$NON-NLS-1$

@@ -344,7 +344,31 @@
          <viewShortcut id="com.ditrix.edt.mcp.server.tags.filterView"/>
       </perspectiveExtension>
    </extension>
-   
+
+   <!-- MCP request/response History View (issue #254): in-EDT browser over the
+        exchanges recorded at the transport choke point, plus a context-usage
+        Statistics tab. (The same feature also adds the read-only get_mcp_history
+        tool over the wire; the view itself contributes no tool.) -->
+   <extension point="org.eclipse.ui.views">
+      <view
+            id="com.ditrix.edt.mcp.server.history.historyView"
+            name="%mcpHistory.view.name"
+            icon="icons/restart.png"
+            category="com.ditrix.edt.mcp.server.tags.viewCategory"
+            class="com.ditrix.edt.mcp.server.ui.McpHistoryView"
+            allowMultiple="false"
+            restorable="true">
+         <description>%mcpHistory.view.description</description>
+      </view>
+   </extension>
+
+   <!-- Add MCP History View to Window > Show View menu -->
+   <extension point="org.eclipse.ui.perspectiveExtensions">
+      <perspectiveExtension targetID="*">
+         <viewShortcut id="com.ditrix.edt.mcp.server.history.historyView"/>
+      </perspectiveExtension>
+   </extension>
+
    <!-- Tag Search Filter for EDT Navigator -->
    <extension point="org.eclipse.ui.navigator.navigatorContent">
       <commonFilter
