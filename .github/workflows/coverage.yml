@@ -15,7 +15,7 @@ name: Coverage
 
 on:
   workflow_run:
-    workflows: ["E2E 2025.2", "E2E 2026.1"]
+    workflows: ["E2E 2026.1"]
     types: [completed]
 
 permissions:

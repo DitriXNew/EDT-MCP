@@ -34,7 +34,7 @@ inputs:
   edt-p2:
     description: "1C:EDT public p2 update-site"
     required: false
-    default: "https://edt.1c.ru/downloads/releases/ruby/2025.2/"
+    default: "https://edt.1c.ru/downloads/releases/ruby/2026.1/"
   eclipse-p2:
     description: "Eclipse release p2 (for the platform closure)"
     required: false
