@@ -1,5 +1,0 @@
-# Created at 2026-07-13T11:43:47.437
-Boot Manifest-JAR contains absolute paths in classpath 'E:\AI\ДоработкаMCP\EDT-MCP\proxy\target\test-classes'
-Hint: <argLine>-Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
-'other' has different root
-
