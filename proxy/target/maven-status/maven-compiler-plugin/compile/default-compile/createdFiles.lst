@@ -1,0 +1,15 @@
+com\ditrix\edt\mcp\proxy\ProjectRouter.class
+com\ditrix\edt\mcp\proxy\BackendRegistry$Snapshot.class
+com\ditrix\edt\mcp\proxy\McpProxyHandler$1.class
+com\ditrix\edt\mcp\proxy\SessionManager.class
+com\ditrix\edt\mcp\proxy\Backend.class
+com\ditrix\edt\mcp\proxy\Json.class
+com\ditrix\edt\mcp\proxy\ProxyServer.class
+com\ditrix\edt\mcp\proxy\BackendRegistry.class
+com\ditrix\edt\mcp\proxy\ProjectRouter$RouteResult.class
+com\ditrix\edt\mcp\proxy\Main.class
+com\ditrix\edt\mcp\proxy\FanOut.class
+com\ditrix\edt\mcp\proxy\McpProxyHandler.class
+com\ditrix\edt\mcp\proxy\ProxyConfig.class
+com\ditrix\edt\mcp\proxy\RouterTools.class
+com\ditrix\edt\mcp\proxy\ProjectRouter$RouteResult$Kind.class

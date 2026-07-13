@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.ditrix.edt.mcp.proxy.ProxyConfigTest
+-------------------------------------------------------------------------------
+Tests run: 22, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.004 s -- in com.ditrix.edt.mcp.proxy.ProxyConfigTest

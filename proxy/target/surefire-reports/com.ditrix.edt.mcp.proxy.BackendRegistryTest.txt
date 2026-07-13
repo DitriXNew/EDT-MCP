@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.ditrix.edt.mcp.proxy.BackendRegistryTest
+-------------------------------------------------------------------------------
+Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 11.10 s -- in com.ditrix.edt.mcp.proxy.BackendRegistryTest

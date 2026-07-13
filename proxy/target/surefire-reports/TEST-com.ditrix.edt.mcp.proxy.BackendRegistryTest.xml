@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="11.097" tests="10" errors="0" skipped="0" failures="0">
+  <properties>
+    <property name="java.specification.version" value="17"/>
+    <property name="sun.cpu.isalist" value="amd64"/>
+    <property name="sun.jnu.encoding" value="Cp1251"/>
+    <property name="java.class.path" value="E:\AI\ДоработкаMCP\EDT-MCP\proxy\target\test-classes;E:\AI\ДоработкаMCP\EDT-MCP\proxy\target\classes;C:\Users\artem.demin\.m2\repository\com\google\code\gson\gson\2.10.1\gson-2.10.1.jar;C:\Users\artem.demin\.m2\repository\junit\junit\4.13.2\junit-4.13.2.jar;C:\Users\artem.demin\.m2\repository\org\hamcrest\hamcrest-core\1.3\hamcrest-core-1.3.jar;"/>
+    <property name="java.vm.vendor" value="Azul Systems, Inc."/>
+    <property name="sun.arch.data.model" value="64"/>
+    <property name="user.variant" value=""/>
+    <property name="java.vendor.url" value="http://www.azul.com/"/>
+    <property name="user.timezone" value="Europe/Moscow"/>
+    <property name="os.name" value="Windows 11"/>
+    <property name="java.vm.specification.version" value="17"/>
+    <property name="sun.java.launcher" value="SUN_STANDARD"/>
+    <property name="user.country" value="RU"/>
+    <property name="sun.boot.library.path" value="C:\Program Files\Zulu\zulu-17\bin"/>
+    <property name="sun.java.command" value="C:\Users\artem.demin\AppData\Local\Temp\surefire1930455699173482512\surefirebooter-20260713114347371_3.jar C:\Users\artem.demin\AppData\Local\Temp\surefire1930455699173482512 2026-07-13T11-43-47_102-jvmRun1 surefire-20260713114347371_1tmp surefire_0-20260713114347371_2tmp"/>
+    <property name="jdk.debug" value="release"/>
+    <property name="surefire.test.class.path" value="E:\AI\ДоработкаMCP\EDT-MCP\proxy\target\test-classes;E:\AI\ДоработкаMCP\EDT-MCP\proxy\target\classes;C:\Users\artem.demin\.m2\repository\com\google\code\gson\gson\2.10.1\gson-2.10.1.jar;C:\Users\artem.demin\.m2\repository\junit\junit\4.13.2\junit-4.13.2.jar;C:\Users\artem.demin\.m2\repository\org\hamcrest\hamcrest-core\1.3\hamcrest-core-1.3.jar;"/>
+    <property name="sun.cpu.endian" value="little"/>
+    <property name="user.home" value="C:\Users\artem.demin"/>
+    <property name="user.language" value="ru"/>
+    <property name="java.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.version.date" value="2024-01-16"/>
+    <property name="java.home" value="C:\Program Files\Zulu\zulu-17"/>
+    <property name="file.separator" value="\"/>
+    <property name="basedir" value="E:\AI\ДоработкаMCP\EDT-MCP\proxy"/>
+    <property name="java.vm.compressedOopsMode" value="Zero based"/>
+    <property name="line.separator" value="&#10;"/>
+    <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.specification.name" value="Java Platform API Specification"/>
+    <property name="surefire.real.class.path" value="C:\Users\artem.demin\AppData\Local\Temp\surefire1930455699173482512\surefirebooter-20260713114347371_3.jar"/>
+    <property name="user.script" value=""/>
+    <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
+    <property name="java.runtime.version" value="17.0.10+7-LTS"/>
+    <property name="user.name" value="artem.demin"/>
+    <property name="path.separator" value=";"/>
+    <property name="os.version" value="10.0"/>
+    <property name="java.runtime.name" value="OpenJDK Runtime Environment"/>
+    <property name="file.encoding" value="Cp1251"/>
+    <property name="java.vm.name" value="OpenJDK 64-Bit Server VM"/>
+    <property name="java.vendor.version" value="Zulu17.48+15-CA"/>
+    <property name="localRepository" value="C:\Users\artem.demin\.m2\repository"/>
+    <property name="java.vendor.url.bug" value="http://www.azul.com/support/"/>
+    <property name="java.io.tmpdir" value="C:\Users\ARTEM~1.DEM\AppData\Local\Temp\"/>
+    <property name="java.version" value="17.0.10"/>
+    <property name="user.dir" value="E:\AI\ДоработкаMCP\EDT-MCP\proxy"/>
+    <property name="os.arch" value="amd64"/>
+    <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
+    <property name="sun.os.patch.level" value=""/>
+    <property name="native.encoding" value="Cp1251"/>
+    <property name="java.library.path" value="C:\Program Files\Zulu\zulu-17\bin;C:\windows\Sun\Java\bin;C:\windows\system32;C:\windows;%OVM_OSCRIPTBIN%;%OVM_OSCRIPTBIN%;C:\Users\artem.demin\.local\bin;C:\Program Files\OpenSSH;C:\Users\artem.demin\bin;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\local\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\bin;C:\Users\artem.demin\bin;C:\Program Files\PowerShell\7;C:\Program Files\OpenSSH;C:\Program Files\Zulu\zulu-17\bin;C:\Program Files\Python311\Scripts;C:\Program Files\Python311;C:\imagemagick;C:\Program Files\BellSoft\LibericaJDK-11-Full\bin;C:\windows\system32;C:\windows;C:\windows\System32\Wbem;C:\windows\System32\WindowsPowerShell\v1.0;C:\windows\System32\OpenSSH;C:\ProgramData\chocolatey\bin;C:\Program Files\Microsoft VS Code\bin;C:\Program Files\Git\cmd;C:\Program Files (x86)\Microsoft SQL Server\150\DTS\Binn;C:\Program Files\Azure Data Studio\bin;C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn;C:\Program Files\OneScript\bin;C:\tools\php81;C:\Program Files\WireGuard;C:\Program Files (x86)\Microsoft SQL Server\160\Tools\Binn;C:\Program Files\Microsoft SQL Server\160\Tools\Binn;C:\Program Files\Microsoft SQL Server\160\DTS\Binn;C:\Program Files\nodejs;C:\Program Files\OpenSSL-Win64\bin;C:\Program Files\PowerShell\7;C:\Program Files\Docker\Docker\resources\bin;C:\Users\artem.demin\AppData\Local\Microsoft\WindowsApps;C:\tools\sonar-scanner\bin;C:\Users\artem.demin\AppData\Roaming\npm;C:\Program Files\1C\1CE\components\1c-edt-2025.1.1+45-x86_64;C:\Users\artem.demin\.local\bin;C:\Program Files\Git\usr\bin\vendor_perl;C:\Program Files\Git\usr\bin\core_perl;C:\Users\artem.demin\.claude\plugins\cache\claude-plugins-official\superpowers\6.1.0\bin;C:\Users\artem.demin\.claude\plugins\cache\claude-plugins-official\code-review\unknown\bin;C:\Users\artem.demin\.claude\plugins\cache\claude-plugins-official\security-guidance\2.0.6\bin;C:\Users\artem.demin\.claude\plugins\cache\claude-plugins-official\postman\1.2.0\bin;."/>
+    <property name="java.vm.info" value="mixed mode, sharing"/>
+    <property name="java.vendor" value="Azul Systems, Inc."/>
+    <property name="java.vm.version" value="17.0.10+7-LTS"/>
+    <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
+    <property name="java.class.version" value="61.0"/>
+  </properties>
+  <testcase name="testParseProjectNamesMissingLevelsYieldsEmpty" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.037"/>
+  <testcase name="testParseProjectNamesNullOrMalformedYieldsEmpty" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.0"/>
+  <testcase name="testDuplicateProjectsWithOverlappingOwnership" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.395">
+    <system-err><![CDATA[июл. 13, 2026 11:43:48 AM com.ditrix.edt.mcp.proxy.BackendRegistry logChange
+INFO: Live EDT backends changed: [] -> [58198, 58199], projects: [Shared]
+]]></system-err>
+  </testcase>
+  <testcase name="testRefreshAgainstTwoBackendsBuildsTheProjectMap" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.035">
+    <system-err><![CDATA[июл. 13, 2026 11:43:48 AM com.ditrix.edt.mcp.proxy.BackendRegistry logChange
+INFO: Live EDT backends changed: [] -> [58202, 58203], projects: [ProjectA, ProjectB]
+]]></system-err>
+  </testcase>
+  <testcase name="testParseProjectNamesValid" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.008"/>
+  <testcase name="testConcurrentRefreshCallsCoalesceIntoASingleScan" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.525">
+    <system-err><![CDATA[июл. 13, 2026 11:43:48 AM com.ditrix.edt.mcp.proxy.BackendRegistry logChange
+INFO: Live EDT backends changed: [] -> [58206], projects: [ProjectA]
+]]></system-err>
+  </testcase>
+  <testcase name="testEmptyScanRangeYieldsNoLiveBackends" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.004"/>
+  <testcase name="testParseProjectNamesSkipsBlankAndNonObjectEntries" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.001"/>
+  <testcase name="testDiscoveryTimeoutBoundsAHungListProjectsWithoutBlockingHealth" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="10.034">
+    <system-err><![CDATA[июл. 13, 2026 11:43:58 AM com.ditrix.edt.mcp.proxy.BackendRegistry logChange
+INFO: Live EDT backends changed: [] -> [58215], projects: []
+]]></system-err>
+  </testcase>
+  <testcase name="testCachedToolsListResponseRoundTrip" classname="com.ditrix.edt.mcp.proxy.BackendRegistryTest" time="0.006"/>
+</testsuite>
