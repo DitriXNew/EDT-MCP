@@ -55,7 +55,7 @@ public final class McpConstants
     public static final String SERVER_NAME = "edt-mcp-server"; //$NON-NLS-1$
     
     /** Plugin author */
-    public static final String AUTHOR = "DitriX, Diversus23"; //$NON-NLS-1$
+    public static final String AUTHOR = "DitriX, Diversus23, Jimmo910"; //$NON-NLS-1$
     
     /** Plugin version - read from Bundle-Version at runtime, set by tycho-versions-plugin */
     public static final String PLUGIN_VERSION;
