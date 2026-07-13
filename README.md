@@ -6,13 +6,11 @@
 [![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=DitriXNew_EDT-MCP&metric=code_smells)](https://sonarcloud.io/summary/new_code?id=DitriXNew_EDT-MCP)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=DitriXNew_EDT-MCP&metric=coverage)](https://sonarcloud.io/summary/new_code?id=DitriXNew_EDT-MCP)
 
-[![E2E 2025.2](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-2025.2.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-2025.2.yml)
 [![E2E 2026.1](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-2026.1.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/e2e-2026.1.yml)
 
-[![Conformance 2025.2](https://github.com/DitriXNew/EDT-MCP/actions/workflows/conformance-2025.2.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/conformance-2025.2.yml)
 [![Conformance 2026.1](https://github.com/DitriXNew/EDT-MCP/actions/workflows/conformance-2026.1.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/conformance-2026.1.yml)
 
-> **Build & Unit Tests**, **E2E**, and **MCP Conformance** all run on stock GitHub-hosted runners (cloud CI) — no docker image, no self-hosted runner. E2E and Conformance run **per EDT version** (2025.2 and 2026.1, each its own badge): the setup step installs a headless EDT of that version on the runner via `p2 director`. E2E additionally imports the test fixtures into an empty workspace via the plugin's headless bootstrap (`EDT_MCP_IMPORT_PROJECTS`) and skips the live-infobase tools, so no 1C platform is needed. Each badge reflects its latest run. (New CI badges render once these workflows land on the default branch.)
+> **Build & Unit Tests**, **E2E**, and **MCP Conformance** all run on stock GitHub-hosted runners (cloud CI) — no docker image, no self-hosted runner. E2E and Conformance run against **EDT 2026.1** (currently build 2026.1.2): the setup step installs a headless EDT of that version on the runner via `p2 director`. E2E additionally imports the test fixtures into an empty workspace via the plugin's headless bootstrap (`EDT_MCP_IMPORT_PROJECTS`) and skips the live-infobase tools, so no 1C platform is needed. Each badge reflects its latest run.
 
 # EDT MCP Server
 
@@ -23,7 +21,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 
 > [!IMPORTANT]
 > **EDT version compatibility:**
-> EDT 2025.2+ is supported
+> Built and CI-validated against 1C:EDT 2026.1 (Ruby), currently build 2026.1.2.
 
 ## Features
 
@@ -952,7 +950,7 @@ bash source/compile.sh
 
 ### Notes
 
-- A full first build pulls the EDT 2025.2 / 2026.1 p2 repository (depending on `mcp/targets/default/default.target`) and the Eclipse 2023-12 release — expect several minutes. Subsequent builds run in ~1 minute thanks to the local p2 cache.
+- A full first build pulls the EDT 2026.1 p2 repository (`mcp/targets/default/default.target`) and the Eclipse 2023-12 release — expect several minutes. Subsequent builds run in ~1 minute thanks to the local p2 cache.
 - The output zip uses forward-slash entries (produced by `jar` when `zip` is unavailable) so it installs cleanly on both Windows and Linux EDT instances.
 - `source/dist/` is gitignored; only the script itself is tracked.
 
@@ -985,7 +983,7 @@ Use it for substantial whole-task work — a feature, a non-trivial bug, or a ne
 
 ## Requirements
 
-- 1C:EDT 2025.2 (Ruby) or later
+- 1C:EDT 2026.1 (Ruby)
 - Java 17+
 
 ## License

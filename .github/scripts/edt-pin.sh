@@ -16,7 +16,7 @@
 # and can never be stale (a new build => a new key => a fresh, self-consistent base).
 #
 # USAGE.  edt-pin.sh <channel> <edt-p2-url>
-#   <channel>     the ruby/<channel>/ segment, e.g. 2025.2 / 2026.1
+#   <channel>     the ruby/<channel>/ segment, e.g. 2026.1
 #   <edt-p2-url>  the full p2 URL (trailing slash), e.g. https://.../ruby/2026.1/
 # Prints ONE line on stdout: the build qualifier to fold into the cache key. All human /
 # annotation output goes to stderr. Exit 1 on a confirmed drift or an unknown channel.
@@ -38,8 +38,7 @@ fi
 # ── PIN MAP (single source of truth) ──────────────────────────────────────────────────
 # channel -> the com._1c.g5.v8.dt.core build qualifier the CI base is validated against.
 case "$CHANNEL" in
-  2025.2) EDT_EXPECTED="26.0.1.v202605050943" ;;
-  2026.1) EDT_EXPECTED="27.0.2.v202607090722" ;;
+  2026.1) EDT_EXPECTED="27.0.2.v202607090722" ;; # 1C:EDT 2026.1.2
   *)
     log "::error::edt-pin.sh: no pinned EDT build for channel '$CHANNEL'. Add it to the PIN MAP in .github/scripts/edt-pin.sh."
     exit 1
