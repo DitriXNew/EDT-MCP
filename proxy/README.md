@@ -46,10 +46,37 @@ server, just a different port.
 | `--scan FROM-TO` | `EDT_MCP_PROXY_SCAN`    | `8765-8774` | Backend port scan range (inclusive)        |
 | `--refresh N`    | `EDT_MCP_PROXY_REFRESH` | `20`        | Periodic registry refresh interval, seconds |
 | `--timeout N`    | `EDT_MCP_PROXY_TIMEOUT` | `300`       | Timeout per forwarded call, seconds        |
+| `--bind HOST`    | `EDT_MCP_PROXY_HOST`    | *(unset)*   | Bind `HOST` instead of loopback only (e.g. `0.0.0.0`) - see [Security](#security) |
 
 Precedence: **CLI flags win over environment variables win over defaults.**
 `--help` prints usage and exits. An invalid value fails startup with an actionable
 error message.
+
+## Security
+
+**The proxy binds loopback (`127.0.0.1`) only by default**, mirroring the EDT-MCP plugin's own
+default: the proxy forwards `tools/call` to EDT-MCP backends whose tool surface includes
+arbitrary-BSL execution (`evaluate_expression`) and destructive operations, so it must not be
+reachable from the network unless you explicitly opt in.
+
+Setting `--bind HOST` (or `EDT_MCP_PROXY_HOST`) - e.g. `--bind 0.0.0.0` to listen on all
+interfaces, or a specific interface address - opts into that exposure. Startup logs which mode
+is active (`loopback only` vs `remote (<host>)`), and a remote bind also logs a `SECURITY`
+warning.
+
+> **⚠️ The proxy has no authentication in v1.** Unlike the plugin (which pairs
+> `allowRemote` with an optional auth token), a remotely-bound proxy accepts every MCP request
+> from any host that can reach the port - including `tools/call` routed to arbitrary BSL on
+> every EDT backend it discovers. Loopback is the security boundary; only bind beyond it on a
+> trusted, isolated network (e.g. behind your own reverse proxy that adds authentication).
+
+Two further limits guard against resource exhaustion regardless of the bind address:
+
+- **Request body cap** - a `POST /mcp` body over 4 MiB is rejected with `413` before it is
+  fully read, so an oversized or unbounded request cannot exhaust heap.
+- **Session cap** - the proxy tracks at most 10,000 concurrently open client sessions;
+  `initialize` past that cap is refused with a JSON-RPC error asking idle sessions to be closed
+  (`DELETE /mcp`) first.
 
 ## How routing works
 

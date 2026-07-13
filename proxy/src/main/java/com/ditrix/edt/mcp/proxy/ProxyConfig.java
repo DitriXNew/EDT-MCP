@@ -12,15 +12,26 @@ import java.util.Map;
  * Immutable configuration for the standalone MCP proxy.
  *
  * <p>Values are resolved with the precedence: CLI argument &gt; environment variable &gt; built-in default.
- * Supported CLI options: {@code --port N}, {@code --scan FROM-TO}, {@code --refresh N}, {@code --timeout N}.
+ * Supported CLI options: {@code --port N}, {@code --scan FROM-TO}, {@code --refresh N}, {@code --timeout N},
+ * {@code --bind HOST}.
  * Supported environment variables: {@code EDT_MCP_PROXY_PORT}, {@code EDT_MCP_PROXY_SCAN} (e.g.
- * {@code "8765-8774"}), {@code EDT_MCP_PROXY_REFRESH}, {@code EDT_MCP_PROXY_TIMEOUT}.
+ * {@code "8765-8774"}), {@code EDT_MCP_PROXY_REFRESH}, {@code EDT_MCP_PROXY_TIMEOUT},
+ * {@code EDT_MCP_PROXY_HOST}.
  *
  * <p>Any invalid value fails fast with an {@link IllegalArgumentException} carrying an actionable
  * message. The {@code --help} flag is handled by {@link Main} before parsing, not here.
  *
  * <p>An inverted scan range ({@code FROM > TO}) is accepted and means an <b>empty</b> scan range:
  * no backend ports are probed and the proxy starts (and stays alive) with zero backends.
+ *
+ * <p><b>Bind address (security).</b> By default the proxy binds loopback only ({@code 127.0.0.1}),
+ * mirroring the EDT-MCP plugin's own default: the proxy forwards {@code tools/call} to EDT-MCP
+ * backends whose tool surface includes arbitrary-BSL execution and destructive operations, so it
+ * must not be reachable from the network unless explicitly opted in. Setting {@code --bind HOST}
+ * (or {@value #ENV_HOST}) - e.g. {@code --bind 0.0.0.0} - opts into binding {@code HOST} instead
+ * and sets {@link #allowRemote}. <b>The proxy has no authentication in v1</b> - exposing it beyond
+ * loopback means any host that can reach the port can invoke every routed tool, including
+ * arbitrary BSL, on every backend the proxy discovers. Only do this on a trusted network.
  */
 public final class ProxyConfig
 {
@@ -36,10 +47,17 @@ public final class ProxyConfig
     /** Environment variable overriding the per-forwarded-call backend timeout in seconds. */
     public static final String ENV_TIMEOUT = "EDT_MCP_PROXY_TIMEOUT"; //$NON-NLS-1$
 
+    /**
+     * Environment variable requesting a non-loopback bind host (e.g. {@code "0.0.0.0"}).
+     * Setting it, like {@code --bind}, opts into {@link #allowRemote}.
+     */
+    public static final String ENV_HOST = "EDT_MCP_PROXY_HOST"; //$NON-NLS-1$
+
     private static final String OPT_PORT = "--port"; //$NON-NLS-1$
     private static final String OPT_SCAN = "--scan"; //$NON-NLS-1$
     private static final String OPT_REFRESH = "--refresh"; //$NON-NLS-1$
     private static final String OPT_TIMEOUT = "--timeout"; //$NON-NLS-1$
+    private static final String OPT_BIND = "--bind"; //$NON-NLS-1$
 
     private static final int DEFAULT_PORT = 8764;
     private static final int DEFAULT_SCAN_FROM = 8765;
@@ -65,13 +83,30 @@ public final class ProxyConfig
     /** Timeout for a single forwarded backend call, in seconds. Default {@code 300}. */
     public final int backendTimeoutSeconds;
 
-    private ProxyConfig(int port, int scanFrom, int scanTo, int refreshSeconds, int backendTimeoutSeconds)
+    /**
+     * {@code true} when the proxy is configured to bind beyond loopback (via {@code --bind} /
+     * {@value #ENV_HOST}). Default {@code false} - loopback only, no authentication needed
+     * because nothing off-box can reach the port.
+     */
+    public final boolean allowRemote;
+
+    /**
+     * The host to bind when {@link #allowRemote} is {@code true} (e.g. {@code "0.0.0.0"} for all
+     * interfaces, or a specific interface address). {@code null} when {@link #allowRemote} is
+     * {@code false} - the loopback address is used instead.
+     */
+    public final String bindHost;
+
+    private ProxyConfig(int port, int scanFrom, int scanTo, int refreshSeconds, int backendTimeoutSeconds,
+        boolean allowRemote, String bindHost)
     {
         this.port = port;
         this.scanFrom = scanFrom;
         this.scanTo = scanTo;
         this.refreshSeconds = refreshSeconds;
         this.backendTimeoutSeconds = backendTimeoutSeconds;
+        this.allowRemote = allowRemote;
+        this.bindHost = bindHost;
     }
 
     /**
@@ -89,6 +124,8 @@ public final class ProxyConfig
         int scanTo = DEFAULT_SCAN_TO;
         int refreshSeconds = DEFAULT_REFRESH_SECONDS;
         int backendTimeoutSeconds = DEFAULT_BACKEND_TIMEOUT_SECONDS;
+        boolean allowRemote = false;
+        String bindHost = null;
 
         if (env != null)
         {
@@ -114,6 +151,12 @@ public final class ProxyConfig
             {
                 backendTimeoutSeconds = parsePositive(ENV_TIMEOUT, value);
             }
+            value = trimmedOrNull(env.get(ENV_HOST));
+            if (value != null)
+            {
+                bindHost = parseHost(ENV_HOST, value);
+                allowRemote = true;
+            }
         }
 
         if (args != null)
@@ -137,6 +180,10 @@ public final class ProxyConfig
                 case OPT_TIMEOUT:
                     backendTimeoutSeconds = parsePositive(OPT_TIMEOUT, optionValue(OPT_TIMEOUT, args, ++i));
                     break;
+                case OPT_BIND:
+                    bindHost = parseHost(OPT_BIND, optionValue(OPT_BIND, args, ++i));
+                    allowRemote = true;
+                    break;
                 default:
                     throw new IllegalArgumentException(
                         "Unknown option '" + option + "'. Run with --help for the supported options."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -144,7 +191,7 @@ public final class ProxyConfig
             }
         }
 
-        return new ProxyConfig(port, scanFrom, scanTo, refreshSeconds, backendTimeoutSeconds);
+        return new ProxyConfig(port, scanFrom, scanTo, refreshSeconds, backendTimeoutSeconds, allowRemote, bindHost);
     }
 
     /**
@@ -164,11 +211,14 @@ public final class ProxyConfig
             "  --scan FROM-TO  Backend discovery port range, inclusive (default 8765-8774)", //$NON-NLS-1$
             "  --refresh N     Periodic backend rediscovery interval in seconds (default 20)", //$NON-NLS-1$
             "  --timeout N     Per-forwarded-call backend timeout in seconds (default 300)", //$NON-NLS-1$
+            "  --bind HOST     Bind HOST instead of loopback only (e.g. 0.0.0.0 for all interfaces).", //$NON-NLS-1$
+            "                  WARNING: v1 has no authentication - this exposes every routed EDT", //$NON-NLS-1$
+            "                  tool, including arbitrary BSL, to anyone who can reach the port.", //$NON-NLS-1$
             "  --help          Print this help and exit", //$NON-NLS-1$
             "", //$NON-NLS-1$
             "Environment variables (CLI options take precedence):", //$NON-NLS-1$
             "  EDT_MCP_PROXY_PORT, EDT_MCP_PROXY_SCAN (FROM-TO),", //$NON-NLS-1$
-            "  EDT_MCP_PROXY_REFRESH, EDT_MCP_PROXY_TIMEOUT"); //$NON-NLS-1$
+            "  EDT_MCP_PROXY_REFRESH, EDT_MCP_PROXY_TIMEOUT, EDT_MCP_PROXY_HOST"); //$NON-NLS-1$
     }
 
     private static String optionValue(String option, String[] args, int index)
@@ -235,6 +285,17 @@ public final class ProxyConfig
                 + "' - expected a positive integer (seconds)."); //$NON-NLS-1$
         }
         return parsed;
+    }
+
+    private static String parseHost(String source, String value)
+    {
+        String trimmed = value == null ? null : value.trim();
+        if (trimmed == null || trimmed.isEmpty())
+        {
+            throw new IllegalArgumentException("Invalid value for " + source + ": '" + value //$NON-NLS-1$ //$NON-NLS-2$
+                + "' - expected a non-empty host, e.g. 0.0.0.0."); //$NON-NLS-1$
+        }
+        return trimmed;
     }
 
     private static int parseInt(String source, String value)

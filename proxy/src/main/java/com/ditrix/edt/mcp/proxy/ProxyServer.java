@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.proxy;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
@@ -29,6 +30,11 @@ import com.sun.net.httpserver.HttpServer;
  * <li>{@code /mcp} - the MCP Streamable HTTP endpoint, delegated entirely to
  *     {@link McpProxyHandler}.</li>
  * </ul>
+ *
+ * <p><b>Bind address.</b> {@link #start()} binds loopback only unless {@code cfg.allowRemote}
+ * opts into a caller-chosen {@code cfg.bindHost} (see {@link ProxyConfig}) - the proxy forwards
+ * to EDT-MCP backends with an arbitrary-BSL tool surface and has no authentication of its own,
+ * so loopback is the security boundary by default.
  */
 public final class ProxyServer
 {
@@ -62,6 +68,12 @@ public final class ProxyServer
      * Binds {@code cfg.port} (0 = ephemeral), registers the {@code /health} and {@code /mcp}
      * contexts and starts serving requests on a cached thread pool.
      *
+     * <p>Binds loopback only ({@link InetAddress#getLoopbackAddress()}) unless
+     * {@code cfg.allowRemote} is set, in which case it binds {@code cfg.bindHost} instead -
+     * mirroring the EDT-MCP plugin's own loopback-by-default policy (see
+     * {@code com.ditrix.edt.mcp.server.McpServer#start}). The proxy has no authentication in
+     * v1, so a remote bind is logged as a security warning.
+     *
      * @throws UncheckedIOException when the port cannot be bound (e.g. already in use)
      * @throws IllegalStateException when the server is already started
      */
@@ -71,14 +83,18 @@ public final class ProxyServer
         {
             throw new IllegalStateException("Proxy server is already started"); //$NON-NLS-1$
         }
+        InetSocketAddress bindAddress = cfg.allowRemote
+            ? new InetSocketAddress(cfg.bindHost, cfg.port)
+            : new InetSocketAddress(InetAddress.getLoopbackAddress(), cfg.port);
         try
         {
-            httpServer = HttpServer.create(new InetSocketAddress(cfg.port), 0);
+            httpServer = HttpServer.create(bindAddress, 0);
         }
         catch (IOException e)
         {
-            throw new UncheckedIOException(
-                "Failed to bind proxy port " + cfg.port + " (already in use?): " + e.getMessage(), e); //$NON-NLS-1$ //$NON-NLS-2$
+            throw new UncheckedIOException("Failed to bind proxy " //$NON-NLS-1$
+                + (cfg.allowRemote ? cfg.bindHost : "loopback") + ":" + cfg.port //$NON-NLS-1$ //$NON-NLS-2$
+                + " (already in use?): " + e.getMessage(), e); //$NON-NLS-1$
         }
         executor = Executors.newCachedThreadPool(r -> {
             Thread thread = new Thread(r, "edt-mcp-proxy-worker"); //$NON-NLS-1$
@@ -89,7 +105,16 @@ public final class ProxyServer
         httpServer.createContext("/health", this::handleHealth); //$NON-NLS-1$
         httpServer.createContext("/mcp", handler); //$NON-NLS-1$
         httpServer.start();
-        LOG.info("Proxy HTTP server started on port " + getPortUnsafe()); //$NON-NLS-1$
+        LOG.info("Proxy HTTP server binding to " //$NON-NLS-1$
+            + (cfg.allowRemote ? "remote (" + cfg.bindHost + ")" : "loopback only") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " on port " + getPortUnsafe()); //$NON-NLS-1$
+        if (cfg.allowRemote)
+        {
+            LOG.warning("SECURITY: proxy is bound to " + cfg.bindHost //$NON-NLS-1$
+                + " with NO authentication. Any host that can reach this port can invoke every " //$NON-NLS-1$
+                + "routed tool on every discovered EDT backend, including arbitrary BSL. " //$NON-NLS-1$
+                + "Only expose this on a trusted network."); //$NON-NLS-1$
+        }
     }
 
     /**

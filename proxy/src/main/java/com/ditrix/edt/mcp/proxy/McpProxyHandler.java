@@ -56,6 +56,7 @@ public final class McpProxyHandler implements HttpHandler
     private static final String HEADER_CONTENT_TYPE = "Content-Type"; //$NON-NLS-1$
     private static final String HEADER_CACHE_CONTROL = "Cache-Control"; //$NON-NLS-1$
     private static final String HEADER_CONNECTION = "Connection"; //$NON-NLS-1$
+    private static final String HEADER_CONTENT_LENGTH = "Content-Length"; //$NON-NLS-1$
 
     private static final String VALUE_NO_CACHE = "no-cache"; //$NON-NLS-1$
     private static final String VALUE_KEEP_ALIVE = "keep-alive"; //$NON-NLS-1$
@@ -77,6 +78,15 @@ public final class McpProxyHandler implements HttpHandler
     private static final int ERROR_INVALID_REQUEST = -32600;
     private static final int ERROR_INTERNAL = -32603;
     private static final int ERROR_BACKEND_UNREACHABLE = -32000;
+
+    /**
+     * Hard cap on a request body's size (issue #253 hardening): a body at or under this size is
+     * read in full; a bigger one is rejected with {@code 413} - either up front (from a declared
+     * {@code Content-Length}) or as soon as the bounded read exceeds the cap - without ever
+     * buffering more than {@code MAX_BODY_BYTES + 1} bytes, so an oversized or unbounded request
+     * body cannot exhaust heap.
+     */
+    private static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
 
     private static final String KEY_METHOD = "method"; //$NON-NLS-1$
     private static final String KEY_PARAMS = "params"; //$NON-NLS-1$
@@ -175,11 +185,18 @@ public final class McpProxyHandler implements HttpHandler
      * the proxy itself and needs no prior session; every other method requires a valid
      * proxy-issued {@code Mcp-Session-Id}. {@code notifications/*} get an empty {@code 202};
      * {@code ping}, {@code tools/list} and {@code tools/call} (plus any other method) are
-     * delegated to their dedicated handlers.
+     * delegated to their dedicated handlers. A body over {@link #MAX_BODY_BYTES} is rejected
+     * with {@code 413} before any further processing (see {@link #readBody}).
      */
     private void handlePost(HttpExchange exchange) throws IOException
     {
         String rawBody = readBody(exchange);
+        if (rawBody == null)
+        {
+            sendPlain(exchange, 413, buildJsonRpcError(ERROR_INVALID_REQUEST,
+                "Request body exceeds the " + MAX_BODY_BYTES + "-byte limit", null)); //$NON-NLS-1$ //$NON-NLS-2$
+            return;
+        }
         JsonObject requestJson = Json.parseObject(rawBody);
         Object requestId = extractRequestId(requestJson);
 
@@ -252,7 +269,9 @@ public final class McpProxyHandler implements HttpHandler
      * Answers {@code initialize} itself: echoes the client's {@code protocolVersion} (falling
      * back to the version the proxy speaks to its backends when absent), advertises
      * {@code capabilities: {"tools":{}}}, identifies as {@value #SERVER_NAME}, and issues a
-     * fresh {@code Mcp-Session-Id}.
+     * fresh {@code Mcp-Session-Id} - unless the proxy's {@link SessionManager} is at its session
+     * cap, in which case {@link SessionManager#create()} returns {@code null} and this answers
+     * a JSON-RPC error instead of a session (no {@code Mcp-Session-Id} header is issued).
      */
     private void handleInitialize(HttpExchange exchange, JsonObject requestJson, Object requestId) throws IOException
     {
@@ -272,6 +291,14 @@ public final class McpProxyHandler implements HttpHandler
         result.add(KEY_SERVER_INFO, serverInfo);
 
         String sessionId = sessions.create();
+        if (sessionId == null)
+        {
+            sendMcpResponse(exchange, 200, buildJsonRpcError(ERROR_INTERNAL,
+                "Session limit reached (" + SessionManager.MAX_SESSIONS //$NON-NLS-1$
+                    + "); close idle sessions and retry.", //$NON-NLS-1$
+                requestId), null);
+            return;
+        }
         sendMcpResponse(exchange, 200, wrapResult(result, requestId), sessionId);
     }
 
@@ -507,11 +534,41 @@ public final class McpProxyHandler implements HttpHandler
         }
     }
 
+    /**
+     * Reads the request body up to {@link #MAX_BODY_BYTES}, never buffering more than that plus
+     * one byte. A declared {@code Content-Length} over the cap is rejected without reading the
+     * stream at all (the container drains it when {@link HttpExchange#close()} runs); absent or
+     * understated {@code Content-Length} (e.g. chunked transfer) is caught by the bounded read
+     * itself.
+     *
+     * @return the decoded UTF-8 body, or {@code null} when it exceeds {@link #MAX_BODY_BYTES}
+     *         (the caller must answer {@code 413} and MUST NOT read the exchange further)
+     */
     private static String readBody(HttpExchange exchange) throws IOException
     {
+        String contentLengthHeader = exchange.getRequestHeaders().getFirst(HEADER_CONTENT_LENGTH);
+        if (contentLengthHeader != null)
+        {
+            try
+            {
+                if (Long.parseLong(contentLengthHeader.trim()) > MAX_BODY_BYTES)
+                {
+                    return null;
+                }
+            }
+            catch (NumberFormatException ignored)
+            {
+                // Malformed header - fall through to the bounded read, which enforces the cap anyway.
+            }
+        }
         try (InputStream in = exchange.getRequestBody())
         {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            byte[] bytes = in.readNBytes(MAX_BODY_BYTES + 1);
+            if (bytes.length > MAX_BODY_BYTES)
+            {
+                return null;
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
         }
     }
 

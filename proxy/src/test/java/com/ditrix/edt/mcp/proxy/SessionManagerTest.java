@@ -10,14 +10,16 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
 /**
  * Unit tests for {@link SessionManager}: session lifecycle ({@code create}/{@code isValid}/
- * {@code close}), rejection of unknown or {@code null} ids, idempotent close, and the
- * active-session count.
+ * {@code close}), rejection of unknown or {@code null} ids, idempotent close, the
+ * active-session count, and the {@link SessionManager#MAX_SESSIONS} hard cap (issue #253
+ * hardening).
  */
 public class SessionManagerTest
 {
@@ -124,5 +126,51 @@ public class SessionManagerTest
         SessionManager sessions = new SessionManager();
 
         assertEquals(0, sessions.activeCount());
+    }
+
+    /**
+     * Fills the session set exactly to {@link SessionManager#MAX_SESSIONS}, then proves the
+     * next {@code create()} is rejected ({@code null}, no growth) while every session created
+     * under the cap remains valid — the hard cap must not evict or corrupt existing sessions.
+     */
+    @Test
+    public void testCreateReturnsNullPastCapAndExistingSessionsStayValid()
+    {
+        SessionManager sessions = new SessionManager();
+        String first = sessions.create();
+        for (int i = 1; i < SessionManager.MAX_SESSIONS; i++)
+        {
+            assertNotNull("create must succeed under the cap (i=" + i + ")", sessions.create());
+        }
+        assertEquals(SessionManager.MAX_SESSIONS, sessions.activeCount());
+
+        String rejected = sessions.create();
+
+        assertNull("create must return null once MAX_SESSIONS is reached", rejected);
+        assertEquals("a rejected create must not grow the session set",
+            SessionManager.MAX_SESSIONS, sessions.activeCount());
+        assertTrue("sessions created under the cap must remain valid", sessions.isValid(first));
+    }
+
+    /**
+     * After a rejection at the cap, closing one existing session must free exactly one slot -
+     * proving the cap check is a live size comparison, not a one-shot latch.
+     */
+    @Test
+    public void testCreateSucceedsAgainAfterClosingASessionAtTheCap()
+    {
+        SessionManager sessions = new SessionManager();
+        String toClose = sessions.create();
+        for (int i = 1; i < SessionManager.MAX_SESSIONS; i++)
+        {
+            sessions.create();
+        }
+        assertNull("must be rejected while at the cap", sessions.create());
+
+        sessions.close(toClose);
+        String afterClose = sessions.create();
+
+        assertNotNull("create must succeed again once a slot is freed", afterClose);
+        assertEquals(SessionManager.MAX_SESSIONS, sessions.activeCount());
     }
 }

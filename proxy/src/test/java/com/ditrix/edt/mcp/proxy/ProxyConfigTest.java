@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.proxy;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -32,6 +34,9 @@ public class ProxyConfigTest
         assertEquals(8774, cfg.scanTo);
         assertEquals(20, cfg.refreshSeconds);
         assertEquals(300, cfg.backendTimeoutSeconds);
+        // Security default: loopback only, no bind host configured.
+        assertFalse(cfg.allowRemote);
+        assertNull(cfg.bindHost);
     }
 
     @Test
@@ -44,6 +49,72 @@ public class ProxyConfigTest
         assertEquals(8774, cfg.scanTo);
         assertEquals(20, cfg.refreshSeconds);
         assertEquals(300, cfg.backendTimeoutSeconds);
+        assertFalse(cfg.allowRemote);
+        assertNull(cfg.bindHost);
+    }
+
+    @Test
+    public void testBindOptionSetsAllowRemoteAndHost()
+    {
+        ProxyConfig cfg = ProxyConfig.parse(new String[] { "--bind", "0.0.0.0" }, Map.of());
+
+        assertTrue("--bind must opt into allowRemote", cfg.allowRemote);
+        assertEquals("0.0.0.0", cfg.bindHost);
+        // Every other setting stays at its default.
+        assertEquals(8764, cfg.port);
+    }
+
+    @Test
+    public void testHostEnvVariableSetsAllowRemoteAndHost()
+    {
+        Map<String, String> env = Map.of(ProxyConfig.ENV_HOST, "192.168.1.5");
+
+        ProxyConfig cfg = ProxyConfig.parse(NO_ARGS, env);
+
+        assertTrue("EDT_MCP_PROXY_HOST must opt into allowRemote", cfg.allowRemote);
+        assertEquals("192.168.1.5", cfg.bindHost);
+    }
+
+    @Test
+    public void testBindCliWinsOverHostEnv()
+    {
+        Map<String, String> env = Map.of(ProxyConfig.ENV_HOST, "10.0.0.1");
+        String[] args = { "--bind", "0.0.0.0" };
+
+        ProxyConfig cfg = ProxyConfig.parse(args, env);
+
+        assertTrue(cfg.allowRemote);
+        assertEquals("CLI --bind must win over " + ProxyConfig.ENV_HOST, "0.0.0.0", cfg.bindHost);
+    }
+
+    @Test
+    public void testBlankHostEnvValueIgnored()
+    {
+        Map<String, String> env = Map.of(ProxyConfig.ENV_HOST, "   ");
+
+        ProxyConfig cfg = ProxyConfig.parse(NO_ARGS, env);
+
+        assertFalse(cfg.allowRemote);
+        assertNull(cfg.bindHost);
+    }
+
+    @Test
+    public void testBindOptionRejectsEmptyHost()
+    {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> ProxyConfig.parse(new String[] { "--bind", "   " }, Map.of()));
+
+        assertTrue(e.getMessage().contains("--bind"));
+    }
+
+    @Test
+    public void testBindOptionRequiresAValue()
+    {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> ProxyConfig.parse(new String[] { "--bind" }, Map.of()));
+
+        assertTrue(e.getMessage().contains("--bind"));
+        assertTrue(e.getMessage().contains("requires a value"));
     }
 
     @Test
@@ -255,10 +326,12 @@ public class ProxyConfigTest
         assertTrue(usage.contains("--scan"));
         assertTrue(usage.contains("--refresh"));
         assertTrue(usage.contains("--timeout"));
+        assertTrue(usage.contains("--bind"));
         assertTrue(usage.contains("--help"));
         assertTrue(usage.contains(ProxyConfig.ENV_PORT));
         assertTrue(usage.contains(ProxyConfig.ENV_SCAN));
         assertTrue(usage.contains(ProxyConfig.ENV_REFRESH));
         assertTrue(usage.contains(ProxyConfig.ENV_TIMEOUT));
+        assertTrue(usage.contains(ProxyConfig.ENV_HOST));
     }
 }
