@@ -17,6 +17,7 @@ import java.util.Map;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.e1c.g5.dt.applications.ApplicationException;
 
 /**
  * Tests for {@link UpdateDatabaseTool}.
@@ -26,6 +27,11 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * returns before any live launch-manager access. This is a destructive tool —
  * the tests only exercise the argument-validation sentinels (which return before
  * any database update); the actual update is covered by the E2E suite.
+ * <p>
+ * Also covers the #258 {@code InternalInfo} error-hint logic (via the package-private
+ * {@link UpdateDatabaseTool#describeInternalInfoHint} and
+ * {@link UpdateDatabaseTool#buildApplicationErrorResult} seams) and the guide's
+ * documentation of the long-running-update / {@code get_mcp_history} workflow.
  */
 public class UpdateDatabaseToolTest
 {
@@ -170,6 +176,133 @@ public class UpdateDatabaseToolTest
             guide.contains("STARTS the standalone server in RUN mode")); //$NON-NLS-1$
         assertTrue("guide must say a subsequent debug launch restarts the server",
             guide.contains("restart that server in DEBUG mode")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsLongRunningUpdatesAndHistoryRetrieval()
+    {
+        // #258: large-configuration updates run minutes and often outlast an MCP client's own
+        // call timeout; the guide must point the caller at get_mcp_history to retrieve the real
+        // outcome afterwards, and at the CLI workaround for the InternalInfo pipeline limitation.
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertNotNull(guide);
+        assertTrue("guide must document retrieving the outcome via get_mcp_history", //$NON-NLS-1$
+            guide.contains("get_mcp_history")); //$NON-NLS-1$
+        assertTrue("guide must document the CLI workaround for the InternalInfo limitation", //$NON-NLS-1$
+            guide.contains("LoadConfigFromFiles")); //$NON-NLS-1$
+    }
+
+    // ==================== #258 InternalInfo error hint (package-private surface) ====================
+
+    /**
+     * Mirrors the real EDT cause type reported in #258: its simple name matches the legacy
+     * {@code describeAuthHint} "Synchronization" keyword, so a naive detector would (wrongly)
+     * append the credentials hint to this InternalInfo failure.
+     */
+    private static class InfobaseSynchronizationException extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+
+        InfobaseSynchronizationException(String message)
+        {
+            super(message);
+        }
+    }
+
+    /** Mirrors the type-name-only detection branch of {@code describeInternalInfoHint}. */
+    private static class ConfigurationLoadException extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+
+        ConfigurationLoadException(String message)
+        {
+            super(message);
+        }
+    }
+
+    @Test
+    public void testInternalInfoHintMatchesMarkerInNestedCause()
+    {
+        // The real Russian EDT message reported in #258.
+        Throwable cause = new RuntimeException(
+            "Отсутствует внутренняя информация (узел InternalInfo) для объекта Configuration"); //$NON-NLS-1$
+        ApplicationException e = new ApplicationException("Failed to load configuration", cause); //$NON-NLS-1$
+
+        String hint = UpdateDatabaseTool.describeInternalInfoHint(e);
+
+        assertFalse("hint must be non-empty for the InternalInfo marker", hint.isEmpty()); //$NON-NLS-1$
+        assertTrue("hint must point at the CLI workaround", //$NON-NLS-1$
+            hint.contains("LoadConfigFromFiles")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInternalInfoHintEmptyForUnrelatedException()
+    {
+        ApplicationException e = new ApplicationException("Unrelated failure", //$NON-NLS-1$
+            new RuntimeException("some other cause")); //$NON-NLS-1$
+
+        String hint = UpdateDatabaseTool.describeInternalInfoHint(e);
+
+        assertEquals("", hint); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInternalInfoHintMatchesMarkerThreeLevelsDeep()
+    {
+        Throwable level3 = new RuntimeException("InternalInfo node is missing"); //$NON-NLS-1$
+        Throwable level2 = new RuntimeException("wrapping level 2", level3); //$NON-NLS-1$
+        Throwable level1 = new RuntimeException("wrapping level 1", level2); //$NON-NLS-1$
+        ApplicationException e = new ApplicationException("top-level failure", level1); //$NON-NLS-1$
+
+        String hint = UpdateDatabaseTool.describeInternalInfoHint(e);
+
+        assertFalse("hint must match a marker 3 cause-hops deep", hint.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInternalInfoHintMatchesConfigurationLoadExceptionTypeName()
+    {
+        // The type-name branch: matches even when the message itself carries no marker text.
+        ApplicationException e = new ApplicationException("Load failed", //$NON-NLS-1$
+            new ConfigurationLoadException("generic load failure")); //$NON-NLS-1$
+
+        String hint = UpdateDatabaseTool.describeInternalInfoHint(e);
+
+        assertFalse("hint must match on the ConfigurationLoadException type name", hint.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInternalInfoHintTakesPriorityOverAuthHintInErrorResult()
+    {
+        // Reproduces #258 problem (1): the cause is an InfobaseSynchronizationException (which
+        // would trip the legacy "Synchronization" auth-hint keyword) AND its message carries the
+        // InternalInfo marker. The final error JSON must carry the InternalInfo hint and must NOT
+        // carry the misleading credentials hint.
+        ApplicationException e = new ApplicationException("Failed to load configuration", //$NON-NLS-1$
+            new InfobaseSynchronizationException("missing InternalInfo node")); //$NON-NLS-1$
+
+        String result =
+            UpdateDatabaseTool.buildApplicationErrorResult(e, "MyProject", "app1", false); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("result must carry the InternalInfo hint", //$NON-NLS-1$
+            result.contains("LoadConfigFromFiles")); //$NON-NLS-1$
+        assertFalse("result must NOT carry the misleading credentials hint", //$NON-NLS-1$
+            result.contains("set_infobase_credentials")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAuthHintStillAppliesWhenNoInternalInfoMarker()
+    {
+        // Unchanged today's behaviour: an actual auth/connection/sync failure with no InternalInfo
+        // marker anywhere in the cause chain must still get the credentials hint.
+        ApplicationException e = new ApplicationException("Failed to load configuration", //$NON-NLS-1$
+            new InfobaseSynchronizationException("connection refused")); //$NON-NLS-1$
+
+        String result =
+            UpdateDatabaseTool.buildApplicationErrorResult(e, "MyProject", "app1", false); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("result must still carry the credentials hint when InternalInfo does not match", //$NON-NLS-1$
+            result.contains("set_infobase_credentials")); //$NON-NLS-1$
     }
 
     // ==================== Argument validation (no live launch manager needed) ====================

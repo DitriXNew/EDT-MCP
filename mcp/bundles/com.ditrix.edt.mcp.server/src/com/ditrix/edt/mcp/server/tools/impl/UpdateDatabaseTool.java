@@ -55,6 +55,12 @@ public class UpdateDatabaseTool implements IMcpTool
     /** Output key: application update state before the update. */
     private static final String KEY_STATE_BEFORE = "stateBefore"; //$NON-NLS-1$
 
+    /**
+     * Cap on how many {@link Throwable#getCause()} hops {@link #describeInternalInfoHint} walks,
+     * guarding against a cyclical cause chain.
+     */
+    private static final int MAX_CAUSE_CHAIN_DEPTH = 10;
+
     @Override
     public String getName()
     {
@@ -437,13 +443,20 @@ public class UpdateDatabaseTool implements IMcpTool
      * Builds the JSON for an {@link ApplicationException} failure. The common failure is the
      * exclusive lock: name a 1C client that still holds the infobase (an MCP-owned sibling launch
      * is exempt from the sweep, or a client outlived the terminate window) so the agent can act
-     * instead of seeing a bare failure. Side-effect-free (the error is already logged by the caller).
+     * instead of seeing a bare failure. When the failure matches the known EDT-platform
+     * {@code InternalInfo} pipeline limitation (#258), {@link #describeInternalInfoHint} takes
+     * priority and {@link #describeAuthHint} is suppressed — that failure has nothing to do with
+     * credentials, and appending the auth hint too would mislead the caller. Side-effect-free (the
+     * error is already logged by the caller). Exposed (package-private) so the #258
+     * InternalInfo-vs-auth-hint precedence can be unit-tested directly.
      */
-    private static String buildApplicationErrorResult(ApplicationException e, String projectName,
+    static String buildApplicationErrorResult(ApplicationException e, String projectName,
             String applicationId, boolean terminatedClient)
     {
+        String internalInfoHint = describeInternalInfoHint(e);
+        String hint = internalInfoHint.isEmpty() ? describeAuthHint(e) : internalInfoHint;
         ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
-            + e.getMessage() + describeInfobaseHolder(applicationId) + describeAuthHint(e));
+            + e.getMessage() + describeInfobaseHolder(applicationId) + hint);
         errorResult.put(McpKeys.APPLICATION_ID, applicationId);
         errorResult.put(McpKeys.PROJECT, projectName);
         if (terminatedClient)
@@ -516,5 +529,48 @@ public class UpdateDatabaseTool implements IMcpTool
         }
         return " If the infobase requires user authentication, set the connection credentials with " //$NON-NLS-1$
             + "set_infobase_credentials (user/password) and retry."; //$NON-NLS-1$
+    }
+
+    /**
+     * Hint appended to the update-failure message when the failure is the known EDT-platform
+     * pipeline limitation (#258): the configuration XML that EDT itself generated for the load is
+     * rejected because the {@code InternalInfo} node is missing (Russian EDT message:
+     * "Отсутствует внутренняя информация (узел InternalInfo) для объекта Configuration"). This is
+     * an EDT-side failure, not something the MCP call causes — the EDT GUI's "Update database
+     * configuration" fails the same way on the same project. Detection walks the WHOLE cause
+     * chain (this exception plus every {@link Throwable#getCause()} below it, depth-capped at
+     * {@link #MAX_CAUSE_CHAIN_DEPTH} to guard against a cycle) looking for a
+     * {@code ConfigurationLoadException} type name or a message containing the language-independent
+     * marker {@code InternalInfo}. Empty when the failure does not match; when it matches, the
+     * caller suppresses {@link #describeAuthHint} (see {@link #buildApplicationErrorResult}) because
+     * this failure has nothing to do with credentials. Exposed (package-private) so the matching
+     * can be unit-tested directly.
+     *
+     * @param e the application exception
+     * @return the InternalInfo hint, or an empty string
+     */
+    static String describeInternalInfoHint(ApplicationException e)
+    {
+        Throwable current = e;
+        int depth = 0;
+        while (current != null && depth < MAX_CAUSE_CHAIN_DEPTH)
+        {
+            String typeName = current.getClass().getSimpleName();
+            String message = String.valueOf(current.getMessage());
+            boolean isConfigLoadFailure = typeName.contains("ConfigurationLoadException") //$NON-NLS-1$
+                || message.contains("InternalInfo"); //$NON-NLS-1$
+            if (isConfigLoadFailure)
+            {
+                return " The platform rejected the configuration XML EDT generated for the load " //$NON-NLS-1$
+                    + "(the InternalInfo node is missing). This is an EDT-side pipeline limitation " //$NON-NLS-1$
+                    + "for this project - the EDT GUI 'Update database configuration' fails the same " //$NON-NLS-1$
+                    + "way; it is not caused by the MCP call. Workarounds: update via the platform " //$NON-NLS-1$
+                    + "CLI (export_configuration_to_xml, then 1cv8 DESIGNER /LoadConfigFromFiles " //$NON-NLS-1$
+                    + "<dir> /UpdateDBCfg), or try a newer EDT release."; //$NON-NLS-1$
+            }
+            current = current.getCause();
+            depth++;
+        }
+        return ""; //$NON-NLS-1$
     }
 }
