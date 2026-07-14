@@ -64,6 +64,13 @@ jobs:
           done
           exit 1
 
+      - name: Build proxy
+        env:
+          MAVEN_OPTS: -Xmx2g
+        run: |
+          mvn -f proxy/pom.xml clean verify --batch-mode --no-transfer-progress
+          cp proxy/target/edt-mcp-proxy-*.jar "edt-mcp-proxy-v${{ steps.version.outputs.version }}.jar"
+
       - name: Package archive
         run: |
           cd mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository
@@ -73,5 +80,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           name: MCP-EDT v${{ steps.version.outputs.version }}
-          files: MCP-EDT.v*.zip
+          files: |
+            MCP-EDT.v*.zip
+            edt-mcp-proxy-v*.jar
           generate_release_notes: true

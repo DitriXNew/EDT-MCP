@@ -21,7 +21,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 /**
- * Owns the proxy's {@link HttpServer}: binds the configured port and wires the two contexts.
+ * Owns the proxy's {@link HttpServer}: binds the configured port and wires the three contexts.
  *
  * <ul>
  * <li>{@code GET /health} - liveness probe answered here:
@@ -29,6 +29,11 @@ import com.sun.net.httpserver.HttpServer;
  *     of live backends in the registry.</li>
  * <li>{@code /mcp} - the MCP Streamable HTTP endpoint, delegated entirely to
  *     {@link McpProxyHandler}.</li>
+ * <li>{@code POST /admin/shutdown} - the {@code stop} CLI subcommand's target (issue #253
+ *     follow-up, spec section 7): gracefully stops the proxy. Accepted ONLY from a loopback
+ *     remote address, REGARDLESS of {@code cfg.allowRemote}/{@code --bind} - the admin surface
+ *     is never exposed remotely even when the MCP traffic itself is. See
+ *     {@link #handleAdminShutdown} and {@link #setShutdownCallback}.</li>
  * </ul>
  *
  * <p><b>Bind address.</b> {@link #start()} binds loopback only unless {@code cfg.allowRemote}
@@ -42,6 +47,8 @@ public final class ProxyServer
 
     private static final String CONTENT_TYPE = "Content-Type"; //$NON-NLS-1$
     private static final String APPLICATION_JSON = "application/json"; //$NON-NLS-1$
+    private static final String HTTP_METHOD_POST = "POST"; //$NON-NLS-1$
+    private static final String CONTEXT_ADMIN_SHUTDOWN = "/admin/shutdown"; //$NON-NLS-1$
 
     private final ProxyConfig cfg;
     private final BackendRegistry registry;
@@ -49,6 +56,16 @@ public final class ProxyServer
 
     private HttpServer httpServer;
     private ExecutorService executor;
+
+    /**
+     * Cleanup run once {@code POST /admin/shutdown} has been accepted and its response flushed;
+     * wired by {@code Main}/{@code CliCommands} to the exact same cleanup a Ctrl+C/SIGTERM
+     * shutdown hook runs (stop the periodic-refresh scheduler, then this server). {@code null}
+     * (the default, e.g. in a test that never calls {@link #setShutdownCallback}) falls back to
+     * calling {@link #stop()} directly, so the endpoint is still self-sufficient without a caller
+     * that owns extra resources to clean up.
+     */
+    private volatile Runnable shutdownCallback;
 
     /**
      * Creates the server (does not bind yet - call {@link #start()}).
@@ -104,6 +121,7 @@ public final class ProxyServer
         httpServer.setExecutor(executor);
         httpServer.createContext("/health", this::handleHealth); //$NON-NLS-1$
         httpServer.createContext("/mcp", handler); //$NON-NLS-1$
+        httpServer.createContext(CONTEXT_ADMIN_SHUTDOWN, this::handleAdminShutdown);
         httpServer.start();
         LOG.info("Proxy HTTP server binding to " //$NON-NLS-1$
             + (cfg.allowRemote ? "remote (" + cfg.bindHost + ")" : "loopback only") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -132,6 +150,21 @@ public final class ProxyServer
             executor.shutdownNow();
             executor = null;
         }
+    }
+
+    /**
+     * Installs the cleanup {@code POST /admin/shutdown} runs once its response has been flushed
+     * to the client, instead of the plain {@link #stop()} fallback. The caller (normally
+     * {@code CliCommands.serve}) should pass the SAME {@link Runnable} it installs as its JVM
+     * shutdown hook, so a Ctrl+C/SIGTERM and an admin-triggered stop clean up identically
+     * (stop the periodic-refresh scheduler, then this server); both paths are idempotent, so it
+     * is harmless if the shutdown hook also fires afterwards.
+     *
+     * @param callback the shutdown cleanup to run; {@code null} restores the {@link #stop()} fallback
+     */
+    public void setShutdownCallback(Runnable callback)
+    {
+        this.shutdownCallback = callback;
     }
 
     /**
@@ -172,6 +205,88 @@ public final class ProxyServer
         {
             exchange.close();
         }
+    }
+
+    /**
+     * Serves {@code POST /admin/shutdown} (issue #253 follow-up, spec section 7/8): the {@code
+     * stop} CLI subcommand's target. Accepted ONLY when {@link #isLoopbackRequest} is {@code
+     * true} for the exchange's remote address - REGARDLESS of {@code cfg.allowRemote}/{@code
+     * --bind} - answering {@code 403} otherwise; any HTTP method other than {@code POST}
+     * answers {@code 405}. On acceptance the {@code 200 {"status":"stopping"}} response is sent
+     * and the exchange closed FIRST, so it reaches the client, and only THEN is the actual stop
+     * triggered on a separate thread (see {@link #triggerShutdown()}) - stopping this server
+     * from within one of its own dispatcher threads before the response is flushed would race
+     * the client seeing a reply at all.
+     */
+    private void handleAdminShutdown(HttpExchange exchange) throws IOException
+    {
+        boolean accepted = false;
+        try
+        {
+            if (!HTTP_METHOD_POST.equals(exchange.getRequestMethod()))
+            {
+                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}"); //$NON-NLS-1$
+                return;
+            }
+            if (!isLoopbackRequest(exchange.getRemoteAddress()))
+            {
+                LOG.warning("Rejected " + CONTEXT_ADMIN_SHUTDOWN + " from non-loopback address " //$NON-NLS-1$ //$NON-NLS-2$
+                    + exchange.getRemoteAddress());
+                sendJson(exchange, 403,
+                    "{\"error\":\"Forbidden - " + CONTEXT_ADMIN_SHUTDOWN + " accepts loopback callers only\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+                return;
+            }
+            LOG.info("Accepted " + CONTEXT_ADMIN_SHUTDOWN + " from " + exchange.getRemoteAddress()); //$NON-NLS-1$ //$NON-NLS-2$
+            sendJson(exchange, 200, "{\"status\":\"stopping\"}"); //$NON-NLS-1$
+            accepted = true;
+        }
+        finally
+        {
+            exchange.close();
+        }
+        if (accepted)
+        {
+            triggerShutdown();
+        }
+    }
+
+    /**
+     * Tells whether an HTTP exchange's remote address is loopback - the ONLY address class
+     * {@code POST /admin/shutdown} accepts, regardless of {@code cfg.allowRemote}/{@code --bind}.
+     * Package-private and static (no exchange/socket needed) so a unit test can exercise both
+     * branches directly: faking a genuinely non-loopback remote peer in-process is impractical,
+     * so the 403 branch is proven on this helper instead of over a real socket.
+     *
+     * @param remote the exchange's remote socket address; {@code null} is treated as non-loopback
+     * @return {@code true} only when the remote address is present and loopback
+     */
+    static boolean isLoopbackRequest(InetSocketAddress remote)
+    {
+        return remote != null && remote.getAddress() != null && remote.getAddress().isLoopbackAddress();
+    }
+
+    /**
+     * Runs the shutdown cleanup on a fresh daemon thread, off the HTTP dispatcher thread that
+     * just answered {@code POST /admin/shutdown}, so stopping this server's {@link HttpServer}
+     * never races the response it just sent. Uses {@link #shutdownCallback} when set (installed
+     * by the caller that also owns e.g. the periodic-refresh scheduler); falls back to
+     * {@link #stop()} so the endpoint is self-sufficient even without one.
+     */
+    private void triggerShutdown()
+    {
+        Thread shutdownThread = new Thread(() -> {
+            Runnable callback = shutdownCallback;
+            if (callback != null)
+            {
+                callback.run();
+            }
+            else
+            {
+                stop();
+            }
+        }, "edt-mcp-proxy-admin-shutdown"); //$NON-NLS-1$
+        shutdownThread.setDaemon(true);
+        shutdownThread.start();
     }
 
     private static void sendJson(HttpExchange exchange, int status, String body) throws IOException

@@ -73,7 +73,6 @@ public final class McpProxyHandler implements HttpHandler
     private static final String NOTIFICATION_PREFIX = "notifications/"; //$NON-NLS-1$
 
     private static final String SERVER_NAME = "edt-mcp-proxy"; //$NON-NLS-1$
-    private static final String FALLBACK_VERSION = "dev"; //$NON-NLS-1$
 
     private static final int ERROR_INVALID_REQUEST = -32600;
     private static final int ERROR_INTERNAL = -32603;
@@ -627,11 +626,10 @@ public final class McpProxyHandler implements HttpHandler
         return "Backend at :" + port + " stopped responding; refreshed registry; retry."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** The proxy's own version, read from the shaded jar's manifest; {@value #FALLBACK_VERSION} outside one. */
+    /** The proxy's own version; see {@link ProxyVersion} for how it is resolved. */
     private static String proxyVersion()
     {
-        String version = McpProxyHandler.class.getPackage().getImplementationVersion();
-        return version != null ? version : FALLBACK_VERSION;
+        return ProxyVersion.current();
     }
 
     private static String buildSimpleError(String message)

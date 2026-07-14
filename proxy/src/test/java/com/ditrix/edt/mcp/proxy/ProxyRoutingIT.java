@@ -345,6 +345,39 @@ public class ProxyRoutingIT
     }
 
     /**
+     * Polls {@code GET /health} on {@code port} until it stops answering (an {@link IOException}
+     * on the connection attempt) or {@code timeoutMillis} elapses, whichever comes first. Used by
+     * the {@code stop}/{@code POST /admin/shutdown} tests ({@code CliIT}, {@code AdminShutdownIT})
+     * to observe the proxy actually stopping asynchronously (the response to the shutdown request
+     * is sent before the server itself stops - see {@code ProxyServer#triggerShutdown}).
+     *
+     * @param port the port to poll
+     * @param timeoutMillis how long to wait before giving up
+     * @throws AssertionError when the port still answers after the timeout
+     */
+    static void awaitHealthUnreachable(int port, long timeoutMillis) throws InterruptedException
+    {
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        URI uri = URI.create("http://127.0.0.1:" + port + "/health"); //$NON-NLS-1$ //$NON-NLS-2$
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline)
+        {
+            try
+            {
+                client.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(1)).GET().build(),
+                    HttpResponse.BodyHandlers.discarding());
+                Thread.sleep(200);
+            }
+            catch (IOException expected)
+            {
+                return;
+            }
+        }
+        throw new AssertionError("port :" + port + " kept answering /health past the " + timeoutMillis //$NON-NLS-1$ //$NON-NLS-2$
+            + "ms timeout"); //$NON-NLS-1$
+    }
+
+    /**
      * Stops a backend, tolerating {@code null} and an already-stopped server (a test may
      * stop a backend mid-scenario; teardown must still be safe).
      *

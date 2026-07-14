@@ -33,6 +33,19 @@ jobs:
       - name: Maven build
         run: mvn -f proxy/pom.xml clean verify --batch-mode --no-transfer-progress
 
+      - name: Coverage summary
+        run: |
+          {
+            echo "## Proxy coverage"
+            awk -F',' 'NR>1 {missed+=$4; covered+=$5} END {total=missed+covered; pct=(total>0)?(100*covered/total):0; printf "Instruction coverage: %.2f%% (%d/%d)\n", pct, covered, total}' proxy/target/site/jacoco/jacoco.csv
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: proxy-coverage
+          path: proxy/target/site/jacoco/
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
