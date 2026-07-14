@@ -1466,6 +1466,9 @@ public final class FormElementWriter
         EObject resolved = resolveType(provider, owner, ownerEnglishType + "Object." + ownerName); //$NON-NLS-1$
         if (!(resolved instanceof TypeItem))
         {
+            // The platform TYPE_ITEM provider only knows PLATFORM type names - createProxy throws
+            // "unknown name" for configuration-produced types, so there is no further fallback here.
+            // The real #262 fix lives in MetadataTypeBuilder.objectType (the generic eGet path).
             return null;
         }
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
@@ -1474,6 +1477,7 @@ public final class FormElementWriter
         td.getTypes().add((TypeItem)resolved);
         return td;
     }
+
 
     /**
      * Forces the form's predefined {@code autoCommandBar} to carry the {@code id == -1} sentinel - the

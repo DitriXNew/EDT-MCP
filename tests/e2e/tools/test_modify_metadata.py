@@ -1099,6 +1099,9 @@ def test_set_default_form_to_nonexistent_form_is_error():
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + dp}),
               "seed the owning DataProcessor")
     wait_for_project_ready()
+    # Snapshot AFTER the (legitimate) seed dirt: the REJECTED set below must add NOTHING on top
+    # (a plain assert_no_diff would false-fail on the seeded DataProcessor itself).
+    before = tree_snapshot()
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": "DataProcessor." + dp,
         "properties": [{"name": "defaultForm",
@@ -1107,7 +1110,7 @@ def test_set_default_form_to_nonexistent_form_is_error():
     e = assert_error(r, "defaultForm set to a nonexistent form")
     assert_error_quality(e, names=["NoSuchForm_zz"],
                          ctx="an unresolvable defaultForm target is a clean, actionable error")
-    assert_no_diff("a rejected defaultForm set must change nothing")
+    assert_tree_unchanged(before, "a rejected defaultForm set must change nothing")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
@@ -1174,6 +1177,8 @@ def test_set_command_group_to_nonexistent_group_is_error():
                    {"projectName": PROJECT, "fqn": "DataProcessor.%s.Command.%s" % (dp, cmd)}),
               "seed the command")
     wait_for_project_ready()
+    # Snapshot AFTER the seed dirt (see the defaultForm error test above for the rationale).
+    before = tree_snapshot()
 
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": "DataProcessor.%s.Command.%s" % (dp, cmd),
@@ -1186,7 +1191,7 @@ def test_set_command_group_to_nonexistent_group_is_error():
     assert_error_quality(e, names=["CommandGroup.NoSuchGroup_e2e"],
                          suggests=["CommandGroup.<Name>", "STANDARD command groups"],
                          ctx="an unresolvable command group is a clean, actionable error naming the shape")
-    assert_no_diff("a rejected group set must change nothing")
+    assert_tree_unchanged(before, "a rejected group set must change nothing")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1205,16 +1210,24 @@ def test_extension_unresolved_ref_gets_adopt_hint():
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog." + not_adopted}),
               "seed a base catalog that TESTS_PROJECT never adopts")
     wait_for_project_ready()
-    # Snapshot AFTER the (legitimate) seed dirt, so the REJECTED extension call below is asserted
-    # to add NOTHING on top of it (the seeding itself would otherwise false-fail a plain assert_no_diff).
+    # Seed an EXTENSION-OWN object + attribute (the fixture's extension does not adopt the base
+    # catalog's members, so targeting an adopted member dies with Node-not-found before the
+    # reference resolution even runs). The un-adopted BASE catalog is then referenced from the
+    # extension-own attribute's type - exactly the #262 UX case.
+    ext_dp = "E2EMdP4ExtDp"
+    assert_ok(call("create_metadata",
+                   {"projectName": TESTS_PROJECT, "fqn": "DataProcessor." + ext_dp}),
+              "seed an extension-own DataProcessor")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata",
+                   {"projectName": TESTS_PROJECT,
+                    "fqn": "DataProcessor.%s.Attribute.Ref1" % ext_dp}),
+              "seed an extension-own attribute")
+    wait_for_project_ready()
     before = tree_snapshot()
-
-    # Catalog.Catalog IS adopted by TESTS_PROJECT, so its Attribute member resolves inside the
-    # extension's own model - the perfect place to set a `type` that references the un-adopted
-    # sibling catalog.
     r = call("modify_metadata", {
         "projectName": TESTS_PROJECT,
-        "fqn": "Catalog.Catalog.Attribute.Attribute",
+        "fqn": "DataProcessor.%s.Attribute.Ref1" % ext_dp,
         "properties": [{"name": "type",
                         "value": {"types": [{"kind": "Ref", "ref": "Catalog." + not_adopted}]}}],
     })

@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.mcore.DateFractions;
 import com._1c.g5.v8.dt.mcore.DateQualifiers;
@@ -271,11 +272,26 @@ public final class MetadataTypeBuilder
             return null;
         }
         MdTypes producedTypes = MdClassUtil.getProducedTypes((MdObject)owner);
-        if (!(producedTypes instanceof BasicDbObjectTypes))
+        if (producedTypes == null)
         {
             return null;
         }
-        MdObjectType mdObjType = ((BasicDbObjectTypes)producedTypes).getObjectType();
+        // The produced-types holder is a per-kind subtype (CatalogTypes, DocumentTypes,
+        // DataProcessorTypes, ...). Only the DB-stored kinds extend BasicDbObjectTypes - on
+        // EDT 2026.1 a DataProcessor's DataProcessorTypesImpl does NOT (issue #262), so an
+        // instanceof gate silently dropped the object type for it. Every kind's holder carries
+        // the same EMF feature "objectType", so read it generically through eGet instead.
+        MdObjectType mdObjType = null;
+        EStructuralFeature objectTypeFeature =
+            producedTypes.eClass().getEStructuralFeature("objectType"); //$NON-NLS-1$
+        if (objectTypeFeature != null)
+        {
+            Object value = producedTypes.eGet(objectTypeFeature);
+            if (value instanceof MdObjectType)
+            {
+                mdObjType = (MdObjectType)value;
+            }
+        }
         if (mdObjType == null)
         {
             return null;
