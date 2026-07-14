@@ -39,7 +39,10 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -1078,7 +1081,7 @@ public final class FormElementWriter
         // id space, mirroring a designer-built object form. Default false keeps the empty-form behaviour.
         if (generateContent)
         {
-            seedMainObjectAttribute(content, russianAutoNames, ownerEnglishType, owner);
+            seedMainObjectAttribute(content, russianAutoNames, ownerEnglishType, owner, version);
             // Then the bound object fields (dataPath Object.<name>) under the form root, mirroring the
             // designer wizard's checked attribute list. Each via createField, so it carries the same
             // designer defaults + auto-children as a manually-created field. Only when the main Object
@@ -1356,9 +1359,11 @@ public final class FormElementWriter
      *     object-form-type GATE; the value type itself comes from {@code owner}'s produced types)
      * @param owner the owner metadata object (re-fetched inside the active BM transaction), or
      *     {@code null} when called headless - the value type is then left unset, the seed still applies
+     * @param version the platform version - only used by the {@link #objectTypeByName} fallback below
+     *     (selects the TYPE_ITEM provider); may be {@code null} (then the fallback is skipped too)
      */
     static void seedMainObjectAttribute(EObject content, boolean russianAutoNames,
-        String ownerEnglishType, EObject owner)
+        String ownerEnglishType, EObject owner, Version version)
     {
         // Only an object-form owner (Catalog / Document / ChartOf* / ExchangePlan / BusinessProcess /
         // Task / Report / DataProcessor) carries a main Object attribute of type <Type>Object.<Name>.
@@ -1385,14 +1390,32 @@ public final class FormElementWriter
             : MAIN_ATTRIBUTE_NAME_EN);
         setIntFeature(attr, FEATURE_ID, nextAttributeId(content));
         // The value type is <Type>Object.<Name> (e.g. DocumentObject.Invoice), taken from the owner's OWN
-        // produced object type (MdClassUtil.getProducedTypes -> BasicDbObjectTypes.getObjectType). Left
-        // unset when the owner is null (headless) or has no produced object type yet, so the seed stays
-        // unattended-safe; the value type is then proven by the e2e/live byte-diff, not headless.
+        // produced object type (MdClassUtil.getProducedTypes -> BasicDbObjectTypes.getObjectType). That
+        // path never materializes for an object CREATED IN AN EXTENSION project (issue #262) - its
+        // derived produced-types data does not carry an object type the same way a base-config object's
+        // does - so a null result here falls back to resolving the SAME value type directly BY NAME
+        // (objectTypeByName). Left unset only when BOTH paths fail (owner is null / headless, or the
+        // platform genuinely has no such type), which is now reported loudly instead of a silent skip.
+        String ownerName = (owner instanceof MdObject) ? ((MdObject)owner).getName() : null;
         EObject objectType = MetadataTypeBuilder.objectType(owner);
+        if (objectType == null)
+        {
+            objectType = objectTypeByName(ownerEnglishType, ownerName, owner, version);
+        }
         EStructuralFeature valueTypeFeature = attr.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
         if (objectType != null && valueTypeFeature instanceof EReference)
         {
             attr.eSet(valueTypeFeature, objectType);
+        }
+        else if (objectType == null)
+        {
+            // Neither the produced-types path nor the by-name fallback resolved a value type - say so
+            // loudly (naming the owner) instead of the previous silent skip, so the gap is diagnosable
+            // rather than surfacing only as a cascade of downstream form-validation markers. Issue #262.
+            String ownerLabel = (owner instanceof IBmObject) ? ((IBmObject)owner).bmGetFqn()
+                : (ownerName != null ? ownerEnglishType + "." + ownerName : "<unknown>"); //$NON-NLS-1$ //$NON-NLS-2$
+            Activator.logWarning("create_metadata form-object seeding could not resolve the main Object " //$NON-NLS-1$
+                + "attribute's value type for owner '" + ownerLabel + "'; the attribute was left untyped"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         setBooleanFeature(attr, FEATURE_MAIN, true);
         setBooleanFeature(attr, FEATURE_SAVED_DATA, true);
@@ -1404,6 +1427,52 @@ public final class FormElementWriter
         setAdjustableBooleanFeature(attr, FEATURE_VIEW);
         setAdjustableBooleanFeature(attr, FEATURE_EDIT);
         addToList(content, FEATURE_ATTRIBUTES, attr);
+    }
+
+    /**
+     * Fallback for {@link MetadataTypeBuilder#objectType(EObject)} when the owner's produced object type
+     * has not materialized (issue #262): an object CREATED IN AN EXTENSION project never resolves a
+     * produced {@code <Type>Object.<Name>} proxy through {@code MdClassUtil.getProducedTypes} the way a
+     * base-configuration object does. Resolves the SAME value type directly BY NAME
+     * ({@code <Kind>Object.<Name>}, e.g. {@code DataProcessorObject.MyDataProcessor}) through the
+     * platform {@code TYPE_ITEM} provider - the identical by-name mechanism {@link #resolveType} already
+     * uses elsewhere in this file to resolve a form element's platform base type ({@code createProxy} +
+     * {@code EcoreUtil.resolve} against a live context). {@code owner} doubles as the resolve context (it
+     * is tx-bound / resource-set-attached whenever this runs for real); {@code null} is tolerated (the
+     * resolve then simply cannot succeed, mirroring {@link MetadataTypeBuilder#objectType}'s own
+     * unattended-safe contract). Never throws.
+     *
+     * @param ownerEnglishType the owner's English-singular TYPE token (e.g. {@code DataProcessor}), or
+     *     {@code null}/blank
+     * @param ownerName the owner object's programmatic Name, or {@code null}/blank
+     * @param owner the resolve context (normally the owner itself), or {@code null}
+     * @param version the platform version (selects the {@code TYPE_ITEM} provider), or {@code null}
+     * @return a fresh {@code TypeDescription} carrying the resolved type, or {@code null} when any input
+     *     is missing or the platform does not know a type by that name either
+     */
+    static EObject objectTypeByName(String ownerEnglishType, String ownerName, EObject owner, Version version)
+    {
+        if (ownerEnglishType == null || ownerEnglishType.isEmpty() || ownerName == null || ownerName.isEmpty()
+            || version == null)
+        {
+            return null;
+        }
+        IEObjectProvider provider =
+            IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version);
+        if (provider == null)
+        {
+            return null;
+        }
+        EObject resolved = resolveType(provider, owner, ownerEnglishType + "Object." + ownerName); //$NON-NLS-1$
+        if (!(resolved instanceof TypeItem))
+        {
+            return null;
+        }
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        // getTypes() is a NON-containment reference list, like MetadataTypeBuilder#objectType's own
+        // TypeDescription build - the resolved platform Type is SHARED, not detached.
+        td.getTypes().add((TypeItem)resolved);
+        return td;
     }
 
     /**
@@ -1548,35 +1617,90 @@ public final class FormElementWriter
         0x041f, 0x0430, 0x043d, 0x0435, 0x043b, 0x044c);
 
     /**
-     * Sets the owner's default object form via {@code setDefaultObjectForm(...)} when present. Uses
-     * reflection because that setter is declared per owner type without a common interface; a missing
-     * setter is reported clearly rather than failing silently.
+     * The setter names tried, IN ORDER, to assign the owner's default object form. Most owners
+     * (Catalog, Document, ChartOf*, ExchangePlan, BusinessProcess, Task) expose
+     * {@code setDefaultObjectForm(...)}; DataProcessor (and Report) instead expose
+     * {@code setDefaultForm(...)} - issue #262. Package-visible so the headless unit test can assert
+     * against the REAL production order rather than duplicating the literal names.
+     */
+    static final String[] DEFAULT_FORM_SETTER_NAMES = {"setDefaultObjectForm", "setDefaultForm"}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    /**
+     * Sets the owner's default object form via the first compatible setter found among
+     * {@link #DEFAULT_FORM_SETTER_NAMES} (tried in order). Uses reflection because the setter is
+     * declared per owner type without a common interface; a missing setter (neither name has a
+     * single-parameter overload accepting the created form) is reported clearly, naming every setter
+     * name that was tried, rather than failing silently or naming only one.
      */
     private static void setDefaultObjectForm(MdObject owner, BasicForm mdForm)
     {
-        for (Method method : owner.getClass().getMethods())
+        Method method = findCompatibleSetter(owner.getClass(), mdForm, DEFAULT_FORM_SETTER_NAMES);
+        if (method == null)
         {
-            if (!"setDefaultObjectForm".equals(method.getName())) //$NON-NLS-1$
+            throw new IllegalArgumentException("Owner type '" + owner.eClass().getName() //$NON-NLS-1$
+                + "' has no compatible " + describeSetterNames(DEFAULT_FORM_SETTER_NAMES) //$NON-NLS-1$
+                + " method; create the form without setAsDefault and assign it manually."); //$NON-NLS-1$
+        }
+        try
+        {
+            method.invoke(owner, mdForm);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new IllegalStateException("Failed to set default object form", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Finds, among {@code target}'s public methods, the first single-parameter setter named one of
+     * {@code setterNames} (tried IN ORDER) whose parameter type accepts {@code argInstance} (the same
+     * {@code Class.isInstance} compatibility check the original single-name lookup used). Package-visible
+     * for the headless unit test - a small fake class exposing just the setter(s), no real
+     * MdObject/BasicForm implementation needed.
+     *
+     * @param target the class to search (the owner's runtime class)
+     * @param argInstance the value the found setter will be invoked with (its instance, not merely its
+     *     class, so a {@code null} argument can never spuriously match)
+     * @param setterNames the setter names to try, in priority order
+     * @return the first matching method, or {@code null} when none of {@code setterNames} has a
+     *     compatible single-parameter overload
+     */
+    static Method findCompatibleSetter(Class<?> target, Object argInstance, String... setterNames)
+    {
+        for (String setterName : setterNames)
+        {
+            for (Method method : target.getMethods())
             {
-                continue;
-            }
-            Class<?>[] paramTypes = method.getParameterTypes();
-            if (paramTypes.length == 1 && paramTypes[0].isInstance(mdForm))
-            {
-                try
+                if (!setterName.equals(method.getName()))
                 {
-                    method.invoke(owner, mdForm);
-                    return;
+                    continue;
                 }
-                catch (ReflectiveOperationException e)
+                Class<?>[] paramTypes = method.getParameterTypes();
+                if (paramTypes.length == 1 && paramTypes[0].isInstance(argInstance))
                 {
-                    throw new IllegalStateException("Failed to set default object form", e); //$NON-NLS-1$
+                    return method;
                 }
             }
         }
-        throw new IllegalArgumentException("Owner type '" + owner.eClass().getName() //$NON-NLS-1$
-            + "' has no compatible setDefaultObjectForm(...) method; create the form without " //$NON-NLS-1$
-            + "setAsDefault and assign it manually."); //$NON-NLS-1$
+        return null;
+    }
+
+    /**
+     * Builds the "every setter name tried" fragment of the missing-setter error, e.g.
+     * {@code "setDefaultObjectForm(...) / setDefaultForm(...)"}. Package-visible for the headless unit
+     * test.
+     *
+     * @param setterNames the setter names that were tried, in order
+     * @return the joined, human-readable fragment
+     */
+    static String describeSetterNames(String... setterNames)
+    {
+        String[] labels = new String[setterNames.length];
+        for (int i = 0; i < setterNames.length; i++)
+        {
+            labels[i] = setterNames[i] + "(...)"; //$NON-NLS-1$
+        }
+        return String.join(" / ", labels); //$NON-NLS-1$
     }
 
     /**

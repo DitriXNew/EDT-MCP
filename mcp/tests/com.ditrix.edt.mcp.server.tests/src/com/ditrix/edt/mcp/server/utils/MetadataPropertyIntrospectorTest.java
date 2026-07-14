@@ -290,6 +290,49 @@ public class MetadataPropertyIntrospectorTest
             coa.allowedValues.contains("ChartOfAccounts")); //$NON-NLS-1$
     }
 
+    // ---- BasicCommand.group (issue #262) --------------------------------------------------------
+    //
+    // BasicCommand.getGroup() is declared against com._1c.g5.v8.dt.mcore.CommandGroup - the base
+    // interface both the metadata com._1c.g5.v8.dt.metadata.mdclass.CommandGroup (a real top MdObject,
+    // FQN-addressable) and the platform's StandardCommandGroup (a built-in group, addressed by an enum
+    // category - out of scope here) implement. The generic MdObject-subtype check alone would miss it
+    // (the DECLARED target type is the mcore interface, not the mdclass one), so 'group' was previously
+    // unclassified (excluded from the assignable set) on every BasicCommand subtype.
+
+    @Test
+    public void testDataProcessorCommandGroupIsSingleReference()
+    {
+        PropertyInfo group = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createDataProcessorCommand(), "group"); //$NON-NLS-1$
+        assertNotNull("a DataProcessorCommand's group must be assignable", group); //$NON-NLS-1$
+        assertTrue("group must be a single REFERENCE", group.valueKind == ValueKind.REFERENCE); //$NON-NLS-1$
+        assertTrue("group must report its CommandGroup target type", //$NON-NLS-1$
+            group.allowedValues.contains("CommandGroup")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommonCommandGroupIsSingleReferenceToo()
+    {
+        // The fix is on the generic mcore-interface target type, not a one-off for a single
+        // BasicCommand subtype - CommonCommand (a different EClass entirely) must classify the same.
+        PropertyInfo group = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createCommonCommand(), "group"); //$NON-NLS-1$
+        assertNotNull("a CommonCommand's group must be assignable", group); //$NON-NLS-1$
+        assertTrue("group must be a single REFERENCE", group.valueKind == ValueKind.REFERENCE); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommandGroupOwnSuppressObjectStaysExcluded()
+    {
+        // A CommandGroup's own suppressObject is a plain EObject-typed reference (not an MdObject / mcore
+        // CommandGroup target) - it must stay excluded, proving the new mcore-interface admission is
+        // scoped to the CommandGroup target type and does not open the filter generally.
+        List<String> names = MetadataPropertyIntrospector.assignableNames(
+            MdClassFactory.eINSTANCE.createCommandGroup());
+        assertFalse("suppressObject must stay excluded (not MdObject / CommandGroup typed)", //$NON-NLS-1$
+            names.contains("suppressObject")); //$NON-NLS-1$
+    }
+
     // ---- extInfo-aware overloads (issue #235) ---------------------------------------------------
     //
     // A form element carries its kind-specific / layout properties on a nested <extInfo> EObject (e.g.

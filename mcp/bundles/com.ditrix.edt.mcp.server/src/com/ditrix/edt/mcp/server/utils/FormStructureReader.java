@@ -158,8 +158,17 @@ public final class FormStructureReader
      * Finds a form by name in an owner object's {@code getForms()} list, accessed reflectively (the
      * return type is a per-owner subtype of {@code BasicForm}, so the call site cannot bind to a single
      * interface). Name match is case-insensitive against the programmatic {@code Name}.
+     *
+     * <p>Public so a caller that already holds the OWNER object (e.g. {@code modify_metadata} resolving
+     * a bare short form name like {@code 'Форма'} against the object being modified) can look up an
+     * owned form directly, without building a full {@code Type.Name.Form.FormName} FQN first - issue
+     * #262.</p>
+     *
+     * @param owner the owner metadata object
+     * @param formName the form's programmatic Name
+     * @return the matching form, or {@code null} when the owner has no such form (or no forms at all)
      */
-    private static MdObject findOwnedForm(MdObject owner, String formName)
+    public static MdObject findOwnedForm(MdObject owner, String formName)
     {
         try
         {

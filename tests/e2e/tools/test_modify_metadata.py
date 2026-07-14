@@ -33,6 +33,7 @@ from harness import (
     diff,
     e2e_test,
     PROJECT,
+    TESTS_PROJECT,
 )
 
 
@@ -1030,3 +1031,195 @@ def test_modify_form_group_unknown_extinfo_property_lists_assignable():
     assert_error_quality(e, names=["definitelyNotAGroupProp_zz"],
                          suggests=["not assignable", "Assignable properties"],
                          ctx="an unknown group property lists the assignable set incl. the extInfo props")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Happy / negative — MEMBER references: a DataProcessor's `defaultForm` (issue #262 P2b) and a
+# Command's `group` (issue #262 P3). Both were previously unsettable via modify_metadata:
+#   - defaultForm resolved as REFERENCE|BasicForm but the resolver only walked mdclass TOP objects /
+#     children (no "Form" token), so ANY defaultForm value failed with "was not found".
+#   - group was excluded from the assignable set entirely (BasicCommand.group is declared against
+#     the mcore CommandGroup interface, which the generic MdObject-subtype filter missed).
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_default_form_by_full_member_fqn():
+    # Seed a DataProcessor + an owned form, then set defaultForm by the full
+    # 'Type.Name.Form.FormName' member FQN - the exact shape the issue reporter had to hand-edit.
+    dp, form = "E2EMdDefFormDp", "E2EMdDefForm"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + dp}),
+              "seed the owning DataProcessor")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "DataProcessor.%s.Form.%s" % (dp, form)}),
+              "seed the owned form")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "DataProcessor." + dp,
+        "properties": [{"name": "defaultForm",
+                        "value": "DataProcessor.%s.Form.%s" % (dp, form)}],
+    })
+    assert_ok(r, "set defaultForm by the full Type.Name.Form.FormName FQN")
+    assert "defaultForm" in (r.structured.get("applied") or []), \
+        "defaultForm must be applied: %r" % (r.structured,)
+    assert r.structured.get("persisted") is True, \
+        "the defaultForm change must force-export the owner .mdo: %r" % (r.structured,)
+    poll_diff_contains("<defaultForm>DataProcessor.%s.Form.%s</defaultForm>" % (dp, form),
+                       ctx="the defaultForm reference must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_default_form_by_short_name_shorthand():
+    # A bare short form Name (no dots) resolves as shorthand for a form owned by the SAME
+    # DataProcessor being modified.
+    dp, form = "E2EMdDefFormShDp", "E2EMdDefFormSh"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + dp}),
+              "seed the owning DataProcessor")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "DataProcessor.%s.Form.%s" % (dp, form)}),
+              "seed the owned form")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "DataProcessor." + dp,
+        "properties": [{"name": "defaultForm", "value": form}],
+    })
+    assert_ok(r, "set defaultForm by the short form Name")
+    assert "defaultForm" in (r.structured.get("applied") or []), \
+        "defaultForm must be applied: %r" % (r.structured,)
+    poll_diff_contains("<defaultForm>DataProcessor.%s.Form.%s</defaultForm>" % (dp, form),
+                       ctx="the short-name defaultForm must resolve to the full FQN on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_default_form_to_nonexistent_form_is_error():
+    dp = "E2EMdDefFormBadDp"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + dp}),
+              "seed the owning DataProcessor")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "DataProcessor." + dp,
+        "properties": [{"name": "defaultForm",
+                        "value": "DataProcessor.%s.Form.NoSuchForm_zz" % dp}],
+    })
+    e = assert_error(r, "defaultForm set to a nonexistent form")
+    assert_error_quality(e, names=["NoSuchForm_zz"],
+                         ctx="an unresolvable defaultForm target is a clean, actionable error")
+    assert_no_diff("a rejected defaultForm set must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_command_group_reference():
+    # Seed a DataProcessor + a command + a CommandGroup, then set the command's group by FQN.
+    dp, cmd, grp = "E2EMdGroupDp", "E2EMdGroupCmd", "E2EMdCmdGroup"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + dp}),
+              "seed the owning DataProcessor")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "DataProcessor.%s.Command.%s" % (dp, cmd)}),
+              "seed the command")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "CommandGroup." + grp}),
+              "seed the command group")
+    wait_for_project_ready()
+
+    fqn = "DataProcessor.%s.Command.%s" % (dp, cmd)
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "group", "value": "CommandGroup." + grp}],
+    })
+    assert_ok(r, "set the command's group")
+    assert "group" in (r.structured.get("applied") or []), "group must be applied: %r" % (r.structured,)
+    assert r.structured.get("persisted") is True, \
+        "the group change must force-export the owner .mdo: %r" % (r.structured,)
+    poll_diff_contains("<group>CommandGroup.%s</group>" % grp,
+                       ctx="the command's group reference must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_command_group_is_assignable_and_listed():
+    # get_metadata_details(assignable:true) on a command must list 'group' as a REFERENCE - it was
+    # previously excluded from the assignable set entirely.
+    dp, cmd = "E2EMdGroupListDp", "E2EMdGroupListCmd"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + dp}),
+              "seed the owning DataProcessor")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "DataProcessor.%s.Command.%s" % (dp, cmd)}),
+              "seed the command")
+    wait_for_project_ready()
+
+    text = _assignable_text("DataProcessor.%s.Command.%s" % (dp, cmd))
+    assert_contains(text, "group", "the command's group must be listed as assignable")
+    group_row = None
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cells and cells[0] == "group":
+            group_row = cells
+            break
+    assert group_row is not None, "the assignable table must have a 'group' row: %r" % (text[:600],)
+    assert len(group_row) >= 2 and group_row[1] == "REFERENCE", \
+        "group's row must report the REFERENCE kind, got %r: %r" % (group_row, text[:600])
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_command_group_to_nonexistent_group_is_error():
+    dp, cmd = "E2EMdGroupBadDp", "E2EMdGroupBadCmd"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + dp}),
+              "seed the owning DataProcessor")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "DataProcessor.%s.Command.%s" % (dp, cmd)}),
+              "seed the command")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "DataProcessor.%s.Command.%s" % (dp, cmd),
+        "properties": [{"name": "group", "value": "CommandGroup.NoSuchGroup_e2e"}],
+    })
+    e = assert_error(r, "group set to a nonexistent CommandGroup")
+    # The not-found hint is CommandGroup-specific: it names the supported 'CommandGroup.<Name>' shape
+    # and explicitly calls out that the platform's STANDARD command groups are unsupported (issue #262
+    # P3: "do not fake support").
+    assert_error_quality(e, names=["CommandGroup.NoSuchGroup_e2e"],
+                         suggests=["CommandGroup.<Name>", "STANDARD command groups"],
+                         ctx="an unresolvable command group is a clean, actionable error naming the shape")
+    assert_no_diff("a rejected group set must change nothing")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UX — extension-adopt hint on an unresolved reference (issue #262 "Мелочь")
+#
+# Inside an EXTENSION project, a reference to a BASE-configuration object that has NOT been
+# adopted correctly fails to resolve (the extension's own model does not see it) - but the plain
+# "Cannot resolve the reference target" error gave no clue an adopt might fix it. Seed a fresh BASE
+# catalog (never adopted by TESTS_PROJECT), then reference it from a `type` property set on the
+# EXTENSION project: the error must keep the sentinel substring AND append the adopt hint.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_extension_unresolved_ref_gets_adopt_hint():
+    not_adopted = "E2EMdP4NotAdopted"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog." + not_adopted}),
+              "seed a base catalog that TESTS_PROJECT never adopts")
+    wait_for_project_ready()
+    # Snapshot AFTER the (legitimate) seed dirt, so the REJECTED extension call below is asserted
+    # to add NOTHING on top of it (the seeding itself would otherwise false-fail a plain assert_no_diff).
+    before = tree_snapshot()
+
+    # Catalog.Catalog IS adopted by TESTS_PROJECT, so its Attribute member resolves inside the
+    # extension's own model - the perfect place to set a `type` that references the un-adopted
+    # sibling catalog.
+    r = call("modify_metadata", {
+        "projectName": TESTS_PROJECT,
+        "fqn": "Catalog.Catalog.Attribute.Attribute",
+        "properties": [{"name": "type",
+                        "value": {"types": [{"kind": "Ref", "ref": "Catalog." + not_adopted}]}}],
+    })
+    e = assert_error(r, "unresolved ref inside an extension project")
+    assert_error_quality(
+        e, names=["Cannot resolve the reference target"], suggests=["adopt_metadata_object"],
+        ctx="an unresolved ref inside an extension must keep the sentinel AND hint at adopt_metadata_object")
+    assert_tree_unchanged(before, "a rejected type set must change nothing on the base project")
