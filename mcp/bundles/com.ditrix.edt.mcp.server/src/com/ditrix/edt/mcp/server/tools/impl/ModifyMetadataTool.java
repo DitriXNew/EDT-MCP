@@ -32,6 +32,7 @@ import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
+import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
@@ -63,7 +64,9 @@ import com.ditrix.edt.mcp.server.utils.DcsWriter;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.ExchangePlanContentWriter;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -1826,9 +1829,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final Version version = resolvePlatformVersion(ctx);
 
         // Validate every property against the introspected schema BEFORE any write (fail fast, no
-        // partial mutation). On success, collect the prepared changes to apply inside the tx.
+        // partial mutation). On success, collect the prepared changes to apply inside the tx. Computed
+        // once so an unresolved 'type' reference can append the extension-adopt hint (issue #262).
+        boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         List<PreparedChange> changes = new ArrayList<>();
-        String prepErr = validateAndPrepare(config, version, target, properties, changes, normReport);
+        String prepErr = validateAndPrepare(config, version, target, properties, changes, normReport,
+            isExtensionProject);
         if (prepErr != null)
         {
             return prepErr;
@@ -2462,13 +2468,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * SAME case, before the BM transaction runs.
      */
     private String validateAndPrepare(Configuration config, Version version, MdObject target,
-        List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport)
+        List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
+        boolean isExtensionProject)
     {
         for (JsonObject prop : properties)
         {
             // The mdclass path has no <extInfo> (extInfo == null): findFeature then classifies only the
             // object's own features, so this stays byte-identical to the pre-extInfo behaviour.
-            String pErr = prepare(config, version, target, null, prop, changes, normReport);
+            String pErr = prepare(config, version, target, null, prop, changes, normReport,
+                isExtensionProject);
             if (pErr != null)
             {
                 return pErr;
@@ -3035,7 +3043,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         JsonObject normProp = normalizeFormProperty(member, prop);
         FormHolder holder = resolveFormHolder(member, asString(normProp.get("name"))); //$NON-NLS-1$
         List<PreparedChange> built = new ArrayList<>();
-        String pErr = prepare(config, version, member, holder.classifyExtInfo, normProp, built, normReport);
+        // The extension-adopt hint (issue #262) is scoped to the mdclass 'type' property path
+        // (validateAndPrepare, which threads the project's extension status through); a form member's
+        // 'type' is a platform-type classifier (group/field/decoration kind), never a metadata reference,
+        // so there is no unresolved-reference case here to hint.
+        String pErr = prepare(config, version, member, holder.classifyExtInfo, normProp, built, normReport,
+            false);
         if (pErr != null)
         {
             throw new FormValidationException(pErr);
@@ -3518,9 +3531,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * extInfo traversal is a no-op and this behaves exactly as before). A property found on the
      * extInfo carries {@code info.onExtInfo == true}; the {@link PreparedChange} is built against the
      * extInfo's feature, and the caller routes the {@code eSet} to the extInfo holder.</p>
+     *
+     * <p>{@code isExtensionProject} is threaded down only to append the extension-adopt hint (issue
+     * #262) to an unresolved {@code TYPE_DESCRIPTION} reference; every other {@code ValueKind} ignores
+     * it.</p>
      */
     private String prepare(Configuration config, Version version, EObject target, EObject extInfo,
-        JsonObject prop, List<PreparedChange> out, MdNameNormalizer.Report normReport)
+        JsonObject prop, List<PreparedChange> out, MdNameNormalizer.Report normReport,
+        boolean isExtensionProject)
     {
         String name = asString(prop.get("name")); //$NON-NLS-1$
         if (name == null || name.isEmpty())
@@ -3565,9 +3583,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case INTEGER:
                 return prepareInteger(name, value, info, out);
             case TYPE_DESCRIPTION:
-                return prepareTypeDescription(config, version, name, prop, info, out);
+                return prepareTypeDescription(config, version, name, prop, info, out, isExtensionProject);
             case REFERENCE:
-                return prepareReference(config, name, value, info, out);
+                return prepareReference(config, target, name, value, info, out);
             case MANY_REFERENCE:
                 return prepareManyReference(config, name, prop, info, out);
             case STYLE_VALUE:
@@ -3680,10 +3698,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Validates a {@code TYPE_DESCRIPTION} property (building the type description for the resolved
      * platform version) and, on success, appends the prepared scalar change to {@code out}. Returns a
      * JSON error on failure, or {@code null} on success. Read-only: it only builds and queues the
-     * change (no model mutation).
+     * change (no model mutation). {@code isExtensionProject} is forwarded to
+     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean)} so an unresolved
+     * reference target's error can append the extension-adopt hint (issue #262).
      */
     private String prepareTypeDescription(Configuration config, Version version, String name,
-        JsonObject prop, PropertyInfo info, List<PreparedChange> out)
+        JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
     {
         if (version == null)
         {
@@ -3691,7 +3711,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         MetadataTypeBuilder.Result tr =
-            MetadataTypeBuilder.build(prop.get(KEY_VALUE), config, version);
+            MetadataTypeBuilder.build(prop.get(KEY_VALUE), config, version, isExtensionProject);
         if (tr.error != null)
         {
             return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -3704,16 +3724,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Validates a single-valued {@code REFERENCE} property (resolving and type-checking its FQN target)
      * and, on success, appends the prepared reference change to {@code out}. Returns a JSON error on
      * failure, or {@code null} on success. Read-only: it only builds and queues the change (no model
-     * mutation).
+     * mutation). {@code owner} is the element the property is being set on (e.g. the DataProcessor a
+     * {@code defaultForm} is set on) - passed to {@link #resolveReferenceTarget} so a bare short form
+     * Name (no dots) can resolve against the owner's OWN {@code getForms()} collection (issue #262).
      */
-    private String prepareReference(Configuration config, String name, String value, PropertyInfo info,
-        List<PreparedChange> out)
+    private String prepareReference(Configuration config, EObject owner, String name, String value,
+        PropertyInfo info, List<PreparedChange> out)
     {
         if (value == null || value.isEmpty())
         {
             return requireValueError(name);
         }
-        MdObject targetMd = resolveReferenceTarget(config, value);
+        MdObject targetMd = resolveReferenceTarget(config, owner, value);
         String vErr = validateReferenceTarget(name, info.feature, targetMd, value);
         if (vErr != null)
         {
@@ -3747,7 +3769,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return ToolResult.error("Each entry of the '" + name + "' list must be a " //$NON-NLS-1$ //$NON-NLS-2$
                     + "non-empty FQN string.").toJson(); //$NON-NLS-1$
             }
-            MdObject t = resolveReferenceTarget(config, fqn);
+            MdObject t = resolveReferenceTarget(config, null, fqn);
             String vErr = validateReferenceTarget(name, info.feature, t, fqn);
             if (vErr != null)
             {
@@ -3800,30 +3822,81 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return "comment".equalsIgnoreCase(name) ? normReport.apply(name, value) : value; //$NON-NLS-1$
     }
 
-    /** Resolves a reference-target FQN to its metadata object (a top object), or {@code null}. */
-    private static MdObject resolveReferenceTarget(Configuration config, String fqn)
+    /**
+     * Resolves a reference-target FQN to its metadata object, or {@code null}. Tries, in order: (1) the
+     * generic mdclass node resolver (top objects and their mdclass members - attributes, tabular
+     * sections, commands, ...); (2) a FORM path ({@code Type.Name.Form.FormName} / {@code CommonForm.
+     * Name}) via the same {@link FormElementWriter#parseFormPath} + {@link FormStructureReader#resolveMdForm}
+     * pair {@code get_metadata_details} uses to read an existing form - forms live in the owner's OWN
+     * {@code getForms()} collection, which the mdclass node resolver does not walk (issue #262: a
+     * {@code defaultForm} could not be set at all); (3) when {@code owner} is supplied and {@code fqn} is
+     * a bare short Name (no dots), the owner's OWN {@code getForms()} collection directly (so
+     * {@code defaultForm:'Форма'} works as a shorthand for the owner's own form, without repeating
+     * {@code Owner.Type.Form.Форма}).
+     *
+     * @param config the configuration to resolve in
+     * @param owner the element the property is being set on (its own forms are the short-name
+     *     candidates), or {@code null} when no owner-relative shorthand applies (e.g. a MANY_REFERENCE)
+     * @param fqn the reference value as supplied by the caller
+     * @return the resolved metadata object, or {@code null} when nothing resolves
+     */
+    // Package-visible (not private) so ModifyMetadataToolTest can exercise the form-path / short-name
+    // resolution headlessly (no BM/live-project needed - pure EMF containment reads).
+    static MdObject resolveReferenceTarget(Configuration config, EObject owner, String fqn)
     {
         String norm = MetadataTypeUtils.normalizeFqn(fqn);
         MetadataNodeResolver.MetadataNode n = MetadataNodeResolver.resolveExisting(config, norm);
-        return n != null ? n.object : null;
+        if (n != null)
+        {
+            return n.object;
+        }
+        String formPath = FormElementWriter.parseFormPath(norm);
+        if (formPath != null)
+        {
+            MdObject form = FormStructureReader.resolveMdForm(config, formPath);
+            if (form != null)
+            {
+                return form;
+            }
+        }
+        if (owner instanceof MdObject && norm.indexOf('.') < 0)
+        {
+            MdObject ownForm = FormStructureReader.findOwnedForm((MdObject)owner, norm);
+            if (ownForm != null)
+            {
+                return ownForm;
+            }
+        }
+        return null;
     }
 
     /**
-     * Validates a reference target: it must resolve, be a re-fetchable top object, and have a type
+     * Validates a reference target: it must resolve, be re-fetchable (a top object, OR a FORM member -
+     * {@code defaultForm} / {@code auxiliaryForm} legitimately reference a form owned by another object,
+     * issue #262 - both re-fetch fine by {@code bmGetId()} inside the write tx), and have a type
      * assignable to the reference feature's target type. Returns a JSON error or {@code null} on OK.
      */
-    private static String validateReferenceTarget(String prop, EStructuralFeature feature,
+    // Package-visible (not private) so ModifyMetadataToolTest can exercise the not-found hint headlessly
+    // (target==null never touches IBmObject, so no live BM model is needed for that branch).
+    static String validateReferenceTarget(String prop, EStructuralFeature feature,
         MdObject target, String fqn)
     {
         if (target == null)
         {
             return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' was not found. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "Use a valid FQN (e.g. 'Catalog.Products'); check with get_metadata_objects.").toJson(); //$NON-NLS-1$
+                + referenceNotFoundHint(feature)).toJson();
         }
-        if (!(target instanceof IBmObject) || !((IBmObject)target).bmIsTop())
+        if (!(target instanceof IBmObject))
         {
             return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + "top-level object; references to members are not supported.").toJson(); //$NON-NLS-1$
+        }
+        boolean isForm = MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(target.eClass());
+        if (!((IBmObject)target).bmIsTop() && !isForm)
+        {
+            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "top-level object; references to members are not supported (forms are the one " //$NON-NLS-1$
+                + "supported member reference).").toJson(); //$NON-NLS-1$
         }
         EClass targetType = ((EReference)feature).getEReferenceType();
         if (targetType != null && !targetType.isSuperTypeOf(target.eClass()))
@@ -3832,6 +3905,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "' requires a " + targetType.getName() + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
+    }
+
+    /**
+     * The "how to address this reference" hint appended to a not-found error: a {@code group} feature
+     * (declared against the mcore {@code CommandGroup} interface - see
+     * {@link MetadataPropertyIntrospector} class doc) points specifically at the supported
+     * {@code CommandGroup.<Name>} FQN shape and names the UNSUPPORTED shape (a platform STANDARD
+     * command group, a different enum-addressed value space - issue #262 P3: "do not fake support");
+     * every other reference feature gets the generic FQN hint.
+     */
+    private static String referenceNotFoundHint(EStructuralFeature feature)
+    {
+        EClass targetType = feature instanceof EReference ? ((EReference)feature).getEReferenceType() : null;
+        if (targetType == McorePackage.Literals.COMMAND_GROUP)
+        {
+            return "Use a 'CommandGroup.<Name>' FQN (a top-level metadata object; create it with " //$NON-NLS-1$
+                + "create_metadata). The platform's built-in STANDARD command groups are a " //$NON-NLS-1$
+                + "different, enum-addressed value space and are not supported here."; //$NON-NLS-1$
+        }
+        return "Use a valid FQN (e.g. 'Catalog.Products'); check with get_metadata_objects."; //$NON-NLS-1$
     }
 
     /**

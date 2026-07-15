@@ -17,7 +17,12 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.mcore.DateFractions;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
@@ -139,5 +144,43 @@ public class MetadataTypeBuilderTest
         assertNull(MetadataTypeBuilder.objectType(null));
         EObject notAnMdObject = EcoreFactory.eINSTANCE.createEObject();
         assertNull(MetadataTypeBuilder.objectType(notAnMdObject));
+    }
+
+    // ---- extension-adopt hint on an unresolved reference target (issue #262 "Мелочь (UX)") ------
+
+    @Test
+    public void testExtensionAdoptHintOnlyForExtensionProject()
+    {
+        assertEquals("", MetadataTypeBuilder.extensionAdoptHint(false)); //$NON-NLS-1$
+        String hint = MetadataTypeBuilder.extensionAdoptHint(true);
+        assertTrue("the hint must point at adopt_metadata_object", //$NON-NLS-1$
+            hint.contains("adopt_metadata_object")); //$NON-NLS-1$
+        assertTrue("the hint must mention the base configuration", hint.contains("base")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAddTypeUnresolvedRefKeepsSentinelAndAppendsHintOnlyForExtension()
+    {
+        // The Ref branch never touches `provider` (only the primitive branch does), so this exercises
+        // the real not-found path headlessly, with no registered platform type provider. The sentinel
+        // "Cannot resolve the reference target" must stay a continuous substring either way (an e2e
+        // regex matches it); the adopt hint is appended ONLY for an extension project.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"Ref\",\"ref\":\"Catalog.NoSuchThing\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        String baseErr = MetadataTypeBuilder.addType(td, item, "Ref", null, config, false); //$NON-NLS-1$
+        assertNotNull(baseErr);
+        assertTrue("the sentinel must be present", //$NON-NLS-1$
+            baseErr.contains("Cannot resolve the reference target")); //$NON-NLS-1$
+        assertFalse("a base-configuration project must get no adopt hint", //$NON-NLS-1$
+            baseErr.contains("adopt_metadata_object")); //$NON-NLS-1$
+
+        String extErr = MetadataTypeBuilder.addType(td, item, "Ref", null, config, true); //$NON-NLS-1$
+        assertNotNull(extErr);
+        assertTrue("the sentinel must stay a continuous substring when the hint is appended", //$NON-NLS-1$
+            extErr.contains("Cannot resolve the reference target")); //$NON-NLS-1$
+        assertTrue("an extension project must get the adopt hint", //$NON-NLS-1$
+            extErr.contains("adopt_metadata_object")); //$NON-NLS-1$
     }
 }

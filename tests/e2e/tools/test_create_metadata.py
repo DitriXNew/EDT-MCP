@@ -46,10 +46,12 @@ from harness import (
     diff,
     poll_diff_contains,
     read_disk,
+    reset_all_fixtures,
     tree_snapshot,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
+    TESTS_PROJECT,
     _fail,
 )
 
@@ -530,6 +532,53 @@ def test_create_form_object_generate_content_seeds_main_object_attribute():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_generate_content_extension_owned_owner_gets_value_type():
+    """Issue #262 (Problem 1): generateContent=true used to write the main Object attribute with
+    NO <valueType> at all when the OWNER OBJECT was created IN AN EXTENSION project - the
+    produced-types path (MdClassUtil.getProducedTypes -> getObjectType) never materializes for an
+    extension-own object, and the old code silently skipped the value type instead of falling back.
+    FormElementWriter now falls back to resolving the SAME value type (DataProcessorObject.<Name>)
+    directly BY NAME through the platform type provider, so the seeded attribute still gets a type
+    for an extension-owned DataProcessor.
+
+    Runs against TESTS_PROJECT (the extension fixture): the orchestrator only auto-resets the BASE
+    fixture between tests (see harness.reset_fixture), so this test reverts the extension itself
+    (disk + in-memory model) in a finally block, mirroring what the suite's own final_cleanup() does
+    for both fixtures - a real mutation here must not pollute later extension-reading tests.
+    """
+    obj, form = "tests_Z262ExtDp", "tests_Z262ExtDpForm"
+    fqn = "DataProcessor.%s.Form.%s" % (obj, form)
+    try:
+        assert_ok(
+            call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": "DataProcessor." + obj}),
+            "seed the owning DataProcessor IN THE EXTENSION project")
+        wait_for_project_ready()
+        r = call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": fqn, "generateContent": True})
+        assert_ok(r, "create the extension-owned DataProcessor's form with generateContent")
+        assert r.structured.get("generateContent") is True, \
+            "the create must echo generateContent=true: %r" % (r.structured,)
+
+        # MODEL READ-BACK (the harness has no on-disk diff helper for the extension fixture, only for
+        # the base project): the rendered "## Attributes" table's Type column must name the object
+        # value type, not just the bare attribute name - a regression to the pre-fix silent skip would
+        # still show "Object" with an EMPTY Type cell.
+        d = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [fqn]})
+        assert_ok(d, "render the extension-owned form's structure")
+        assert_contains(d.text, "Object", "the rendered structure must surface the main Object attribute")
+        assert_contains(d.text, "DataProcessorObject.%s" % obj,
+                        "the main Object attribute must carry the DataProcessorObject value type even "
+                        "though the owner was created in an extension (issue #262)")
+    finally:
+        # Revert the EXTENSION fixture on disk, then re-sync ITS in-memory model from the clean disk -
+        # the same two-step final_cleanup() uses for both fixtures, scoped here to just the extension
+        # (the orchestrator's kind="write-metadata" post-test hook already handles the BASE fixture).
+        reset_all_fixtures()
+        call("clean_project", {"projectName": TESTS_PROJECT})
+        wait_for_project_ready()
+        reset_all_fixtures()
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_object_generate_content_seeds_default_object_fields():
     # Issue #208 round 2: generateContent on a DOCUMENT object form seeds the kind-default bound fields
     # (Number, Date) as InputFields whose dataPath is Object.Number / Object.Date - mirroring the
@@ -719,6 +768,35 @@ def test_create_form_table_with_columns_and_additions_issue_177():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_set_as_default_on_data_processor_succeeds():
+    """Issue #262 (Problem 2a): setAsDefault=true on a DataProcessor's Form used to fail with
+    "Owner type 'DataProcessor' has no compatible setDefaultObjectForm(...) method" - DataProcessor
+    (like Report/Task) exposes setDefaultForm, not setDefaultObjectForm. The reflective setter lookup
+    now tries setDefaultObjectForm THEN setDefaultForm, so this must succeed and the owner .mdo must
+    record the new form as its defaultForm.
+    """
+    obj, form = "Z_McpDefaultDp262", "Z_McpDefaultForm262"
+    fqn = "DataProcessor.%s.Form.%s" % (obj, form)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + obj}),
+              "seed the owning DataProcessor")
+    wait_for_project_ready()
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn, "setAsDefault": True})
+    assert_ok(r, "create the DataProcessor's form with setAsDefault=true (used to error - issue #262)")
+    assert r.structured.get("kind") == "Form", "kind must be Form: %r" % (r.structured,)
+
+    # ON-DISK: the owner .mdo gains the exact <defaultForm> reference to the new form (the structural
+    # element, not just the bare form name, which would false-match the owner's <forms> list entry).
+    poll_diff_contains("<defaultForm>DataProcessor.%s.Form.%s</defaultForm>" % (obj, form),
+                       ctx="the owner .mdo must record the new form as its defaultForm")
+
+    # MODEL read-back: the owner's rendered details still resolve and name the new form (a broken
+    # default-form assignment that corrupted the owner would fail to render here).
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["DataProcessor." + obj]})
+    assert_ok(d, "render the owner after setAsDefault")
+    assert_contains(d.text, form, "the owner's details must still name the new default form")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_data_processor_form_members_allocate_form_ids_issue_189():
     # Issue #189 end-to-end repro: a managed form and ALL its attributes/items/commands are created by
     # MCP writes. The validator used to see duplicate id=0 for field context menus, the command
@@ -738,7 +816,9 @@ def test_create_data_processor_form_members_allocate_form_ids_issue_189():
         return r
 
     create_ok(base, ctx="create the DataProcessor owner")
-    # DataProcessor managed forms reject setAsDefault=true, so the repro creates the form without it.
+    # setAsDefault is intentionally omitted here: this repro is about issue #189 (form-item id
+    # allocation), not setAsDefault - see test_create_form_object_set_as_default_on_data_processor_
+    # succeeds for the issue #262 coverage of setAsDefault on a DataProcessor.
     create_ok(form_fqn, ctx="create the DataProcessor managed form")
 
     attrs = ["FAttr%d" % i for i in range(1, 8)]

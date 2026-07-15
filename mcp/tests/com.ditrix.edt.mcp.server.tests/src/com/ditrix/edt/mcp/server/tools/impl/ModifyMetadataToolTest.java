@@ -25,12 +25,18 @@ import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorForm;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
@@ -521,6 +527,131 @@ public class ModifyMetadataToolTest
         String guide = new ModifyMetadataTool().getGuide();
         assertTrue("the no-mixing-with-properties policy must be documented", //$NON-NLS-1$
             guide.contains("CANNOT be combined with a generic")); //$NON-NLS-1$
+    }
+
+    // ===== resolveReferenceTarget: FORM member resolution for a REFERENCE property (issue #262) =====
+    //
+    // A REFERENCE property whose target is a FORM (e.g. a DataProcessor's `defaultForm`) could not be
+    // set at all: the generic mdclass node resolver only walks the child-token containment tree
+    // (attributes / tabular sections / commands / ...), which has no "Form" token - forms live in the
+    // owner's OWN getForms() collection. resolveReferenceTarget now falls back to the SAME
+    // FormElementWriter.parseFormPath + FormStructureReader.resolveMdForm pair get_metadata_details
+    // already uses to read an existing form, plus a short-Name shorthand against a supplied owner.
+    // Exercised headlessly: pure EMF containment reads, no BM/live project needed.
+
+    private static DataProcessorForm addOwnedForm(DataProcessor owner, String formName)
+    {
+        DataProcessorForm form = MdClassFactory.eINSTANCE.createDataProcessorForm();
+        form.setName(formName);
+        owner.getForms().add(form);
+        return form;
+    }
+
+    @Test
+    public void testResolveReferenceTargetResolvesFullFormPath()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        DataProcessor dp = MdClassFactory.eINSTANCE.createDataProcessor();
+        dp.setName("MyProcessor"); //$NON-NLS-1$
+        config.getDataProcessors().add(dp);
+        DataProcessorForm form = addOwnedForm(dp, "MyForm"); //$NON-NLS-1$
+
+        MdObject resolved = ModifyMetadataTool.resolveReferenceTarget(config, dp,
+            "DataProcessor.MyProcessor.Form.MyForm"); //$NON-NLS-1$
+        assertSame("the full Type.Name.Form.FormName path must resolve the owned form", form, resolved); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveReferenceTargetResolvesShortFormNameAgainstOwner()
+    {
+        // A bare short Name ('MyForm', no dots) resolves as shorthand for a form owned by the SAME
+        // object being modified (e.g. defaultForm:'MyForm' instead of the full FQN).
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        DataProcessor dp = MdClassFactory.eINSTANCE.createDataProcessor();
+        dp.setName("MyProcessor"); //$NON-NLS-1$
+        config.getDataProcessors().add(dp);
+        DataProcessorForm form = addOwnedForm(dp, "MyForm"); //$NON-NLS-1$
+
+        MdObject resolved = ModifyMetadataTool.resolveReferenceTarget(config, dp, "MyForm"); //$NON-NLS-1$
+        assertSame("a short form Name must resolve against the supplied owner", form, resolved); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveReferenceTargetShortNameWithoutOwnerDoesNotResolve()
+    {
+        // Without an owner (e.g. the MANY_REFERENCE call site), a bare short Name must NOT silently
+        // pick some unrelated object - it simply does not resolve.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        DataProcessor dp = MdClassFactory.eINSTANCE.createDataProcessor();
+        dp.setName("MyProcessor"); //$NON-NLS-1$
+        config.getDataProcessors().add(dp);
+        addOwnedForm(dp, "MyForm"); //$NON-NLS-1$
+
+        assertNull(ModifyMetadataTool.resolveReferenceTarget(config, null, "MyForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveReferenceTargetUnknownFormReturnsNull()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        DataProcessor dp = MdClassFactory.eINSTANCE.createDataProcessor();
+        dp.setName("MyProcessor"); //$NON-NLS-1$
+        config.getDataProcessors().add(dp);
+
+        assertNull(ModifyMetadataTool.resolveReferenceTarget(config, dp,
+            "DataProcessor.MyProcessor.Form.NoSuchForm")); //$NON-NLS-1$
+        assertNull(ModifyMetadataTool.resolveReferenceTarget(config, dp, "NoSuchForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveReferenceTargetStillResolvesTopObjects()
+    {
+        // Non-form top-object references (e.g. a Command's group -> 'CommandGroup.<Name>') keep
+        // working through the generic mdclass resolver, unaffected by the new form fallback.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        CommandGroup group = MdClassFactory.eINSTANCE.createCommandGroup();
+        group.setName("MyGroup"); //$NON-NLS-1$
+        config.getCommandGroups().add(group);
+
+        MdObject resolved = ModifyMetadataTool.resolveReferenceTarget(config, null, "CommandGroup.MyGroup"); //$NON-NLS-1$
+        assertSame(group, resolved);
+    }
+
+    // ===== validateReferenceTarget: not-found hint (issue #262 P3, "do not fake support") ==========
+    //
+    // target==null never touches IBmObject (bmGetId/bmIsTop), so this branch is testable headlessly.
+
+    @Test
+    public void testValidateReferenceTargetNotFoundHintIsCommandGroupSpecific()
+    {
+        // A command's 'group' feature (declared against the mcore CommandGroup interface) gets a hint
+        // naming the supported 'CommandGroup.<Name>' shape AND explicitly calling out that the
+        // platform's STANDARD command groups are a different, unsupported value space.
+        EStructuralFeature groupFeature = MdClassFactory.eINSTANCE.createDataProcessorCommand()
+            .eClass().getEStructuralFeature("group"); //$NON-NLS-1$
+        assertNotNull("precondition: DataProcessorCommand must declare 'group'", groupFeature); //$NON-NLS-1$
+        String err = ModifyMetadataTool.validateReferenceTarget("group", groupFeature, null, //$NON-NLS-1$
+            "CommandGroup.Bogus"); //$NON-NLS-1$
+        assertNotNull(err);
+        assertTrue("the hint must name the CommandGroup.<Name> shape", //$NON-NLS-1$
+            err.contains("CommandGroup.<Name>")); //$NON-NLS-1$
+        assertTrue("the hint must call out standard groups as unsupported", //$NON-NLS-1$
+            err.contains("STANDARD command groups")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValidateReferenceTargetNotFoundHintIsGenericForOtherReferences()
+    {
+        EStructuralFeature parentFeature = MdClassFactory.eINSTANCE.createSubsystem()
+            .eClass().getEStructuralFeature("parentSubsystem"); //$NON-NLS-1$
+        assertNotNull("precondition: Subsystem must declare 'parentSubsystem'", parentFeature); //$NON-NLS-1$
+        String err = ModifyMetadataTool.validateReferenceTarget("parentSubsystem", parentFeature, null, //$NON-NLS-1$
+            "Subsystem.Bogus"); //$NON-NLS-1$
+        assertNotNull(err);
+        assertFalse("a non-group reference must NOT get the CommandGroup-specific hint", //$NON-NLS-1$
+            err.contains("CommandGroup.<Name>")); //$NON-NLS-1$
+        assertTrue("a non-group reference gets the generic FQN hint", //$NON-NLS-1$
+            err.contains("get_metadata_objects")); //$NON-NLS-1$
     }
 
     // ===== form-member extInfo routing (#235: a UsualGroup's layout props live under <extInfo>) =====

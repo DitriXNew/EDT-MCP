@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.mcore.DateFractions;
 import com._1c.g5.v8.dt.mcore.DateQualifiers;
@@ -121,6 +122,26 @@ public final class MetadataTypeBuilder
      */
     public static Result build(JsonElement spec, Configuration config, Version version)
     {
+        return build(spec, config, version, false);
+    }
+
+    /**
+     * Builds the {@link TypeDescription} from a validated spec, like {@link #build(JsonElement,
+     * Configuration, Version)}, additionally appending an extension-adopt hint to an unresolved-reference
+     * error when {@code isExtensionProject} is {@code true} (issue #262): a reference target that lives
+     * in the BASE configuration is invisible to an EXTENSION project until it is adopted
+     * ({@code adopt_metadata_object}), and the plain "not found" wording gives no clue why. The hint is
+     * APPENDED, so the sentinel "Cannot resolve the reference target" stays a continuous substring.
+     *
+     * @param spec the {@code type} value (object with a {@code types} array)
+     * @param config the configuration (to resolve reference targets)
+     * @param version the platform version (to create primitive type proxies)
+     * @param isExtensionProject whether the project being modified is a configuration EXTENSION
+     * @return the result (type or error)
+     */
+    public static Result build(JsonElement spec, Configuration config, Version version,
+        boolean isExtensionProject)
+    {
         String shapeError = validateShape(spec);
         if (shapeError != null)
         {
@@ -140,7 +161,7 @@ public final class MetadataTypeBuilder
         {
             JsonObject item = itemEl.getAsJsonObject();
             String kind = asString(item.get("kind")).trim(); //$NON-NLS-1$
-            String err = addType(td, item, kind, provider, config);
+            String err = addType(td, item, kind, provider, config, isExtensionProject);
             if (err != null)
             {
                 return error(err);
@@ -251,11 +272,26 @@ public final class MetadataTypeBuilder
             return null;
         }
         MdTypes producedTypes = MdClassUtil.getProducedTypes((MdObject)owner);
-        if (!(producedTypes instanceof BasicDbObjectTypes))
+        if (producedTypes == null)
         {
             return null;
         }
-        MdObjectType mdObjType = ((BasicDbObjectTypes)producedTypes).getObjectType();
+        // The produced-types holder is a per-kind subtype (CatalogTypes, DocumentTypes,
+        // DataProcessorTypes, ...). Only the DB-stored kinds extend BasicDbObjectTypes - on
+        // EDT 2026.1 a DataProcessor's DataProcessorTypesImpl does NOT (issue #262), so an
+        // instanceof gate silently dropped the object type for it. Every kind's holder carries
+        // the same EMF feature "objectType", so read it generically through eGet instead.
+        MdObjectType mdObjType = null;
+        EStructuralFeature objectTypeFeature =
+            producedTypes.eClass().getEStructuralFeature("objectType"); //$NON-NLS-1$
+        if (objectTypeFeature != null)
+        {
+            Object value = producedTypes.eGet(objectTypeFeature);
+            if (value instanceof MdObjectType)
+            {
+                mdObjType = (MdObjectType)value;
+            }
+        }
         if (mdObjType == null)
         {
             return null;
@@ -272,8 +308,11 @@ public final class MetadataTypeBuilder
         return td;
     }
 
-    private static String addType(TypeDescription td, JsonObject item, String kind,
-        IEObjectProvider provider, Configuration config)
+    // Package-visible (not private) so MetadataTypeBuilderTest can exercise the Ref-not-found branch -
+    // including the extension-adopt hint - directly, without a registered platform type `provider`
+    // (which only the primitive branch needs; see MetadataTypeBuilderTest's class doc).
+    static String addType(TypeDescription td, JsonObject item, String kind,
+        IEObjectProvider provider, Configuration config, boolean isExtensionProject)
     {
         if (isRefKind(kind))
         {
@@ -282,7 +321,8 @@ public final class MetadataTypeBuilder
             {
                 return "Cannot resolve the reference target for kind '" + kind + "' ref '" //$NON-NLS-1$ //$NON-NLS-2$
                     + asString(item.get("ref")) + "'. Use {kind:'Ref', ref:'Type.Name'} or " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "{kind:'CatalogRef', ref:'Name'} and check the object exists."; //$NON-NLS-1$
+                    + "{kind:'CatalogRef', ref:'Name'} and check the object exists." //$NON-NLS-1$
+                    + extensionAdoptHint(isExtensionProject);
             }
             Type refType;
             try
@@ -369,6 +409,23 @@ public final class MetadataTypeBuilder
         String k = kind.trim();
         return k.equalsIgnoreCase("Ref") //$NON-NLS-1$
             || (k.length() > 3 && k.regionMatches(true, k.length() - 3, "Ref", 0, 3)); //$NON-NLS-1$
+    }
+
+    /**
+     * The extension-adopt hint appended to an unresolved-reference error (issue #262 "Мелочь (UX)"): a
+     * reference target that exists in the BASE configuration is simply invisible to an EXTENSION
+     * project's resolvers until it is adopted, and the plain "not found" wording gives no clue why. Empty
+     * (never {@code null}) for a base-configuration project, so callers can append it unconditionally.
+     *
+     * @param isExtensionProject whether the project being modified is a configuration EXTENSION
+     * @return the hint sentence (with a leading space), or an empty string
+     */
+    static String extensionAdoptHint(boolean isExtensionProject)
+    {
+        return isExtensionProject
+            ? " If this is an extension project, adopt the target object from the base " //$NON-NLS-1$
+                + "configuration first (adopt_metadata_object) and retry." //$NON-NLS-1$
+            : ""; //$NON-NLS-1$
     }
 
     private static MdObject resolveRefTarget(Configuration config, String kind, String ref)
