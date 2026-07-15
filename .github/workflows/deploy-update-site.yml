@@ -1,12 +1,20 @@
 name: Deploy Update Site
 
 on:
+  # NOTE: `on: release` alone never fires here - the release is published by release.yml
+  # with the standard GITHUB_TOKEN, and GITHUB_TOKEN-generated events do not trigger other
+  # workflows (GitHub's anti-recursion rule). Chain off the Release workflow instead.
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
 
 jobs:
   deploy:
+    # For the workflow_run chaining, deploy only when the Release run succeeded.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,10 +38,21 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            # workflow_dispatch: use the latest published release tag
-            VERSION=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName | ltrimstr("v")')
+            # workflow_dispatch / workflow_run: the latest PUBLISHED release. Use the
+            # releases/latest endpoint (never a draft, no list-ordering ambiguity) and retry:
+            # `gh release list` raced a just-published release once and redeployed the OLD
+            # version (issue #265 - the site served 2.6.1 after the 2.7.1 release).
+            VERSION=""
+            for attempt in 1 2 3 4 5; do
+              VERSION=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" -q '.tag_name | ltrimstr("v")' || true)
+              [[ -n "$VERSION" ]] && break
+              echo "releases/latest not ready (attempt $attempt); retrying in 15s"
+              sleep 15
+            done
+            [[ -n "$VERSION" ]] || { echo "::error::could not resolve the latest published release"; exit 1; }
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Deploying update site for v$VERSION"
 
       - name: Download release artifact
         env:
