@@ -11,8 +11,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 
 /**
  * The filter + pagination spec consumed by {@link EventLogReader}. Fluent setters
@@ -221,7 +221,7 @@ public final class EventLogQuery
         }
     }
 
-    private static Set<String> normalise(List<String> vals, Function<String, String> tx)
+    private static Set<String> normalise(List<String> vals, UnaryOperator<String> tx)
     {
         if (vals == null || vals.isEmpty())
         {
@@ -245,43 +245,62 @@ public final class EventLogQuery
      */
     public Predicate<EventRecord> asPredicate()
     {
-        return ev ->
+        return ev -> matchesPeriod(ev) && matchesExactSets(ev) && matchesSubstrings(ev) && matchesSession(ev);
+    }
+
+    /**
+     * @return whether the record's date falls inside the configured {@code [from, to]} window.
+     */
+    private boolean matchesPeriod(EventRecord ev)
+    {
+        return ev.dateRaw >= this.dateFromRaw && ev.dateRaw <= this.dateToRaw;
+    }
+
+    /**
+     * @return whether the record passes the exact-value set filters (severity, user,
+     *         application, event); an empty set is pass-through.
+     */
+    private boolean matchesExactSets(EventRecord ev)
+    {
+        if (!this.severities.isEmpty() && !this.severities.contains(ev.severityCode))
         {
-            if (ev.dateRaw < this.dateFromRaw || ev.dateRaw > this.dateToRaw)
-            {
-                return false;
-            }
-            if (!this.severities.isEmpty() && !this.severities.contains(ev.severityCode))
-            {
-                return false;
-            }
-            if (!this.users.isEmpty() && (ev.user == null || !this.users.contains(ev.user)))
-            {
-                return false;
-            }
-            if (!this.applications.isEmpty()
-                && (ev.application == null || !this.applications.contains(ev.application)))
-            {
-                return false;
-            }
-            if (!this.events.isEmpty() && (ev.event == null || !this.events.contains(ev.event)))
-            {
-                return false;
-            }
-            if (!containsIgnoreCase(ev.event, this.eventContains))
-            {
-                return false;
-            }
-            if (!containsIgnoreCase(ev.comment, this.commentContains))
-            {
-                return false;
-            }
-            if (!containsIgnoreCase(ev.metadata, this.metadataContains))
-            {
-                return false;
-            }
-            return this.sessions.isEmpty() || this.sessions.contains(Long.valueOf(ev.session));
-        };
+            return false;
+        }
+        if (!this.users.isEmpty() && (ev.user == null || !this.users.contains(ev.user)))
+        {
+            return false;
+        }
+        if (!this.applications.isEmpty()
+            && (ev.application == null || !this.applications.contains(ev.application)))
+        {
+            return false;
+        }
+        return this.events.isEmpty() || (ev.event != null && this.events.contains(ev.event));
+    }
+
+    /**
+     * @return whether the record passes the case-insensitive substring filters (event name,
+     *         comment, metadata full name); an unset needle is pass-through.
+     */
+    private boolean matchesSubstrings(EventRecord ev)
+    {
+        if (!containsIgnoreCase(ev.event, this.eventContains))
+        {
+            return false;
+        }
+        if (!containsIgnoreCase(ev.comment, this.commentContains))
+        {
+            return false;
+        }
+        return containsIgnoreCase(ev.metadata, this.metadataContains);
+    }
+
+    /**
+     * @return whether the record passes the session filter; an empty set is pass-through.
+     */
+    private boolean matchesSession(EventRecord ev)
+    {
+        return this.sessions.isEmpty() || this.sessions.contains(Long.valueOf(ev.session));
     }
 
     /**

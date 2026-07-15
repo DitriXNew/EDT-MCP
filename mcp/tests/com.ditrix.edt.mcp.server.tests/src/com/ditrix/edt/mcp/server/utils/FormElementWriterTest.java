@@ -15,6 +15,7 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -2077,6 +2078,144 @@ public class FormElementWriterTest
         assertNotNull("the seeded field must carry a contained DataPath", dataPath); //$NON-NLS-1$
         assertEquals("the field must bind to Object." + sub, Arrays.asList("Object", sub), //$NON-NLS-1$ //$NON-NLS-2$
             dataPath.eGet(feature(dataPath, "segments"))); //$NON-NLS-1$
+    }
+
+    // ==================== issue #262: extension owner value-type fallback + setAsDefault ====================
+
+    @Test
+    public void testObjectTypeByNameGuardsAgainstMissingInputs()
+    {
+        // The by-name fallback (issue #262) must never throw and must return null when any required
+        // input is missing - it never even reaches the platform provider lookup in that case.
+        assertNull(FormElementWriter.objectTypeByName(null, "MyDp", null, Version.V8_3_20)); //$NON-NLS-1$
+        assertNull(FormElementWriter.objectTypeByName("", "MyDp", null, Version.V8_3_20)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.objectTypeByName("DataProcessor", null, null, Version.V8_3_20)); //$NON-NLS-1$
+        assertNull(FormElementWriter.objectTypeByName("DataProcessor", "", null, Version.V8_3_20)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.objectTypeByName("DataProcessor", "MyDp", null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testObjectTypeByNameGracefulWithoutLivePlatformProvider()
+    {
+        // Even with every input present, this headless harness has no live project/configuration, so
+        // the platform TYPE_ITEM provider either is not registered for the version or does not know a
+        // "DataProcessorObject.<madeUpName>" type - the fallback must return null, not throw (mirrors
+        // MetadataTypeBuilderTest#testObjectTypeGracefulWithoutModelOwner: the real success path needs a
+        // live provider and is proven by the e2e suite, not headless).
+        assertNull(FormElementWriter.objectTypeByName("DataProcessor", "Z_NoSuchDp_e2e_262", null, //$NON-NLS-1$ //$NON-NLS-2$
+            Version.V8_3_20));
+    }
+
+    @Test
+    public void testCreateContentFormGenerateContentLeavesValueTypeUnsetWhenOwnerUnresolvable()
+    {
+        // Issue #262: headless (owner == null) BOTH the produced-types path and the by-name fallback
+        // fail to resolve a value type (no live BM owner / no platform provider in this harness), so the
+        // seeded main Object attribute must stay untyped WITHOUT throwing - the new WARN-instead-of-
+        // silently-skip path must remain exactly as safe as the old silent skip.
+        EObject content = FormElementWriter.createContentForm(null, null, Version.V8_5_1, false, true,
+            "DataProcessor"); //$NON-NLS-1$
+        List<?> attributes = (List<?>)content.eGet(feature(content, "attributes")); //$NON-NLS-1$
+        assertEquals(1, attributes.size());
+        EObject mainAttr = (EObject)attributes.get(0);
+        assertNull("headless: neither type-resolution path can succeed, so valueType stays unset " //$NON-NLS-1$
+            + "(and creation must not throw)", mainAttr.eGet(feature(mainAttr, "valueType"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFindCompatibleSetterPrefersSetDefaultObjectFormFirst()
+    {
+        // Issue #262: when an owner exposes BOTH setters, setDefaultObjectForm must be tried FIRST
+        // (DEFAULT_FORM_SETTER_NAMES order), matching most owners' actual API shape (Catalog/Document/...).
+        Method m = FormElementWriter.findCompatibleSetter(FakeOwnerBothSetters.class, "FORM", //$NON-NLS-1$
+            FormElementWriter.DEFAULT_FORM_SETTER_NAMES);
+        assertNotNull("a compatible setter must be found when both are present", m); //$NON-NLS-1$
+        assertEquals("setDefaultObjectForm must win when both setters exist", //$NON-NLS-1$
+            "setDefaultObjectForm", m.getName()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFindCompatibleSetterFindsSetDefaultObjectFormAlone()
+    {
+        Method m = FormElementWriter.findCompatibleSetter(FakeOwnerObjectFormSetterOnly.class, "FORM", //$NON-NLS-1$
+            FormElementWriter.DEFAULT_FORM_SETTER_NAMES);
+        assertNotNull(m);
+        assertEquals("setDefaultObjectForm", m.getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindCompatibleSetterFallsBackToSetDefaultForm()
+    {
+        // Issue #262 root cause: DataProcessor (and Report/Task) expose ONLY setDefaultForm, not
+        // setDefaultObjectForm - the lookup must fall back to it rather than reporting no setter at all.
+        Method m = FormElementWriter.findCompatibleSetter(FakeOwnerDefaultFormSetterOnly.class, "FORM", //$NON-NLS-1$
+            FormElementWriter.DEFAULT_FORM_SETTER_NAMES);
+        assertNotNull("the fallback setDefaultForm must be found", m); //$NON-NLS-1$
+        assertEquals("setDefaultForm", m.getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindCompatibleSetterReturnsNullWhenNoneCompatible()
+    {
+        // Neither setter name matches (setDefaultForm(int) cannot accept a String argument), so the
+        // lookup must return null - the caller then reports BOTH names tried, not a bogus match.
+        assertNull(FormElementWriter.findCompatibleSetter(FakeOwnerNoCompatibleSetter.class, "FORM", //$NON-NLS-1$
+            FormElementWriter.DEFAULT_FORM_SETTER_NAMES));
+    }
+
+    @Test
+    public void testDescribeSetterNamesListsAllTried()
+    {
+        // Issue #262: the missing-setter error must name EVERY setter that was tried, not just one.
+        assertEquals("setDefaultObjectForm(...) / setDefaultForm(...)", //$NON-NLS-1$
+            FormElementWriter.describeSetterNames(FormElementWriter.DEFAULT_FORM_SETTER_NAMES));
+    }
+
+    /** Fake owner exposing ONLY {@code setDefaultObjectForm} - most owners (Catalog/Document/...). */
+    private static final class FakeOwnerObjectFormSetterOnly
+    {
+        @SuppressWarnings("unused")
+        public void setDefaultObjectForm(String form)
+        {
+            // no-op fake - only the setter's presence/signature matters to findCompatibleSetter
+        }
+    }
+
+    /** Fake owner exposing ONLY {@code setDefaultForm} - DataProcessor / Report (issue #262). */
+    private static final class FakeOwnerDefaultFormSetterOnly
+    {
+        @SuppressWarnings("unused")
+        public void setDefaultForm(String form)
+        {
+            // no-op fake
+        }
+    }
+
+    /** Fake owner exposing BOTH setters - {@code setDefaultObjectForm} must win (tried first). */
+    private static final class FakeOwnerBothSetters
+    {
+        @SuppressWarnings("unused")
+        public void setDefaultObjectForm(String form)
+        {
+            // no-op fake
+        }
+
+        @SuppressWarnings("unused")
+        public void setDefaultForm(String form)
+        {
+            // no-op fake
+        }
+    }
+
+    /** Fake owner with neither compatible setter (a same-named setter with an incompatible parameter
+     * type is a deliberate near-miss - it must NOT be treated as a match). */
+    private static final class FakeOwnerNoCompatibleSetter
+    {
+        @SuppressWarnings("unused")
+        public void setDefaultForm(int notAFormType)
+        {
+            // wrong parameter type - must not match a String/Object argument
+        }
     }
 
     // ==================== dynamic form-like EMF metamodel ====================

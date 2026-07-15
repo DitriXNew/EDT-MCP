@@ -1,8 +1,9 @@
 name: E2E Tests (reusable)
 
-# REUSABLE workflow (on: workflow_call) — invoked once per EDT version by the thin
-# caller workflows e2e-2025.2.yml and e2e-2026.1.yml, so each version gets its OWN
-# status badge. Black-box e2e gate on a STOCK GitHub-hosted runner (ubuntu-latest):
+# REUSABLE workflow (on: workflow_call) — invoked by the thin caller workflow
+# e2e-2026.1.yml (parameterized by EDT version so it stays ready for a future matrix),
+# which gives the gate its OWN status badge. Black-box e2e gate on a STOCK
+# GitHub-hosted runner (ubuntu-latest):
 # no docker image, no self-hosted runner. The `build` job builds the plugin; the `e2e`
 # job boots a headless EDT (inlined setup, numbered steps 1/8…8/8 — each phase is a
 # separate line in the Actions UI so you can see what is cached vs what runs),
@@ -17,7 +18,7 @@ name: E2E Tests (reusable)
 #
 # The EDT version comes from the caller via inputs.edt. The extra IUs the install
 # pulls (platform-support 8.5.1, profiling.feature, bsl.extension) are verified
-# present in both 2025.2 and 2026.1 p2.
+# present in the 2026.1 p2.
 
 on:
   workflow_call:
@@ -166,18 +167,27 @@ jobs:
           done
           sudo apt-get install -y --no-install-recommends xvfb
 
-      - name: "EDT setup 2/8 · compute base cache key"
+      - name: "EDT setup 2/8 · pin guard + compute base cache key"
         id: edtcache
         shell: bash
         run: |
           set -euo pipefail
-          # Key on the IMMUTABLE base inputs (NOT the plugin, which is overlaid fresh).
-          H=$(printf '%s|%s|%s|%s|%s|%s|%s' \
+          # Pin the EDT build this base is validated against and FAIL if 1C shipped a newer one.
+          # The public ruby/<ver>/ channel is mutated IN PLACE on every point-release (no
+          # immutable per-release URL), so folding the SERVED build qualifier into the cache key
+          # makes the base cache track the served build — it can never go stale, which is what
+          # caused the felix uses-constraint overlay flap. edt-pin.sh exits 1 on a drift, which
+          # aborts this step under `set -e` (a red gate that forces a conscious re-pin).
+          EDT_BUILD="$(bash "$GITHUB_WORKSPACE/.github/scripts/edt-pin.sh" "${{ inputs.edt }}" "$EDT_P2")"
+          # Key on the IMMUTABLE base inputs (NOT the plugin, which is overlaid fresh) + the
+          # served EDT build qualifier.
+          H=$(printf '%s|%s|%s|%s|%s|%s|%s|%s' \
                 "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" \
                 "$PLATFORM_SUPPORT_IU" "$PROFILING_IU" "$BSL_EXTENSION_IU" \
+                "$EDT_BUILD" \
                 | sha256sum | cut -c1-16)
           echo "key=edt-base-${{ runner.os }}-$H" >> "$GITHUB_OUTPUT"
-          echo "EDT-base cache key: edt-base-${{ runner.os }}-$H"
+          echo "EDT-base cache key: edt-base-${{ runner.os }}-$H (edt build: $EDT_BUILD)"
 
       - name: "EDT setup 3/8 · RESTORE base cache (Eclipse+EDT, no plugin)"
         id: restore-edt
@@ -243,7 +253,7 @@ jobs:
           path: ${{ runner.temp }}/edt/eclipse
           key: ${{ steps.edtcache.outputs.key }}
 
-      - name: "EDT setup 7/8 · overlay MCP plugin [ALWAYS — fresh, local p2, no edt.1c.ru]"
+      - name: "EDT setup 7/8 · overlay MCP plugin [ALWAYS — fresh, local p2 + EDT repo]"
         shell: bash
         run: |
           set -uxo pipefail
@@ -255,9 +265,14 @@ jobs:
           ok=0
           for attempt in 1 2; do
             echo "[edt] plugin overlay attempt $attempt/2 ..."
+            # $EDT_P2 MUST be in the overlay repo list: the director re-resolves the EDT platform
+            # bundles here, and without the full EDT metadata it cannot pick a consistent
+            # servlet-api / jetty wiring for dt.html -> activedocument.ui (a felix uses-constraint
+            # conflict once the cached base carries a newer EDT point-release). The retry covers
+            # the rate-limited edt.1c.ru re-contact.
             if "$ECLIPSE/eclipse" -nosplash -consoleLog \
                 -application org.eclipse.equinox.p2.director \
-                -repository "$LOCAL_REPO,$ECLIPSE_P2,$ORBIT_P2,$ORBIT_SIMREL_P2" \
+                -repository "$LOCAL_REPO,$EDT_P2,$ECLIPSE_P2,$ORBIT_P2,$ORBIT_SIMREL_P2" \
                 -installIU "com.ditrix.edt.mcp.server.feature.feature.group" \
                 -destination "$ECLIPSE" \
                 -profileProperties org.eclipse.update.install.features=true \

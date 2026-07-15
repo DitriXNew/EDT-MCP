@@ -97,6 +97,43 @@ public final class EventLogReader
         }
     }
 
+    /** The page window derived from the query: skip {@code offset} matches, keep {@code limit}. */
+    private static final class Window
+    {
+        /** Number of matches to skip before the page (clamped to {@code >= 0}). */
+        final long offset;
+
+        /** Exclusive end ordinal of the page: {@code offset + limit}. */
+        final long end;
+
+        /** Window buffer cap: {@code end} clamped to {@code [1, Integer.MAX_VALUE]}. */
+        final int cap;
+
+        Window(EventLogQuery q)
+        {
+            this.offset = Math.max(0L, q.offset);
+            long limit = Math.max(0L, q.limit);
+            this.end = this.offset + limit;
+            this.cap = (int)Math.min(Integer.MAX_VALUE, Math.max(1L, this.end));
+        }
+    }
+
+    /** The mutable scan accumulator: the window buffer plus the matched/scanned/truncated totals. */
+    private static final class ScanState
+    {
+        /** The window buffer (ascending: the page itself; descending: the newest window matches). */
+        final List<EventRecord> buffer = new ArrayList<>();
+
+        /** The number of records that matched the filter so far. */
+        long matched;
+
+        /** The number of records tokenised so far. */
+        long scanned;
+
+        /** Whether the scan cap stopped the walk early. */
+        boolean truncated;
+    }
+
     private final LgfParser lgfParser;
     private final int totalScanCap;
 
@@ -121,6 +158,31 @@ public final class EventLogReader
      */
     public Page read(Path logDir, EventLogQuery q) throws EventLogException
     {
+        Path lgf = requireLegacyLog(logDir);
+        EventLogReferences refs = parseReferences(lgf);
+
+        // A descending ("newest first") read must walk partitions newest-first so a
+        // scan-cap stop keeps the TRUE newest events; an ascending read walks oldest-first.
+        List<Path> partitions =
+            listPartitionsInRange(logDir, q.dateFromRaw, q.dateToRaw, q.descending);
+        LgpParser lgp = new LgpParser(refs);
+        Predicate<EventRecord> filter = q.asPredicate();
+        Window window = new Window(q);
+
+        ScanState state = scanPartitions(partitions, lgp, filter, q.descending, window);
+        List<EventRecord> pageRecords = slicePage(state.buffer, q.descending, window);
+        return new Page(pageRecords, state.matched, state.scanned, state.truncated);
+    }
+
+    /**
+     * Validates the log directory and locates the legacy references file.
+     *
+     * @param logDir the {@code 1Cv8Log} directory
+     * @return the {@code 1Cv8.lgf} path
+     * @throws EventLogException when the directory or the references file is missing/unsupported
+     */
+    private static Path requireLegacyLog(Path logDir) throws EventLogException
+    {
         if (logDir == null || !Files.isDirectory(logDir))
         {
             throw new EventLogException("Event log directory not found: " + logDir
@@ -138,29 +200,43 @@ public final class EventLogReader
             throw new EventLogException("Event log references file not found: " + lgf
                 + " (expected a legacy text-format 1Cv8.lgf in the log directory)");
         }
+        return lgf;
+    }
 
-        EventLogReferences refs;
+    /**
+     * Parses the {@code 1Cv8.lgf} references dictionary.
+     *
+     * @param lgf the references file path
+     * @return the parsed reference tables
+     * @throws EventLogException when the file cannot be parsed
+     */
+    private EventLogReferences parseReferences(Path lgf) throws EventLogException
+    {
         try
         {
-            refs = this.lgfParser.parse(lgf);
+            return this.lgfParser.parse(lgf);
         }
         catch (IOException e)
         {
             throw new EventLogException("Failed to parse " + lgf + ": " + e.getMessage(), e);
         }
+    }
 
-        // A descending ("newest first") read must walk partitions newest-first so a
-        // scan-cap stop keeps the TRUE newest events; an ascending read walks oldest-first.
-        List<Path> partitions =
-            listPartitionsInRange(logDir, q.dateFromRaw, q.dateToRaw, q.descending);
-        LgpParser lgp = new LgpParser(refs);
-        Predicate<EventRecord> filter = q.asPredicate();
-
-        long offset = Math.max(0L, (long)q.offset);
-        long limit = Math.max(0L, (long)q.limit);
-        long windowEnd = offset + limit;
-        int windowCap = (int)Math.min((long)Integer.MAX_VALUE, Math.max(1L, windowEnd));
-
+    /**
+     * Walks the partitions, streaming every record through the filter and accumulating the
+     * page window plus the matched/scanned/truncated totals.
+     *
+     * @param partitions the partitions to scan, already ordered per the walk direction
+     * @param lgp the partition parser
+     * @param filter the record filter
+     * @param descending {@code true} when the newest events are wanted first
+     * @param window the page window
+     * @return the accumulated scan state
+     * @throws EventLogException when a partition cannot be read
+     */
+    private ScanState scanPartitions(List<Path> partitions, LgpParser lgp, Predicate<EventRecord> filter,
+        boolean descending, Window window) throws EventLogException
+    {
         // Window buffering, both bounded to O(offset+limit) (never the whole log):
         //  - ascending: partitions oldest-first; keep the matches at ordinals
         //    [offset, offset+limit) directly;
@@ -169,68 +245,104 @@ public final class EventLogReader
         //    each partition those are folded newest-first into the buffer until it holds
         //    the first (offset+limit) newest matches. A cap-stop after the newest
         //    partitions therefore still yields the true-newest page.
-        List<EventRecord> buffer = new ArrayList<>();
-        long[] matched = { 0L };
-        long scanned = 0L;
-        boolean truncated = false;
-
+        ScanState state = new ScanState();
         for (Path part : partitions)
         {
-            final Deque<EventRecord> partRing = q.descending ? new ArrayDeque<>() : null;
+            final Deque<EventRecord> partRing = descending ? new ArrayDeque<>() : null;
             try
             {
                 long here = lgp.stream(part, filter, ev ->
                 {
-                    long ord = matched[0]++;
-                    if (q.descending)
-                    {
-                        partRing.addLast(ev);
-                        if (partRing.size() > windowCap)
-                        {
-                            partRing.removeFirst();
-                        }
-                    }
-                    else if (ord >= offset && ord < windowEnd)
-                    {
-                        buffer.add(ev);
-                    }
+                    long ord = state.matched++;
+                    bufferMatch(ev, ord, descending, partRing, state.buffer, window);
                     return true;
                 });
-                scanned += here;
+                state.scanned += here;
             }
             catch (IOException e)
             {
                 throw new EventLogException("Failed to read " + part + ": " + e.getMessage(), e);
             }
-            if (q.descending && buffer.size() < windowCap)
+            if (descending && state.buffer.size() < window.cap)
             {
                 // partRing holds this partition's newest <=windowCap matches in chronological
                 // order; drain it newest-first into the buffer until the page window is full.
-                Iterator<EventRecord> it = partRing.descendingIterator();
-                while (it.hasNext() && buffer.size() < windowCap)
-                {
-                    buffer.add(it.next());
-                }
+                drainRingNewestFirst(partRing, state.buffer, window.cap);
             }
-            if (scanned > this.totalScanCap)
+            if (state.scanned > this.totalScanCap)
             {
-                truncated = true;
+                state.truncated = true;
                 break;
             }
         }
+        return state;
+    }
 
-        List<EventRecord> pageRecords;
-        if (q.descending)
+    /**
+     * Buffers one matched record. A descending walk keeps the partition's newest
+     * {@code window.cap} matches in the ring; an ascending walk keeps the match directly
+     * when its ordinal falls inside the page window.
+     *
+     * @param ev the matched record
+     * @param ord the match ordinal (0-based, across all partitions)
+     * @param descending the walk direction
+     * @param partRing the per-partition ring ({@code null} on an ascending walk)
+     * @param buffer the page buffer (the ascending target)
+     * @param window the page window
+     */
+    private static void bufferMatch(EventRecord ev, long ord, boolean descending, Deque<EventRecord> partRing,
+        List<EventRecord> buffer, Window window)
+    {
+        if (descending)
         {
-            int from = (int)Math.min(offset, buffer.size());
-            int to = (int)Math.min(windowEnd, buffer.size());
-            pageRecords = new ArrayList<>(buffer.subList(from, to));
+            partRing.addLast(ev);
+            if (partRing.size() > window.cap)
+            {
+                partRing.removeFirst();
+            }
         }
-        else
+        else if (ord >= window.offset && ord < window.end)
         {
-            pageRecords = buffer;
+            buffer.add(ev);
         }
-        return new Page(pageRecords, matched[0], scanned, truncated);
+    }
+
+    /**
+     * Drains a partition's ring (its newest matches, in chronological order) newest-first
+     * into the buffer until the page window is full.
+     *
+     * @param partRing the per-partition ring
+     * @param buffer the window buffer
+     * @param windowCap the buffer cap
+     */
+    private static void drainRingNewestFirst(Deque<EventRecord> partRing, List<EventRecord> buffer, int windowCap)
+    {
+        Iterator<EventRecord> it = partRing.descendingIterator();
+        while (it.hasNext() && buffer.size() < windowCap)
+        {
+            buffer.add(it.next());
+        }
+    }
+
+    /**
+     * Cuts the requested page out of the window buffer. A descending buffer holds the newest
+     * {@code offset+limit} matches newest-first, so the page is its {@code [offset, end)}
+     * slice; an ascending buffer already holds exactly the page.
+     *
+     * @param buffer the window buffer
+     * @param descending the walk direction
+     * @param window the page window
+     * @return the page records
+     */
+    private static List<EventRecord> slicePage(List<EventRecord> buffer, boolean descending, Window window)
+    {
+        if (descending)
+        {
+            int from = (int)Math.min(window.offset, buffer.size());
+            int to = (int)Math.min(window.end, buffer.size());
+            return new ArrayList<>(buffer.subList(from, to));
+        }
+        return buffer;
     }
 
     private static boolean hasLgd(Path logDir)
@@ -277,32 +389,7 @@ public final class EventLogReader
         long fromDay = (fromRaw / 1000000L) * 1000000L;
         long toDay = (toRaw / 1000000L + 1) * 1000000L;
         List<Path> filtered = new ArrayList<>();
-        int carryIdx = -1;
-        for (int i = 0; i < all.size(); i++)
-        {
-            String name = all.get(i).getFileName().toString();
-            long startRaw;
-            try
-            {
-                startRaw = Long.parseLong(name.substring(0, 14));
-            }
-            catch (RuntimeException e)
-            {
-                continue;
-            }
-            if (startRaw <= fromDay)
-            {
-                carryIdx = i;
-            }
-            if (startRaw >= toDay)
-            {
-                break;
-            }
-            if (startRaw >= fromDay)
-            {
-                filtered.add(all.get(i));
-            }
-        }
+        int carryIdx = selectWindow(all, fromDay, toDay, filtered);
         if (carryIdx >= 0)
         {
             Path carry = all.get(carryIdx);
@@ -316,5 +403,61 @@ public final class EventLogReader
             Collections.reverse(filtered);
         }
         return filtered;
+    }
+
+    /**
+     * Walks the name-sorted partitions, adding to {@code filtered} those whose start day
+     * falls inside {@code [fromDay, toDay)} and tracking the last partition starting
+     * on/before the window's first day (the carry-over candidate). Stops at the first
+     * partition starting on/after {@code toDay}; a file without a leading 14-digit
+     * timestamp is ignored.
+     *
+     * @param all every {@code *.lgp} path, sorted by file name
+     * @param fromDay the window's first day, packed ({@code YYYYMMDD000000})
+     * @param toDay the first day after the window, packed
+     * @param filtered the output collector for the in-window partitions
+     * @return the carry-over candidate index into {@code all}, or {@code -1} when there is none
+     */
+    private static int selectWindow(List<Path> all, long fromDay, long toDay, List<Path> filtered)
+    {
+        int carryIdx = -1;
+        for (int i = 0; i < all.size(); i++)
+        {
+            Long startRaw = parsePartitionStart(all.get(i).getFileName().toString());
+            if (startRaw != null)
+            {
+                if (startRaw.longValue() <= fromDay)
+                {
+                    carryIdx = i;
+                }
+                if (startRaw.longValue() >= toDay)
+                {
+                    break;
+                }
+                if (startRaw.longValue() >= fromDay)
+                {
+                    filtered.add(all.get(i));
+                }
+            }
+        }
+        return carryIdx;
+    }
+
+    /**
+     * Parses the leading 14-digit {@code YYYYMMDDhhmmss} timestamp of a partition file name.
+     *
+     * @param name the {@code *.lgp} file name
+     * @return the packed start timestamp, or {@code null} when the name does not carry one
+     */
+    private static Long parsePartitionStart(String name)
+    {
+        try
+        {
+            return Long.valueOf(name.substring(0, 14));
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
     }
 }

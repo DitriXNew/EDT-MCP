@@ -264,82 +264,12 @@ public class GetEventLogTool implements IMcpTool
                 .toJson();
         }
 
-        String order = normalizeOrder(JsonUtils.extractStringArgument(params, KEY_ORDER));
-        if (order == null)
+        ParsedQuery parsed = parseQuery(params);
+        if (parsed.error != null)
         {
-            String bad = JsonUtils.extractStringArgument(params, KEY_ORDER);
-            return ToolResult.error("Invalid order: '" + bad + "'. Must be one of: " //$NON-NLS-1$ //$NON-NLS-2$
-                + ORDER_DATE_ASC + ", " + ORDER_DATE_DESC + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            return parsed.error;
         }
-
-        // Parse the scalar session filter up front so a malformed value fails fast (before any file
-        // access) with an actionable error instead of silently matching every session. EventLogQuery
-        // keeps a List<Long> (a future multi-session filter); the tool exposes a single value.
-        String sessionRaw = JsonUtils.extractStringArgument(params, KEY_SESSION);
-        List<Long> sessionFilter = null;
-        if (sessionRaw != null && !sessionRaw.isBlank())
-        {
-            try
-            {
-                sessionFilter = List.of(Long.valueOf(sessionRaw.trim()));
-            }
-            catch (NumberFormatException e)
-            {
-                return ToolResult.error("Invalid session: '" + sessionRaw + "'. It must be an " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "integer session number.").toJson(); //$NON-NLS-1$
-            }
-        }
-
-        int limit = Pagination.clampLimit(
-            JsonUtils.extractIntArgument(params, McpKeys.LIMIT, Pagination.DEFAULT_LIMIT),
-            Pagination.MAX_LIMIT);
-        int offset = Math.max(0, JsonUtils.extractIntArgument(params, KEY_OFFSET, 0));
-
-        // Build the filter/pagination query - Dev A. EventLogQuery exposes fluent setters for the
-        // collection filters (user/event/severity/session take lists) and public fields for the scalar
-        // substring / pagination knobs. The tool's event filter is a single exact value, wrapped here
-        // into the one-element list the query expects. Everything is validated BEFORE the reflective
-        // resolver runs, so a bad argument fails fast (headless) without touching EDT or the filesystem.
-        String eventRaw = JsonUtils.extractStringArgument(params, KEY_EVENT);
-        EventLogQuery query = new EventLogQuery()
-            .user(JsonUtils.extractArrayArgument(params, KEY_USER))
-            .event(eventRaw == null || eventRaw.isBlank() ? null : List.of(eventRaw))
-            .severity(JsonUtils.extractArrayArgument(params, KEY_SEVERITY))
-            .session(sessionFilter);
-        query.eventContains = JsonUtils.extractStringArgument(params, KEY_EVENT_CONTAINS);
-        query.commentContains = JsonUtils.extractStringArgument(params, KEY_COMMENT_CONTAINS);
-        query.metadataContains = JsonUtils.extractStringArgument(params, KEY_METADATA_CONTAINS);
-        query.descending = ORDER_DATE_DESC.equals(order);
-        query.limit = limit;
-        query.offset = offset;
-
-        // Period bounds are optional: skip an omitted bound (the query keeps its unbounded default)
-        // and turn a malformed ISO value into an actionable error rather than letting the ISO parse
-        // throw an uncaught NumberFormatException / NPE (unattended-safety, CLAUDE.md #8).
-        String fromRaw = JsonUtils.extractStringArgument(params, KEY_FROM);
-        if (fromRaw != null && !fromRaw.isBlank())
-        {
-            try
-            {
-                query.from(fromRaw);
-            }
-            catch (RuntimeException e)
-            {
-                return badPeriod(KEY_FROM, fromRaw);
-            }
-        }
-        String toRaw = JsonUtils.extractStringArgument(params, KEY_TO);
-        if (toRaw != null && !toRaw.isBlank())
-        {
-            try
-            {
-                query.to(toRaw);
-            }
-            catch (RuntimeException e)
-            {
-                return badPeriod(KEY_TO, toRaw);
-            }
-        }
+        EventLogQuery query = parsed.query;
 
         // Resolve the 1Cv8Log directory (reflective, or the logDir override) - Dev B.
         EventLogLocator.Resolution resolution =
@@ -376,11 +306,134 @@ public class GetEventLogTool implements IMcpTool
             .put(KEY_MATCHED, page.matchedTotal)
             .put(KEY_SCANNED, page.scanned)
             .put(KEY_RETURNED, events.size())
-            .put(McpKeys.LIMIT, limit)
-            .put(KEY_OFFSET, offset)
+            .put(McpKeys.LIMIT, query.limit)
+            .put(KEY_OFFSET, query.offset)
             .put(KEY_TRUNCATED, page.truncated)
             .put(KEY_EVENTS, events)
             .toJson();
+    }
+
+    /** The outcome of assembling the filter/pagination query: the query, or a ready error JSON. */
+    private static final class ParsedQuery
+    {
+        /** The assembled query ({@code null} when {@link #error} is set). */
+        final EventLogQuery query;
+
+        /** A ready {@link ToolResult} error JSON ({@code null} on success). */
+        final String error;
+
+        ParsedQuery(EventLogQuery query, String error)
+        {
+            this.query = query;
+            this.error = error;
+        }
+    }
+
+    /**
+     * Validates the order/session arguments and assembles the filter/pagination query - Dev A.
+     * EventLogQuery exposes fluent setters for the collection filters (user/event/severity/session
+     * take lists) and public fields for the scalar substring / pagination knobs. The tool's event
+     * filter is a single exact value, wrapped here into the one-element list the query expects.
+     * Everything is validated BEFORE the reflective resolver runs, so a bad argument fails fast
+     * (headless) without touching EDT or the filesystem.
+     *
+     * @param params the raw tool arguments
+     * @return the assembled query, or a ready error for an invalid order/session/period value
+     */
+    private static ParsedQuery parseQuery(Map<String, String> params)
+    {
+        String order = normalizeOrder(JsonUtils.extractStringArgument(params, KEY_ORDER));
+        if (order == null)
+        {
+            String bad = JsonUtils.extractStringArgument(params, KEY_ORDER);
+            return new ParsedQuery(null,
+                ToolResult.error("Invalid order: '" + bad + "'. Must be one of: " //$NON-NLS-1$ //$NON-NLS-2$
+                    + ORDER_DATE_ASC + ", " + ORDER_DATE_DESC + ".").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        // Parse the scalar session filter up front so a malformed value fails fast (before any file
+        // access) with an actionable error instead of silently matching every session. EventLogQuery
+        // keeps a List<Long> (a future multi-session filter); the tool exposes a single value.
+        String sessionRaw = JsonUtils.extractStringArgument(params, KEY_SESSION);
+        List<Long> sessionFilter = null;
+        if (sessionRaw != null && !sessionRaw.isBlank())
+        {
+            try
+            {
+                sessionFilter = List.of(Long.valueOf(sessionRaw.trim()));
+            }
+            catch (NumberFormatException e)
+            {
+                return new ParsedQuery(null,
+                    ToolResult.error("Invalid session: '" + sessionRaw + "'. It must be an " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "integer session number.").toJson()); //$NON-NLS-1$
+            }
+        }
+
+        int limit = Pagination.clampLimit(
+            JsonUtils.extractIntArgument(params, McpKeys.LIMIT, Pagination.DEFAULT_LIMIT),
+            Pagination.MAX_LIMIT);
+        int offset = Math.max(0, JsonUtils.extractIntArgument(params, KEY_OFFSET, 0));
+
+        String eventRaw = JsonUtils.extractStringArgument(params, KEY_EVENT);
+        EventLogQuery query = new EventLogQuery()
+            .user(JsonUtils.extractArrayArgument(params, KEY_USER))
+            .event(eventRaw == null || eventRaw.isBlank() ? null : List.of(eventRaw))
+            .severity(JsonUtils.extractArrayArgument(params, KEY_SEVERITY))
+            .session(sessionFilter);
+        query.eventContains = JsonUtils.extractStringArgument(params, KEY_EVENT_CONTAINS);
+        query.commentContains = JsonUtils.extractStringArgument(params, KEY_COMMENT_CONTAINS);
+        query.metadataContains = JsonUtils.extractStringArgument(params, KEY_METADATA_CONTAINS);
+        query.descending = ORDER_DATE_DESC.equals(order);
+        query.limit = limit;
+        query.offset = offset;
+
+        String periodError = applyPeriodBounds(query, params);
+        if (periodError != null)
+        {
+            return new ParsedQuery(null, periodError);
+        }
+        return new ParsedQuery(query, null);
+    }
+
+    /**
+     * Applies the optional {@code from}/{@code to} period bounds to the query.
+     *
+     * @param query the query to bound
+     * @param params the raw tool arguments
+     * @return a ready error JSON for a malformed bound, or {@code null} when both bounds were
+     *         applied or omitted cleanly
+     */
+    private static String applyPeriodBounds(EventLogQuery query, Map<String, String> params)
+    {
+        // Period bounds are optional: skip an omitted bound (the query keeps its unbounded default)
+        // and turn a malformed ISO value into an actionable error rather than letting the ISO parse
+        // throw an uncaught NumberFormatException / NPE (unattended-safety, CLAUDE.md #8).
+        String fromRaw = JsonUtils.extractStringArgument(params, KEY_FROM);
+        if (fromRaw != null && !fromRaw.isBlank())
+        {
+            try
+            {
+                query.from(fromRaw);
+            }
+            catch (RuntimeException e)
+            {
+                return badPeriod(KEY_FROM, fromRaw);
+            }
+        }
+        String toRaw = JsonUtils.extractStringArgument(params, KEY_TO);
+        if (toRaw != null && !toRaw.isBlank())
+        {
+            try
+            {
+                query.to(toRaw);
+            }
+            catch (RuntimeException e)
+            {
+                return badPeriod(KEY_TO, toRaw);
+            }
+        }
+        return null;
     }
 
     /**

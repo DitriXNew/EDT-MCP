@@ -21,7 +21,7 @@ Tool	When Copilot Uses It
 In the examples folder, there are examples of creating a plugin.
 Instructions are available here: https://edt.1c.ru/dev/ru/docs/plugins/project/
 We are developing a plugin for EDT, this is the MCP server.
-Documentation is here: https://edt.1c.ru/dev/edt/2025.2/apidocs/
+Documentation is here: https://edt.1c.ru/dev/edt/2026.1/apidocs/
 
 DO NOT BUILD YOURSELF, ASK THE EXPERT!
 

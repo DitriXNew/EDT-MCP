@@ -91,7 +91,7 @@ public final class LgfParser
         List<LgToken> items = rec.items;
         switch (type)
         {
-            case 1: // User: {1, uuid, "name", seq}
+            case 1: // User record: uuid, name, trailing seq
                 if (items.size() >= 4)
                 {
                     Integer seq = trailingSeq(items);
@@ -102,16 +102,16 @@ public final class LgfParser
                     }
                 }
                 break;
-            case 2: // Computer: {2, "name", seq}
+            case 2: // Computer record: name, trailing seq
                 putName(items, out.computers);
                 break;
-            case 3: // Application: {3, "name", seq}
+            case 3: // Application record: name, trailing seq
                 putName(items, out.applications);
                 break;
-            case 4: // Event: {4, "name", seq}
+            case 4: // Event record: name, trailing seq
                 putName(items, out.events);
                 break;
-            case 5: // Metadata: {5, uuid, "fullName", seq}
+            case 5: // Metadata record: uuid, fullName, trailing seq
                 if (items.size() >= 4)
                 {
                     Integer seq = trailingSeq(items);
@@ -122,13 +122,13 @@ public final class LgfParser
                     }
                 }
                 break;
-            case 6: // WorkServer: {6, "name", seq}
+            case 6: // WorkServer record: name, trailing seq
                 putName(items, out.servers);
                 break;
-            case 7: // MainPort: {7, port, seq}
+            case 7: // MainPort record: port, trailing seq
                 putPort(items, out.mainPorts);
                 break;
-            case 8: // SecondaryPort: {8, port, seq}
+            case 8: // SecondaryPort record: port, trailing seq
                 putPort(items, out.secondaryPorts);
                 break;
             default:

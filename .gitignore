@@ -22,3 +22,6 @@ log.log
 /tests/e2e/*.xml
 /.devtool
 .mcp.json
+
+# Proxy module build output
+proxy/target/

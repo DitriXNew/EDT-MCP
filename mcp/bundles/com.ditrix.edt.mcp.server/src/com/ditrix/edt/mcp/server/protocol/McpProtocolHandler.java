@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.UserSignal;
+import com.ditrix.edt.mcp.server.history.McpCallHistory;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.InitializeResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
@@ -26,6 +27,7 @@ import com.ditrix.edt.mcp.server.utils.GuideRenderer;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
+import com.ditrix.edt.mcp.server.utils.privacy.PiiRedactor;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -91,27 +93,112 @@ public class McpProtocolHandler
     }
     
     /**
-     * Processes an MCP JSON-RPC request.
-     * 
+     * Processes an MCP JSON-RPC request. This is the single choke point through
+     * which EVERY MCP message (initialize / tools/list / tools/call / notifications
+     * / ping / resources) flows, so the request/response HISTORY recorder (#254) is
+     * hooked here — once per message, in a {@code finally}, and strictly guarded so
+     * it can never alter the returned response nor propagate a failure onto the wire
+     * path. The returned value is {@link #dispatch(JsonRpcRequest)}'s EXACT String (no
+     * envelope re-serialization).
+     * <p>
+     * The request is parsed ONCE here and the parsed form is reused for both dispatch
+     * and the recorder, so a large tool-call payload is never parsed twice on this hot
+     * path — {@link #dispatch(JsonRpcRequest)} takes the already-parsed request and the
+     * {@code finally} reads method/toolName from it instead of re-parsing.
+     *
      * @param requestBody the JSON request body
-     * @return JSON response with correct id from request
+     * @return JSON response with correct id from request ({@code null} for a
+     *         notification answered with 202 Accepted)
      */
     public String processRequest(String requestBody)
+    {
+        long startNanos = System.nanoTime();
+        // Parse once at the choke point; parse() swallows a JSON syntax error and
+        // returns null, and dispatch() treats a null request as an invalid request —
+        // exactly as before, when the parse happened inside dispatch.
+        JsonRpcRequest request = parse(requestBody);
+        String response = null;
+        try
+        {
+            response = dispatch(request);
+        }
+        finally
+        {
+            // Record this exchange into the in-memory history at the choke point.
+            // Best-effort and strictly non-intrusive: a recorder failure, a
+            // null/unparseable request, a notification's null response, or a missing
+            // plugin context (Activator.getDefault()==null during a shutdown race or
+            // in a headless unit test) are ALL swallowed here so the returned value —
+            // dispatch's exact String — is never altered.
+            try
+            {
+                long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
+                String method = request != null ? request.getMethod() : null;
+                String toolName = (request != null && McpConstants.METHOD_TOOLS_CALL.equals(method))
+                    ? request.getToolName() : null;
+                recordToHistory(method, toolName, requestBody, response, durationMs);
+            }
+            catch (Exception recordingFailure) // NOSONAR: history recording must never break a call
+            {
+                // Intentionally swallowed — the wire path must be unaffected by the
+                // recorder (see the contract above).
+            }
+        }
+        return response;
+    }
+
+    /**
+     * Appends one recorded exchange to the shared in-memory {@link McpCallHistory}
+     * at the choke point. Delegates to the history singleton, tolerating a
+     * {@code null} singleton (e.g. the plugin is not active). Package-private and
+     * overridable so the guard around it in {@link #processRequest} is unit-testable
+     * without a live history buffer. The argument order mirrors
+     * {@link com.ditrix.edt.mcp.server.history.McpCallRecord} (minus its
+     * recorder-stamped timestamp).
+     *
+     * @param method the JSON-RPC method (may be {@code null} for an unparseable request)
+     * @param toolName the tool name for a {@code tools/call}, else {@code null}
+     * @param requestJson the raw request body (may be {@code null})
+     * @param responseJson the response body, or {@code null} for a notification
+     * @param durationMs the wall-clock exchange duration in milliseconds
+     */
+    void recordToHistory(String method, String toolName, String requestJson, String responseJson,
+        long durationMs)
+    {
+        McpCallHistory history = McpCallHistory.getInstance();
+        if (history != null)
+        {
+            history.record(method, toolName, requestJson, responseJson, durationMs);
+        }
+    }
+
+    /**
+     * Dispatches a parsed MCP JSON-RPC request to the matching handler and returns
+     * the serialized response. Split out of {@link #processRequest} so it can be
+     * wrapped with the history recorder without altering any dispatch behaviour; it
+     * takes the already-parsed request ({@code null} for an unparseable body) so the
+     * body is parsed only once at the choke point. Never throws: every error is turned
+     * into a JSON-RPC error response here.
+     *
+     * @param request the parsed JSON-RPC request, or {@code null} for an unparseable
+     *        body (handled as an invalid request)
+     * @return JSON response with correct id from request ({@code null} for a
+     *         notification answered with 202 Accepted)
+     */
+    private String dispatch(JsonRpcRequest request)
     {
         // Per JSON-RPC 2.0: when the id cannot be determined (parse error /
         // invalid request) the error response id MUST be null. A real id from
         // the parsed request overwrites this below.
         Object requestId = null;
-        
+
         try
         {
-            // Parse request using GsonProvider
-            JsonRpcRequest request = parse(requestBody);
             if (request != null)
             {
                 requestId = normalizeId(request.getId());
             }
-            
+
             // Validate JSON-RPC version
             if (request == null || !McpConstants.JSONRPC_VERSION.equals(request.getJsonrpc()))
             {
@@ -265,6 +352,11 @@ public class McpProtocolHandler
         
         // Execute the tool (timed + logged + status-bar cleared in one place).
         String result = executeToolTimed(tool, params, server);
+
+        // PII redaction (#242): the single wire-serialization choke point.
+        // A no-op unless redaction is enabled AND the tool is flagged returnsInfobaseData -
+        // returns the same reference otherwise, so output stays byte-identical.
+        result = PiiRedactor.redactIfEnabled(tool, params, result);
 
         // Check if user sent a signal during execution
         UserSignal signal = null;

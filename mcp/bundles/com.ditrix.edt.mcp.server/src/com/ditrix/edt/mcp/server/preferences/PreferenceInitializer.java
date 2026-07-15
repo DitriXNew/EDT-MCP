@@ -10,6 +10,7 @@ import org.eclipse.core.runtime.preferences.AbstractPreferenceInitializer;
 import org.eclipse.jface.preference.IPreferenceStore;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.history.HistoryConfig;
 
 /**
  * Default preference initializer.
@@ -54,6 +55,16 @@ public class PreferenceInitializer extends AbstractPreferenceInitializer
             PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_LEVEL);
         store.setDefault(PreferenceConstants.PREF_DESTRUCTIVE_ALLOWED_TOOLS,
             PreferenceConstants.DEFAULT_DESTRUCTIVE_ALLOWED_TOOLS);
+
+        // MCP request/response history recorder (record ON by default; file log OFF for privacy)
+        HistoryConfig.initializeDefaults(store);
+
+        // PII redaction rule table + pseudonymiser salt (the master toggle
+        // PREF_PII_REDACTION_ENABLED stays OFF via the boolean default).
+        store.setDefault(PreferenceConstants.PREF_PII_RULES_JSON,
+            PreferenceConstants.DEFAULT_PII_RULES_JSON);
+        store.setDefault(PreferenceConstants.PREF_PII_SALT,
+            PreferenceConstants.DEFAULT_PII_SALT);
 
         // Per-tool parameter defaults
         ToolParameterSettings.getInstance().initializeDefaults(store);

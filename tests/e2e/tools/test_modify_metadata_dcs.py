@@ -1,18 +1,24 @@
 """
 e2e tests for modify_metadata authoring a Report's Data Composition Schema (СКД / .dcs) via the `dcs`
-payload (#241).
+payload (#241, extended with calculated fields by #267).
 
 A 1C Report produces its output from a Data Composition Schema (схема компоновки данных) - datasets
-(typically a query with its query text + fields) and schema parameters. #241 lets that schema be
-AUTHORED through modify_metadata via a sibling `dcs` payload on a Report FQN (`Report.<Name>`), mirroring
-the #245 `template` payload and the Role `rights[]` / CommonAttribute `content[]` precedent - NO new tool:
+(typically a query with its query text + fields), calculated fields and schema parameters. #241 lets
+that schema be AUTHORED through modify_metadata via a sibling `dcs` payload on a Report FQN
+(`Report.<Name>`), mirroring the #245 `template` payload and the Role `rights[]` / CommonAttribute
+`content[]` precedent - NO new tool:
 
     modify_metadata(fqn="Report.X",
                     dcs={
-                        dataSources: [{name, type?}],
-                        dataSets:    [{name, type:'query', query, dataSource?, autoFillFields?,
-                                       fields:[{dataPath, name?, title?, role?}]}],
-                        parameters:  [{name, valueType?, title?, use?}] })
+                        dataSources:      [{name, type?}],
+                        dataSets:         [{name, type:'query', query, dataSource?, autoFillFields?,
+                                            fields:[{dataPath, name?, title?, role?}]}],
+                        parameters:       [{name, valueType?, title?, use?}],
+                        calculatedFields: [{dataPath, expression, title?}] })
+
+Every entry is FOUND-OR-UPDATED by its key (dataSets[].name, parameters[].name,
+calculatedFields[].dataPath): a repeated `dcs` call naming an entry already in the schema UPDATES it in
+place (e.g. a dataset's query text, or a calculated field's expression) rather than duplicating it.
 
 The report has no schema when freshly created; the FIRST `dcs` write FINDS-OR-CREATES the report's main
 DCS template (its `.dcs` content resource) and fills it. The write goes through a BM write transaction
@@ -153,6 +159,70 @@ def test_dcs_content_lands_in_dcs_on_disk():
     assert "<dataSourceType>Local</dataSourceType>" in doc, \
         "the auto-created data source must serialize the canonical <dataSourceType>Local</dataSourceType> " \
         "into the report's .dcs (%s): %r" % (dcs_rel, doc[:600])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Happy — a calculated field lands with its expression, and a re-applied entry for the SAME dataPath
+# UPDATES that expression in place instead of adding a duplicate (#267)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_calculated_field_lands_and_updates_in_place():
+    report = "E2EDcsCalcReport"
+    fqn = _seed_report(report)
+
+    # A unique dataPath marker plus two mutually-distinct expression markers: the FIRST expression must
+    # land on disk, then the SECOND apply (same dataPath, changed expression) must REPLACE it - proving
+    # find-or-UPDATE rather than find-or-CREATE-a-duplicate.
+    data_path = "E2EDcsCalcMargin"
+    # NB: neither expression may be a substring of the other, or the "old expression is GONE"
+    # assert below could never (or vacuously) pass.
+    expr1 = "E2EDcsCalcRevenue - E2EDcsCalcCost"
+    expr2 = "E2EDcsCalcRevenue * 2 - E2EDcsCalcCost"
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "dcs": {
+            "calculatedFields": [{"dataPath": data_path, "expression": expr1, "title": "Margin"}],
+        },
+    })
+    assert_ok(r, "author a calculated field on the fresh report")
+    _dcs_result(r, "dcs calculated field author")
+
+    poll_diff_contains(expr1,
+        ctx="the calculated field's expression must flush to the report's .dcs on disk")
+
+    dcs_rel = _find_report_dcs(report)
+    assert dcs_rel is not None, \
+        "the first dcs write must find-or-create the report's .dcs content resource under " \
+        "src/Reports/%s/Templates/<Tpl>/Template.dcs" % report
+    doc = read_disk(dcs_rel)
+    assert data_path in doc, \
+        "the calculated field's dataPath must serialize into the report's .dcs (%s): %r" % (dcs_rel, doc[:600])
+    assert expr1 in doc, \
+        "the calculated field's expression must serialize into the report's .dcs (%s): %r" % (dcs_rel, doc[:600])
+
+    # Re-apply with a CHANGED expression on the SAME dataPath: the existing calculated field must be
+    # UPDATED in place, not duplicated - the same find-or-update discipline as a re-applied dataSet /
+    # parameter (the #267 reporter's exact confusion, now guarded for calculatedFields too).
+    r2 = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "dcs": {
+            "calculatedFields": [{"dataPath": data_path, "expression": expr2}],
+        },
+    })
+    assert_ok(r2, "re-author the calculated field with a changed expression")
+    _dcs_result(r2, "dcs calculated field update")
+
+    poll_diff_contains(expr2, ctx="the UPDATED expression must flush to the report's .dcs on disk")
+    doc2 = read_disk(dcs_rel)
+    assert expr2 in doc2, \
+        "the updated expression must serialize into the report's .dcs (%s): %r" % (dcs_rel, doc2[:600])
+    assert expr1 not in doc2, \
+        "the OLD expression must be GONE after the update, not merely superseded (%s): %r" % (dcs_rel, doc2[:600])
+    assert doc2.count(data_path) == 1, \
+        "the calculated field must be UPDATED in place (one dataPath occurrence), not duplicated " \
+        "(%s): %r" % (dcs_rel, doc2[:600])
 
 
 # ══════════════════════════════════════════════════════════════════════════════

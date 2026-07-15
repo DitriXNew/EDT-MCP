@@ -1,8 +1,8 @@
 name: MCP Conformance (reusable)
 
-# REUSABLE protocol-conformance gate (on: workflow_call) — invoked once per EDT
-# version by the thin caller workflows conformance-2025.2.yml / conformance-2026.1.yml,
-# so each version gets its OWN status badge. Runs the official
+# REUSABLE protocol-conformance gate (on: workflow_call) — invoked by the thin caller
+# workflow conformance-2026.1.yml (parameterized by EDT version so it stays ready for a
+# future matrix), which gives the gate its OWN status badge. Runs the official
 # modelcontextprotocol/conformance suite against a LIVE MCP server and compares against
 # the committed baseline of intentional gaps, so the gate catches protocol REGRESSIONS
 # — not the known, deliberate gaps.
@@ -14,8 +14,8 @@ name: MCP Conformance (reusable)
 # client hits the local :8765. Conformance is protocol-only — no EDT project and no 1C
 # platform license needed.
 #
-# Note: the plugin is COMPILED against the 2025.2 target platform, so a 2026.1 run is a
-# runtime compatibility check ("does the 2025.2-built plugin run on EDT 2026.1").
+# Note: the plugin is COMPILED against the 2026.1 target platform (mcp/targets), so this
+# runs the plugin on the same EDT version it is built against.
 
 on:
   workflow_call:

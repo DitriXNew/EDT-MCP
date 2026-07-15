@@ -4,3 +4,7 @@
 # Generated tool docs + e2e golden must stay LF regardless of platform/autocrlf
 docs/tools/** text eol=lf
 tests/e2e/tools_list.golden.json text eol=lf
+
+# Shell scripts run on Linux CI runners — force LF so a Windows checkout can never
+# introduce CRLF (a CRLF shebang / `\r` breaks the script on the runner).
+*.sh text eol=lf

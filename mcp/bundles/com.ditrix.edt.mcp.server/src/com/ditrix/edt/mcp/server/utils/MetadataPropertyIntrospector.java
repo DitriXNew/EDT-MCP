@@ -23,6 +23,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.FontValue;
+import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
@@ -378,13 +379,12 @@ public final class MetadataPropertyIntrospector
                 continue;
             }
             ValueKind kind = classify(feature);
-            if (kind == null)
+            if (kind != null)
             {
-                continue;
+                String current = extInfo != null ? renderCurrent(extInfo, feature, kind) : null;
+                result.add(new PropertyInfo(feature.getName(), kind, current,
+                    allowedValuesFor(feature, kind), feature, true));
             }
-            String current = extInfo != null ? renderCurrent(extInfo, feature, kind) : null;
-            result.add(new PropertyInfo(feature.getName(), kind, current,
-                allowedValuesFor(feature, kind), feature, true));
         }
         return result;
     }
@@ -455,6 +455,16 @@ public final class MetadataPropertyIntrospector
      * Classifies a reference feature: the localized synonym map and the contained TypeDescription are
      * assignable values; a non-containment reference to an {@code MdObject} is a plain object reference
      * (single or many); every other reference is excluded ({@code null}).
+     *
+     * <p>A {@link com._1c.g5.v8.dt.metadata.mdclass.BasicCommand#getGroup() BasicCommand.group} feature
+     * is declared against {@code com._1c.g5.v8.dt.mcore.CommandGroup} - the base interface both the
+     * platform's {@code StandardCommandGroup} (a built-in group, addressed by an enum category, not an
+     * FQN) and the metadata {@code com._1c.g5.v8.dt.metadata.mdclass.CommandGroup} (a real top
+     * {@code MdObject}, e.g. {@code CommandGroup.Sales}) implement. The generic MdObject check above
+     * would miss it (the DECLARED target type is the mcore interface, not the mdclass one), so a
+     * reference declared against that mcore interface is admitted too - issue #262. Only the metadata
+     * {@code CommandGroup} resolves by FQN; a {@code StandardCommandGroup} value is out of scope (see
+     * {@code ModifyMetadataTool}'s reference-not-found handling).</p>
      */
     private static ValueKind classifyReference(EReference ref)
     {
@@ -470,13 +480,15 @@ public final class MetadataPropertyIntrospector
         {
             return ValueKind.TYPE_DESCRIPTION;
         }
-        // A non-containment reference whose target is a metadata object (MdObject subtype) is a
-        // plain object reference, settable by FQN. Containment refs (child collections) and
-        // non-MdObject refs (e.g. the EObject-typed suppressObject) are excluded. Derived /
-        // transient / non-changeable refs are already filtered upstream by isAssignable.
+        // A non-containment reference whose target is a metadata object (MdObject subtype), OR the
+        // mcore CommandGroup interface (BasicCommand.group - see the class doc above), is a plain
+        // object reference, settable by FQN. Containment refs (child collections) and other non-MdObject
+        // refs (e.g. the EObject-typed suppressObject) are excluded. Derived / transient /
+        // non-changeable refs are already filtered upstream by isAssignable.
         EClass targetType = ref.getEReferenceType();
         if (!ref.isContainment() && targetType != null
-            && MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(targetType))
+            && (MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(targetType)
+                || McorePackage.Literals.COMMAND_GROUP.isSuperTypeOf(targetType)))
         {
             return ref.isMany() ? ValueKind.MANY_REFERENCE : ValueKind.REFERENCE;
         }

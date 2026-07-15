@@ -1991,6 +1991,105 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Return the recorded MCP call history (this server's in-memory ring of request/response exchanges) so you can introspect your OWN traffic: which tools you called, how long they took, which failed, and what has been filling your context. Read-only (a snapshot; never mutates anything). Filters (AND): tool (substring over the tool name / method), status (all|error|ok), minDurationMs, sinceMs/untilMs (half-open epoch-ms window); newest first, capped by limit. Records are metadata only by default; set includeBodies for the raw payloads (may carry infobase data), or includeStats for the aggregated per-tool context-usage totals. Full parameters and examples: call get_tool_guide('get_mcp_history').",
+    "inputSchema": {
+      "properties": {
+        "includeBodies": {
+          "description": "Include the raw request/response JSON bodies for each record (default false = metadata only). The bodies can carry infobase / personal data; keep them off unless you need the payloads.",
+          "type": "boolean"
+        },
+        "includeStats": {
+          "description": "Append the aggregated per-tool context-usage statistics (rows + summary + top3) for the FILTERED set of records (default false).",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Max records to return, newest first (default 100, max 1000; clamped, never rejected).",
+          "type": "integer"
+        },
+        "minDurationMs": {
+          "description": "Keep only calls whose duration is at least this many milliseconds (find the slow ones). Default 0 (no lower bound).",
+          "type": "integer"
+        },
+        "sinceMs": {
+          "description": "Time-window lower bound, INCLUSIVE, as an epoch-millisecond timestamp (matches the timestampMs of a returned record). Omit for no lower bound.",
+          "type": "integer"
+        },
+        "status": {
+          "description": "Outcome filter: all (default), error (only failed calls), or ok (only successful calls). Classified the same way the statistics are (a JSON-RPC error, or a tool result with isError:true / success:false).",
+          "enum": [
+            "all",
+            "error",
+            "ok"
+          ],
+          "type": "string"
+        },
+        "tool": {
+          "description": "Case-insensitive substring match on the call key: the tool name for a tools/call exchange, otherwise the JSON-RPC method (e.g. tools/list, initialize). Omit to match every call.",
+          "type": "string"
+        },
+        "untilMs": {
+          "description": "Time-window upper bound, EXCLUSIVE, as an epoch-millisecond timestamp. Omit for no upper bound. The window is half-open [sinceMs, untilMs).",
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "get_mcp_history",
+    "outputSchema": {
+      "properties": {
+        "bufferSize": {
+          "description": "The ring capacity (how many exchanges history retains).",
+          "type": "integer"
+        },
+        "limit": {
+          "description": "The effective page size (after clamping to [1, max]).",
+          "type": "integer"
+        },
+        "matched": {
+          "description": "Total records matching the filters (before the limit cap).",
+          "type": "integer"
+        },
+        "recording": {
+          "description": "Whether recording is currently enabled.",
+          "type": "boolean"
+        },
+        "records": {
+          "description": "The page of matched records, newest first: {timestampMs, method, tool, durationMs, status, requestChars, responseChars, (+ requestJson/responseJson when includeBodies)}.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "returned": {
+          "description": "Number of records returned on this page (after the limit cap).",
+          "type": "integer"
+        },
+        "stats": {
+          "description": "The aggregated per-tool statistics for the filtered set (present only when includeStats): {summary, rows[], top3[]}.",
+          "type": "object"
+        },
+        "success": {
+          "description": "Whether the read succeeded",
+          "type": "boolean"
+        },
+        "totalRecorded": {
+          "description": "Total records currently retained in the ring.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties ('full: true' shows every object, otherwise only the non-default rows, the first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
